@@ -13,9 +13,10 @@ const candidatePaths = new Set([
   '/api/z3-background/decision'
 ]);
 const relevantKey = /direction|prediction|predict|final|locked|decision|signal|result|outcome|confidence|score|recommend/i;
+const summaryKey = /(^|_)(id|round|direction|decision|signal|result|outcome|locked|score|confidence|status|final|open|close|start|end|created|updated|time|price)(_|$)/i;
 
 function pickRelevant(value, path = '', out = {}, depth = 0) {
-  if (depth > 5 || value == null || Object.keys(out).length >= 50) return out;
+  if (depth > 6 || value == null || Object.keys(out).length >= 60) return out;
   if (Array.isArray(value)) {
     for (let i = 0; i < Math.min(value.length, 20); i++) pickRelevant(value[i], `${path}[${i}]`, out, depth + 1);
     return out;
@@ -25,7 +26,20 @@ function pickRelevant(value, path = '', out = {}, depth = 0) {
     const p = path ? `${path}.${k}` : k;
     if ((typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') && relevantKey.test(k)) out[p] = v;
     else if (v && typeof v === 'object') pickRelevant(v, p, out, depth + 1);
-    if (Object.keys(out).length >= 50) break;
+    if (Object.keys(out).length >= 60) break;
+  }
+  return out;
+}
+
+function summarizeRecord(value, path = '', out = {}, depth = 0) {
+  if (depth > 5 || value == null || Object.keys(out).length >= 80) return out;
+  if (Array.isArray(value)) return out;
+  if (typeof value !== 'object') return out;
+  for (const [k, v] of Object.entries(value)) {
+    const p = path ? `${path}.${k}` : k;
+    if ((typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v === null) && summaryKey.test(k)) out[p] = v;
+    else if (v && typeof v === 'object' && !Array.isArray(v)) summarizeRecord(v, p, out, depth + 1);
+    if (Object.keys(out).length >= 80) break;
   }
   return out;
 }
@@ -73,6 +87,19 @@ async function probePath(path) {
         if (json && typeof json === 'object' && !Array.isArray(json)) out.topLevelKeys = Object.keys(json).slice(0, 80);
         const relevant = pickRelevant(json);
         if (Object.keys(relevant).length) out.relevantFields = relevant;
+        if (Array.isArray(json?.records)) {
+          out.recordCount = json.records.length;
+          if (json.records.length) {
+            out.firstRecord = summarizeRecord(json.records[0]);
+            out.lastRecord = summarizeRecord(json.records[json.records.length - 1]);
+          }
+        }
+        if (Array.isArray(json?.pendingRounds)) {
+          out.pendingRoundCount = json.pendingRounds.length;
+          if (json.pendingRounds.length) out.latestPendingRound = summarizeRecord(json.pendingRounds[0]);
+        }
+        if (json?.stats && typeof json.stats === 'object') out.statsSummary = summarizeRecord(json.stats);
+        if (json?.live && typeof json.live === 'object') out.liveSummary = summarizeRecord(json.live);
       } catch (e) {
         out.parseError = String(e?.message || e);
       }

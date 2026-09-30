@@ -13,6 +13,7 @@ const RETRY_MS = Math.max(1000, Number(process.env.AUTO_TAKE_PROFIT_RETRY_MS || 
 const DEFAULT_SLIPPAGE_BPS = Number(process.env.AUTO_TAKE_PROFIT_SLIPPAGE_BPS || 1200);
 const DEFAULT_FEE_RATE_BPS = Number(process.env.AUTO_TAKE_PROFIT_FEE_RATE_BPS || 200);
 const SCOPE = String(process.env.AUTO_TAKE_PROFIT_SCOPE || 'BTC_5M').toUpperCase();
+const QUOTE_MIN_REMAINING_MS = 250;
 
 let workerBusy = false;
 let walletCache = null;
@@ -107,6 +108,84 @@ function decimalToWei(value) {
   return (BigInt(a) * 10n ** 18n + BigInt(b)).toString();
 }
 
+function weiToDecimal(value) {
+  const s = String(value ?? '').trim();
+  if (!s) return NaN;
+
+  if (/^-?\d+$/.test(s)) {
+    const wei = BigInt(s);
+    const negative = wei < 0n;
+    const abs = negative ? -wei : wei;
+    const base = 10n ** 18n;
+    const whole = abs / base;
+    const fraction = (abs % base).toString().padStart(18, '0').replace(/0+$/, '');
+    const decimal = `${negative ? '-' : ''}${whole.toString()}${fraction ? `.${fraction}` : ''}`;
+    const parsed = Number(decimal);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  }
+
+  const parsed = Number(s);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function hasRequiredPositionFields(position) {
+  return position?.totalCost !== undefined && position?.totalCost !== null && position?.totalCost !== ''
+    && position?.toWin !== undefined && position?.toWin !== null && position?.toWin !== ''
+    && position?.shares !== undefined && position?.shares !== null && position?.shares !== ''
+    && position?.tokenId !== undefined && position?.tokenId !== null && String(position?.tokenId).trim() !== '';
+}
+
+function calculateTakeProfitTarget(position) {
+  if (!hasRequiredPositionFields(position)) {
+    return { ok: false, error: 'REQUIRED_POSITION_FIELD_MISSING' };
+  }
+
+  const totalCost = Number(position.totalCost);
+  const toWin = Number(position.toWin);
+  const shares = Number(position.shares);
+  const percent = Number(TAKE_PROFIT_PERCENT);
+
+  if (!Number.isFinite(totalCost) || totalCost < 0) return { ok: false, error: 'INVALID_TOTAL_COST' };
+  if (!Number.isFinite(toWin) || toWin < 0) return { ok: false, error: 'INVALID_TO_WIN' };
+  if (!Number.isFinite(shares) || shares <= 0) return { ok: false, error: 'INVALID_SHARES' };
+  if (!Number.isFinite(percent) || percent < 0 || percent > 100) return { ok: false, error: 'INVALID_TAKE_PROFIT_PERCENT' };
+
+  const maxProfit = toWin - totalCost;
+  if (!Number.isFinite(maxProfit) || maxProfit <= 0) return { ok: false, error: 'NON_POSITIVE_MAX_PROFIT' };
+
+  const targetProfit = maxProfit * (percent / 100);
+  const rawTarget = totalCost + targetProfit;
+  const targetSellAmount = Math.ceil(rawTarget * 100) / 100;
+
+  return {
+    ok: true,
+    totalCost,
+    toWin,
+    shares,
+    maxProfit,
+    targetProfit,
+    rawTarget,
+    targetSellAmount,
+  };
+}
+
+function evaluateSellQuote(target, quote) {
+  const currentSellAmount = weiToDecimal(quote?.amountOut);
+  if (!Number.isFinite(currentSellAmount)) {
+    return { ok: false, error: 'INVALID_SELL_QUOTE_AMOUNT_OUT' };
+  }
+  return {
+    ok: true,
+    currentSellAmount,
+    triggered: currentSellAmount >= target.targetSellAmount,
+  };
+}
+
+function quoteTooCloseToExpiry(quote) {
+  const expireAt = Number(quote?.expireAt || 0);
+  return expireAt > 0 && expireAt - Date.now() < QUOTE_MIN_REMAINING_MS;
+}
+
 async function resolveWallet() {
   if (walletCache?.walletAddress && walletCache?.walletId) return walletCache;
   if (ENV_WALLET_ADDRESS && ENV_WALLET_ID) {
@@ -174,15 +253,6 @@ async function inScope(position) {
   return false;
 }
 
-function positionPercent(position) {
-  const direct = Number(position?.unrealizedPnlPercent);
-  if (Number.isFinite(direct)) return direct;
-  const avg = Number(position?.avgPrice);
-  const current = Number(position?.currentPrice);
-  if (avg > 0 && Number.isFinite(current)) return ((current - avg) / avg) * 100;
-  return NaN;
-}
-
 async function queryOngoingPositions(walletAddress) {
   const call = await signedGet('/sapi/v1/w3w/wallet/prediction/position/list', {
     walletAddress,
@@ -219,8 +289,7 @@ async function getSellQuote(wallet, position, topic) {
 
 async function placeSell(wallet, payment, sellQuote) {
   const quote = sellQuote.quote;
-  const expireAt = Number(quote?.expireAt || 0);
-  if (expireAt > 0 && expireAt - Date.now() < 250) {
+  if (quoteTooCloseToExpiry(quote)) {
     return { ok: false, error: 'SELL_QUOTE_TOO_CLOSE_TO_EXPIRY' };
   }
   const body = {
@@ -239,33 +308,55 @@ async function placeSell(wallet, payment, sellQuote) {
   return { ok: true, orderId: String(call.data.orderId), raw: call.data };
 }
 
-async function sellPosition(wallet, payment, position, pnlPercent) {
+async function sellPosition(wallet, payment, position, topic, target, initialQuoteResult, initialEvaluation) {
   const tokenId = String(position?.tokenId || '');
   if (!tokenId) return;
+
   const state = sellState.get(tokenId);
-  if (state?.inFlight) return;
-  if (state?.submitted && Date.now() - Number(state.submittedAt || 0) < 300000) return;
+  if (state?.inFlight || state?.submitted) return;
   if (state?.lastAttemptAt && Date.now() - state.lastAttemptAt < RETRY_MS) return;
 
   sellState.set(tokenId, { ...(state || {}), inFlight: true, lastAttemptAt: Date.now() });
   try {
-    const topic = await getTopic(position.marketTopicId);
-    if (!topic) {
-      sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: 'MARKET_DETAIL_UNAVAILABLE' });
-      return;
-    }
+    let quoteResult = initialQuoteResult;
+    let evaluation = initialEvaluation;
 
-    const quoteResult = await getSellQuote(wallet, position, topic);
-    if (!quoteResult.ok) {
-      sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: quoteResult.error });
-      log('tp50_sell_quote_failed', {
-        tokenId,
-        marketTopicId: position.marketTopicId,
-        pnlPercent,
-        error: quoteResult.error,
-        code: quoteResult.code ?? null,
-      });
-      return;
+    if (quoteTooCloseToExpiry(quoteResult.quote)) {
+      quoteResult = await getSellQuote(wallet, position, topic);
+      if (!quoteResult.ok) {
+        sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: quoteResult.error });
+        log('tp50_sell_quote_failed', {
+          tokenId,
+          marketTopicId: position.marketTopicId,
+          error: quoteResult.error,
+          code: quoteResult.code ?? null,
+        });
+        return;
+      }
+      evaluation = evaluateSellQuote(target, quoteResult.quote);
+      if (!evaluation.ok) {
+        sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: evaluation.error });
+        log('tp50_sell_quote_failed', {
+          tokenId,
+          marketTopicId: position.marketTopicId,
+          error: evaluation.error,
+        });
+        return;
+      }
+      if (!evaluation.triggered) {
+        sellState.set(tokenId, { inFlight: false });
+        log('tp50_check', {
+          tokenId,
+          totalCost: target.totalCost,
+          toWin: target.toWin,
+          maxProfit: target.maxProfit,
+          targetSellAmount: target.targetSellAmount,
+          currentSellAmount: evaluation.currentSellAmount,
+          triggered: false,
+          refreshedQuote: true,
+        });
+        return;
+      }
     }
 
     const placed = await placeSell(wallet, payment, quoteResult);
@@ -274,10 +365,9 @@ async function sellPosition(wallet, payment, position, pnlPercent) {
       log('tp50_sell_failed', {
         tokenId,
         marketTopicId: position.marketTopicId,
-        pnlPercent,
         shares: position.shares,
-        avgPrice: position.avgPrice,
-        currentPrice: position.currentPrice,
+        targetSellAmount: target.targetSellAmount,
+        currentSellAmount: evaluation.currentSellAmount,
         error: placed.error,
         code: placed.code ?? null,
         network: Boolean(placed.network),
@@ -297,11 +387,13 @@ async function sellPosition(wallet, payment, position, pnlPercent) {
       marketTopicId: position.marketTopicId,
       marketTitle: position.marketTitle ?? null,
       outcomeName: position.outcomeName ?? null,
-      pnlPercent,
-      thresholdPercent: TAKE_PROFIT_PERCENT,
       shares: position.shares,
-      avgPrice: position.avgPrice,
-      currentPrice: position.currentPrice,
+      totalCost: target.totalCost,
+      toWin: target.toWin,
+      maxProfit: target.maxProfit,
+      targetSellAmount: target.targetSellAmount,
+      currentSellAmount: evaluation.currentSellAmount,
+      thresholdPercent: TAKE_PROFIT_PERCENT,
       quoteAveragePrice: quoteResult.quote?.averagePrice ?? null,
       quoteAmountOut: quoteResult.quote?.amountOut ?? null,
     });
@@ -339,15 +431,91 @@ async function tick() {
     const activeTokens = new Set();
 
     for (const position of positionsResult.positions) {
-      const tokenId = String(position?.tokenId || '');
-      if (!tokenId) continue;
-      activeTokens.add(tokenId);
+      const tokenId = String(position?.tokenId || '').trim();
+      if (tokenId) activeTokens.add(tokenId);
+
       if (String(position?.positionStatus || '').toUpperCase() !== 'OPEN') continue;
-      if (Number(position?.shares || 0) <= 0) continue;
-      const pnlPercent = positionPercent(position);
-      if (!Number.isFinite(pnlPercent) || pnlPercent < TAKE_PROFIT_PERCENT) continue;
+
+      const target = calculateTakeProfitTarget(position);
+      if (!target.ok) {
+        log('tp50_invalid_position', {
+          tokenId: tokenId || null,
+          marketTopicId: position?.marketTopicId ?? null,
+          error: target.error,
+          hasTotalCost: position?.totalCost !== undefined && position?.totalCost !== null && position?.totalCost !== '',
+          hasToWin: position?.toWin !== undefined && position?.toWin !== null && position?.toWin !== '',
+          hasShares: position?.shares !== undefined && position?.shares !== null && position?.shares !== '',
+          hasTokenId: Boolean(tokenId),
+        });
+        continue;
+      }
+
       if (!(await inScope(position))) continue;
-      await sellPosition(wallet, payment, position, pnlPercent);
+
+      const state = sellState.get(tokenId);
+      if (state?.submitted || state?.inFlight) continue;
+      if (state?.lastAttemptAt && state?.error && Date.now() - state.lastAttemptAt < RETRY_MS) continue;
+
+      const topic = await getTopic(position.marketTopicId);
+      if (!topic) {
+        sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: 'MARKET_DETAIL_UNAVAILABLE' });
+        log('tp50_sell_quote_failed', {
+          tokenId,
+          marketTopicId: position.marketTopicId,
+          error: 'MARKET_DETAIL_UNAVAILABLE',
+        });
+        continue;
+      }
+
+      const quoteResult = await getSellQuote(wallet, position, topic);
+      if (!quoteResult.ok) {
+        sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: quoteResult.error });
+        log('tp50_sell_quote_failed', {
+          tokenId,
+          marketTopicId: position.marketTopicId,
+          error: quoteResult.error,
+          code: quoteResult.code ?? null,
+          httpStatus: quoteResult.httpStatus ?? null,
+          network: Boolean(quoteResult.network),
+        });
+        continue;
+      }
+
+      const evaluation = evaluateSellQuote(target, quoteResult.quote);
+      if (!evaluation.ok) {
+        sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: evaluation.error });
+        log('tp50_sell_quote_failed', {
+          tokenId,
+          marketTopicId: position.marketTopicId,
+          error: evaluation.error,
+          quoteAmountOut: quoteResult.quote?.amountOut ?? null,
+        });
+        continue;
+      }
+
+      if (state?.error) {
+        sellState.set(tokenId, { ...state, error: null, lastAttemptAt: 0 });
+      }
+
+      log('tp50_check', {
+        tokenId,
+        totalCost: target.totalCost,
+        toWin: target.toWin,
+        maxProfit: target.maxProfit,
+        targetSellAmount: target.targetSellAmount,
+        currentSellAmount: evaluation.currentSellAmount,
+        triggered: evaluation.triggered,
+      });
+
+      if (!evaluation.triggered) continue;
+
+      log('tp50_triggered', {
+        tokenId,
+        targetSellAmount: target.targetSellAmount,
+        currentSellAmount: evaluation.currentSellAmount,
+      });
+
+      await sellPosition(wallet, payment, position, topic, target, quoteResult, evaluation);
     }
 
     cleanupSellState(activeTokens);
@@ -361,7 +529,9 @@ async function tick() {
 log('tp50_worker_started', {
   enabled: ENABLED,
   thresholdPercent: TAKE_PROFIT_PERCENT,
+  thresholdMeaning: 'MAX_PROFIT_SPACE_PERCENT',
   pollMs: POLL_MS,
+  retryMs: RETRY_MS,
   scope: SCOPE,
   hasCredentials: Boolean(API_KEY && API_SECRET),
   hasWalletAddress: Boolean(ENV_WALLET_ADDRESS),

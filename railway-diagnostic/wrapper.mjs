@@ -61,9 +61,9 @@ const clientJs = String.raw`(function(){
         if(btn) btn.classList.add('hidden');
       }else if(currentPending.state==='READY'){
         text('pendingTitle',(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT');
-        text('pendingMeta','市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · Quote：点击确认后即时获取');
+        text('pendingMeta','市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · 点击按钮即直接提交真实订单');
         if(btn){
-          btn.textContent='确认 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';
+          btn.textContent='确认并直接下单 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT';
           btn.disabled=false;
           btn.classList.remove('hidden');
         }
@@ -73,7 +73,7 @@ const clientJs = String.raw`(function(){
         if(btn) btn.classList.add('hidden');
       }else{
         text('pendingTitle',currentPending.state==='QUOTING'?'正在获取最新 Quote...':'正在提交...');
-        text('pendingMeta','请稍候，不要重复点击。');
+        text('pendingMeta','正在处理，请不要重复点击。');
         if(btn) btn.classList.add('hidden');
       }
 
@@ -101,18 +101,16 @@ const clientJs = String.raw`(function(){
 
   window.confirmOrder=function(){
     if(!currentPending||currentPending.state!=='READY') return;
-    if(!window.confirm('确认提交真实订单：'+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT？\n确认后后台会即时获取最新 Quote 并立即提交。')) return;
     var btn=el('confirmBtn'),pinEl=el('pin');
     if(btn){ btn.disabled=true; btn.textContent='正在获取最新 Quote 并提交...'; }
     request('POST','/api/confirm',{pin:pinEl?pinEl.value:'',confirmationToken:currentPending.confirmationToken},function(code,j){
-      if(code>=200&&code<300) alert('订单已提交，正在核验 Binance 成交状态。orderId：'+j.orderId);
-      else alert(((j&&j.error)||'下单失败')+(j&&j.code!=null?' ('+j.code+')':''));
+      if(code<200||code>=300){ alert(((j&&j.error)||'下单失败')+(j&&j.code!=null?' ('+j.code+')':'')); }
       refresh();
     });
   };
 
   function boot(){
-    html('switch','<span class="warn">● V6 正在读取状态...</span>');
+    html('switch','<span class="warn">● V7 正在读取状态...</span>');
     refresh();
     setInterval(refresh,2500);
   }
@@ -121,8 +119,8 @@ const clientJs = String.raw`(function(){
 
 const scriptPattern=/<script>[\s\S]*?<\/script>/;
 if(!scriptPattern.test(source)) throw new Error('INLINE_SCRIPT_NOT_FOUND');
-source=source.replace(scriptPattern,'<script src="/panel-client.js?v=6" defer></script>');
-source=source.replace('加载中...','V6 页面已加载，等待状态...');
+source=source.replace(scriptPattern,'<script src="/panel-client.js?v=7" defer></script>');
+source=source.replace('加载中...','V7 页面已加载，等待状态...');
 
 const marker="  if (req.method === 'GET' && url.pathname === '/healthz') {";
 if(!source.includes(marker)) throw new Error('HEALTH_ROUTE_MARKER_NOT_FOUND');

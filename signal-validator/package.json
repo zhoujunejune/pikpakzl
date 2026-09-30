@@ -1,8 +1,9 @@
 {
-  "name": "prediction-signal-validator",
-  "version": "1.0.0",
+  "name": "fast-binance-prediction-signal",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {"start": "node index.mjs"},
-  "engines": {"node": ">=22"}
+  "engines": {"node": ">=22"},
+  "dependencies": {"ws": "^8.18.0"}
 }

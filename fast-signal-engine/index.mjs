@@ -7,6 +7,7 @@ const SYMBOL_LOWER = SYMBOL.toLowerCase();
 const WINDOW_MS = Math.max(500, Number(process.env.SIGNAL_WINDOW_MS || 2000));
 const EVAL_MS = Math.max(100, Number(process.env.SIGNAL_EVAL_MS || 200));
 const MIN_TRADES = Math.max(3, Number(process.env.SIGNAL_MIN_TRADES || 8));
+const MIN_OFI_EVENTS = Math.max(2, Number(process.env.SIGNAL_MIN_OFI_EVENTS || 4));
 const SCORE_THRESHOLD = Math.min(0.95, Math.max(0.05, Number(process.env.SIGNAL_SCORE_THRESHOLD || 0.18)));
 const CONFIRM_TICKS = Math.max(1, Number(process.env.SIGNAL_CONFIRM_TICKS || 2));
 const STALE_MS = Math.max(500, Number(process.env.SIGNAL_STALE_MS || 1500));
@@ -14,6 +15,7 @@ const STALE_MS = Math.max(500, Number(process.env.SIGNAL_STALE_MS || 1500));
 const STREAMS = [
   `${SYMBOL_LOWER}@aggTrade`,
   `${SYMBOL_LOWER}@bookTicker`,
+  `${SYMBOL_LOWER}@depth20@100ms`,
   `${SYMBOL_LOWER}@kline_5m`,
 ];
 const WS_URL = process.env.BINANCE_WS_URL || `wss://stream.binance.com:9443/stream?streams=${STREAMS.join('/')}`;
@@ -37,8 +39,16 @@ let currentKlineOpen = null;
 let currentKlineStart = null;
 let currentKlineEnd = null;
 
+let prevDepthBid = null;
+let prevDepthAsk = null;
+let prevDepthBidQty = null;
+let prevDepthAskQty = null;
+let lastDepthUpdateId = null;
+let lastDepthAt = 0;
+
 const trades = [];
 const prices = [];
+const ofiEvents = [];
 
 let candidateDirection = 'WAIT';
 let candidateTicks = 0;
@@ -54,6 +64,7 @@ let lastSignal = {
 function prune(now) {
   const cutoff = now - WINDOW_MS;
   while (trades.length && trades[0].localTs < cutoff) trades.shift();
+  while (ofiEvents.length && ofiEvents[0].localTs < cutoff) ofiEvents.shift();
   const priceCutoff = now - Math.max(WINDOW_MS, 5000);
   while (prices.length && prices[0].localTs < priceCutoff) prices.shift();
 }
@@ -76,10 +87,42 @@ function roundInfo(now) {
   return { start, end };
 }
 
+function pushOfiEvent(now, bid, bidQty, ask, askQty) {
+  if (![prevDepthBid, prevDepthAsk, prevDepthBidQty, prevDepthAskQty].every(Number.isFinite)) {
+    prevDepthBid = bid;
+    prevDepthAsk = ask;
+    prevDepthBidQty = bidQty;
+    prevDepthAskQty = askQty;
+    return;
+  }
+
+  // Top-of-book OFI using real Binance depth snapshots.
+  // Positive = buy-side pressure; negative = sell-side pressure.
+  let bidContribution = 0;
+  if (bid > prevDepthBid) bidContribution = bidQty;
+  else if (bid < prevDepthBid) bidContribution = -prevDepthBidQty;
+  else bidContribution = bidQty - prevDepthBidQty;
+
+  let askContribution = 0;
+  if (ask < prevDepthAsk) askContribution = -askQty;
+  else if (ask > prevDepthAsk) askContribution = prevDepthAskQty;
+  else askContribution = prevDepthAskQty - askQty;
+
+  const value = bidContribution + askContribution;
+  const scale = Math.abs(bidContribution) + Math.abs(askContribution);
+  ofiEvents.push({ localTs: now, value, scale });
+
+  prevDepthBid = bid;
+  prevDepthAsk = ask;
+  prevDepthBidQty = bidQty;
+  prevDepthAskQty = askQty;
+}
+
 function calculate(now = Date.now()) {
   prune(now);
 
   const dataAgeMs = lastWsMessageAt ? now - lastWsMessageAt : Infinity;
+  const depthAgeMs = lastDepthAt ? now - lastDepthAt : Infinity;
   const hasBook = [bestBid, bestAsk, bestBidQty, bestAskQty].every(Number.isFinite);
   const hasPrice = Number.isFinite(lastPrice);
 
@@ -95,6 +138,14 @@ function calculate(now = Date.now()) {
   const bookTotal = hasBook ? bestBidQty + bestAskQty : 0;
   const bookImbalance = bookTotal > 0 ? (bestBidQty - bestAskQty) / bookTotal : 0;
 
+  let ofiRaw = 0;
+  let ofiScale = 0;
+  for (const e of ofiEvents) {
+    ofiRaw += e.value;
+    ofiScale += e.scale;
+  }
+  const ofiNormalized = ofiScale > 0 ? clamp(ofiRaw / ofiScale) : 0;
+
   const p1 = priceNear(now - 1000);
   const momentum1sBps = hasPrice && Number.isFinite(p1) ? bps(lastPrice, p1) : 0;
 
@@ -106,29 +157,35 @@ function calculate(now = Date.now()) {
   const spreadBps = hasBook && Number.isFinite(mid) ? ((bestAsk - bestBid) / mid) * 10000 : null;
   const distanceFromOpenBps = hasPrice && Number.isFinite(currentKlineOpen) ? bps(lastPrice, currentKlineOpen) : 0;
 
-  // Fast microstructure score. Every input below comes directly from Binance official streams.
+  // Fast microstructure score. All inputs are direct Binance official WebSocket facts.
+  // OFI is now the largest single factor and is calculated only from real depth20@100ms updates.
   const score = clamp(
-    0.35 * clamp(tradePressure) +
-    0.25 * clamp(bookImbalance) +
-    0.20 * clamp(momentum1sBps / 3) +
+    0.30 * clamp(ofiNormalized) +
+    0.25 * clamp(tradePressure) +
+    0.15 * clamp(bookImbalance) +
+    0.15 * clamp(momentum1sBps / 3) +
     0.10 * clamp(micropriceBps / 0.5) +
-    0.10 * clamp(distanceFromOpenBps / 8)
+    0.05 * clamp(distanceFromOpenBps / 8)
   );
 
   let nextCandidate = 'WAIT';
   let reason = 'NEUTRAL_SCORE';
   if (dataAgeMs > STALE_MS) {
     reason = 'STALE_BINANCE_STREAM';
+  } else if (depthAgeMs > STALE_MS) {
+    reason = 'STALE_BINANCE_DEPTH';
   } else if (!hasBook || !hasPrice) {
     reason = 'WAITING_FOR_REAL_MARKET_DATA';
   } else if (trades.length < MIN_TRADES) {
     reason = 'INSUFFICIENT_REAL_TRADES';
+  } else if (ofiEvents.length < MIN_OFI_EVENTS) {
+    reason = 'INSUFFICIENT_REAL_DEPTH_UPDATES';
   } else if (score >= SCORE_THRESHOLD) {
     nextCandidate = 'UP';
-    reason = 'POSITIVE_MICROSTRUCTURE_SCORE';
+    reason = 'POSITIVE_REAL_MICROSTRUCTURE_SCORE';
   } else if (score <= -SCORE_THRESHOLD) {
     nextCandidate = 'DOWN';
-    reason = 'NEGATIVE_MICROSTRUCTURE_SCORE';
+    reason = 'NEGATIVE_REAL_MICROSTRUCTURE_SCORE';
   }
 
   if (nextCandidate === candidateDirection) candidateTicks += 1;
@@ -166,6 +223,12 @@ function calculate(now = Date.now()) {
       sellVolume: Number(sellVol.toFixed(8)),
       tradePressure: Number(tradePressure.toFixed(6)),
       bookImbalance: Number(bookImbalance.toFixed(6)),
+      ofiEventCount: ofiEvents.length,
+      ofiRaw: Number(ofiRaw.toFixed(8)),
+      ofiScale: Number(ofiScale.toFixed(8)),
+      ofiNormalized: Number(ofiNormalized.toFixed(6)),
+      lastDepthUpdateId,
+      depthAgeMs: Number.isFinite(depthAgeMs) ? depthAgeMs : null,
       momentum1sBps: Number(momentum1sBps.toFixed(4)),
       microprice: Number.isFinite(microprice) ? Number(microprice.toFixed(4)) : null,
       micropriceBps: Number(micropriceBps.toFixed(4)),
@@ -214,6 +277,21 @@ function handleMessage(raw) {
     return;
   }
 
+  if (stream.includes('@depth20@100ms')) {
+    const bid0 = Array.isArray(d.bids) ? d.bids[0] : null;
+    const ask0 = Array.isArray(d.asks) ? d.asks[0] : null;
+    const bid = Number(bid0?.[0]);
+    const bidQty = Number(bid0?.[1]);
+    const ask = Number(ask0?.[0]);
+    const askQty = Number(ask0?.[1]);
+    if ([bid, ask, bidQty, askQty].every(Number.isFinite) && bid > 0 && ask > 0 && bidQty >= 0 && askQty >= 0) {
+      pushOfiEvent(now, bid, bidQty, ask, askQty);
+      lastDepthAt = now;
+      if (Number.isFinite(Number(d.lastUpdateId))) lastDepthUpdateId = Number(d.lastUpdateId);
+    }
+    return;
+  }
+
   if (stream.includes('@kline_5m')) {
     const k = d.k || {};
     const open = Number(k.o);
@@ -225,19 +303,34 @@ function handleMessage(raw) {
   }
 }
 
+function resetMicrostructureState() {
+  trades.length = 0;
+  prices.length = 0;
+  ofiEvents.length = 0;
+  prevDepthBid = null;
+  prevDepthAsk = null;
+  prevDepthBidQty = null;
+  prevDepthAskQty = null;
+  lastDepthUpdateId = null;
+  lastDepthAt = 0;
+  candidateDirection = 'WAIT';
+  candidateTicks = 0;
+}
+
 function connect() {
   if (ws) {
     try { ws.terminate(); } catch {}
     ws = null;
   }
 
+  resetMicrostructureState();
   console.log(JSON.stringify({ event: 'binance_ws_connecting', url: WS_URL, at: new Date().toISOString() }));
   ws = new WebSocket(WS_URL, { perMessageDeflate: false, handshakeTimeout: 10000 });
 
   ws.on('open', () => {
     connectedAt = Date.now();
     reconnects = 0;
-    console.log(JSON.stringify({ event: 'binance_ws_connected', streams: STREAMS, at: new Date().toISOString() }));
+    console.log(JSON.stringify({ event: 'binance_ws_connected', streams: STREAMS, ofiMode: 'REAL_DEPTH20_100MS_TOP_OF_BOOK', at: new Date().toISOString() }));
   });
 
   ws.on('message', handleMessage);
@@ -267,13 +360,17 @@ function payload() {
     service: 'binance-fast-signal-engine',
     symbol: SYMBOL,
     source: 'BINANCE_OFFICIAL_SPOT_WEBSOCKET',
+    model: 'FAST_MICROSTRUCTURE_WITH_REAL_OFI_V2',
     dataIntegrity: {
       simulated: false,
       estimatedOrderBook: false,
+      ofiUsesRealDepth: true,
+      ofiMode: 'REAL_DEPTH20_100MS_TOP_OF_BOOK',
       streams: STREAMS,
       wsConnected: ws?.readyState === WebSocket.OPEN,
       connectedAt,
       lastMessageAgeMs: lastWsMessageAt ? now - lastWsMessageAt : null,
+      lastDepthAgeMs: lastDepthAt ? now - lastDepthAt : null,
       lastExchangeEventLagMs: lastTradeExchangeLagMs,
       signalAgeMs: now - lastSignal.generatedAt,
     },
@@ -281,9 +378,18 @@ function payload() {
       windowMs: WINDOW_MS,
       evaluationMs: EVAL_MS,
       minTrades: MIN_TRADES,
+      minOfiEvents: MIN_OFI_EVENTS,
       scoreThreshold: SCORE_THRESHOLD,
       confirmTicks: CONFIRM_TICKS,
       staleMs: STALE_MS,
+      weights: {
+        ofi: 0.30,
+        tradePressure: 0.25,
+        bookImbalance: 0.15,
+        momentum1s: 0.15,
+        microprice: 0.10,
+        distanceFromRoundOpen: 0.05,
+      },
     },
     signal: lastSignal,
   };
@@ -296,9 +402,13 @@ http.createServer((req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
     const p = payload();
-    const healthy = p.dataIntegrity.wsConnected && p.dataIntegrity.lastMessageAgeMs != null && p.dataIntegrity.lastMessageAgeMs < STALE_MS * 2;
+    const healthy = p.dataIntegrity.wsConnected
+      && p.dataIntegrity.lastMessageAgeMs != null
+      && p.dataIntegrity.lastMessageAgeMs < STALE_MS * 2
+      && p.dataIntegrity.lastDepthAgeMs != null
+      && p.dataIntegrity.lastDepthAgeMs < STALE_MS * 2;
     res.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json; charset=utf-8' });
-    return res.end(JSON.stringify({ ok: healthy, service: p.service, source: p.source, dataIntegrity: p.dataIntegrity }));
+    return res.end(JSON.stringify({ ok: healthy, service: p.service, source: p.source, model: p.model, dataIntegrity: p.dataIntegrity }));
   }
 
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/api/signal')) {
@@ -318,6 +428,7 @@ http.createServer((req, res) => {
       input: { round: s.roundStartMs },
       generatedAt: s.generatedAt,
       source: p.source,
+      model: p.model,
       facts: s.facts,
     };
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
@@ -332,6 +443,8 @@ http.createServer((req, res) => {
     port: PORT,
     symbol: SYMBOL,
     source: 'BINANCE_OFFICIAL_SPOT_WEBSOCKET',
+    model: 'FAST_MICROSTRUCTURE_WITH_REAL_OFI_V2',
+    ofiMode: 'REAL_DEPTH20_100MS_TOP_OF_BOOK',
     streams: STREAMS,
     windowMs: WINDOW_MS,
     evaluationMs: EVAL_MS,

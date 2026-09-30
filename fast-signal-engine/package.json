@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node stats-wrapper.mjs"
   },
   "engines": {
     "node": ">=22"

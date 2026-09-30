@@ -1,0 +1,127 @@
+import fs from 'node:fs';
+
+let source = fs.readFileSync(new URL('./index.mjs', import.meta.url), 'utf8');
+
+const clientScript = `<script>
+(function(){
+  var currentPending = null;
+  function el(id){ return document.getElementById(id); }
+  function text(id, value){ var n=el(id); if(n) n.textContent = value; }
+  function html(id, value){ var n=el(id); if(n) n.innerHTML = value; }
+  function request(method, url, body, cb){
+    var x = new XMLHttpRequest();
+    x.open(method, url, true);
+    x.setRequestHeader('Cache-Control','no-cache');
+    if(method !== 'GET') x.setRequestHeader('Content-Type','application/json');
+    x.onreadystatechange = function(){
+      if(x.readyState !== 4) return;
+      var data = null;
+      try { data = JSON.parse(x.responseText || '{}'); } catch(e) { data = { error: '返回数据无法解析' }; }
+      cb(x.status, data);
+    };
+    x.onerror = function(){ cb(0, { error: '网络请求失败' }); };
+    x.send(body ? JSON.stringify(body) : null);
+  }
+  function refresh(){
+    request('GET','/api/status?ts=' + Date.now(),null,function(status,j){
+      if(status !== 200 || !j){
+        html('switch','<span class="bad">● 状态读取失败</span>');
+        text('walletMeta',(j && j.error) ? j.error : '无法连接 /api/status');
+        return;
+      }
+      html('switch', j.enabled ? '<span class="on">● 跟随已开启</span>' : '<span class="off">● 跟随已停止</span>');
+      var s = j.signal || {};
+      text('round', s.round != null ? s.round : '-');
+      text('status', s.status != null ? s.status : '-');
+      text('direction', s.direction != null ? s.direction : '-');
+      text('score', s.score == null ? '-' : Number(s.score).toFixed(2));
+      text('amountView', j.amount != null ? j.amount : '-');
+      var amount = el('amount');
+      if(amount && document.activeElement !== amount && j.amount != null) amount.value = j.amount;
+
+      var b = j.balance || {};
+      var items = b.items || [];
+      var first = null;
+      var i;
+      for(i=0;i<items.length;i++){ if(items[i].enabled && Number(items[i].availableBalanceDisplay)>0){ first=items[i]; break; } }
+      if(!first){ for(i=0;i<items.length;i++){ if(items[i].enabled){ first=items[i]; break; } } }
+      if(!first && items.length) first = items[0];
+      if(b.ok && first){
+        html('walletBalance','<span class="ok">'+first.availableBalanceDisplay+' USDT</span>');
+        text('walletMeta','账户：'+first.accountType+' · Binance Prediction 实时可用余额');
+      } else {
+        html('walletBalance','<span class="bad">读取失败</span>');
+        text('walletMeta',(b.error || '未返回余额') + (b.code != null ? ' ('+b.code+')' : ''));
+      }
+
+      currentPending = j.pendingAction || null;
+      var btn = el('confirmBtn');
+      if(!currentPending){
+        text('pendingTitle','暂无');
+        text('pendingMeta',j.enabled ? '正在等待下一轮 LOCKED，并准备市场/方向...' : '开启后等待下一轮 LOCKED 信号。');
+        if(btn) btn.classList.add('hidden');
+      } else if(currentPending.state === 'READY'){
+        text('pendingTitle',(currentPending.signal === 'UP' ? '上涨 / BUY_UP' : '下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT');
+        text('pendingMeta','市场 '+(currentPending.marketTitle || '-')+' / '+(currentPending.outcome || '-')+' · 支付 '+(currentPending.paymentAccount || '-')+' · Quote：点击确认后即时获取');
+        if(btn){
+          btn.textContent='确认 '+(currentPending.signal === 'UP' ? 'BUY_UP ' : 'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';
+          btn.disabled=false;
+          btn.classList.remove('hidden');
+        }
+      } else if(currentPending.state === 'PREPARE_ERROR'){
+        text('pendingTitle','准备失败');
+        text('pendingMeta',(currentPending.error || currentPending.state)+(currentPending.code != null ? ' ('+currentPending.code+')' : ''));
+        if(btn) btn.classList.add('hidden');
+      } else {
+        text('pendingTitle',currentPending.state === 'QUOTING' ? '正在获取最新 Quote...' : '正在提交...');
+        text('pendingMeta','请稍候，不要重复点击。');
+        if(btn) btn.classList.add('hidden');
+      }
+
+      var o = j.lastOrder;
+      if(o){
+        var filled = o.state === 'CONFIRMED_FILLED' || Number(o.fillPercentage || 0) >= 1 || Number(o.filledUsdtAmount || 0) > 0;
+        var failed = o.state === 'CONFIRMED_FAILED';
+        html('orderTitle',filled ? '<span class="ok">已成交</span>' : (failed ? '<span class="bad">下单失败</span>' : '<span class="warn">已提交，核验中</span>'));
+        text('orderMeta','orderId '+(o.orderId || '-')+' · '+(o.action || '-')+' · '+(o.amount || '-')+' USDT · 状态 '+(o.status || o.state || '-')+(o.filledUsdtAmount ? ' · 已成交 '+o.filledUsdtAmount+' USDT' : '')+(o.error ? ' · '+o.error : ''));
+      } else {
+        text('orderTitle','暂无');
+        text('orderMeta','-');
+      }
+    });
+  }
+
+  window.setV = function(v){
+    var a = Number(el('amount').value);
+    if(v && (!isFinite(a) || a < 1.5)){ alert('请输入至少 1.5 USDT；实际最低金额仍以 Binance 返回为准'); return; }
+    request('POST','/api/control',{enabled:v,amount:v?el('amount').value:undefined,pin:el('pin').value},function(status,j){
+      if(status < 200 || status >= 300){ alert((j && j.error) || '操作失败'); return; }
+      refresh();
+    });
+  };
+
+  window.confirmOrder = function(){
+    if(!currentPending || currentPending.state !== 'READY') return;
+    if(!window.confirm('确认提交真实订单：'+(currentPending.signal === 'UP' ? 'BUY_UP ' : 'BUY_DOWN ')+currentPending.amount+' USDT？\\n确认后后台会即时获取最新 Quote 并立即提交。')) return;
+    var btn=el('confirmBtn');
+    if(btn){ btn.disabled=true; btn.textContent='正在获取最新 Quote 并提交...'; }
+    request('POST','/api/confirm',{pin:el('pin').value,confirmationToken:currentPending.confirmationToken},function(status,j){
+      if(status >= 200 && status < 300){ alert('订单已提交，正在核验 Binance 成交状态。orderId：'+j.orderId); }
+      else { alert(((j && j.error) || '下单失败') + (j && j.code != null ? ' ('+j.code+')' : '')); }
+      refresh();
+    });
+  };
+
+  html('switch','<span class="warn">● 正在读取状态...</span>');
+  refresh();
+  setInterval(refresh,2500);
+})();
+</script>`;
+
+const scriptPattern = /<script>[\s\S]*?<\/script>/;
+if (!scriptPattern.test(source)) {
+  throw new Error('INLINE_SCRIPT_NOT_FOUND');
+}
+source = source.replace(scriptPattern, clientScript);
+fs.writeFileSync('/tmp/trade-control-fixed.mjs', source);
+await import('file:///tmp/trade-control-fixed.mjs');

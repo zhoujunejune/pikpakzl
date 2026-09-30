@@ -51,5 +51,6 @@ console.log(JSON.stringify({
   failMode: 'IMMUTABLE_UNTIL_NEXT_5M_ROUND',
 }));
 
-const encoded = Buffer.from(source, 'utf8').toString('base64');
-await import(`data:text/javascript;base64,${encoded}`);
+const runtimePath = new URL('./.freeze-runtime-index.mjs', import.meta.url);
+fs.writeFileSync(runtimePath, source, 'utf8');
+await import(runtimePath.href + '?v=' + Date.now());

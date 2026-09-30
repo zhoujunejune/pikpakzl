@@ -1,4 +1,5 @@
 const originalFetch = globalThis.fetch;
+const originalSetInterval = globalThis.setInterval;
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const SERVICE_ROOT = process.cwd();
@@ -15,6 +16,24 @@ function cloneResponse(response, bodyText) {
     headers: response.headers,
   });
 }
+
+// Keep the trade module's signal polling cadence aligned with the fast signal
+// engine without changing order preparation/submission semantics. This patch is
+// intentionally narrow: it only replaces the legacy 1200ms prepareWorker timer.
+globalThis.setInterval = function patchedSetInterval(callback, delay, ...args) {
+  if (typeof callback === 'function' && callback.name === 'prepareWorker' && Number(delay) === 1200) {
+    const configured = Number(process.env.SIGNAL_POLL_MS || 200);
+    const pollMs = Number.isFinite(configured) ? Math.max(100, Math.trunc(configured)) : 200;
+    console.log(JSON.stringify({
+      event: 'signal_poll_interval_aligned',
+      worker: 'prepareWorker',
+      legacyMs: 1200,
+      pollMs,
+    }));
+    return originalSetInterval(callback, pollMs, ...args);
+  }
+  return originalSetInterval(callback, delay, ...args);
+};
 
 globalThis.fetch = async function patchedFetch(input, init) {
   const response = await originalFetch(input, init);

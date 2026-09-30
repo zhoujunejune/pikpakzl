@@ -1,0 +1,2 @@
+TP50 max-profit-space take-profit deployment marker.
+Created 2026-09-30 to force a fresh Railway source deployment after updating the service start command.

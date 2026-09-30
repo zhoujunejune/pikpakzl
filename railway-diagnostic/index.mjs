@@ -518,7 +518,7 @@ http.createServer(async (req, res) => {
     if (nextEnabled) {
       const amount = cleanAmount(body.amount);
       if (!amount || Number(amount) < 1) {
-        return send(res, 400, { ok: false, error: 'MARKET 市价单金额请至少填写 1.5 USDT，实际最低值以 Binance 为准' });
+        return send(res, 400, { ok: false, error: 'MARKET 市价单金额请至少填写 1 USDT，实际最低值以 Binance 为准' });
       }
       tradeAmountText = amount;
       const current = await getSignal();

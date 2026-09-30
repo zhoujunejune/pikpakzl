@@ -1,4 +1,8 @@
 const originalFetch = globalThis.fetch;
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const SERVICE_ROOT = process.cwd();
+const TP50_FILE_URL = pathToFileURL(path.join(SERVICE_ROOT, 'tp50-worker.mjs')).href;
 
 if (typeof originalFetch !== 'function') {
   throw new Error('GLOBAL_FETCH_NOT_AVAILABLE');
@@ -26,7 +30,7 @@ globalThis.fetch = async function patchedFetch(input, init) {
     patched = patched.replace('min=\\"1.5\\"', 'min=\\"1\\"');
     patched = patched.replace("a<1.5)){alert('请输入至少 1.5 USDT；实际最低金额仍以 Binance 返回为准')", "a<1)){alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准')");
     patched = patched.replace('Number(amount) < 1.5', 'Number(amount) < 1');
-    patched = patched.replace('MARKET 市价单金额请至少填写 1.5 USDT，实际最低值以 Binance 为准', 'MARKET 市价单金额请至少填写 1 USDT，实际最低值以 Binance 为准');
+    patched = patched.replace('MARKET 市价单金额请至少填写 1.5 USDT，实际最低值以 Binance 返回为准', 'MARKET 市价单金额请至少填写 1 USDT，实际最低值以 Binance 返回为准');
 
     const remaining = (patched.match(/1\.5/g) || []).length;
     console.log(JSON.stringify({ event: 'min_amount_runtime_patch', minimumUsdt: 1, remainingLegacy15Count: remaining }));
@@ -35,8 +39,8 @@ globalThis.fetch = async function patchedFetch(input, init) {
 
   if (url.endsWith('/railway-diagnostic/wrapper.mjs')) {
     const source = await response.text();
-    const merged = source + `\n\ntry {\n  await import('file://' + process.cwd() + '/tp50-worker.mjs');\n  console.log(JSON.stringify({ event: 'tp50_worker_merged', mode: 'same_service', thresholdPercent: Number(process.env.AUTO_TAKE_PROFIT_PERCENT || 50) }));\n} catch (e) {\n  console.error(JSON.stringify({ event: 'tp50_worker_merge_failed', error: e?.message || String(e) }));\n}\n`;
-    console.log(JSON.stringify({ event: 'tp50_merge_runtime_patch', source: 'wrapper.mjs' }));
+    const merged = source + `\n\ntry {\n  await import(${JSON.stringify(TP50_FILE_URL)});\n  console.log(JSON.stringify({ event: 'tp50_worker_merged', mode: 'same_service', thresholdPercent: Number(process.env.AUTO_TAKE_PROFIT_PERCENT || 50) }));\n} catch (e) {\n  console.error(JSON.stringify({ event: 'tp50_worker_merge_failed', error: e?.message || String(e) }));\n}\n`;
+    console.log(JSON.stringify({ event: 'tp50_merge_runtime_patch', source: 'wrapper.mjs', workerUrl: TP50_FILE_URL }));
     return cloneResponse(response, merged);
   }
 

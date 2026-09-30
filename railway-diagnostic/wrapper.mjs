@@ -469,7 +469,7 @@ const clientJs = String.raw`(function(){
   window.setV=function(v){
     var amountEl=el('amount'),pinEl=el('pin');
     var a=Number(amountEl&&amountEl.value);
-    if(v&&amountEl&&amountEl.value&&(!isFinite(a)||a<1.5)){ alert('请输入至少 1.5 USDT；实际最低金额仍以 Binance 返回为准'); return; }
+    if(v&&amountEl&&amountEl.value&&(!isFinite(a)||a<1)){ alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准'); return; }
     request('POST','/api/control',{enabled:v,amount:v&&amountEl?amountEl.value:undefined,pin:pinEl?pinEl.value:''},function(code,j){
       if(code<200||code>=300){ alert((j&&j.error)||'操作失败'); return; }
       refresh();

@@ -51,8 +51,25 @@ globalThis.fetch = async function patchedFetch(input, init) {
     patched = patched.replace('Number(amount) < 1.5', 'Number(amount) < 1');
     patched = patched.replace('MARKET 市价单金额请至少填写 1.5 USDT，实际最低值以 Binance 返回为准', 'MARKET 市价单金额请至少填写 1 USDT，实际最低值以 Binance 返回为准');
 
+    const legacyPrepareRetry = '  if (Date.now() - lastPrepareAttemptAt < 2500) return;';
+    const fastPrepareRetry = "  if (Date.now() - lastPrepareAttemptAt < Math.max(100, Number(process.env.PREPARE_RETRY_MS || 300))) return;";
+    const prepareRetryPatched = patched.includes(legacyPrepareRetry);
+    patched = patched.replace(legacyPrepareRetry, fastPrepareRetry);
+
+    const legacyMarketSearchGate = `  if (!topics.length) {\n    const searchCall = await signedGet('/sapi/v1/w3w/wallet/prediction/market/search', { query: 'BTC 5m', topK: 50 });\n    if (searchCall.ok && Array.isArray(searchCall.data)) topics = searchCall.data;\n  }`;
+    const fastMarketSearchGate = `  const hasMatchingRound = topics.some(t =>\n    String(t?.symbol || '').toUpperCase() === 'BTCUSDT' &&\n    durationLooks5m(t) &&\n    Number.isFinite(Number(t?.startDate)) &&\n    Math.abs(Number(t.startDate) - target) <= 30000\n  );\n  if (!topics.length || !hasMatchingRound) {\n    const searchCall = await signedGet('/sapi/v1/w3w/wallet/prediction/market/search', { query: 'BTC 5m', topK: 50 });\n    if (searchCall.ok && Array.isArray(searchCall.data) && searchCall.data.length) {\n      const merged = new Map();\n      for (const t of topics) merged.set(String(t?.marketTopicId ?? `${Number(t?.startDate) || 0}:${String(t?.symbol || '')}`), t);\n      for (const t of searchCall.data) merged.set(String(t?.marketTopicId ?? `${Number(t?.startDate) || 0}:${String(t?.symbol || '')}`), t);\n      topics = Array.from(merged.values());\n    }\n  }`;
+    const marketSearchPatched = patched.includes(legacyMarketSearchGate);
+    patched = patched.replace(legacyMarketSearchGate, fastMarketSearchGate);
+
     const remaining = (patched.match(/1\.5/g) || []).length;
-    console.log(JSON.stringify({ event: 'min_amount_runtime_patch', minimumUsdt: 1, remainingLegacy15Count: remaining }));
+    console.log(JSON.stringify({
+      event: 'trade_runtime_fast_prepare_patch',
+      minimumUsdt: 1,
+      remainingLegacy15Count: remaining,
+      prepareRetryMs: Math.max(100, Number(process.env.PREPARE_RETRY_MS || 300)),
+      prepareRetryPatched,
+      marketSearchFallbackOnRoundMiss: marketSearchPatched,
+    }));
     return cloneResponse(response, patched);
   }
 

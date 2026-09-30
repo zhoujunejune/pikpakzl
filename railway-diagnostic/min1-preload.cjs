@@ -1,7 +1,29 @@
+const { spawn } = require('node:child_process');
 const originalFetch = globalThis.fetch;
 
 if (typeof originalFetch !== 'function') {
   throw new Error('GLOBAL_FETCH_NOT_AVAILABLE');
+}
+
+if (!globalThis.__tp50WorkerSpawned) {
+  globalThis.__tp50WorkerSpawned = true;
+  const launchTp50Worker = () => {
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS;
+    const child = spawn(process.execPath, ['./tp50-worker.mjs'], {
+      cwd: process.cwd(),
+      env,
+      stdio: 'inherit',
+    });
+    child.on('exit', (code, signal) => {
+      console.log(JSON.stringify({ event: 'tp50_worker_exit', code, signal }));
+      setTimeout(launchTp50Worker, 1000).unref();
+    });
+    child.on('error', (error) => {
+      console.log(JSON.stringify({ event: 'tp50_worker_spawn_error', error: error?.message || String(error) }));
+    });
+  };
+  launchTp50Worker();
 }
 
 globalThis.fetch = async function patchedFetch(input, init) {

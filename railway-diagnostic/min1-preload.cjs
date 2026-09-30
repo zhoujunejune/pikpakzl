@@ -21,7 +21,7 @@ function cloneResponse(response, bodyText) {
 
 function patchTradeIndexSource(source) {
   if (typeof source !== 'string' || !source.includes('async function prepareWorker()') || !source.includes('async function discoverTopic(round)')) {
-    return { source, applied: false, prepareRetryPatched: false, marketSearchPatched: false };
+    return { source, applied: false, prepareRetryPatched: false, marketSearchPatched: false, canonicalSignalPatched: false };
   }
 
   let patched = source;
@@ -40,11 +40,51 @@ function patchTradeIndexSource(source) {
   const marketSearchPatched = patched.includes(legacyMarketSearchGate);
   patched = patched.replace(legacyMarketSearchGate, fastMarketSearchGate);
 
+  let canonicalSignalPatched = false;
+  const signalStart = patched.indexOf('async function getSignal() {');
+  const signalEndMarker = '\n}\n\nasync function getPaymentBalances()';
+  const signalEnd = signalStart >= 0 ? patched.indexOf(signalEndMarker, signalStart) : -1;
+  if (signalStart >= 0 && signalEnd >= 0) {
+    const canonicalSignalFunction = [
+      'async function getSignal() {',
+      "  const canonicalOrigin = String(process.env.FROZEN_SIGNAL_ORIGIN || process.env.ROUND_STATS_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\\/+$/, '');",
+      '  try {',
+      "    const r = await fetch(canonicalOrigin + '/api/round-stats', {",
+      "      cache: 'no-store',",
+      '      signal: AbortSignal.timeout(2500),',
+      '    });',
+      '    if (!r.ok) return null;',
+      '    const json = await r.json();',
+      '    const records = Array.isArray(json?.records) ? json.records : [];',
+      '    const expectedRound = Math.floor(Date.now() / 300000) * 300000;',
+      '    const row = records.find(x => Number(x?.roundStartMs) === expectedRound);',
+      '    if (!row) return null;',
+      "    const direction = row.prediction === 'UP' || row.prediction === 'DOWN' ? row.prediction : null;",
+      '    return {',
+      '      round: row.roundStartMs,',
+      "      status: direction ? 'LOCKED' : 'WAIT',",
+      '      direction,',
+      '      score: row.predictionScore ?? null,',
+      '      confidence: row.predictionConfidence ?? null,',
+      '      predictedAt: row.predictedAt ?? null,',
+      '      canonical: true,',
+      "      policy: 'FIRST_LOCKED_UP_DOWN_PER_5M_ROUND',",
+      '    };',
+      '  } catch {',
+      '    return null;',
+      '  }',
+      '}',
+    ].join('\n');
+    patched = patched.slice(0, signalStart) + canonicalSignalFunction + patched.slice(signalEnd + 2);
+    canonicalSignalPatched = true;
+  }
+
   return {
     source: patched,
-    applied: prepareRetryPatched || marketSearchPatched,
+    applied: prepareRetryPatched || marketSearchPatched || canonicalSignalPatched,
     prepareRetryPatched,
     marketSearchPatched,
+    canonicalSignalPatched,
   };
 }
 
@@ -55,11 +95,14 @@ function logFastPreparePatch(result, sourceKind) {
     prepareRetryMs: Math.max(100, Number(process.env.PREPARE_RETRY_MS || 300)),
     prepareRetryPatched: result.prepareRetryPatched,
     marketSearchFallbackOnRoundMiss: result.marketSearchPatched,
+    canonicalFrozenSignal: result.canonicalSignalPatched,
+    frozenSignalPolicy: result.canonicalSignalPatched ? 'FIRST_LOCKED_UP_DOWN_PER_5M_ROUND' : null,
+    failClosedOnCanonicalSignalError: result.canonicalSignalPatched,
   }));
 }
 
 // wrapper.mjs reads the local index.mjs directly. Patch that read before the
-// wrapper evaluates it so the latency optimization is guaranteed to apply.
+// wrapper evaluates it so latency + canonical-signal rules are guaranteed to apply.
 fs.readFileSync = function patchedReadFileSync(file, ...args) {
   const value = originalReadFileSync(file, ...args);
   const name = String(file?.href || file || '');

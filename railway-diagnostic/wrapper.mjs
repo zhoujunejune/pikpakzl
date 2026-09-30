@@ -1,3 +1,4 @@
+// V7 one-click confirm: button click submits immediately, no secondary browser confirmation.
 import fs from 'node:fs';
 
 let source = fs.readFileSync(new URL('./index.mjs', import.meta.url), 'utf8');

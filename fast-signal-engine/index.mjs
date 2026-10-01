@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import WebSocket from 'ws';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -19,6 +20,11 @@ const MICRO_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_MICRO_THRESHOLD
 const TREND_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_TREND_THRESHOLD || 0.14));
 const CONTEXT_OPPOSE_LIMIT = Math.max(0.10, Number(process.env.SIGNAL_CONTEXT_OPPOSE_LIMIT || 0.28));
 const STRATEGY_VERSION = 'CONTINUOUS_MARKET_STATE_V5';
+const PREDICTION_API = 'https://api.binance.com';
+const PREDICTION_API_KEY = String(process.env.BINANCE_PREDICTION_API_KEY || '');
+const PREDICTION_API_SECRET = String(process.env.BINANCE_PREDICTION_API_SECRET || '');
+const PREDICTION_REFRESH_MS = Math.max(1000, Number(process.env.PREDICTION_MARKET_REFRESH_MS || 3000));
+const PREDICTION_BOOK_STALE_MS = Math.max(1000, Number(process.env.PREDICTION_BOOK_STALE_MS || 5000));
 
 const STREAMS = [
   `${SYMBOL_LOWER}@aggTrade`,
@@ -43,6 +49,28 @@ let lastMarketTs = 0;
 let lastTradeMarketTs = 0;
 let lastDepthMarketTs = 0;
 let bootstrapCompletedAt = null;
+
+let predictionWs = null;
+let predictionReconnectTimer = null;
+let predictionRefreshBusy = false;
+let predictionMarketRound = null;
+let predictionMarketTopicId = null;
+let predictionMarketId = null;
+let predictionYesDirection = null;
+let predictionMarketMeta = null;
+let predictionBook = {
+  updateTimestampMs: 0,
+  receivedAt: 0,
+  bestBid: null,
+  bestAsk: null,
+  bidDepth5: null,
+  askDepth5: null,
+  imbalance5: null,
+  upBid: null,
+  upAsk: null,
+  upMid: null,
+};
+const predictionTopicCache = new Map();
 
 let bestBid = null;
 let bestAsk = null;
@@ -177,6 +205,298 @@ function pushOfiEvent(now, bid, bidQty, ask, askQty) {
   prevDepthAsk = ask;
   prevDepthBidQty = bidQty;
   prevDepthAskQty = askQty;
+}
+
+
+function predictionSign(query) {
+  return crypto.createHmac('sha256', PREDICTION_API_SECRET).update(query).digest('hex');
+}
+
+async function signedPredictionGet(path, params = {}) {
+  if (!PREDICTION_API_KEY || !PREDICTION_API_SECRET) {
+    return { ok: false, status: 500, data: { msg: 'PREDICTION_API_CREDENTIALS_MISSING' } };
+  }
+  try {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') q.append(k, String(v));
+    }
+    q.append('timestamp', String(Date.now()));
+    q.append('recvWindow', '5000');
+    q.append('signature', predictionSign(q.toString()));
+    const r = await fetch(PREDICTION_API + path + '?' + q.toString(), {
+      headers: { 'X-MBX-APIKEY': PREDICTION_API_KEY },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000),
+    });
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 500) }; }
+    return { ok: r.ok, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: null, error: e?.message || String(e) };
+  }
+}
+
+function predNorm(v) {
+  return String(v ?? '').trim().toUpperCase();
+}
+
+function predDurationLooks5m(topic) {
+  const start = Number(topic?.startDate);
+  const end = Number(topic?.endDate);
+  if (Number.isFinite(start) && Number.isFinite(end) && Math.abs((end - start) - 300000) <= 30000) return true;
+  return /(^|\D)5\s*M(IN(UTE)?)?S?(\D|$)/i.test(String(topic?.duration || topic?.title || topic?.question || ''));
+}
+
+function predTopicScore(topic, target) {
+  const st = Number(topic?.startDate);
+  const en = Number(topic?.endDate);
+  if (!Number.isFinite(st) || !Number.isFinite(en)) return Number.POSITIVE_INFINITY;
+  return Math.abs(st - target) + Math.abs(en - (target + 300000));
+}
+
+function mapOutcomeDirection(market, outcome) {
+  const name = predNorm(outcome?.name);
+  if (name === 'UP' || name === 'DOWN') return name;
+  const mt = predNorm((market?.title || '') + ' ' + (market?.question || ''));
+  if (name === 'YES') {
+    if (mt.includes('UP')) return 'UP';
+    if (mt.includes('DOWN')) return 'DOWN';
+  }
+  if (name === 'NO') {
+    if (mt.includes('UP')) return 'DOWN';
+    if (mt.includes('DOWN')) return 'UP';
+  }
+  return null;
+}
+
+function choosePredictionOutcome(topic, direction) {
+  const dir = predNorm(direction);
+  let best = null;
+  for (const m of Array.isArray(topic?.markets) ? topic.markets : []) {
+    const mt = predNorm((m?.title || '') + ' ' + (m?.question || ''));
+    for (const o of Array.isArray(m?.outcomes) ? m.outcomes : []) {
+      const mapped = mapOutcomeDirection(m, o);
+      let score = mapped === dir ? 200 : 0;
+      if (predNorm(o?.name) === dir) score += 50;
+      if (mt.includes(dir) && predNorm(o?.name) === 'YES') score += 40;
+      if (!best || score > best.score) best = { score, market: m, outcome: o, mapped };
+    }
+  }
+  return best && best.score >= 100 ? best : null;
+}
+
+async function discoverPredictionTopic(round, maxAgeMs = 4000) {
+  const target = Number(round);
+  const cached = predictionTopicCache.get(String(target));
+  if (cached && Date.now() - cached.at < maxAgeMs) return cached.value;
+
+  const listCall = await signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/list', {
+    l1Category: 'crypto',
+    l2Category: 'up-down',
+    sortBy: 'CREATED_TIME',
+    orderBy: 'DESC',
+    offset: 0,
+    limit: 100,
+  });
+  let topics = listCall.ok && Array.isArray(listCall.data?.marketTopics) ? listCall.data.marketTopics : [];
+  const hasRound = topics.some(t =>
+    String(t?.symbol || '').toUpperCase() === SYMBOL &&
+    predDurationLooks5m(t) &&
+    Number.isFinite(Number(t?.startDate)) &&
+    Math.abs(Number(t.startDate) - target) <= 30000
+  );
+  if (!topics.length || !hasRound) {
+    const searchCall = await signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/search', { query: 'BTC 5m', topK: 50 });
+    if (searchCall.ok && Array.isArray(searchCall.data)) {
+      const merged = new Map();
+      for (const t of topics) merged.set(String(t?.marketTopicId ?? (String(t?.startDate) + ':' + String(t?.symbol))), t);
+      for (const t of searchCall.data) merged.set(String(t?.marketTopicId ?? (String(t?.startDate) + ':' + String(t?.symbol))), t);
+      topics = Array.from(merged.values());
+    }
+  }
+
+  const candidates = topics
+    .filter(t => String(t?.symbol || '').toUpperCase() === SYMBOL && predDurationLooks5m(t))
+    .sort((a,b) => predTopicScore(a,target) - predTopicScore(b,target));
+  const topic = candidates[0];
+  if (!topic?.marketTopicId || predTopicScore(topic,target) > 180000) {
+    const value = { ok:false, error:'PREDICTION_TOPIC_NOT_FOUND', round:target };
+    predictionTopicCache.set(String(target), { at:Date.now(), value });
+    return value;
+  }
+
+  const detail = await signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/detail', { marketTopicId: topic.marketTopicId });
+  const value = detail.ok ? { ok:true, topic:{ ...topic, ...detail.data } } : { ok:false, error:'PREDICTION_DETAIL_FAILED', status:detail.status };
+  predictionTopicCache.set(String(target), { at:Date.now(), value });
+  return value;
+}
+
+function inferPredictionBookMapping(topic) {
+  const up = choosePredictionOutcome(topic, 'UP');
+  if (!up?.market) return null;
+  const marketId = Number(up.market?.marketId ?? up.market?.id);
+  if (!Number.isFinite(marketId)) return null;
+  const mt = predNorm((up.market?.title || '') + ' ' + (up.market?.question || ''));
+  let yesDirection = null;
+  if (mt.includes('UP')) yesDirection = 'UP';
+  else if (mt.includes('DOWN')) yesDirection = 'DOWN';
+  return {
+    marketId,
+    yesDirection,
+    marketTitle: up.market?.title || up.market?.question || null,
+    mappingReliable: yesDirection === 'UP' || yesDirection === 'DOWN',
+  };
+}
+
+function closePredictionWs() {
+  clearTimeout(predictionReconnectTimer);
+  predictionReconnectTimer = null;
+  if (predictionWs) {
+    try { predictionWs.terminate(); } catch {}
+    predictionWs = null;
+  }
+}
+
+function connectPredictionOrderbook(marketId, yesDirection) {
+  closePredictionWs();
+  if (!PREDICTION_API_KEY || !PREDICTION_API_SECRET || !Number.isFinite(Number(marketId))) return;
+
+  const params = {
+    random: crypto.randomBytes(8).toString('hex'),
+    recvWindow: '30000',
+    timestamp: String(Date.now()),
+    topic: 'web3_prediction_orderbook_' + String(marketId),
+  };
+  const sorted = Object.keys(params).sort().map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k])).join('&');
+  const url = 'wss://api.binance.com/sapi/wss?' + sorted + '&signature=' + predictionSign(sorted);
+  predictionWs = new WebSocket(url, {
+    headers: { 'X-MBX-APIKEY': PREDICTION_API_KEY },
+    perMessageDeflate: false,
+    handshakeTimeout: 10000,
+  });
+
+  predictionWs.on('open', () => {
+    console.log(JSON.stringify({ event:'prediction_orderbook_connected', marketId, yesDirection, strategyVersion:STRATEGY_VERSION }));
+  });
+  predictionWs.on('message', raw => {
+    let env;
+    try { env = JSON.parse(raw.toString()); } catch { return; }
+    let d = env?.data;
+    if (typeof d === 'string') { try { d = JSON.parse(d); } catch { return; } }
+    if (!d || d.msgType !== 'orderbook' || Number(d.marketId) !== Number(marketId)) return;
+    const ts = Number(d.updateTimestampMs);
+    if (!Number.isFinite(ts) || ts <= Number(predictionBook.updateTimestampMs || 0)) return;
+
+    const bids = Array.isArray(d.bids) ? d.bids : [];
+    const asks = Array.isArray(d.asks) ? d.asks : [];
+    const bestBid = Number(bids?.[0]?.[0]);
+    const bestAsk = Number(asks?.[0]?.[0]);
+    const bidDepth5 = bids.slice(0,5).reduce((a,x)=>a + (Number(x?.[1]) || 0),0);
+    const askDepth5 = asks.slice(0,5).reduce((a,x)=>a + (Number(x?.[1]) || 0),0);
+    const depthTotal = bidDepth5 + askDepth5;
+    const mid = Number.isFinite(bestBid) && Number.isFinite(bestAsk) ? (bestBid + bestAsk) / 2 : Number.isFinite(bestAsk) ? bestAsk : bestBid;
+    const upBid = yesDirection === 'UP' ? bestBid : yesDirection === 'DOWN' && Number.isFinite(bestAsk) ? 1 - bestAsk : null;
+    const upAsk = yesDirection === 'UP' ? bestAsk : yesDirection === 'DOWN' && Number.isFinite(bestBid) ? 1 - bestBid : null;
+    const upMid = yesDirection === 'UP' ? mid : yesDirection === 'DOWN' && Number.isFinite(mid) ? 1 - mid : null;
+
+    predictionBook = {
+      updateTimestampMs: ts,
+      receivedAt: Date.now(),
+      bestBid: Number.isFinite(bestBid) ? bestBid : null,
+      bestAsk: Number.isFinite(bestAsk) ? bestAsk : null,
+      bidDepth5,
+      askDepth5,
+      imbalance5: depthTotal > 0 ? (bidDepth5 - askDepth5) / depthTotal : null,
+      upBid: Number.isFinite(upBid) ? Number(upBid.toFixed(6)) : null,
+      upAsk: Number.isFinite(upAsk) ? Number(upAsk.toFixed(6)) : null,
+      upMid: Number.isFinite(upMid) ? Number(upMid.toFixed(6)) : null,
+    };
+  });
+  predictionWs.on('ping', data => { try { predictionWs?.pong(data); } catch {} });
+  predictionWs.on('error', err => {
+    console.error(JSON.stringify({ event:'prediction_orderbook_error', marketId, error:err?.message || String(err) }));
+  });
+  predictionWs.on('close', () => {
+    predictionWs = null;
+    if (Number(predictionMarketId) === Number(marketId)) {
+      predictionReconnectTimer = setTimeout(() => connectPredictionOrderbook(marketId, yesDirection), 1500);
+    }
+  });
+}
+
+async function refreshPredictionMarket() {
+  if (predictionRefreshBusy) return;
+  predictionRefreshBusy = true;
+  try {
+    const marketNow = lastMarketTs || Date.now();
+    const round = roundInfo(marketNow).start;
+    if (predictionMarketRound === round && predictionMarketId && predictionWs?.readyState === WebSocket.OPEN) return;
+    const found = await discoverPredictionTopic(round);
+    if (!found.ok) return;
+    const mapping = inferPredictionBookMapping(found.topic);
+    predictionMarketRound = round;
+    predictionMarketTopicId = found.topic?.marketTopicId ?? null;
+    predictionMarketMeta = mapping;
+    if (!mapping?.marketId) return;
+    if (Number(predictionMarketId) !== Number(mapping.marketId) || predictionWs?.readyState !== WebSocket.OPEN) {
+      predictionMarketId = Number(mapping.marketId);
+      predictionYesDirection = mapping.yesDirection;
+      predictionBook = { updateTimestampMs:0, receivedAt:0, bestBid:null, bestAsk:null, bidDepth5:null, askDepth5:null, imbalance5:null, upBid:null, upAsk:null, upMid:null };
+      connectPredictionOrderbook(predictionMarketId, predictionYesDirection);
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ event:'prediction_market_refresh_failed', error:e?.message || String(e) }));
+  } finally {
+    predictionRefreshBusy = false;
+  }
+}
+
+function directionFromResolutionValue(v) {
+  const t = predNorm(typeof v === 'object' ? (v?.name ?? v?.value ?? v?.result ?? '') : v);
+  if (t === 'UP' || /(^|\W)UP($|\W)/.test(t)) return 'UP';
+  if (t === 'DOWN' || /(^|\W)DOWN($|\W)/.test(t)) return 'DOWN';
+  return null;
+}
+
+function extractOfficialResolution(topic) {
+  const directKeys = ['result','resolution','resolvedOutcome','winningOutcome','winner','answer','finalResult'];
+  for (const k of directKeys) {
+    const d = directionFromResolutionValue(topic?.[k]);
+    if (d) return { direction:d, evidence:'topic.' + k };
+  }
+  for (const m of Array.isArray(topic?.markets) ? topic.markets : []) {
+    for (const k of directKeys) {
+      const d = directionFromResolutionValue(m?.[k]);
+      if (d) return { direction:d, evidence:'market.' + k };
+    }
+    for (const o of Array.isArray(m?.outcomes) ? m.outcomes : []) {
+      const flag = o?.isWinner === true || o?.winner === true ||
+        ['WINNER','WON','WIN','RESOLVED_TRUE','TRUE'].includes(predNorm(o?.status)) ||
+        ['WINNER','WON','WIN','TRUE'].includes(predNorm(o?.result));
+      if (flag) {
+        const d = mapOutcomeDirection(m,o);
+        if (d) return { direction:d, evidence:'outcome_winner_flag' };
+      }
+    }
+  }
+  return null;
+}
+
+async function getOfficialPredictionResolution(round) {
+  const found = await discoverPredictionTopic(round, 1000);
+  if (!found.ok) return { ok:false, resolved:false, error:found.error || 'TOPIC_NOT_FOUND' };
+  const extracted = extractOfficialResolution(found.topic);
+  return {
+    ok:true,
+    resolved:Boolean(extracted?.direction),
+    direction:extracted?.direction || null,
+    evidence:extracted?.evidence || null,
+    marketTopicId:found.topic?.marketTopicId ?? null,
+    status:found.topic?.status ?? found.topic?.tradingStatus ?? null,
+    endDate:found.topic?.endDate ?? null,
+  };
 }
 
 function calculate(now = Date.now()) {
@@ -379,7 +699,7 @@ function calculate(now = Date.now()) {
     generatedAt: direction === 'WAIT' ? now : frozenAt,
     reason: direction === 'WAIT'
       ? (nextCandidate !== 'WAIT' ? 'CONFIRMING_CONTINUOUS_STATE' : reason)
-      : 'ROUND_SIGNAL_FROZEN_V4',
+      : 'ROUND_SIGNAL_FROZEN_V5',
     roundStartMs: round.start,
     roundEndMs: round.end,
     facts: {
@@ -403,6 +723,16 @@ function calculate(now = Date.now()) {
       lastDepthUpdateId,
       depthAgeMs: Number.isFinite(depthAgeMs) ? depthAgeMs : null,
       historyAgeMs,
+      predictionMarketTopicId,
+      predictionMarketId,
+      predictionMarketBookAgeMs: predictionBook.receivedAt ? Math.max(0, now - predictionBook.receivedAt) : null,
+      predictionMarketUpdateTimestampMs: predictionBook.updateTimestampMs || null,
+      predictionMarketYesDirection: predictionYesDirection,
+      predictionMarketMappingReliable: Boolean(predictionMarketMeta?.mappingReliable),
+      predictionMarketUpBid: predictionBook.upBid,
+      predictionMarketUpAsk: predictionBook.upAsk,
+      predictionMarketUpMid: predictionBook.upMid,
+      predictionMarketDepthImbalance5: predictionBook.imbalance5,
       momentum1sBps: Number(momentum1sBps.toFixed(4)),
       momentum5sBps: Number(momentum5sBps.toFixed(4)),
       momentum15sBps: Number(momentum15sBps.toFixed(4)),
@@ -630,8 +960,10 @@ function connect() {
 }
 
 setInterval(() => calculate(Date.now()), EVAL_MS).unref();
+setInterval(refreshPredictionMarket, PREDICTION_REFRESH_MS).unref();
 await bootstrapMarketHistory();
 connect();
+refreshPredictionMarket();
 
 function payload() {
   const now = Date.now();
@@ -655,6 +987,9 @@ function payload() {
       lastMarketTs: lastMarketTs || null,
       marketClockAgeMs: lastMarketTs ? Math.max(0, now - lastMarketTs) : null,
       bootstrapCompletedAt,
+      predictionOrderbookConnected: predictionWs?.readyState === WebSocket.OPEN,
+      predictionOrderbookAgeMs: predictionBook.receivedAt ? Math.max(0, now - predictionBook.receivedAt) : null,
+      predictionOrderbookFresh: predictionBook.receivedAt ? (now - predictionBook.receivedAt) <= PREDICTION_BOOK_STALE_MS : false,
       signalAgeMs: now - lastSignal.generatedAt,
     },
     config: {
@@ -676,6 +1011,13 @@ function payload() {
       strategyVersion: STRATEGY_VERSION,
       horizonsMs: [5000, 15000, 30000, 60000, 180000, 300000, 900000],
       principle: '5M_BOUNDARY_IS_SETTLEMENT_ONLY_NOT_MARKET_STATE_RESET',
+      predictionOrderbook: {
+        enabled: Boolean(PREDICTION_API_KEY && PREDICTION_API_SECRET),
+        source: 'BINANCE_W3W_PREDICTION_ORDERBOOK_WSS',
+        refreshMs: PREDICTION_REFRESH_MS,
+        staleMs: PREDICTION_BOOK_STALE_MS,
+        usedForDirectionWeight: false,
+      },
     },
     signal: lastSignal,
   };
@@ -719,6 +1061,22 @@ http.createServer((req, res) => {
     };
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ ok: true, live, records: [live] }));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/prediction-resolution') {
+    const round = Number(url.searchParams.get('round'));
+    if (!Number.isFinite(round)) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok:false, resolved:false, error:'INVALID_ROUND' }));
+    }
+    try {
+      const result = await getOfficialPredictionResolution(round);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify(result));
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok:false, resolved:false, error:e?.message || String(e) }));
+    }
   }
 
   res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });

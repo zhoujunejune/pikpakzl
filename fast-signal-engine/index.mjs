@@ -58,6 +58,7 @@ let predictionMarketTopicId = null;
 let predictionMarketId = null;
 let predictionYesDirection = null;
 let predictionMarketMeta = null;
+let predictionBookLoggedMarketId = null;
 let predictionBook = {
   updateTimestampMs: 0,
   receivedAt: 0,
@@ -413,6 +414,20 @@ function connectPredictionOrderbook(marketId, yesDirection) {
       upAsk: Number.isFinite(upAsk) ? Number(upAsk.toFixed(6)) : null,
       upMid: Number.isFinite(upMid) ? Number(upMid.toFixed(6)) : null,
     };
+    if (Number(predictionBookLoggedMarketId) !== Number(marketId)) {
+      predictionBookLoggedMarketId = Number(marketId);
+      console.log(JSON.stringify({
+        event:'prediction_orderbook_first_update',
+        marketId:Number(marketId),
+        yesDirection,
+        updateTimestampMs:ts,
+        bestBid:predictionBook.bestBid,
+        bestAsk:predictionBook.bestAsk,
+        upMid:predictionBook.upMid,
+        bidDepth5,
+        askDepth5,
+      }));
+    }
   });
   predictionWs.on('ping', data => { try { predictionWs?.pong(data); } catch {} });
   predictionWs.on('error', err => {
@@ -964,6 +979,26 @@ setInterval(refreshPredictionMarket, PREDICTION_REFRESH_MS).unref();
 await bootstrapMarketHistory();
 connect();
 refreshPredictionMarket();
+setTimeout(async () => {
+  try {
+    const currentRound = roundInfo(lastMarketTs || Date.now()).start;
+    const probeRound = currentRound - 300000;
+    const result = await getOfficialPredictionResolution(probeRound);
+    console.log(JSON.stringify({
+      event:'prediction_resolution_probe',
+      round:probeRound,
+      ok:Boolean(result?.ok),
+      resolved:Boolean(result?.resolved),
+      direction:result?.direction ?? null,
+      evidence:result?.evidence ?? null,
+      status:result?.status ?? null,
+      marketTopicId:result?.marketTopicId ?? null,
+      error:result?.error ?? null,
+    }));
+  } catch (e) {
+    console.error(JSON.stringify({ event:'prediction_resolution_probe_failed', error:e?.message || String(e) }));
+  }
+}, 4000).unref();
 
 function payload() {
   const now = Date.now();

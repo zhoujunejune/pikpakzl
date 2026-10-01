@@ -9,6 +9,7 @@ const SETTLE_POLL_MS = Math.max(500, Number(process.env.ROUND_SETTLE_POLL_MS || 
 const HISTORY_LIMIT = Math.max(20, Number(process.env.ROUND_HISTORY_LIMIT || 200));
 const HISTORY_FILE = process.env.ROUND_HISTORY_FILE || '/tmp/round-history.json';
 const MARKET_DATA_BASE = String(process.env.BINANCE_MARKET_DATA_BASE || 'https://data-api.binance.vision').replace(/\/+$/, '');
+const STATS_VERSION = String(process.env.ROUND_STATS_VERSION || 'QUALITY_FILTER_V3_5M');
 
 const rounds = new Map();
 let signalPollBusy = false;
@@ -73,7 +74,7 @@ function ensureRound(roundStartMs) {
       closePrice: null,
       settledAt: null,
       result: 'PENDING',
-      source: 'FAST_MICROSTRUCTURE_WITH_REAL_OFI_V2',
+      source: STATS_VERSION,
       settleAttempts: 0,
       nextSettleAt: 0,
     };
@@ -225,7 +226,8 @@ function payload() {
     symbol: SYMBOL,
     signalOrigin: SIGNAL_ORIGIN,
     settlementSource: 'BINANCE_OFFICIAL_DATA_API_KLINES',
-    rule: 'FIRST_LOCKED_UP_DOWN_PER_5M_ROUND',
+    rule: 'FIRST_QUALITY_LOCKED_UP_DOWN_PER_5M_ROUND',
+    statsVersion: STATS_VERSION,
     accuracyRule: 'HIT_DIVIDED_BY_DECIDED_SETTLED_ROUNDS',
     summary: summary(),
     health: {
@@ -238,7 +240,7 @@ function payload() {
       lastSettlementError,
       marketDataBase: MARKET_DATA_BASE,
     },
-    records: records.slice(0, 50),
+    records: records.slice(0, 100),
   };
 }
 
@@ -277,5 +279,6 @@ http.createServer((req, res) => {
     historyLimit: HISTORY_LIMIT,
     marketDataBase: MARKET_DATA_BASE,
     settlementSource: 'BINANCE_OFFICIAL_DATA_API_KLINES',
+    statsVersion: STATS_VERSION,
   });
 });

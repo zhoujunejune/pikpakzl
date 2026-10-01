@@ -1023,7 +1023,7 @@ function payload() {
   };
 }
 
-http.createServer((req, res) => {
+http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('cache-control', 'no-store');
   res.setHeader('access-control-allow-origin', '*');

@@ -18,7 +18,7 @@ const MIN_CONTEXT_MS = Math.max(30000, Number(process.env.SIGNAL_MIN_CONTEXT_MS 
 const MICRO_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_MICRO_THRESHOLD || 0.16));
 const TREND_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_TREND_THRESHOLD || 0.14));
 const CONTEXT_OPPOSE_LIMIT = Math.max(0.10, Number(process.env.SIGNAL_CONTEXT_OPPOSE_LIMIT || 0.28));
-const STRATEGY_VERSION = 'CONTINUOUS_MARKET_STATE_V4';
+const STRATEGY_VERSION = 'CONTINUOUS_MARKET_STATE_V5';
 
 const STREAMS = [
   `${SYMBOL_LOWER}@aggTrade`,
@@ -39,6 +39,10 @@ let reconnects = 0;
 let lastWsMessageAt = 0;
 let lastTradeExchangeLagMs = null;
 let connectedAt = null;
+let lastMarketTs = 0;
+let lastTradeMarketTs = 0;
+let lastDepthMarketTs = 0;
+let bootstrapCompletedAt = null;
 
 let bestBid = null;
 let bestAsk = null;
@@ -80,9 +84,9 @@ let lastSignal = {
 
 function prune(now) {
   const cutoff = now - STORAGE_MS;
-  while (trades.length && trades[0].localTs < cutoff) trades.shift();
-  while (ofiEvents.length && ofiEvents[0].localTs < cutoff) ofiEvents.shift();
-  while (prices.length && prices[0].localTs < cutoff) prices.shift();
+  while (trades.length && trades[0].marketTs < cutoff) trades.shift();
+  while (ofiEvents.length && ofiEvents[0].marketTs < cutoff) ofiEvents.shift();
+  while (prices.length && prices[0].marketTs < cutoff) prices.shift();
 }
 
 function tradeFlow(windowMs, now) {
@@ -92,7 +96,7 @@ function tradeFlow(windowMs, now) {
   let count = 0;
   for (let i = trades.length - 1; i >= 0; i -= 1) {
     const t = trades[i];
-    if (t.localTs < cutoff) break;
+    if (t.marketTs < cutoff) break;
     count += 1;
     if (t.isAggressiveBuy) buyVol += t.qty;
     else sellVol += t.qty;
@@ -113,7 +117,7 @@ function ofiFlow(windowMs, now) {
   let count = 0;
   for (let i = ofiEvents.length - 1; i >= 0; i -= 1) {
     const e = ofiEvents[i];
-    if (e.localTs < cutoff) break;
+    if (e.marketTs < cutoff) break;
     count += 1;
     raw += e.value;
     scale += e.scale;
@@ -130,7 +134,7 @@ function priceNear(targetTs) {
   if (!prices.length) return null;
   let selected = null;
   for (let i = prices.length - 1; i >= 0; i -= 1) {
-    if (prices[i].localTs <= targetTs) {
+    if (prices[i].marketTs <= targetTs) {
       selected = prices[i].price;
       break;
     }
@@ -167,7 +171,7 @@ function pushOfiEvent(now, bid, bidQty, ask, askQty) {
 
   const value = bidContribution + askContribution;
   const scale = Math.abs(bidContribution) + Math.abs(askContribution);
-  ofiEvents.push({ localTs: now, value, scale });
+  ofiEvents.push({ marketTs: now, value, scale });
 
   prevDepthBid = bid;
   prevDepthAsk = ask;
@@ -176,30 +180,31 @@ function pushOfiEvent(now, bid, bidQty, ask, askQty) {
 }
 
 function calculate(now = Date.now()) {
-  prune(now);
+  const marketNow = lastMarketTs || now;
+  prune(marketNow);
 
   const dataAgeMs = lastWsMessageAt ? now - lastWsMessageAt : Infinity;
   const depthAgeMs = lastDepthAt ? now - lastDepthAt : Infinity;
   const hasBook = [bestBid, bestAsk, bestBidQty, bestAskQty].every(Number.isFinite);
   const hasPrice = Number.isFinite(lastPrice);
-  const historyAgeMs = prices.length ? Math.max(0, now - prices[0].localTs) : 0;
+  const historyAgeMs = prices.length ? Math.max(0, marketNow - prices[0].marketTs) : 0;
 
-  const flow5 = tradeFlow(5000, now);
-  const flow15 = tradeFlow(15000, now);
-  const flow60 = tradeFlow(60000, now);
-  const ofi5 = ofiFlow(5000, now);
-  const ofi60 = ofiFlow(60000, now);
+  const flow5 = tradeFlow(5000, marketNow);
+  const flow15 = tradeFlow(15000, marketNow);
+  const flow60 = tradeFlow(60000, marketNow);
+  const ofi5 = ofiFlow(5000, marketNow);
+  const ofi60 = ofiFlow(60000, marketNow);
 
   const bookTotal = hasBook ? bestBidQty + bestAskQty : 0;
   const bookImbalance = bookTotal > 0 ? (bestBidQty - bestAskQty) / bookTotal : 0;
 
-  const p1 = priceNear(now - 1000);
-  const p5 = priceNear(now - 5000);
-  const p15 = priceNear(now - 15000);
-  const p30 = priceNear(now - 30000);
-  const p60 = priceNear(now - 60000);
-  const p180 = priceNear(now - 180000);
-  const p300 = priceNear(now - 300000);
+  const p1 = priceNear(marketNow - 1000);
+  const p5 = priceNear(marketNow - 5000);
+  const p15 = priceNear(marketNow - 15000);
+  const p30 = priceNear(marketNow - 30000);
+  const p60 = priceNear(marketNow - 60000);
+  const p180 = priceNear(marketNow - 180000);
+  const p300 = priceNear(marketNow - 300000);
 
   const momentum1sBps = hasPrice && Number.isFinite(p1) ? bps(lastPrice, p1) : 0;
   const momentum5sBps = hasPrice && Number.isFinite(p5) ? bps(lastPrice, p5) : 0;
@@ -266,8 +271,8 @@ function calculate(now = Date.now()) {
   const currentScore = clamp(0.55 * microScore + 0.45 * currentTrendScore);
   const score = clamp(currentWeight * currentScore + historyWeight * priorScore);
 
-  const round = roundInfo(now);
-  const elapsedMs = Math.max(0, now - round.start);
+  const round = roundInfo(marketNow);
+  const elapsedMs = Math.max(0, marketNow - round.start);
   if (frozenRoundStart !== round.start) {
     frozenRoundStart = round.start;
     frozenDirection = 'WAIT';
@@ -348,6 +353,7 @@ function calculate(now = Date.now()) {
       signalStrength: frozenConfidence,
       elapsedMs,
       historyAgeMs,
+      marketClockTs: marketNow,
       currentScore: Number(currentScore.toFixed(6)),
       microScore: Number(microScore.toFixed(6)),
       currentTrendScore: Number(currentTrendScore.toFixed(6)),
@@ -435,18 +441,20 @@ function handleMessage(raw) {
     const price = Number(d.p);
     const qty = Number(d.q);
     if (!Number.isFinite(price) || !Number.isFinite(qty) || qty <= 0) return;
-    const exchangeTs = Number(d.E || d.T || now);
+    const exchangeTs = Number(d.T || d.E || now);
     lastTradeExchangeLagMs = Number.isFinite(exchangeTs) ? Math.max(0, now - exchangeTs) : null;
+    lastTradeMarketTs = Number.isFinite(exchangeTs) ? exchangeTs : now;
+    lastMarketTs = Math.max(lastMarketTs, lastTradeMarketTs);
     lastPrice = price;
     trades.push({
-      localTs: now,
-      exchangeTs,
+      marketTs: lastTradeMarketTs,
+      exchangeTs: lastTradeMarketTs,
       price,
       qty,
       // Binance aggTrade m=true => buyer is maker => seller is the aggressor.
       isAggressiveBuy: d.m === false,
     });
-    prices.push({ localTs: now, exchangeTs, price });
+    prices.push({ marketTs: lastTradeMarketTs, exchangeTs: lastTradeMarketTs, price });
     return;
   }
 
@@ -472,7 +480,10 @@ function handleMessage(raw) {
     const ask = Number(ask0?.[0]);
     const askQty = Number(ask0?.[1]);
     if ([bid, ask, bidQty, askQty].every(Number.isFinite) && bid > 0 && ask > 0 && bidQty >= 0 && askQty >= 0) {
-      pushOfiEvent(now, bid, bidQty, ask, askQty);
+      const depthMarketTs = Number(d.E || d.T || now);
+      lastDepthMarketTs = Number.isFinite(depthMarketTs) ? depthMarketTs : now;
+      lastMarketTs = Math.max(lastMarketTs, lastDepthMarketTs);
+      pushOfiEvent(lastDepthMarketTs, bid, bidQty, ask, askQty);
       lastDepthAt = now;
       if (Number.isFinite(Number(d.lastUpdateId))) lastDepthUpdateId = Number(d.lastUpdateId);
     }
@@ -481,6 +492,8 @@ function handleMessage(raw) {
 
   if (stream.includes('@kline_1m')) {
     const k = d.k || {};
+    const eventTs = Number(d.E || now);
+    if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
     if (Number.isFinite(open)) currentKline1mOpen = open;
     return;
@@ -488,6 +501,8 @@ function handleMessage(raw) {
 
   if (stream.includes('@kline_5m')) {
     const k = d.k || {};
+    const eventTs = Number(d.E || now);
+    if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
     const start = Number(k.t);
     const end = Number(k.T);
@@ -499,15 +514,14 @@ function handleMessage(raw) {
 
   if (stream.includes('@kline_15m')) {
     const k = d.k || {};
+    const eventTs = Number(d.E || now);
+    if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
     if (Number.isFinite(open)) currentKline15mOpen = open;
   }
 }
 
-function resetMicrostructureState() {
-  trades.length = 0;
-  prices.length = 0;
-  ofiEvents.length = 0;
+function resetTransportState() {
   prevDepthBid = null;
   prevDepthAsk = null;
   prevDepthBidQty = null;
@@ -518,13 +532,77 @@ function resetMicrostructureState() {
   candidateTicks = 0;
 }
 
+async function bootstrapMarketHistory() {
+  const now = Date.now();
+  try {
+    const startTime = now - Math.min(STORAGE_MS, 999000);
+    const u = new URL('https://api.binance.com/api/v3/klines');
+    u.searchParams.set('symbol', SYMBOL);
+    u.searchParams.set('interval', '1s');
+    u.searchParams.set('startTime', String(startTime));
+    u.searchParams.set('endTime', String(now));
+    u.searchParams.set('limit', '1000');
+    const r = await fetch(u, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const data = await r.json();
+      if (Array.isArray(data)) {
+        for (const k of data) {
+          const marketTs = Number(k?.[6] ?? k?.[0]);
+          const price = Number(k?.[4]);
+          if (Number.isFinite(marketTs) && Number.isFinite(price)) prices.push({ marketTs, exchangeTs: marketTs, price });
+        }
+      }
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ event: 'market_history_kline_bootstrap_failed', error: e?.message || String(e) }));
+  }
+
+  try {
+    const u = new URL('https://api.binance.com/api/v3/aggTrades');
+    u.searchParams.set('symbol', SYMBOL);
+    u.searchParams.set('limit', '1000');
+    const r = await fetch(u, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const data = await r.json();
+      if (Array.isArray(data)) {
+        for (const t of data) {
+          const marketTs = Number(t?.T);
+          const price = Number(t?.p);
+          const qty = Number(t?.q);
+          if (![marketTs, price, qty].every(Number.isFinite)) continue;
+          trades.push({ marketTs, exchangeTs: marketTs, price, qty, isAggressiveBuy: t?.m === false });
+          lastTradeMarketTs = Math.max(lastTradeMarketTs, marketTs);
+          lastPrice = price;
+        }
+      }
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ event: 'market_history_trade_bootstrap_failed', error: e?.message || String(e) }));
+  }
+
+  prices.sort((a,b) => a.marketTs - b.marketTs);
+  trades.sort((a,b) => a.marketTs - b.marketTs);
+  if (prices.length) lastMarketTs = Math.max(lastMarketTs, prices[prices.length - 1].marketTs);
+  if (trades.length) lastMarketTs = Math.max(lastMarketTs, trades[trades.length - 1].marketTs);
+  prune(lastMarketTs || now);
+  bootstrapCompletedAt = Date.now();
+  console.log(JSON.stringify({
+    event: 'continuous_market_history_bootstrapped',
+    strategyVersion: STRATEGY_VERSION,
+    priceSamples: prices.length,
+    tradeSamples: trades.length,
+    historyAgeMs: prices.length ? Math.max(0, (lastMarketTs || now) - prices[0].marketTs) : 0,
+    bootstrapCompletedAt,
+  }));
+}
+
 function connect() {
   if (ws) {
     try { ws.terminate(); } catch {}
     ws = null;
   }
 
-  resetMicrostructureState();
+  resetTransportState();
   console.log(JSON.stringify({ event: 'binance_ws_connecting', url: WS_URL, at: new Date().toISOString() }));
   ws = new WebSocket(WS_URL, { perMessageDeflate: false, handshakeTimeout: 10000 });
 
@@ -552,6 +630,7 @@ function connect() {
 }
 
 setInterval(() => calculate(Date.now()), EVAL_MS).unref();
+await bootstrapMarketHistory();
 connect();
 
 function payload() {
@@ -573,6 +652,9 @@ function payload() {
       lastMessageAgeMs: lastWsMessageAt ? now - lastWsMessageAt : null,
       lastDepthAgeMs: lastDepthAt ? now - lastDepthAt : null,
       lastExchangeEventLagMs: lastTradeExchangeLagMs,
+      lastMarketTs: lastMarketTs || null,
+      marketClockAgeMs: lastMarketTs ? Math.max(0, now - lastMarketTs) : null,
+      bootstrapCompletedAt,
       signalAgeMs: now - lastSignal.generatedAt,
     },
     config: {

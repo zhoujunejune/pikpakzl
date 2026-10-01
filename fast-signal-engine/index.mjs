@@ -499,18 +499,26 @@ function extractOfficialResolution(topic) {
   return null;
 }
 
-async function getOfficialPredictionResolution(round) {
-  const found = await discoverPredictionTopic(round, 1000);
-  if (!found.ok) return { ok:false, resolved:false, error:found.error || 'TOPIC_NOT_FOUND' };
-  const extracted = extractOfficialResolution(found.topic);
+async function getOfficialPredictionResolution(round, marketTopicId = null) {
+  let topic = null;
+  if (marketTopicId) {
+    const detail = await signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/detail', { marketTopicId });
+    if (!detail.ok) return { ok:false, resolved:false, error:'PREDICTION_DETAIL_FAILED', marketTopicId, status:detail.status };
+    topic = { ...(detail.data || {}), marketTopicId };
+  } else {
+    const found = await discoverPredictionTopic(round, 1000);
+    if (!found.ok) return { ok:false, resolved:false, error:found.error || 'TOPIC_NOT_FOUND' };
+    topic = found.topic;
+  }
+  const extracted = extractOfficialResolution(topic);
   return {
     ok:true,
     resolved:Boolean(extracted?.direction),
     direction:extracted?.direction || null,
     evidence:extracted?.evidence || null,
-    marketTopicId:found.topic?.marketTopicId ?? null,
-    status:found.topic?.status ?? found.topic?.tradingStatus ?? null,
-    endDate:found.topic?.endDate ?? null,
+    marketTopicId:topic?.marketTopicId ?? marketTopicId ?? null,
+    status:topic?.status ?? topic?.tradingStatus ?? null,
+    endDate:topic?.endDate ?? null,
   };
 }
 
@@ -1042,7 +1050,7 @@ function payload() {
       microThreshold: MICRO_THRESHOLD,
       trendThreshold: TREND_THRESHOLD,
       contextOpposeLimit: CONTEXT_OPPOSE_LIMIT,
-      freezePolicy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND',
+      freezePolicy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',
       strategyVersion: STRATEGY_VERSION,
       horizonsMs: [5000, 15000, 30000, 60000, 180000, 300000, 900000],
       principle: '5M_BOUNDARY_IS_SETTLEMENT_ONLY_NOT_MARKET_STATE_RESET',
@@ -1105,7 +1113,8 @@ http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok:false, resolved:false, error:'INVALID_ROUND' }));
     }
     try {
-      const result = await getOfficialPredictionResolution(round);
+      const marketTopicId = url.searchParams.get('marketTopicId');
+      const result = await getOfficialPredictionResolution(round, marketTopicId);
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify(result));
     } catch (e) {
@@ -1125,7 +1134,7 @@ http.createServer(async (req, res) => {
     model: STRATEGY_VERSION,
     ofiMode: 'REAL_DEPTH20_100MS_TOP_OF_BOOK',
     strategyVersion: STRATEGY_VERSION,
-    freezePolicy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND',
+    freezePolicy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',
     observeMinMs: OBSERVE_MIN_MS,
     decisionWindowMs: DECISION_WINDOW_MS,
     streams: STREAMS,

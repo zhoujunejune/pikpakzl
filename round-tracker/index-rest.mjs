@@ -9,7 +9,7 @@ const SETTLE_POLL_MS = Math.max(500, Number(process.env.ROUND_SETTLE_POLL_MS || 
 const HISTORY_LIMIT = Math.max(20, Number(process.env.ROUND_HISTORY_LIMIT || 200));
 const HISTORY_FILE = process.env.ROUND_HISTORY_FILE || '/tmp/round-history.json';
 const MARKET_DATA_BASE = String(process.env.BINANCE_MARKET_DATA_BASE || 'https://data-api.binance.vision').replace(/\/+$/, '');
-const STATS_VERSION = String(process.env.ROUND_STATS_VERSION || 'CONTINUOUS_MARKET_STATE_V4');
+const STATS_VERSION = String(process.env.ROUND_STATS_VERSION || 'CONTINUOUS_MARKET_STATE_V5');
 const STATS_START_MS = Math.max(0, Number(process.env.ROUND_STATS_START_MS || 0));
 const CALIBRATION_MIN_SAMPLES = Math.max(8, Number(process.env.CALIBRATION_MIN_SAMPLES || 20));
 const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
@@ -319,7 +319,7 @@ function payload() {
     symbol: SYMBOL,
     signalOrigin: SIGNAL_ORIGIN,
     settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_WITH_SPOT_FALLBACK',
-    rule: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND',
+    rule: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
     accuracyRule: 'HIT_DIVIDED_BY_DECIDED_SETTLED_ROUNDS',

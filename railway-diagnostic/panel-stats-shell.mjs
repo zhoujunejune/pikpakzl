@@ -40,11 +40,28 @@ function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){retu
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
-var errs=[];
-try{var r=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});var j=await r.json();if(r.ok&&j&&j.ok){try{localStorage.setItem('v5_round_stats_cache',JSON.stringify({at:Date.now(),data:j}))}catch(_){}return j}errs.push((j&&j.error)||('proxy HTTP '+r.status))}catch(x){errs.push(x&&x.message?x.message:String(x))}
-try{var r2=await fetch('https://signal-diagnostic-v2-production.up.railway.app/api/round-stats?ts='+Date.now(),{cache:'no-store',mode:'cors'});var j2=await r2.json();if(r2.ok&&j2&&j2.ok){try{localStorage.setItem('v5_round_stats_cache',JSON.stringify({at:Date.now(),data:j2}))}catch(_){}return j2}errs.push((j2&&j2.error)||('direct HTTP '+r2.status))}catch(x){errs.push(x&&x.message?x.message:String(x))}
-try{var c=JSON.parse(localStorage.getItem('v5_round_stats_cache')||'null');if(c&&c.data&&c.data.ok){c.data.stale=true;c.data.staleAgeMs=Date.now()-Number(c.at||0);c.data.proxyWarning=errs.join(' | ');return c.data}}catch(_){}
-throw new Error(errs.join(' | ')||'统计服务暂不可用')
+var errMsg='';
+try{
+  var r=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});
+  var j=await r.json();
+  if(r.ok&&j&&j.ok){
+    try{localStorage.setItem('v5_round_stats_cache',JSON.stringify({at:Date.now(),data:j}))}catch(_){}
+    return j
+  }
+  errMsg=(j&&j.error)||('proxy HTTP '+r.status)
+}catch(x){
+  errMsg=x&&x.message?x.message:String(x)
+}
+try{
+  var c=JSON.parse(localStorage.getItem('v5_round_stats_cache')||'null');
+  if(c&&c.data&&c.data.ok){
+    c.data.stale=true;
+    c.data.staleAgeMs=Date.now()-Number(c.at||0);
+    c.data.proxyWarning=errMsg;
+    return c.data
+  }
+}catch(_){}
+throw new Error(errMsg||'统计服务暂不可用')
 }
 async function load(){try{
 var j=await getStats();var s=j.summary||{},h=j.health||{};

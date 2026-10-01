@@ -88,9 +88,10 @@ function calibrateProbability(direction, score, excludeRound = null) {
   };
 }
 
-async function fetchOfficialPredictionResolution(roundStartMs) {
+async function fetchOfficialPredictionResolution(roundStartMs, marketTopicId = null) {
   try {
-    const u = SIGNAL_ORIGIN + '/api/prediction-resolution?round=' + encodeURIComponent(String(roundStartMs));
+    let u = SIGNAL_ORIGIN + '/api/prediction-resolution?round=' + encodeURIComponent(String(roundStartMs));
+    if (marketTopicId) u += '&marketTopicId=' + encodeURIComponent(String(marketTopicId));
     const r = await fetch(u, { cache:'no-store', signal:AbortSignal.timeout(5000) });
     if (!r.ok) return { ok:false, resolved:false, error:'HTTP_' + r.status };
     return await r.json();
@@ -226,7 +227,7 @@ async function settlePendingRounds() {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;
       try {
         const afterCloseMs = Math.max(0, Date.now() - (row.roundEndMs + 1));
-        const official = await fetchOfficialPredictionResolution(row.roundStartMs);
+        const official = await fetchOfficialPredictionResolution(row.roundStartMs, row.predictionMarketTopicId);
         let k = null;
 
         if (official?.resolved && (official.direction === 'UP' || official.direction === 'DOWN')) {

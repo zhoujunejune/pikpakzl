@@ -14,12 +14,18 @@ const SCORE_THRESHOLD = Math.min(0.95, Math.max(0.05, Number(process.env.SIGNAL_
 const CONFIRM_TICKS = Math.max(2, Number(process.env.SIGNAL_CONFIRM_TICKS || 3));
 const STALE_MS = Math.max(500, Number(process.env.SIGNAL_STALE_MS || 1500));
 const OBSERVE_MIN_MS = Math.max(5000, Number(process.env.SIGNAL_OBSERVE_MIN_MS || 10000));
-const DECISION_WINDOW_MS = Math.max(OBSERVE_MIN_MS + 2000, Number(process.env.SIGNAL_DECISION_WINDOW_MS || 18000));
+const DECISION_WINDOW_MS = Math.max(OBSERVE_MIN_MS + 5000, Number(process.env.SIGNAL_DECISION_WINDOW_MS || 30000));
 const MIN_CONTEXT_MS = Math.max(30000, Number(process.env.SIGNAL_MIN_CONTEXT_MS || 60000));
 const MICRO_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_MICRO_THRESHOLD || 0.16));
 const TREND_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_TREND_THRESHOLD || 0.14));
 const CONTEXT_OPPOSE_LIMIT = Math.max(0.10, Number(process.env.SIGNAL_CONTEXT_OPPOSE_LIMIT || 0.28));
-const STRATEGY_VERSION = 'CONTINUOUS_MARKET_STATE_V5';
+const RANGE_OBSERVE_MS = Math.max(OBSERVE_MIN_MS, Number(process.env.SIGNAL_RANGE_OBSERVE_MS || 14000));
+const COUNTERTREND_OBSERVE_MS = Math.max(RANGE_OBSERVE_MS + 2000, Number(process.env.SIGNAL_COUNTERTREND_OBSERVE_MS || 22000));
+const REGIME_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_REGIME_THRESHOLD || 0.18));
+const REVERSAL_THRESHOLD = Math.max(0.15, Number(process.env.SIGNAL_REVERSAL_THRESHOLD || 0.40));
+const PREDICTION_CONFLICT_MARGIN = Math.min(0.25, Math.max(0.05, Number(process.env.PREDICTION_CONFLICT_MARGIN || 0.10)));
+const PRICE_SAMPLE_MS = Math.max(100, Number(process.env.SIGNAL_PRICE_SAMPLE_MS || 250));
+const STRATEGY_VERSION = 'REGIME_LAYER_V6_5M';
 const PREDICTION_API = 'https://api.binance.com';
 const PREDICTION_API_KEY = String(process.env.BINANCE_PREDICTION_API_KEY || '');
 const PREDICTION_API_SECRET = String(process.env.BINANCE_PREDICTION_API_SECRET || '');
@@ -49,6 +55,7 @@ let lastMarketTs = 0;
 let lastTradeMarketTs = 0;
 let lastDepthMarketTs = 0;
 let bootstrapCompletedAt = null;
+let lastPriceSampleTs = 0;
 
 let predictionWs = null;
 let predictionReconnectTimer = null;
@@ -169,6 +176,47 @@ function priceNear(targetTs) {
     }
   }
   return selected ?? prices[0].price;
+}
+
+
+function sampledRealizedVolBps(windowMs, now, stepMs = 5000) {
+  if (prices.length < 3) return 0;
+  const cutoff = now - windowMs;
+  let nextTarget = now;
+  const sampled = [];
+  for (let i = prices.length - 1; i >= 0 && nextTarget >= cutoff; i -= 1) {
+    const p = prices[i];
+    if (p.marketTs <= nextTarget) {
+      sampled.push(p.price);
+      nextTarget -= stepMs;
+    }
+  }
+  if (sampled.length < 3) return 0;
+  sampled.reverse();
+  let sumSq = 0;
+  let n = 0;
+  for (let i = 1; i < sampled.length; i += 1) {
+    const r = bps(sampled[i], sampled[i - 1]);
+    if (!Number.isFinite(r)) continue;
+    sumSq += r * r;
+    n += 1;
+  }
+  return n ? Math.sqrt(sumSq / n) : 0;
+}
+
+function priceRangePosition(windowMs, now) {
+  const cutoff = now - windowMs;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = prices.length - 1; i >= 0; i -= 1) {
+    const p = prices[i];
+    if (p.marketTs < cutoff) break;
+    if (!Number.isFinite(p.price)) continue;
+    if (p.price < lo) lo = p.price;
+    if (p.price > hi) hi = p.price;
+  }
+  if (!Number.isFinite(lastPrice) || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return 0;
+  return clamp(((lastPrice - lo) / (hi - lo)) * 2 - 1);
 }
 
 function roundInfo(now) {
@@ -568,7 +616,26 @@ function calculate(now = Date.now()) {
   const distanceFrom1mOpenBps = hasPrice && Number.isFinite(currentKline1mOpen) ? bps(lastPrice, currentKline1mOpen) : 0;
   const distanceFrom15mOpenBps = hasPrice && Number.isFinite(currentKline15mOpen) ? bps(lastPrice, currentKline15mOpen) : 0;
 
-  // Current-state score: what is happening now and whether current-round price confirms it.
+  const vol5sRms60 = sampledRealizedVolBps(60000, marketNow, 5000);
+  const vol5sRms300 = sampledRealizedVolBps(300000, marketNow, 5000);
+  const scale5 = Math.max(1.0, vol5sRms60 || 1);
+  const scale15 = Math.max(1.5, scale5 * Math.sqrt(3));
+  const scale30 = Math.max(2.0, scale5 * Math.sqrt(6));
+  const scale60 = Math.max(3.0, scale5 * Math.sqrt(12));
+  const scale180 = Math.max(5.0, scale5 * Math.sqrt(36));
+  const scale300 = Math.max(7.0, scale5 * Math.sqrt(60));
+
+  const n5 = clamp(momentum5sBps / scale5);
+  const n15 = clamp(momentum15sBps / scale15);
+  const n30 = clamp(momentum30sBps / scale30);
+  const n60 = clamp(momentum60sBps / scale60);
+  const n180 = clamp(momentum180sBps / scale180);
+  const n300 = clamp(momentum300sBps / scale300);
+  const nRound = clamp(distanceFromOpenBps / Math.max(2.0, scale5 * Math.sqrt(Math.max(1, Math.min(60, (marketNow - (currentKlineStart || marketNow)) / 5000)))));
+  const n1mOpen = clamp(distanceFrom1mOpenBps / scale60);
+  const n15mOpen = clamp(distanceFrom15mOpenBps / Math.max(10, scale300 * 1.5));
+  const rangePosition180 = priceRangePosition(180000, marketNow);
+
   const microScore = clamp(
     0.30 * clamp(ofi5.normalized) +
     0.25 * clamp(flow5.pressure) +
@@ -577,42 +644,56 @@ function calculate(now = Date.now()) {
     0.15 * clamp(micropriceBps / 0.5)
   );
 
+  // V6: current trend is volatility-normalized, so a fixed 5 bps move does not mean the same thing in every regime.
   const currentTrendScore = clamp(
-    0.30 * clamp(distanceFromOpenBps / 5) +
-    0.25 * clamp(momentum15sBps / 5) +
-    0.20 * clamp(momentum30sBps / 7) +
-    0.15 * clamp(momentum5sBps / 3) +
-    0.10 * clamp(momentum1sBps / 2)
+    0.30 * nRound +
+    0.25 * n30 +
+    0.20 * n15 +
+    0.10 * n5 +
+    0.15 * n1mOpen
   );
 
-  // Continuous prior: horizons only participate when enough real history exists.
-  // This prevents a freshly restarted service from treating its earliest sample as a fake 3m/5m observation.
-  const priorParts = [
-    historyAgeMs >= 60000 ? { w: 0.30, v: clamp(momentum60sBps / 12), h: '60s' } : null,
-    historyAgeMs >= 180000 ? { w: 0.25, v: clamp(momentum180sBps / 20), h: '180s' } : null,
-    historyAgeMs >= 300000 ? { w: 0.20, v: clamp(momentum300sBps / 30), h: '300s' } : null,
-    historyAgeMs >= 60000 ? { w: 0.15, v: clamp(flow60.pressure), h: 'flow60s' } : null,
-    Number.isFinite(currentKline15mOpen) ? { w: 0.10, v: clamp(distanceFrom15mOpenBps / 25), h: '15mOpen' } : null,
+  // V6 regime layer: longer-horizon state is explicitly separated from current microstructure.
+  const regimeComponents = [
+    historyAgeMs >= 60000 ? { w: 0.25, v: n60, h: '60s' } : null,
+    historyAgeMs >= 180000 ? { w: 0.25, v: n180, h: '180s' } : null,
+    historyAgeMs >= 300000 ? { w: 0.20, v: n300, h: '300s' } : null,
+    historyAgeMs >= 60000 ? { w: 0.10, v: clamp(flow60.pressure), h: 'flow60s' } : null,
+    historyAgeMs >= 180000 ? { w: 0.10, v: rangePosition180, h: 'range180s' } : null,
+    Number.isFinite(currentKline15mOpen) ? { w: 0.10, v: n15mOpen, h: '15mOpen' } : null,
   ].filter(Boolean);
-  const priorWeightSum = priorParts.reduce((sum, p) => sum + p.w, 0);
-  const priorScore = priorWeightSum > 0
-    ? clamp(priorParts.reduce((sum, p) => sum + p.w * p.v, 0) / priorWeightSum)
+  const regimeWeightSum = regimeComponents.reduce((sum, p) => sum + p.w, 0);
+  const regimeScore = regimeWeightSum > 0
+    ? clamp(regimeComponents.reduce((sum, p) => sum + p.w * p.v, 0) / regimeWeightSum)
     : 0;
-  const activePriorHorizons = priorParts.map(p => p.h);
+  const activeRegimeHorizons = regimeComponents.map(p => p.h);
 
-  const signs = [
-    historyAgeMs >= 30000 ? Math.sign(momentum30sBps) : 0,
-    historyAgeMs >= 60000 ? Math.sign(momentum60sBps) : 0,
-    historyAgeMs >= 180000 ? Math.sign(momentum180sBps) : 0,
-    historyAgeMs >= 300000 ? Math.sign(momentum300sBps) : 0,
+  const regimeSigns = [
+    historyAgeMs >= 60000 ? Math.sign(n60) : 0,
+    historyAgeMs >= 180000 ? Math.sign(n180) : 0,
+    historyAgeMs >= 300000 ? Math.sign(n300) : 0,
   ].filter(v => v !== 0);
-  const signSum = signs.reduce((a, b) => a + b, 0);
-  const regimeStability = signs.length ? Math.abs(signSum) / signs.length : 0;
-  const historyWeight = 0.25 + 0.15 * regimeStability;
-  const currentWeight = 1 - historyWeight;
+  const regimeSignSum = regimeSigns.reduce((a, b) => a + b, 0);
+  const regimeAgreement = regimeSigns.length ? Math.abs(regimeSignSum) / regimeSigns.length : 0;
+  const regimeDirection = Math.abs(regimeScore) >= REGIME_THRESHOLD && regimeAgreement >= 0.34
+    ? (regimeScore > 0 ? 'UP' : 'DOWN')
+    : 'RANGE';
+  const highVol = vol5sRms300 > 0 && vol5sRms60 > Math.max(1.5, vol5sRms300 * 1.55);
+  const volatilityRegime = highVol ? 'HIGH_VOL' : 'NORMAL';
 
-  const currentScore = clamp(0.55 * microScore + 0.45 * currentTrendScore);
-  const score = clamp(currentWeight * currentScore + historyWeight * priorScore);
+  // Reduce the previous V5 dominance of 1-30s microstructure.
+  const currentScore = clamp(0.40 * microScore + 0.60 * currentTrendScore);
+  const historyWeight = regimeDirection === 'RANGE'
+    ? 0.35
+    : Math.min(0.62, 0.48 + 0.14 * regimeAgreement);
+  const currentWeight = 1 - historyWeight;
+  const score = clamp(currentWeight * currentScore + historyWeight * regimeScore);
+
+  // Strong aggressive flow with weak price progress often means absorption/exhaustion rather than continuation.
+  const absorptionRisk = Math.abs(flow15.pressure) >= 0.35 && Math.abs(n30) < 0.28;
+  const flowPriceEfficiency = Math.abs(flow15.pressure) > 0.05
+    ? Math.min(5, Math.abs(n30) / Math.abs(flow15.pressure))
+    : null;
 
   const round = roundInfo(marketNow);
   const elapsedMs = Math.max(0, marketNow - round.start);
@@ -627,8 +708,67 @@ function calculate(now = Date.now()) {
   }
 
   const priceSide = distanceFromOpenBps > 0 ? 1 : distanceFromOpenBps < 0 ? -1 : 0;
+  let proposedDirection = 'WAIT';
+  if (
+    priceSide > 0 &&
+    currentScore >= TREND_THRESHOLD &&
+    score >= SCORE_THRESHOLD
+  ) proposedDirection = 'UP';
+  else if (
+    priceSide < 0 &&
+    currentScore <= -TREND_THRESHOLD &&
+    score <= -SCORE_THRESHOLD
+  ) proposedDirection = 'DOWN';
+
+  const proposedSign = proposedDirection === 'UP' ? 1 : proposedDirection === 'DOWN' ? -1 : 0;
+  const regimeSign = regimeDirection === 'UP' ? 1 : regimeDirection === 'DOWN' ? -1 : 0;
+  const alignment = proposedSign === 0
+    ? 'NONE'
+    : regimeSign === 0
+      ? 'RANGE'
+      : proposedSign === regimeSign ? 'ALIGNED' : 'COUNTERTREND';
+
+  const reversalScore = proposedSign === 0 ? 0 : clamp(proposedSign * (
+    0.35 * currentTrendScore +
+    0.25 * microScore +
+    0.20 * n30 +
+    0.10 * n15 +
+    0.10 * n60
+  ));
+  const reversalStructureConfirmed = proposedSign !== 0 &&
+    proposedSign * n30 >= 0.20 &&
+    proposedSign * n15 >= 0.10 &&
+    proposedSign * flow15.pressure >= 0.08 &&
+    reversalScore >= REVERSAL_THRESHOLD;
+
+  const predBookAgeMs = predictionBook.receivedAt ? Math.max(0, now - predictionBook.receivedAt) : Infinity;
+  const predBookUsable = predictionMarketMeta?.mappingReliable &&
+    predBookAgeMs <= PREDICTION_BOOK_STALE_MS &&
+    Number.isFinite(Number(predictionBook.upMid));
+  const predUpMid = Number(predictionBook.upMid);
+  const predictionConflict = predBookUsable && (
+    (proposedDirection === 'UP' && predUpMid <= 0.5 - PREDICTION_CONFLICT_MARGIN) ||
+    (proposedDirection === 'DOWN' && predUpMid >= 0.5 + PREDICTION_CONFLICT_MARGIN)
+  );
+
+  let requiredObserveMs = OBSERVE_MIN_MS;
+  let requiredTicks = CONFIRM_TICKS;
+  if (alignment === 'RANGE') {
+    requiredObserveMs = RANGE_OBSERVE_MS;
+    requiredTicks += 1;
+  } else if (alignment === 'COUNTERTREND') {
+    requiredObserveMs = COUNTERTREND_OBSERVE_MS;
+    requiredTicks += 2;
+  }
+  if (highVol) {
+    requiredObserveMs += 3000;
+    requiredTicks += 1;
+  }
+  if (absorptionRisk) requiredTicks += 1;
+  requiredObserveMs = Math.min(requiredObserveMs, Math.max(OBSERVE_MIN_MS, DECISION_WINDOW_MS - 1000));
+
   let nextCandidate = 'WAIT';
-  let reason = 'CONTINUOUS_STATE_NEUTRAL';
+  let reason = 'V6_NEUTRAL';
 
   if (dataAgeMs > STALE_MS) {
     reason = 'STALE_BINANCE_STREAM';
@@ -638,39 +778,33 @@ function calculate(now = Date.now()) {
     reason = 'WAITING_FOR_REAL_MARKET_DATA';
   } else if (historyAgeMs < MIN_CONTEXT_MS) {
     reason = 'WARMING_CONTINUOUS_CONTEXT';
-  } else if (elapsedMs < OBSERVE_MIN_MS) {
-    reason = 'CURRENT_ROUND_CONFIRMATION_WINDOW';
   } else if (elapsedMs > DECISION_WINDOW_MS) {
-    reason = 'DECISION_WINDOW_EXPIRED';
+    reason = 'V6_DECISION_WINDOW_EXPIRED';
   } else if (flow5.count < MIN_TRADES) {
     reason = 'INSUFFICIENT_REAL_TRADES';
   } else if (ofi5.count < MIN_OFI_EVENTS) {
     reason = 'INSUFFICIENT_REAL_DEPTH_UPDATES';
-  } else if (
-    priceSide > 0 &&
-    currentScore >= TREND_THRESHOLD &&
-    score >= SCORE_THRESHOLD &&
-    priorScore >= -CONTEXT_OPPOSE_LIMIT
-  ) {
-    nextCandidate = 'UP';
-    reason = 'CONTINUOUS_STATE_CONFIRMED_UP';
-  } else if (
-    priceSide < 0 &&
-    currentScore <= -TREND_THRESHOLD &&
-    score <= -SCORE_THRESHOLD &&
-    priorScore <= CONTEXT_OPPOSE_LIMIT
-  ) {
-    nextCandidate = 'DOWN';
-    reason = 'CONTINUOUS_STATE_CONFIRMED_DOWN';
-  } else if (
-    Math.sign(currentScore) !== 0 &&
-    Math.sign(priorScore) !== 0 &&
-    Math.sign(currentScore) !== Math.sign(priorScore) &&
-    Math.abs(priorScore) >= CONTEXT_OPPOSE_LIMIT
-  ) {
-    reason = 'CURRENT_PRIOR_CONFLICT';
+  } else if (proposedDirection === 'WAIT') {
+    reason = 'V6_DIRECTION_THRESHOLDS_NOT_MET';
+  } else if (elapsedMs < requiredObserveMs) {
+    reason = alignment === 'COUNTERTREND'
+      ? 'V6_COUNTERTREND_NEEDS_MORE_CONFIRMATION'
+      : alignment === 'RANGE'
+        ? 'V6_RANGE_NEEDS_MORE_CONFIRMATION'
+        : 'V6_CONFIRMATION_WINDOW';
+  } else if (predictionConflict) {
+    reason = 'V6_PREDICTION_MARKET_STRONG_CONFLICT';
+  } else if (alignment === 'COUNTERTREND' && !reversalStructureConfirmed) {
+    reason = 'V6_PULLBACK_NOT_CONFIRMED_REVERSAL';
+  } else if (absorptionRisk && alignment !== 'ALIGNED') {
+    reason = 'V6_FLOW_ABSORPTION_RISK';
   } else {
-    reason = 'CONTINUOUS_QUALITY_THRESHOLDS_NOT_MET';
+    nextCandidate = proposedDirection;
+    reason = alignment === 'ALIGNED'
+      ? 'V6_REGIME_ALIGNED_CONFIRMED'
+      : alignment === 'COUNTERTREND'
+        ? 'V6_REVERSAL_CONFIRMED'
+        : 'V6_RANGE_BREAK_CONFIRMED';
   }
 
   if (nextCandidate === candidateDirection) candidateTicks += 1;
@@ -679,8 +813,10 @@ function calculate(now = Date.now()) {
     candidateTicks = 1;
   }
 
-  const rawDirection = nextCandidate !== 'WAIT' && candidateTicks >= CONFIRM_TICKS ? nextCandidate : 'WAIT';
-  const rawStrength = rawDirection === 'WAIT' ? 0 : Number(Math.min(0.99, Math.abs(score)).toFixed(4));
+  const rawDirection = nextCandidate !== 'WAIT' && candidateTicks >= requiredTicks ? nextCandidate : 'WAIT';
+  const rawStrength = rawDirection === 'WAIT'
+    ? 0
+    : Number(Math.min(0.99, Math.max(0, Math.abs(score) * (0.75 + 0.25 * regimeAgreement))).toFixed(4));
 
   if (frozenDirection === 'WAIT' && (rawDirection === 'UP' || rawDirection === 'DOWN')) {
     frozenDirection = rawDirection;
@@ -695,15 +831,25 @@ function calculate(now = Date.now()) {
       score: frozenScore,
       signalStrength: frozenConfidence,
       elapsedMs,
+      requiredObserveMs,
+      requiredTicks,
       historyAgeMs,
       marketClockTs: marketNow,
+      regimeDirection,
+      regimeScore: Number(regimeScore.toFixed(6)),
+      regimeAgreement: Number(regimeAgreement.toFixed(4)),
+      volatilityRegime,
+      vol5sRms60: Number(vol5sRms60.toFixed(4)),
+      vol5sRms300: Number(vol5sRms300.toFixed(4)),
       currentScore: Number(currentScore.toFixed(6)),
       microScore: Number(microScore.toFixed(6)),
       currentTrendScore: Number(currentTrendScore.toFixed(6)),
-      priorScore: Number(priorScore.toFixed(6)),
-      activePriorHorizons,
-      priorWeightSum: Number(priorWeightSum.toFixed(4)),
-      regimeStability: Number(regimeStability.toFixed(4)),
+      alignment,
+      reversalScore: Number(reversalScore.toFixed(6)),
+      reversalStructureConfirmed,
+      absorptionRisk,
+      predictionMarketUpMid: predBookUsable ? predUpMid : null,
+      predictionConflict,
       historyWeight: Number(historyWeight.toFixed(4)),
       at: new Date(frozenAt).toISOString(),
     }));
@@ -716,13 +862,13 @@ function calculate(now = Date.now()) {
     direction,
     candidateDirection: nextCandidate,
     candidateTicks,
-    requiredTicks: CONFIRM_TICKS,
+    requiredTicks,
     score: direction === 'WAIT' ? Number(score.toFixed(6)) : frozenScore,
     confidence,
     generatedAt: direction === 'WAIT' ? now : frozenAt,
     reason: direction === 'WAIT'
-      ? (nextCandidate !== 'WAIT' ? 'CONFIRMING_CONTINUOUS_STATE' : reason)
-      : 'ROUND_SIGNAL_FROZEN_V5',
+      ? (nextCandidate !== 'WAIT' ? 'V6_CONFIRMING_CANDIDATE' : reason)
+      : 'ROUND_SIGNAL_FROZEN_V6',
     roundStartMs: round.start,
     roundEndMs: round.end,
     facts: {
@@ -731,6 +877,7 @@ function calculate(now = Date.now()) {
       distanceFromOpenBps: Number(distanceFromOpenBps.toFixed(4)),
       distanceFrom1mOpenBps: Number(distanceFrom1mOpenBps.toFixed(4)),
       distanceFrom15mOpenBps: Number(distanceFrom15mOpenBps.toFixed(4)),
+      normalizedDistanceFromOpen: Number(nRound.toFixed(6)),
       bestBid,
       bestAsk,
       bidQty: bestBidQty,
@@ -756,6 +903,7 @@ function calculate(now = Date.now()) {
       predictionMarketUpAsk: predictionBook.upAsk,
       predictionMarketUpMid: predictionBook.upMid,
       predictionMarketDepthImbalance5: predictionBook.imbalance5,
+      predictionMarketConflict: predictionConflict,
       momentum1sBps: Number(momentum1sBps.toFixed(4)),
       momentum5sBps: Number(momentum5sBps.toFixed(4)),
       momentum15sBps: Number(momentum15sBps.toFixed(4)),
@@ -763,15 +911,33 @@ function calculate(now = Date.now()) {
       momentum60sBps: Number(momentum60sBps.toFixed(4)),
       momentum180sBps: Number(momentum180sBps.toFixed(4)),
       momentum300sBps: Number(momentum300sBps.toFixed(4)),
+      normalizedMomentum5s: Number(n5.toFixed(6)),
+      normalizedMomentum15s: Number(n15.toFixed(6)),
+      normalizedMomentum30s: Number(n30.toFixed(6)),
+      normalizedMomentum60s: Number(n60.toFixed(6)),
+      normalizedMomentum180s: Number(n180.toFixed(6)),
+      normalizedMomentum300s: Number(n300.toFixed(6)),
+      vol5sRms60: Number(vol5sRms60.toFixed(4)),
+      vol5sRms300: Number(vol5sRms300.toFixed(4)),
+      volatilityRegime,
+      rangePosition180: Number(rangePosition180.toFixed(6)),
       microprice: Number.isFinite(microprice) ? Number(microprice.toFixed(4)) : null,
       micropriceBps: Number(micropriceBps.toFixed(4)),
       microScore: Number(microScore.toFixed(6)),
       currentTrendScore: Number(currentTrendScore.toFixed(6)),
       currentScore: Number(currentScore.toFixed(6)),
-      priorScore: Number(priorScore.toFixed(6)),
-      activePriorHorizons,
-      regimeStability: Number(regimeStability.toFixed(4)),
+      regimeScore: Number(regimeScore.toFixed(6)),
+      regimeDirection,
+      regimeAgreement: Number(regimeAgreement.toFixed(4)),
+      activeRegimeHorizons,
       historyWeight: Number(historyWeight.toFixed(4)),
+      alignment,
+      reversalScore: Number(reversalScore.toFixed(6)),
+      reversalStructureConfirmed,
+      absorptionRisk,
+      flowPriceEfficiency: Number.isFinite(flowPriceEfficiency) ? Number(flowPriceEfficiency.toFixed(6)) : null,
+      requiredObserveMs,
+      requiredTicks,
       liveCandidateDirection: rawDirection,
       liveScore: Number(score.toFixed(6)),
       frozenDirection,
@@ -807,7 +973,10 @@ function handleMessage(raw) {
       // Binance aggTrade m=true => buyer is maker => seller is the aggressor.
       isAggressiveBuy: d.m === false,
     });
-    prices.push({ marketTs: lastTradeMarketTs, exchangeTs: lastTradeMarketTs, price });
+    if (!lastPriceSampleTs || lastTradeMarketTs - lastPriceSampleTs >= PRICE_SAMPLE_MS) {
+      prices.push({ marketTs: lastTradeMarketTs, exchangeTs: lastTradeMarketTs, price });
+      lastPriceSampleTs = lastTradeMarketTs;
+    }
     return;
   }
 
@@ -935,7 +1104,10 @@ async function bootstrapMarketHistory() {
 
   prices.sort((a,b) => a.marketTs - b.marketTs);
   trades.sort((a,b) => a.marketTs - b.marketTs);
-  if (prices.length) lastMarketTs = Math.max(lastMarketTs, prices[prices.length - 1].marketTs);
+  if (prices.length) {
+    lastMarketTs = Math.max(lastMarketTs, prices[prices.length - 1].marketTs);
+    lastPriceSampleTs = prices[prices.length - 1].marketTs;
+  }
   if (trades.length) lastMarketTs = Math.max(lastMarketTs, trades[trades.length - 1].marketTs);
   prune(lastMarketTs || now);
   bootstrapCompletedAt = Date.now();
@@ -1050,16 +1222,26 @@ function payload() {
       microThreshold: MICRO_THRESHOLD,
       trendThreshold: TREND_THRESHOLD,
       contextOpposeLimit: CONTEXT_OPPOSE_LIMIT,
-      freezePolicy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',
+      freezePolicy: 'FIRST_REGIME_LAYER_LOCK_PER_5M_ROUND_V6',
       strategyVersion: STRATEGY_VERSION,
       horizonsMs: [5000, 15000, 30000, 60000, 180000, 300000, 900000],
-      principle: '5M_BOUNDARY_IS_SETTLEMENT_ONLY_NOT_MARKET_STATE_RESET',
+      principle: 'REGIME_FIRST_5M_TARGET_WITH_CONTINUOUS_MARKET_STATE',
+      regimeLayer: {
+        rangeObserveMs: RANGE_OBSERVE_MS,
+        countertrendObserveMs: COUNTERTREND_OBSERVE_MS,
+        regimeThreshold: REGIME_THRESHOLD,
+        reversalThreshold: REVERSAL_THRESHOLD,
+        predictionConflictMargin: PREDICTION_CONFLICT_MARGIN,
+        volatilityNormalized: true,
+        predictionMarketRole: 'CONFIRMATION_VETO_NOT_DIRECTION_DRIVER',
+      },
       predictionOrderbook: {
         enabled: Boolean(PREDICTION_API_KEY && PREDICTION_API_SECRET),
         source: 'BINANCE_W3W_PREDICTION_ORDERBOOK_WSS',
         refreshMs: PREDICTION_REFRESH_MS,
         staleMs: PREDICTION_BOOK_STALE_MS,
         usedForDirectionWeight: false,
+        usedAsStrongConflictVeto: true,
       },
     },
     signal: lastSignal,
@@ -1134,7 +1316,7 @@ http.createServer(async (req, res) => {
     model: STRATEGY_VERSION,
     ofiMode: 'REAL_DEPTH20_100MS_TOP_OF_BOOK',
     strategyVersion: STRATEGY_VERSION,
-    freezePolicy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',
+    freezePolicy: 'FIRST_REGIME_LAYER_LOCK_PER_5M_ROUND_V6',
     observeMinMs: OBSERVE_MIN_MS,
     decisionWindowMs: DECISION_WINDOW_MS,
     streams: STREAMS,

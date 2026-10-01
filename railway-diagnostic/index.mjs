@@ -15,6 +15,9 @@ let tradeAmountText = null;
 let startAfterRound = null;
 let pendingAction = null;
 let lastBalance = null;
+let lastBalanceAt = 0;
+let balanceRefreshPromise = null;
+const UI_BALANCE_CACHE_MS = Math.max(3000, Number(process.env.UI_BALANCE_CACHE_MS || 10000));
 let lastOrder = null;
 let prepareInFlight = false;
 let lastPrepareAttemptAt = 0;
@@ -156,6 +159,32 @@ async function getPaymentBalances() {
       }))
     : [];
   return { ok: true, items, checkedAt: new Date().toISOString() };
+}
+
+async function refreshUiBalance() {
+  if (balanceRefreshPromise) return balanceRefreshPromise;
+  balanceRefreshPromise = (async () => {
+    const next = await getPaymentBalances();
+    if (next?.ok) {
+      lastBalance = next;
+      lastBalanceAt = Date.now();
+    }
+    return next;
+  })();
+  try {
+    return await balanceRefreshPromise;
+  } finally {
+    balanceRefreshPromise = null;
+  }
+}
+
+async function getUiBalance() {
+  if (lastBalance?.ok) {
+    if (Date.now() - lastBalanceAt >= UI_BALANCE_CACHE_MS) refreshUiBalance();
+    return { ...lastBalance, cached: Date.now() - lastBalanceAt > 1000, cacheAgeMs: Math.max(0, Date.now() - lastBalanceAt) };
+  }
+  const fresh = await refreshUiBalance();
+  return fresh;
 }
 
 async function resolveWallet() {
@@ -454,13 +483,14 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
 <div class="c"><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" inputmode="numeric" placeholder="控制 PIN"><button class="start" onclick="setV(true)">开始跟随新信号</button><button class="stop" onclick="setV(false)">停止跟随</button><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
 </div><script>
 let currentPending=null;
+let refreshBusy=false;
 function el(id){return document.getElementById(id)}
-async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();el('switch').innerHTML=j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>';const s=j.signal||{};el('round').textContent=s.round??'-';el('status').textContent=s.status??'-';el('direction').textContent=s.direction??'-';el('score').textContent=s.score==null?'-':Number(s.score).toFixed(2);el('amountView').textContent=j.amount??'-';if(document.activeElement!==el('amount')&&j.amount!=null)el('amount').value=j.amount;const b=j.balance||{};const first=(b.items||[]).find(x=>x.enabled&&Number(x.availableBalanceDisplay)>0)||(b.items||[]).find(x=>x.enabled)||(b.items||[])[0];if(b.ok&&first){el('walletBalance').innerHTML='<span class="ok">'+first.availableBalanceDisplay+' USDT</span>';el('walletMeta').textContent='账户：'+first.accountType+' · Binance Prediction 实时可用余额'}else{el('walletBalance').innerHTML='<span class="bad">读取失败</span>';el('walletMeta').textContent=(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':'')}
+async function refresh(){if(refreshBusy)return;refreshBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();el('switch').innerHTML=j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>';const s=j.signal||{};el('round').textContent=s.round??'-';el('status').textContent=s.status??'-';el('direction').textContent=s.direction??'-';el('score').textContent=s.score==null?'-':Number(s.score).toFixed(2);el('amountView').textContent=j.amount??'-';if(document.activeElement!==el('amount')&&j.amount!=null)el('amount').value=j.amount;const b=j.balance||{};const first=(b.items||[]).find(x=>x.enabled&&Number(x.availableBalanceDisplay)>0)||(b.items||[]).find(x=>x.enabled)||(b.items||[])[0];if(b.ok&&first){el('walletBalance').innerHTML='<span class="ok">'+first.availableBalanceDisplay+' USDT</span>';el('walletMeta').textContent='账户：'+first.accountType+' · Binance Prediction 实时可用余额'}else{el('walletBalance').innerHTML='<span class="bad">读取失败</span>';el('walletMeta').textContent=(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':'')}
 currentPending=j.pendingAction||null;const btn=el('confirmBtn');if(!currentPending){el('pendingTitle').textContent='暂无';el('pendingMeta').textContent=j.enabled?'正在等待下一轮 LOCKED，并准备市场/方向...':'开启后等待下一轮 LOCKED 信号。';btn.classList.add('hidden')}else if(currentPending.state==='READY'){el('pendingTitle').textContent=(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT';el('pendingMeta').textContent='市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · Quote：点击确认后即时获取';btn.textContent='确认 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';btn.disabled=false;btn.classList.remove('hidden')}else if(currentPending.state==='PREPARE_ERROR'){el('pendingTitle').textContent='准备失败';el('pendingMeta').textContent=(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':'');btn.classList.add('hidden')}else{el('pendingTitle').textContent=currentPending.state==='QUOTING'?'正在获取最新 Quote...':'正在提交...';el('pendingMeta').textContent='请稍候，不要重复点击。';btn.classList.add('hidden')}
-const o=j.lastOrder;if(o){const filled=o.state==='CONFIRMED_FILLED'||Number(o.fillPercentage||0)>=1||Number(o.filledUsdtAmount||0)>0;const failed=o.state==='CONFIRMED_FAILED';if(filled){el('orderTitle').innerHTML='<span class="ok">已成交</span>'}else if(failed){el('orderTitle').innerHTML='<span class="bad">下单失败</span>'}else{el('orderTitle').innerHTML='<span class="warn">已提交，核验中</span>'}el('orderMeta').textContent='orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:'')}else{el('orderTitle').textContent='暂无';el('orderMeta').textContent='-' }}catch(e){el('switch').textContent='状态读取失败'}}
+const o=j.lastOrder;if(o){const filled=o.state==='CONFIRMED_FILLED'||Number(o.fillPercentage||0)>=1||Number(o.filledUsdtAmount||0)>0;const failed=o.state==='CONFIRMED_FAILED';if(filled){el('orderTitle').innerHTML='<span class="ok">已成交</span>'}else if(failed){el('orderTitle').innerHTML='<span class="bad">下单失败</span>'}else{el('orderTitle').innerHTML='<span class="warn">已提交，核验中</span>'}el('orderMeta').textContent='orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:'')}else{el('orderTitle').textContent='暂无';el('orderMeta').textContent='-' }}catch(e){el('switch').textContent='状态读取失败'}finally{refreshBusy=false}}
 async function setV(v){const a=Number(el('amount').value);if(v&&(!Number.isFinite(a)||a<1)){alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准');return}const r=await fetch('/api/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:v,amount:v?el('amount').value:undefined,pin:el('pin').value})});const j=await r.json();if(!r.ok){alert(j.error||'操作失败');return}refresh()}
 async function confirmOrder(){if(!currentPending||currentPending.state!=='READY')return;if(!confirm('确认提交真实订单：'+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT？\n确认后后台会即时获取最新 Quote 并立即提交。'))return;const btn=el('confirmBtn');btn.disabled=true;btn.textContent='正在获取最新 Quote 并提交...';const r=await fetch('/api/confirm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pin:el('pin').value,confirmationToken:currentPending.confirmationToken})});const j=await r.json();if(r.ok){alert('订单已提交，正在核验 Binance 成交状态。orderId：'+j.orderId)}else{alert((j.error||'下单失败')+(j.code!=null?' ('+j.code+')':''))}refresh()}
-refresh();setInterval(refresh,2500);
+refresh();setInterval(refresh,1000);
 </script></body></html>`;
 
 async function readBody(req) {
@@ -489,8 +519,7 @@ http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/status') {
-    const [signal, balance] = await Promise.all([getSignal(), getPaymentBalances()]);
-    lastBalance = balance;
+    const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
     return send(res, 200, {
       ok: true,
       enabled,
@@ -701,6 +730,7 @@ http.createServer(async (req, res) => {
     hasWalletId: Boolean(ENV_WALLET_ID),
   }));
   lastBalance = await getPaymentBalances();
+  lastBalanceAt = Date.now();
   console.log(JSON.stringify({
     event: 'prediction_balance_check',
     ok: lastBalance.ok,

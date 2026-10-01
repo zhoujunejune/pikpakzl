@@ -4,6 +4,10 @@ import { spawn } from 'node:child_process';
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PANEL_PORT = Number(process.env.INNER_PANEL_PORT || 3002);
 const ROUND_STATS_ORIGIN = String(process.env.ROUND_STATS_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');
+const STATS_PROXY_TIMEOUT_MS = Math.max(3000, Number(process.env.STATS_PROXY_TIMEOUT_MS || 10000));
+const STATS_PROXY_RETRY_MS = Math.max(100, Number(process.env.STATS_PROXY_RETRY_MS || 250));
+let lastGoodStats = null;
+let lastGoodStatsAt = 0;
 
 function log(event, extra = {}) {
   console.log(JSON.stringify({ event, shell: 'panel-stats', at: new Date().toISOString(), ...extra }));
@@ -37,7 +41,8 @@ e('rsAccuracy').innerHTML=s.accuracyPct==null?'准确率：-':'准确率：<span
 e('rsSettled').textContent=s.settledRounds??0;e('rsDecided').textContent=s.decidedRounds??0;e('rsCorrect').innerHTML='<span class="on">'+(s.correct??0)+'</span>';e('rsWrong').innerHTML='<span class="bad">'+(s.wrong??0)+'</span>';e('rsWait').textContent=s.noDecision??0;e('rsCoverage').textContent=s.coveragePct==null?'-':Number(s.coveragePct).toFixed(2)+'%';
 var settlement=j.settlementSource==='BINANCE_OFFICIAL_DATA_API_KLINES'?'Binance 官方 5分钟K线结算':'真实结果源';
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
-e('rsMeta').textContent='策略 '+(j.statsVersion||'V3')+' · 信号检查 '+(h.signalPollMs||'-')+'ms · '+settlement+' · 连续状态分析 · 校准样本 '+(s.calibratedRounds??0)+' · Brier '+(s.brierScore==null?'-':Number(s.brierScore).toFixed(4))+' · 冲突/低质量保持 WAIT'+status;
+var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
+e('rsMeta').textContent='策略 '+(j.statsVersion||'V5')+' · 信号检查 '+(h.signalPollMs||'-')+'ms · '+settlement+' · 连续状态分析 · 校准样本 '+(s.calibratedRounds??0)+' · Brier '+(s.brierScore==null?'-':Number(s.brierScore).toFixed(4))+' · 冲突/低质量保持 WAIT'+status+stale;
 var a=(j.records||[]).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var px=x.openPrice==null?'-':Number(x.openPrice).toFixed(2),pc=x.closePrice==null?'-':Number(x.closePrice).toFixed(2),st=x.predictionConfidence==null?'-':Number(x.predictionConfidence).toFixed(3),dl=x.predictionDelayMs==null?'-':(Number(x.predictionDelayMs)/1000).toFixed(2)+'s';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.prediction)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(x.actual)+'</td><td style="padding:9px 6px">'+badge(x.result)+'</td><td style="padding:9px 6px">'+px+' → '+pc+'</td></tr>'}).join(''):'<tr><td colspan="7" style="padding:10px 6px;color:#8f98a8">等待首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,2000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
@@ -79,12 +84,41 @@ function proxyInner(req, res, transformHtml = false) {
 }
 
 async function proxyStats(res) {
-  try {
-    const r = await fetch(`${ROUND_STATS_ORIGIN}/api/round-stats`, { cache:'no-store', signal:AbortSignal.timeout(3000) });
-    const text = await r.text(); res.writeHead(r.status, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' }); res.end(text);
-  } catch (err) {
-    res.writeHead(502, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' }); res.end(JSON.stringify({ ok:false, error:err?.message||String(err) }));
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const r = await fetch(`${ROUND_STATS_ORIGIN}/api/round-stats`, {
+        cache:'no-store',
+        signal:AbortSignal.timeout(STATS_PROXY_TIMEOUT_MS),
+      });
+      const text = await r.text();
+      if (!r.ok) throw new Error('ROUND_STATS_HTTP_' + r.status);
+      let json;
+      try { json = JSON.parse(text); } catch { throw new Error('ROUND_STATS_INVALID_JSON'); }
+      if (!json?.ok) throw new Error(json?.error || 'ROUND_STATS_NOT_OK');
+      lastGoodStats = json;
+      lastGoodStatsAt = Date.now();
+      res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+      return res.end(JSON.stringify(json));
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, STATS_PROXY_RETRY_MS));
+    }
   }
+
+  if (lastGoodStats) {
+    const stale = {
+      ...lastGoodStats,
+      stale: true,
+      staleAgeMs: Date.now() - lastGoodStatsAt,
+      proxyWarning: lastError?.message || String(lastError),
+    };
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+    return res.end(JSON.stringify(stale));
+  }
+
+  res.writeHead(502, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+  return res.end(JSON.stringify({ ok:false, error:lastError?.message || String(lastError) }));
 }
 
 startInner();

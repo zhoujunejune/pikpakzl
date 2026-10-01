@@ -12,7 +12,7 @@ function log(event, extra = {}) {
 const statsCard = `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
-<div class="muted" id="rsMeta">统计独立于是否下单；每轮第一次确认后的 UP/DOWN 会锁定为该轮预测。</div>
+<div class="muted" id="rsMeta">新版质量过滤：只统计本策略启动后的轮次；信号冲突时保持 WAIT。</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">已结算</div><div class="v" id="rsSettled">-</div></div>
 <div class="kv"><div class="k">有效判断</div><div class="v" id="rsDecided">-</div></div>
@@ -21,7 +21,7 @@ const statsCard = `<div class="c" id="roundStatsCard">
 <div class="kv"><div class="k">未出方向</div><div class="v" id="rsWait">-</div></div>
 <div class="kv"><div class="k">判断覆盖率</div><div class="v" id="rsCoverage">-</div></div>
 </div>
-<div style="overflow-x:auto;margin-top:12px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:520px"><thead><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">判断</th><th style="padding:8px 6px">真实</th><th style="padding:8px 6px">结果</th><th style="padding:8px 6px">开盘→收盘</th></tr></thead><tbody id="rsRows"><tr><td colspan="5" style="padding:10px 6px;color:#8f98a8">读取中...</td></tr></tbody></table></div>
+<div style="overflow:auto;max-height:460px;margin-top:12px;border:1px solid #2b313d;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px"><thead style="position:sticky;top:0;background:#151922;z-index:2"><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">判断</th><th style="padding:8px 6px">强度</th><th style="padding:8px 6px">耗时</th><th style="padding:8px 6px">真实</th><th style="padding:8px 6px">结果</th><th style="padding:8px 6px">开盘→收盘</th></tr></thead><tbody id="rsRows"><tr><td colspan="7" style="padding:10px 6px;color:#8f98a8">读取中...</td></tr></tbody></table></div>
 <div class="muted" style="margin-top:10px">准确率 = 命中 ÷ 已结算且实际给出 UP/DOWN 的轮次；WAIT 单独统计，不事后修改历史判断。</div>
 </div>`;
 
@@ -37,8 +37,8 @@ e('rsAccuracy').innerHTML=s.accuracyPct==null?'准确率：-':'准确率：<span
 e('rsSettled').textContent=s.settledRounds??0;e('rsDecided').textContent=s.decidedRounds??0;e('rsCorrect').innerHTML='<span class="on">'+(s.correct??0)+'</span>';e('rsWrong').innerHTML='<span class="bad">'+(s.wrong??0)+'</span>';e('rsWait').textContent=s.noDecision??0;e('rsCoverage').textContent=s.coveragePct==null?'-':Number(s.coveragePct).toFixed(2)+'%';
 var settlement=j.settlementSource==='BINANCE_OFFICIAL_DATA_API_KLINES'?'Binance 官方 5分钟K线结算':'真实结果源';
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
-e('rsMeta').textContent='统计独立于是否下单 · 信号检查 '+(h.signalPollMs||'-')+'ms · '+settlement+status;
-var a=(j.records||[]).slice(0,10);e('rsRows').innerHTML=a.length?a.map(function(x){var px=x.openPrice==null?'-':Number(x.openPrice).toFixed(2),pc=x.closePrice==null?'-':Number(x.closePrice).toFixed(2);return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.prediction)+'</td><td style="padding:9px 6px">'+badge(x.actual)+'</td><td style="padding:9px 6px">'+badge(x.result)+'</td><td style="padding:9px 6px">'+px+' → '+pc+'</td></tr>'}).join(''):'<tr><td colspan="5" style="padding:10px 6px;color:#8f98a8">等待首个轮次...</td></tr>';
+e('rsMeta').textContent='策略 '+(j.statsVersion||'V3')+' · 信号检查 '+(h.signalPollMs||'-')+'ms · '+settlement+' · 冲突/低质量保持 WAIT'+status;
+var a=(j.records||[]).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var px=x.openPrice==null?'-':Number(x.openPrice).toFixed(2),pc=x.closePrice==null?'-':Number(x.closePrice).toFixed(2),st=x.predictionConfidence==null?'-':Number(x.predictionConfidence).toFixed(3),dl=x.predictionDelayMs==null?'-':(Number(x.predictionDelayMs)/1000).toFixed(2)+'s';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.prediction)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(x.actual)+'</td><td style="padding:9px 6px">'+badge(x.result)+'</td><td style="padding:9px 6px">'+px+' → '+pc+'</td></tr>'}).join(''):'<tr><td colspan="7" style="padding:10px 6px;color:#8f98a8">等待首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,2000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;

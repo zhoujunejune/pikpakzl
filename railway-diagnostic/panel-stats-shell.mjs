@@ -4,7 +4,9 @@ import { spawn } from 'node:child_process';
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PANEL_PORT = Number(process.env.INNER_PANEL_PORT || 3002);
 const ROUND_STATS_ORIGIN = String(process.env.ROUND_STATS_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');
-const STATS_PROXY_TIMEOUT_MS = Math.max(3000, Number(process.env.STATS_PROXY_TIMEOUT_MS || 10000));
+const ROUND_STATS_PUBLIC_ORIGIN = String(process.env.ROUND_STATS_PUBLIC_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');
+const STATS_PROXY_PRIMARY_TIMEOUT_MS = Math.max(1000, Number(process.env.STATS_PROXY_PRIMARY_TIMEOUT_MS || 2500));
+const STATS_PROXY_FALLBACK_TIMEOUT_MS = Math.max(3000, Number(process.env.STATS_PROXY_FALLBACK_TIMEOUT_MS || 7000));
 const STATS_PROXY_RETRY_MS = Math.max(100, Number(process.env.STATS_PROXY_RETRY_MS || 250));
 let lastGoodStats = null;
 let lastGoodStatsAt = 0;
@@ -35,8 +37,15 @@ function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
+async function getStats(){
+var errs=[];
+try{var r=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});var j=await r.json();if(r.ok&&j&&j.ok){try{localStorage.setItem('v5_round_stats_cache',JSON.stringify({at:Date.now(),data:j}))}catch(_){}return j}errs.push((j&&j.error)||('proxy HTTP '+r.status))}catch(x){errs.push(x&&x.message?x.message:String(x))}
+try{var r2=await fetch('https://signal-diagnostic-v2-production.up.railway.app/api/round-stats?ts='+Date.now(),{cache:'no-store',mode:'cors'});var j2=await r2.json();if(r2.ok&&j2&&j2.ok){try{localStorage.setItem('v5_round_stats_cache',JSON.stringify({at:Date.now(),data:j2}))}catch(_){}return j2}errs.push((j2&&j2.error)||('direct HTTP '+r2.status))}catch(x){errs.push(x&&x.message?x.message:String(x))}
+try{var c=JSON.parse(localStorage.getItem('v5_round_stats_cache')||'null');if(c&&c.data&&c.data.ok){c.data.stale=true;c.data.staleAgeMs=Date.now()-Number(c.at||0);c.data.proxyWarning=errs.join(' | ');return c.data}}catch(_){}
+throw new Error(errs.join(' | ')||'统计服务暂不可用')
+}
 async function load(){try{
-var r=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});var j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||'读取失败');var s=j.summary||{},h=j.health||{};
+var j=await getStats();var s=j.summary||{},h=j.health||{};
 e('rsAccuracy').innerHTML=s.accuracyPct==null?'准确率：-':'准确率：<span class="on">'+Number(s.accuracyPct).toFixed(2)+'%</span>';
 e('rsSettled').textContent=s.settledRounds??0;e('rsDecided').textContent=s.decidedRounds??0;e('rsCorrect').innerHTML='<span class="on">'+(s.correct??0)+'</span>';e('rsWrong').innerHTML='<span class="bad">'+(s.wrong??0)+'</span>';e('rsWait').textContent=s.noDecision??0;e('rsCoverage').textContent=s.coveragePct==null?'-':Number(s.coveragePct).toFixed(2)+'%';
 var settlement=j.settlementSource==='BINANCE_OFFICIAL_DATA_API_KLINES'?'Binance 官方 5分钟K线结算':'真实结果源';
@@ -83,27 +92,45 @@ function proxyInner(req, res, transformHtml = false) {
   req.pipe(p);
 }
 
+async function fetchStatsOrigin(origin, timeoutMs, label) {
+  const startedAt = Date.now();
+  try {
+    const r = await fetch(origin + '/api/round-stats', {
+      cache:'no-store',
+      signal:AbortSignal.timeout(timeoutMs),
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error('HTTP_' + r.status);
+    let json;
+    try { json = JSON.parse(text); } catch { throw new Error('INVALID_JSON'); }
+    if (!json?.ok) throw new Error(json?.error || 'NOT_OK');
+    log('stats_origin_ok', { label, origin, latencyMs:Date.now()-startedAt });
+    return { ok:true, json };
+  } catch (err) {
+    log('stats_origin_failed', { label, origin, latencyMs:Date.now()-startedAt, error:err?.message || String(err) });
+    return { ok:false, error:err?.message || String(err) };
+  }
+}
+
 async function proxyStats(res) {
+  const origins = [
+    { origin:ROUND_STATS_ORIGIN, timeoutMs:STATS_PROXY_PRIMARY_TIMEOUT_MS, label:'primary' },
+  ];
+  if (ROUND_STATS_PUBLIC_ORIGIN && ROUND_STATS_PUBLIC_ORIGIN !== ROUND_STATS_ORIGIN) {
+    origins.push({ origin:ROUND_STATS_PUBLIC_ORIGIN, timeoutMs:STATS_PROXY_FALLBACK_TIMEOUT_MS, label:'public_fallback' });
+  }
+
   let lastError = null;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      const r = await fetch(`${ROUND_STATS_ORIGIN}/api/round-stats`, {
-        cache:'no-store',
-        signal:AbortSignal.timeout(STATS_PROXY_TIMEOUT_MS),
-      });
-      const text = await r.text();
-      if (!r.ok) throw new Error('ROUND_STATS_HTTP_' + r.status);
-      let json;
-      try { json = JSON.parse(text); } catch { throw new Error('ROUND_STATS_INVALID_JSON'); }
-      if (!json?.ok) throw new Error(json?.error || 'ROUND_STATS_NOT_OK');
-      lastGoodStats = json;
+  for (const item of origins) {
+    const got = await fetchStatsOrigin(item.origin, item.timeoutMs, item.label);
+    if (got.ok) {
+      lastGoodStats = got.json;
       lastGoodStatsAt = Date.now();
       res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
-      return res.end(JSON.stringify(json));
-    } catch (err) {
-      lastError = err;
-      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, STATS_PROXY_RETRY_MS));
+      return res.end(JSON.stringify(got.json));
     }
+    lastError = got.error;
+    await new Promise(resolve => setTimeout(resolve, STATS_PROXY_RETRY_MS));
   }
 
   if (lastGoodStats) {
@@ -111,14 +138,24 @@ async function proxyStats(res) {
       ...lastGoodStats,
       stale: true,
       staleAgeMs: Date.now() - lastGoodStatsAt,
-      proxyWarning: lastError?.message || String(lastError),
+      proxyWarning: lastError || 'ROUND_STATS_UNAVAILABLE',
     };
     res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
     return res.end(JSON.stringify(stale));
   }
 
   res.writeHead(502, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
-  return res.end(JSON.stringify({ ok:false, error:lastError?.message || String(lastError) }));
+  return res.end(JSON.stringify({ ok:false, error:lastError || 'ROUND_STATS_UNAVAILABLE' }));
+}
+
+async function probeStatsOrigins() {
+  const targets = [
+    { origin:ROUND_STATS_ORIGIN, timeoutMs:STATS_PROXY_PRIMARY_TIMEOUT_MS, label:'primary_startup_probe' },
+  ];
+  if (ROUND_STATS_PUBLIC_ORIGIN && ROUND_STATS_PUBLIC_ORIGIN !== ROUND_STATS_ORIGIN) {
+    targets.push({ origin:ROUND_STATS_PUBLIC_ORIGIN, timeoutMs:STATS_PROXY_FALLBACK_TIMEOUT_MS, label:'public_startup_probe' });
+  }
+  for (const t of targets) await fetchStatsOrigin(t.origin, t.timeoutMs, t.label);
 }
 
 startInner();
@@ -127,7 +164,17 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/round-stats') return proxyStats(res);
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);
   return proxyInner(req, res, false);
-}).listen(PORT, '0.0.0.0', () => log('panel_stats_shell_started', { port:PORT, innerPanelPort:INNER_PANEL_PORT, roundStatsOrigin:ROUND_STATS_ORIGIN }));
+}).listen(PORT, '0.0.0.0', () => {
+  log('panel_stats_shell_started', {
+    port:PORT,
+    innerPanelPort:INNER_PANEL_PORT,
+    roundStatsOrigin:ROUND_STATS_ORIGIN,
+    publicFallbackOrigin:ROUND_STATS_PUBLIC_ORIGIN,
+    primaryTimeoutMs:STATS_PROXY_PRIMARY_TIMEOUT_MS,
+    fallbackTimeoutMs:STATS_PROXY_FALLBACK_TIMEOUT_MS,
+  });
+  setTimeout(probeStatsOrigins, 1200).unref();
+});
 
 function shutdown(signal){stopping=true;if(child)child.kill('SIGTERM');log('panel_stats_shell_stopped',{signal});setTimeout(()=>process.exit(0),150).unref()}
 process.on('SIGTERM',()=>shutdown('SIGTERM'));process.on('SIGINT',()=>shutdown('SIGINT'));

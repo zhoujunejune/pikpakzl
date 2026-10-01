@@ -10,6 +10,8 @@ const STATS_PROXY_FALLBACK_TIMEOUT_MS = Math.max(3000, Number(process.env.STATS_
 const STATS_PROXY_RETRY_MS = Math.max(100, Number(process.env.STATS_PROXY_RETRY_MS || 250));
 let lastGoodStats = null;
 let lastGoodStatsAt = 0;
+let statsRefreshPromise = null;
+let statsRefreshLastError = null;
 
 function log(event, extra = {}) {
   console.log(JSON.stringify({ event, shell: 'panel-stats', at: new Date().toISOString(), ...extra }));
@@ -54,7 +56,7 @@ var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||
 e('rsMeta').textContent='策略 '+(j.statsVersion||'V5')+' · 信号检查 '+(h.signalPollMs||'-')+'ms · '+settlement+' · 连续状态分析 · 校准样本 '+(s.calibratedRounds??0)+' · Brier '+(s.brierScore==null?'-':Number(s.brierScore).toFixed(4))+' · 冲突/低质量保持 WAIT'+status+stale;
 var a=(j.records||[]).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var px=x.openPrice==null?'-':Number(x.openPrice).toFixed(2),pc=x.closePrice==null?'-':Number(x.closePrice).toFixed(2),st=x.predictionConfidence==null?'-':Number(x.predictionConfidence).toFixed(3),dl=x.predictionDelayMs==null?'-':(Number(x.predictionDelayMs)/1000).toFixed(2)+'s';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.prediction)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(x.actual)+'</td><td style="padding:9px 6px">'+badge(x.result)+'</td><td style="padding:9px 6px">'+px+' → '+pc+'</td></tr>'}).join(''):'<tr><td colspan="7" style="padding:10px 6px;color:#8f98a8">等待首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
-function boot(){load();setInterval(load,2000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;
 
 function injectStats(html) {
@@ -112,50 +114,54 @@ async function fetchStatsOrigin(origin, timeoutMs, label) {
   }
 }
 
-async function proxyStats(res) {
-  const origins = [
-    { origin:ROUND_STATS_ORIGIN, timeoutMs:STATS_PROXY_PRIMARY_TIMEOUT_MS, label:'primary' },
-  ];
-  if (ROUND_STATS_PUBLIC_ORIGIN && ROUND_STATS_PUBLIC_ORIGIN !== ROUND_STATS_ORIGIN) {
-    origins.push({ origin:ROUND_STATS_PUBLIC_ORIGIN, timeoutMs:STATS_PROXY_FALLBACK_TIMEOUT_MS, label:'public_fallback' });
-  }
-
-  let lastError = null;
-  for (const item of origins) {
-    const got = await fetchStatsOrigin(item.origin, item.timeoutMs, item.label);
-    if (got.ok) {
-      lastGoodStats = got.json;
+async function refreshStatsCache() {
+  if (statsRefreshPromise) return statsRefreshPromise;
+  statsRefreshPromise = (async () => {
+    const primary = await fetchStatsOrigin(ROUND_STATS_ORIGIN, STATS_PROXY_PRIMARY_TIMEOUT_MS, 'cache_primary');
+    if (primary.ok) {
+      lastGoodStats = primary.json;
       lastGoodStatsAt = Date.now();
-      res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
-      return res.end(JSON.stringify(got.json));
+      statsRefreshLastError = null;
+      return true;
     }
-    lastError = got.error;
-    await new Promise(resolve => setTimeout(resolve, STATS_PROXY_RETRY_MS));
+
+    if (ROUND_STATS_PUBLIC_ORIGIN && ROUND_STATS_PUBLIC_ORIGIN !== ROUND_STATS_ORIGIN) {
+      const fallback = await fetchStatsOrigin(ROUND_STATS_PUBLIC_ORIGIN, STATS_PROXY_FALLBACK_TIMEOUT_MS, 'cache_public_fallback');
+      if (fallback.ok) {
+        lastGoodStats = fallback.json;
+        lastGoodStatsAt = Date.now();
+        statsRefreshLastError = null;
+        return true;
+      }
+      statsRefreshLastError = fallback.error || primary.error;
+    } else {
+      statsRefreshLastError = primary.error;
+    }
+    return false;
+  })();
+
+  try {
+    return await statsRefreshPromise;
+  } finally {
+    statsRefreshPromise = null;
   }
+}
+
+async function proxyStats(res) {
+  // UI reads the panel-local cache instead of hitting V2 for every browser/tab.
+  if (!lastGoodStats) await refreshStatsCache();
 
   if (lastGoodStats) {
-    const stale = {
-      ...lastGoodStats,
-      stale: true,
-      staleAgeMs: Date.now() - lastGoodStatsAt,
-      proxyWarning: lastError || 'ROUND_STATS_UNAVAILABLE',
-    };
+    const age = Date.now() - lastGoodStatsAt;
+    const body = age > 5000
+      ? { ...lastGoodStats, stale:true, staleAgeMs:age, proxyWarning:statsRefreshLastError || null }
+      : lastGoodStats;
     res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
-    return res.end(JSON.stringify(stale));
+    return res.end(JSON.stringify(body));
   }
 
   res.writeHead(502, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
-  return res.end(JSON.stringify({ ok:false, error:lastError || 'ROUND_STATS_UNAVAILABLE' }));
-}
-
-async function probeStatsOrigins() {
-  const targets = [
-    { origin:ROUND_STATS_ORIGIN, timeoutMs:STATS_PROXY_PRIMARY_TIMEOUT_MS, label:'primary_startup_probe' },
-  ];
-  if (ROUND_STATS_PUBLIC_ORIGIN && ROUND_STATS_PUBLIC_ORIGIN !== ROUND_STATS_ORIGIN) {
-    targets.push({ origin:ROUND_STATS_PUBLIC_ORIGIN, timeoutMs:STATS_PROXY_FALLBACK_TIMEOUT_MS, label:'public_startup_probe' });
-  }
-  for (const t of targets) await fetchStatsOrigin(t.origin, t.timeoutMs, t.label);
+  return res.end(JSON.stringify({ ok:false, error:statsRefreshLastError || 'ROUND_STATS_CACHE_NOT_READY' }));
 }
 
 startInner();
@@ -172,8 +178,10 @@ http.createServer((req, res) => {
     publicFallbackOrigin:ROUND_STATS_PUBLIC_ORIGIN,
     primaryTimeoutMs:STATS_PROXY_PRIMARY_TIMEOUT_MS,
     fallbackTimeoutMs:STATS_PROXY_FALLBACK_TIMEOUT_MS,
+    statsCacheMode:'SINGLE_FLIGHT_BACKGROUND_REFRESH',
   });
-  setTimeout(probeStatsOrigins, 1200).unref();
+  setTimeout(refreshStatsCache, 300).unref();
+  setInterval(refreshStatsCache, 1000).unref();
 });
 
 function shutdown(signal){stopping=true;if(child)child.kill('SIGTERM');log('panel_stats_shell_stopped',{signal});setTimeout(()=>process.exit(0),150).unref()}

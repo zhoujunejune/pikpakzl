@@ -559,7 +559,7 @@ function payload() {
     symbol: SYMBOL,
     signalOrigin: SIGNAL_ORIGIN,
     settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_WITH_SPOT_FALLBACK',
-    rule: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',
+    rule: 'FIRST_REGIME_LAYER_LOCK_PER_5M_ROUND_V6',
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
     accuracyRule: 'HIT_DIVIDED_BY_DECIDED_SETTLED_ROUNDS',

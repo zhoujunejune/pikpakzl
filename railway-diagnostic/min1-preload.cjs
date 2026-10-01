@@ -72,7 +72,7 @@ function patchTradeIndexSource(source) {
       '      facts: row.predictionFacts ?? null,',
       '      predictedAt: row.predictedAt ?? null,',
       '      canonical: true,',
-      "      policy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',",
+      "      policy: 'FIRST_REGIME_LAYER_LOCK_PER_5M_ROUND_V6',",
       '    };',
       '  } catch {',
       '    return null;',
@@ -100,7 +100,7 @@ function logFastPreparePatch(result, sourceKind) {
     prepareRetryPatched: result.prepareRetryPatched,
     marketSearchFallbackOnRoundMiss: result.marketSearchPatched,
     canonicalFrozenSignal: result.canonicalSignalPatched,
-    frozenSignalPolicy: result.canonicalSignalPatched ? 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5' : null,
+    frozenSignalPolicy: result.canonicalSignalPatched ? 'FIRST_REGIME_LAYER_LOCK_PER_5M_ROUND_V6' : null,
     failClosedOnCanonicalSignalError: result.canonicalSignalPatched,
   }));
 }

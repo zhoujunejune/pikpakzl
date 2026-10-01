@@ -10,6 +10,7 @@ const HISTORY_LIMIT = Math.max(20, Number(process.env.ROUND_HISTORY_LIMIT || 200
 const HISTORY_FILE = process.env.ROUND_HISTORY_FILE || '/tmp/round-history.json';
 const MARKET_DATA_BASE = String(process.env.BINANCE_MARKET_DATA_BASE || 'https://data-api.binance.vision').replace(/\/+$/, '');
 const STATS_VERSION = String(process.env.ROUND_STATS_VERSION || 'QUALITY_FILTER_V3_5M');
+const STATS_START_MS = Math.max(0, Number(process.env.ROUND_STATS_START_MS || 0));
 
 const rounds = new Map();
 let signalPollBusy = false;
@@ -42,7 +43,8 @@ function loadHistory() {
     const parsed = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
     if (!Array.isArray(parsed)) return;
     for (const item of parsed.slice(-HISTORY_LIMIT)) {
-      if (Number.isFinite(Number(item?.roundStartMs))) rounds.set(String(item.roundStartMs), item);
+      const start = Number(item?.roundStartMs);
+      if (Number.isFinite(start) && start >= STATS_START_MS) rounds.set(String(start), item);
     }
     log('history_loaded', { records: rounds.size, file: HISTORY_FILE });
   } catch (e) {
@@ -87,6 +89,7 @@ function ensureRound(roundStartMs) {
 function ensureCurrentRound() {
   const now = Date.now();
   const start = Math.floor(now / 300000) * 300000;
+  if (start < STATS_START_MS) return;
   ensureRound(start);
 }
 
@@ -104,6 +107,7 @@ async function pollSignal() {
     const json = await r.json();
     const live = json?.live;
     if (!live?.round) return;
+    if (Number(live.round) < STATS_START_MS) return;
     lastSignalOkAt = Date.now();
     lastSignalError = null;
 
@@ -228,6 +232,7 @@ function payload() {
     settlementSource: 'BINANCE_OFFICIAL_DATA_API_KLINES',
     rule: 'FIRST_QUALITY_LOCKED_UP_DOWN_PER_5M_ROUND',
     statsVersion: STATS_VERSION,
+    statsStartMs: STATS_START_MS,
     accuracyRule: 'HIT_DIVIDED_BY_DECIDED_SETTLED_ROUNDS',
     summary: summary(),
     health: {
@@ -280,5 +285,6 @@ http.createServer((req, res) => {
     marketDataBase: MARKET_DATA_BASE,
     settlementSource: 'BINANCE_OFFICIAL_DATA_API_KLINES',
     statsVersion: STATS_VERSION,
+    statsStartMs: STATS_START_MS,
   });
 });

@@ -9,9 +9,12 @@ const SETTLE_POLL_MS = Math.max(500, Number(process.env.ROUND_SETTLE_POLL_MS || 
 const HISTORY_LIMIT = Math.max(20, Number(process.env.ROUND_HISTORY_LIMIT || 200));
 const HISTORY_FILE = process.env.ROUND_HISTORY_FILE || '/tmp/round-history.json';
 const MARKET_DATA_BASE = String(process.env.BINANCE_MARKET_DATA_BASE || 'https://data-api.binance.vision').replace(/\/+$/, '');
-const STATS_VERSION = String(process.env.ROUND_STATS_VERSION || 'CONTINUOUS_MARKET_STATE_V5');
+const STATS_VERSION = String(process.env.ROUND_STATS_VERSION || 'REGIME_LAYER_V6_5M');
 const STATS_START_MS = Math.max(0, Number(process.env.ROUND_STATS_START_MS || 0));
-const CALIBRATION_MIN_SAMPLES = Math.max(8, Number(process.env.CALIBRATION_MIN_SAMPLES || 20));
+const CALIBRATION_MIN_SAMPLES = Math.max(20, Number(process.env.CALIBRATION_MIN_SAMPLES || 100));
+const SHADOW_OBSERVE_MS = Math.max(10000, Number(process.env.SHADOW_OBSERVE_MS || 15000));
+const SHADOW_TRAIN_MIN_SAMPLES = Math.max(100, Number(process.env.SHADOW_TRAIN_MIN_SAMPLES || 300));
+const SHADOW_FORWARD_MIN_SAMPLES = Math.max(30, Number(process.env.SHADOW_FORWARD_MIN_SAMPLES || 60));
 const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
 const OFFICIAL_RESOLUTION_WAIT_MS = Math.max(10000, Number(process.env.OFFICIAL_RESOLUTION_WAIT_MS || 60000));
 
@@ -23,6 +26,20 @@ let lastSignalOkAt = 0;
 let lastSignalError = null;
 let lastSettlementOkAt = 0;
 let lastSettlementError = null;
+let shadowModel = null;
+let shadowModelMetrics = {
+  status: 'COLLECTING',
+  trainedSamples: 0,
+  validationSamples: 0,
+  forwardSamples: 0,
+  validationAccuracy: null,
+  validationBrier: null,
+  baselineAccuracy: null,
+  baselineBrier: null,
+  forwardAccuracy: null,
+  forwardBrier: null,
+  trainedAt: null,
+};
 
 function log(event, extra = {}) {
   console.log(JSON.stringify({ event, service: 'round-tracker', at: new Date().toISOString(), ...extra }));
@@ -61,6 +78,206 @@ function trimHistory() {
   while (keys.length > HISTORY_LIMIT) rounds.delete(keys.shift());
 }
 
+
+
+const SHADOW_FEATURE_KEYS = [
+  'regimeScore',
+  'currentScore',
+  'microScore',
+  'currentTrendScore',
+  'normalizedMomentum15s',
+  'normalizedMomentum30s',
+  'normalizedMomentum60s',
+  'normalizedMomentum180s',
+  'normalizedMomentum300s',
+  'tradePressure15s',
+  'tradePressure60s',
+  'ofiNormalized5s',
+  'rangePosition180',
+  'predictionMarketUpMidCentered',
+  'absorptionRisk',
+];
+
+function shadowVector(facts) {
+  if (!facts || typeof facts !== 'object') return null;
+  const upMid = Number(facts.predictionMarketUpMid);
+  const values = [
+    Number(facts.regimeScore),
+    Number(facts.currentScore),
+    Number(facts.microScore),
+    Number(facts.currentTrendScore),
+    Number(facts.normalizedMomentum15s),
+    Number(facts.normalizedMomentum30s),
+    Number(facts.normalizedMomentum60s),
+    Number(facts.normalizedMomentum180s),
+    Number(facts.normalizedMomentum300s),
+    Number(facts.tradePressure15s),
+    Number(facts.tradePressure60s),
+    Number(facts.ofiNormalized5s),
+    Number(facts.rangePosition180),
+    Number.isFinite(upMid) ? (upMid - 0.5) * 2 : 0,
+    facts.absorptionRisk ? 1 : 0,
+  ].map(v => Number.isFinite(v) ? Math.max(-3, Math.min(3, v)) : 0);
+  return values;
+}
+
+function sigmoid(z) {
+  if (z >= 0) {
+    const e = Math.exp(-z);
+    return 1 / (1 + e);
+  }
+  const e = Math.exp(z);
+  return e / (1 + e);
+}
+
+function trainLogistic(rows) {
+  const samples = rows.map(r => {
+    const x = shadowVector(r.shadowFacts);
+    const y = r.actual === 'UP' ? 1 : r.actual === 'DOWN' ? 0 : null;
+    return x && y !== null ? { x, y } : null;
+  }).filter(Boolean);
+  if (samples.length < SHADOW_TRAIN_MIN_SAMPLES) return null;
+
+  const split = Math.max(1, Math.floor(samples.length * 0.8));
+  const train = samples.slice(0, split);
+  const valid = samples.slice(split);
+  if (valid.length < 20) return null;
+
+  const w = new Array(SHADOW_FEATURE_KEYS.length + 1).fill(0);
+  const lr = 0.06;
+  const l2 = 0.01;
+  for (let epoch = 0; epoch < 220; epoch += 1) {
+    const grad = new Array(w.length).fill(0);
+    for (const s of train) {
+      let z = w[0];
+      for (let j = 0; j < s.x.length; j += 1) z += w[j + 1] * s.x[j];
+      const e = sigmoid(z) - s.y;
+      grad[0] += e;
+      for (let j = 0; j < s.x.length; j += 1) grad[j + 1] += e * s.x[j];
+    }
+    const n = train.length || 1;
+    w[0] -= lr * grad[0] / n;
+    for (let j = 1; j < w.length; j += 1) {
+      w[j] -= lr * (grad[j] / n + l2 * w[j]);
+    }
+  }
+
+  const evalRows = (arr) => {
+    let hit = 0;
+    let brier = 0;
+    for (const s of arr) {
+      let z = w[0];
+      for (let j = 0; j < s.x.length; j += 1) z += w[j + 1] * s.x[j];
+      const p = sigmoid(z);
+      hit += (p >= 0.5 ? 1 : 0) === s.y ? 1 : 0;
+      brier += (p - s.y) * (p - s.y);
+    }
+    return {
+      accuracy: arr.length ? hit / arr.length : null,
+      brier: arr.length ? brier / arr.length : null,
+    };
+  };
+
+  const prevalence = train.reduce((sum, x) => sum + x.y, 0) / train.length;
+  const baselineClass = prevalence >= 0.5 ? 1 : 0;
+  const baselineAccuracy = valid.filter(x => x.y === baselineClass).length / valid.length;
+  const baselineBrier = valid.reduce((sum, x) => sum + (prevalence - x.y) ** 2, 0) / valid.length;
+  const validation = evalRows(valid);
+
+  return {
+    weights: w,
+    featureKeys: SHADOW_FEATURE_KEYS,
+    trainedAt: Date.now(),
+    trainedSamples: train.length,
+    validationSamples: valid.length,
+    validationAccuracy: validation.accuracy,
+    validationBrier: validation.brier,
+    baselineAccuracy,
+    baselineBrier,
+  };
+}
+
+function shadowPredict(facts) {
+  if (!shadowModel?.weights) return null;
+  const x = shadowVector(facts);
+  if (!x) return null;
+  let z = shadowModel.weights[0];
+  for (let j = 0; j < x.length; j += 1) z += shadowModel.weights[j + 1] * x[j];
+  return sigmoid(z);
+}
+
+function updateShadowForwardMetrics() {
+  if (!shadowModel?.trainedAt) return;
+  const forward = Array.from(rounds.values()).filter(r =>
+    Number(r.shadowModelTrainedAt) === Number(shadowModel.trainedAt) &&
+    Number.isFinite(Number(r.shadowProbability)) &&
+    (r.actual === 'UP' || r.actual === 'DOWN')
+  );
+  if (!forward.length) {
+    shadowModelMetrics.forwardSamples = 0;
+    shadowModelMetrics.forwardAccuracy = null;
+    shadowModelMetrics.forwardBrier = null;
+    return;
+  }
+  let hits = 0;
+  let brier = 0;
+  for (const r of forward) {
+    const p = Number(r.shadowProbability);
+    const y = r.actual === 'UP' ? 1 : 0;
+    hits += (p >= 0.5 ? 1 : 0) === y ? 1 : 0;
+    brier += (p - y) * (p - y);
+  }
+  shadowModelMetrics.forwardSamples = forward.length;
+  shadowModelMetrics.forwardAccuracy = Number((hits / forward.length).toFixed(4));
+  shadowModelMetrics.forwardBrier = Number((brier / forward.length).toFixed(4));
+  if (
+    forward.length >= SHADOW_FORWARD_MIN_SAMPLES &&
+    shadowModelMetrics.forwardAccuracy >= Number(shadowModel.validationAccuracy || 0) - 0.03 &&
+    shadowModelMetrics.forwardBrier <= Number(shadowModel.validationBrier || 1) + 0.03
+  ) {
+    shadowModelMetrics.status = 'FORWARD_VALIDATED_CANDIDATE';
+  }
+}
+
+function maybeTrainShadowModel() {
+  const labeled = Array.from(rounds.values())
+    .filter(r => r.shadowFacts && (r.actual === 'UP' || r.actual === 'DOWN'))
+    .sort((a,b) => a.roundStartMs - b.roundStartMs);
+  if (labeled.length < SHADOW_TRAIN_MIN_SAMPLES) {
+    shadowModelMetrics.status = 'COLLECTING';
+    shadowModelMetrics.trainedSamples = labeled.length;
+    return;
+  }
+
+  const latestRound = labeled[labeled.length - 1]?.roundStartMs || 0;
+  const lastTrainRound = Number(shadowModel?.lastTrainRound || 0);
+  if (shadowModel && latestRound - lastTrainRound < 20 * 300000) {
+    updateShadowForwardMetrics();
+    return;
+  }
+
+  const trained = trainLogistic(labeled);
+  if (!trained) return;
+  shadowModel = { ...trained, lastTrainRound: latestRound };
+  shadowModelMetrics = {
+    status:
+      trained.validationAccuracy > trained.baselineAccuracy + 0.03 &&
+      trained.validationBrier < trained.baselineBrier
+        ? 'SHADOW_VALIDATION_PASSED'
+        : 'SHADOW_VALIDATION_NOT_BETTER_THAN_BASELINE',
+    trainedSamples: trained.trainedSamples,
+    validationSamples: trained.validationSamples,
+    forwardSamples: 0,
+    validationAccuracy: Number(trained.validationAccuracy.toFixed(4)),
+    validationBrier: Number(trained.validationBrier.toFixed(4)),
+    baselineAccuracy: Number(trained.baselineAccuracy.toFixed(4)),
+    baselineBrier: Number(trained.baselineBrier.toFixed(4)),
+    forwardAccuracy: null,
+    forwardBrier: null,
+    trainedAt: trained.trainedAt,
+  };
+  log('shadow_model_trained', shadowModelMetrics);
+}
 
 function calibrateProbability(direction, score, excludeRound = null) {
   const dir = String(direction || '').toUpperCase();
@@ -112,6 +329,10 @@ function ensureRound(roundStartMs) {
       predictionScore: null,
       predictionConfidence: null,
       predictionFacts: null,
+      shadowObservedAt: null,
+      shadowFacts: null,
+      shadowProbability: null,
+      shadowModelTrainedAt: null,
       modelProbability: null,
       calibrationSamples: 0,
       calibrationReady: false,
@@ -161,7 +382,17 @@ async function pollSignal() {
     lastSignalError = null;
 
     const row = ensureRound(Number(live.round));
-    const liveTopicId = live?.facts?.predictionMarketTopicId ?? null;
+    const liveFacts = live?.facts && typeof live.facts === 'object' ? live.facts : null;
+    const elapsedMs = Date.now() - row.roundStartMs;
+    if (!row.shadowObservedAt && liveFacts && elapsedMs >= SHADOW_OBSERVE_MS) {
+      row.shadowObservedAt = Date.now();
+      row.shadowFacts = liveFacts;
+      const shadowP = shadowPredict(liveFacts);
+      row.shadowProbability = Number.isFinite(shadowP) ? Number(shadowP.toFixed(6)) : null;
+      row.shadowModelTrainedAt = shadowModel?.trainedAt ?? null;
+      saveHistory();
+    }
+    const liveTopicId = liveFacts?.predictionMarketTopicId ?? null;
     if (!row.predictionMarketTopicId && liveTopicId) {
       row.predictionMarketTopicId = liveTopicId;
       saveHistory();
@@ -264,6 +495,8 @@ async function settlePendingRounds() {
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
         saveHistory();
+        maybeTrainShadowModel();
+        updateShadowForwardMetrics();
         log('round_settled', {
           round: row.roundStartMs,
           prediction: row.prediction,
@@ -314,6 +547,7 @@ function summary() {
     calibratedRounds: calibrated.length,
     brierScore,
     calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
+    shadowLearning: shadowModelMetrics,
   };
 }
 
@@ -348,6 +582,8 @@ function payload() {
 }
 
 loadHistory();
+maybeTrainShadowModel();
+updateShadowForwardMetrics();
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
 setInterval(settlePendingRounds, SETTLE_POLL_MS).unref();
@@ -385,6 +621,9 @@ http.createServer((req, res) => {
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
     calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
+    shadowObserveMs: SHADOW_OBSERVE_MS,
+    shadowTrainMinSamples: SHADOW_TRAIN_MIN_SAMPLES,
+    shadowForwardMinSamples: SHADOW_FORWARD_MIN_SAMPLES,
     officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
   });
 });

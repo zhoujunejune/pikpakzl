@@ -11,6 +11,9 @@ const HISTORY_FILE = process.env.ROUND_HISTORY_FILE || '/tmp/round-history.json'
 const MARKET_DATA_BASE = String(process.env.BINANCE_MARKET_DATA_BASE || 'https://data-api.binance.vision').replace(/\/+$/, '');
 const STATS_VERSION = String(process.env.ROUND_STATS_VERSION || 'CONTINUOUS_MARKET_STATE_V4');
 const STATS_START_MS = Math.max(0, Number(process.env.ROUND_STATS_START_MS || 0));
+const CALIBRATION_MIN_SAMPLES = Math.max(8, Number(process.env.CALIBRATION_MIN_SAMPLES || 20));
+const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
+const OFFICIAL_RESOLUTION_WAIT_MS = Math.max(10000, Number(process.env.OFFICIAL_RESOLUTION_WAIT_MS || 60000));
 
 const rounds = new Map();
 let signalPollBusy = false;
@@ -58,6 +61,44 @@ function trimHistory() {
   while (keys.length > HISTORY_LIMIT) rounds.delete(keys.shift());
 }
 
+
+function calibrateProbability(direction, score, excludeRound = null) {
+  const dir = String(direction || '').toUpperCase();
+  const strength = Math.abs(Number(score));
+  const all = Array.from(rounds.values()).filter(r =>
+    r.roundStartMs !== excludeRound &&
+    r.result && (r.result === 'HIT' || r.result === 'MISS') &&
+    r.prediction === dir &&
+    Number.isFinite(Number(r.predictionScore))
+  );
+  let sample = Number.isFinite(strength)
+    ? all.filter(r => Math.abs(Math.abs(Number(r.predictionScore)) - strength) <= CALIBRATION_BAND)
+    : all;
+  if (sample.length < CALIBRATION_MIN_SAMPLES) sample = all;
+  if (sample.length < CALIBRATION_MIN_SAMPLES) {
+    return { probability:null, samples:sample.length, calibrated:false };
+  }
+  const hits = sample.filter(r => r.result === 'HIT').length;
+  // Beta(2,2) smoothing avoids extreme 0/1 estimates on modest samples.
+  const probability = (hits + 2) / (sample.length + 4);
+  return {
+    probability:Number(probability.toFixed(4)),
+    samples:sample.length,
+    calibrated:true,
+  };
+}
+
+async function fetchOfficialPredictionResolution(roundStartMs) {
+  try {
+    const u = SIGNAL_ORIGIN + '/api/prediction-resolution?round=' + encodeURIComponent(String(roundStartMs));
+    const r = await fetch(u, { cache:'no-store', signal:AbortSignal.timeout(5000) });
+    if (!r.ok) return { ok:false, resolved:false, error:'HTTP_' + r.status };
+    return await r.json();
+  } catch (e) {
+    return { ok:false, resolved:false, error:e?.message || String(e) };
+  }
+}
+
 function ensureRound(roundStartMs) {
   const start = Number(roundStartMs);
   const key = String(start);
@@ -69,9 +110,16 @@ function ensureRound(roundStartMs) {
       prediction: 'WAIT',
       predictionScore: null,
       predictionConfidence: null,
+      predictionFacts: null,
+      modelProbability: null,
+      calibrationSamples: 0,
+      calibrationReady: false,
       predictedAt: null,
       predictionDelayMs: null,
       actual: null,
+      actualSource: null,
+      resolutionEvidence: null,
+      predictionMarketTopicId: null,
       openPrice: null,
       closePrice: null,
       settledAt: null,
@@ -117,6 +165,12 @@ async function pollSignal() {
       row.prediction = direction;
       row.predictionScore = Number.isFinite(Number(live?.signal?.score)) ? Number(live.signal.score) : null;
       row.predictionConfidence = Number.isFinite(Number(live?.signal?.confidence)) ? Number(live.signal.confidence) : null;
+      row.predictionFacts = live?.facts && typeof live.facts === 'object' ? live.facts : null;
+      row.predictionMarketTopicId = row.predictionFacts?.predictionMarketTopicId ?? null;
+      const cal = calibrateProbability(direction, row.predictionScore, row.roundStartMs);
+      row.modelProbability = cal.probability;
+      row.calibrationSamples = cal.samples;
+      row.calibrationReady = cal.calibrated;
       row.predictedAt = Number(live.generatedAt || Date.now());
       row.predictionDelayMs = Math.max(0, row.predictedAt - row.roundStartMs);
       row.source = live.model || row.source;
@@ -126,7 +180,10 @@ async function pollSignal() {
         prediction: row.prediction,
         score: row.predictionScore,
         confidence: row.predictionConfidence,
+        modelProbability: row.modelProbability,
+        calibrationSamples: row.calibrationSamples,
         predictionDelayMs: row.predictionDelayMs,
+        predictionMarketUpMid: row.predictionFacts?.predictionMarketUpMid ?? null,
       });
     }
   } catch (e) {
@@ -168,11 +225,31 @@ async function settlePendingRounds() {
     for (const row of pending) {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;
       try {
-        const k = await fetchRealKline(row.roundStartMs);
-        row.openPrice = k.open;
-        row.closePrice = k.close;
-        row.roundEndMs = k.closeTime;
-        row.actual = k.close > k.open ? 'UP' : k.close < k.open ? 'DOWN' : 'FLAT';
+        const afterCloseMs = Math.max(0, Date.now() - (row.roundEndMs + 1));
+        const official = await fetchOfficialPredictionResolution(row.roundStartMs);
+        let k = null;
+
+        if (official?.resolved && (official.direction === 'UP' || official.direction === 'DOWN')) {
+          row.actual = official.direction;
+          row.actualSource = 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION';
+          row.resolutionEvidence = official.evidence ?? null;
+          row.predictionMarketTopicId = official.marketTopicId ?? row.predictionMarketTopicId;
+          try { k = await fetchRealKline(row.roundStartMs); } catch {}
+        } else {
+          if (afterCloseMs < OFFICIAL_RESOLUTION_WAIT_MS) {
+            throw new Error('PREDICTION_RESOLUTION_PENDING');
+          }
+          k = await fetchRealKline(row.roundStartMs);
+          row.actual = k.close > k.open ? 'UP' : k.close < k.open ? 'DOWN' : 'FLAT';
+          row.actualSource = 'BINANCE_SPOT_KLINE_FALLBACK_AFTER_OFFICIAL_WAIT';
+          row.resolutionEvidence = official?.error || official?.status || 'OFFICIAL_NOT_RESOLVED';
+        }
+
+        if (k) {
+          row.openPrice = k.open;
+          row.closePrice = k.close;
+          row.roundEndMs = k.closeTime;
+        }
         row.settledAt = Date.now();
         row.result = row.prediction === 'UP' || row.prediction === 'DOWN'
           ? (row.actual === row.prediction ? 'HIT' : row.actual === 'FLAT' ? 'FLAT' : 'MISS')
@@ -189,7 +266,8 @@ async function settlePendingRounds() {
           openPrice: row.openPrice,
           closePrice: row.closePrice,
           settleAttempts: row.settleAttempts,
-          source: 'BINANCE_OFFICIAL_DATA_API_KLINES',
+          source: row.actualSource,
+          resolutionEvidence: row.resolutionEvidence,
         });
       } catch (e) {
         lastSettlementError = e?.message || String(e);
@@ -210,6 +288,14 @@ function summary() {
   const noDecision = settled.filter(r => r.result === 'NO_DECISION').length;
   const accuracyPct = decided.length ? Number(((correct / decided.length) * 100).toFixed(2)) : null;
   const coveragePct = settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null;
+  const calibrated = decided.filter(r => Number.isFinite(Number(r.modelProbability)));
+  const brierScore = calibrated.length
+    ? Number((calibrated.reduce((sum,r) => {
+        const y = r.result === 'HIT' ? 1 : 0;
+        const p = Number(r.modelProbability);
+        return sum + (p - y) * (p - y);
+      }, 0) / calibrated.length).toFixed(4))
+    : null;
   return {
     totalTrackedRounds: records.length,
     settledRounds: settled.length,
@@ -219,6 +305,9 @@ function summary() {
     noDecision,
     accuracyPct,
     coveragePct,
+    calibratedRounds: calibrated.length,
+    brierScore,
+    calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
   };
 }
 
@@ -229,7 +318,7 @@ function payload() {
     service: 'binance-round-tracker',
     symbol: SYMBOL,
     signalOrigin: SIGNAL_ORIGIN,
-    settlementSource: 'BINANCE_OFFICIAL_DATA_API_KLINES',
+    settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_WITH_SPOT_FALLBACK',
     rule: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND',
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
@@ -244,6 +333,9 @@ function payload() {
       lastSettlementOkAt,
       lastSettlementError,
       marketDataBase: MARKET_DATA_BASE,
+      officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
+      calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
+      calibrationBand: CALIBRATION_BAND,
     },
     records: records.slice(0, 100),
   };
@@ -283,8 +375,10 @@ http.createServer((req, res) => {
     settlePollMs: SETTLE_POLL_MS,
     historyLimit: HISTORY_LIMIT,
     marketDataBase: MARKET_DATA_BASE,
-    settlementSource: 'BINANCE_OFFICIAL_DATA_API_KLINES',
+    settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_WITH_SPOT_FALLBACK',
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
+    calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
+    officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
   });
 });

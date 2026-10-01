@@ -66,9 +66,13 @@ function patchTradeIndexSource(source) {
       '      direction,',
       '      score: row.predictionScore ?? null,',
       '      confidence: row.predictionConfidence ?? null,',
+      '      modelProbability: row.modelProbability ?? null,',
+      '      calibrationSamples: row.calibrationSamples ?? 0,',
+      '      calibrationReady: Boolean(row.calibrationReady),',
+      '      facts: row.predictionFacts ?? null,',
       '      predictedAt: row.predictedAt ?? null,',
       '      canonical: true,',
-      "      policy: 'FIRST_LOCKED_UP_DOWN_PER_5M_ROUND',",
+      "      policy: 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5',",
       '    };',
       '  } catch {',
       '    return null;',
@@ -96,7 +100,7 @@ function logFastPreparePatch(result, sourceKind) {
     prepareRetryPatched: result.prepareRetryPatched,
     marketSearchFallbackOnRoundMiss: result.marketSearchPatched,
     canonicalFrozenSignal: result.canonicalSignalPatched,
-    frozenSignalPolicy: result.canonicalSignalPatched ? 'FIRST_LOCKED_UP_DOWN_PER_5M_ROUND' : null,
+    frozenSignalPolicy: result.canonicalSignalPatched ? 'FIRST_CONTINUOUS_STATE_LOCK_PER_5M_ROUND_V5' : null,
     failClosedOnCanonicalSignalError: result.canonicalSignalPatched,
   }));
 }

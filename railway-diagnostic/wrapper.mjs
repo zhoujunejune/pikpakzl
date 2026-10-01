@@ -12,6 +12,9 @@ const AUTO_CONFIRM_AMOUNT = String(process.env.AUTO_CONFIRM_AMOUNT || '').trim()
 const AUTO_CONFIRM_MAX_ORDERS_PER_ROUND = Math.max(1, Number(process.env.AUTO_CONFIRM_MAX_ORDERS_PER_ROUND || 1));
 const AUTO_CONFIRM_COOLDOWN_MS = Math.max(0, Number(process.env.AUTO_CONFIRM_COOLDOWN_MS || 2500));
 const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.env.AUTO_CONFIRM_STOP_ON_ERROR || 'true'));
+const EV_FILTER_ENABLED = !/^(0|false|no|off)$/i.test(String(process.env.PREDICTION_EV_FILTER_ENABLED || 'true'));
+const EV_FILTER_REQUIRE_CALIBRATED = !/^(0|false|no|off)$/i.test(String(process.env.PREDICTION_EV_REQUIRE_CALIBRATED || 'true'));
+const EV_MIN_EDGE = Math.max(0, Math.min(0.50, Number(process.env.PREDICTION_EV_MIN_EDGE || 0.04)));
 let autoConfirmHalted = false;
 let lastAutoSubmitAt = 0;
 const autoAttemptedRounds = new Set();
@@ -123,6 +126,73 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     triggerToQuoteMs: Date.now() - quoteRequestStartedAt,
     source,
   }));
+
+  if (EV_FILTER_ENABLED) {
+    const modelProbability = Number(current?.modelProbability);
+    const calibrationSamples = Number(current?.calibrationSamples || 0);
+    const quoteChance = Number(quote?.chance);
+    const calibrated = current?.calibrationReady === true && Number.isFinite(modelProbability);
+
+    if (EV_FILTER_REQUIRE_CALIBRATED && !calibrated) {
+      p.state = isAuto ? 'EV_FILTERED' : 'READY';
+      p.error = '模型尚未完成概率校准，本轮不自动下单。';
+      console.log(JSON.stringify({
+        event: 'ev_filter_blocked',
+        reason: 'MODEL_NOT_CALIBRATED',
+        round: p.round,
+        direction: p.signal,
+        calibrationSamples,
+        requiredCalibrated: true,
+        source,
+      }));
+      return { status: 409, body: { ok:false, error:p.error, reason:'MODEL_NOT_CALIBRATED', calibrationSamples } };
+    }
+
+    if (calibrated && Number.isFinite(quoteChance)) {
+      const edge = modelProbability - quoteChance;
+      if (edge < EV_MIN_EDGE) {
+        p.state = isAuto ? 'EV_FILTERED' : 'READY';
+        p.error = '当前赔率优势不足，本轮不下单。';
+        console.log(JSON.stringify({
+          event: 'ev_filter_blocked',
+          reason: 'INSUFFICIENT_EDGE',
+          round: p.round,
+          direction: p.signal,
+          modelProbability,
+          quoteChance,
+          edge: Number(edge.toFixed(6)),
+          minEdge: EV_MIN_EDGE,
+          calibrationSamples,
+          source,
+        }));
+        return {
+          status: 409,
+          body: {
+            ok:false,
+            error:p.error,
+            reason:'INSUFFICIENT_EDGE',
+            modelProbability,
+            quoteChance,
+            edge:Number(edge.toFixed(6)),
+            minEdge:EV_MIN_EDGE,
+            calibrationSamples,
+          },
+        };
+      }
+
+      console.log(JSON.stringify({
+        event: 'ev_filter_passed',
+        round: p.round,
+        direction: p.signal,
+        modelProbability,
+        quoteChance,
+        edge: Number(edge.toFixed(6)),
+        minEdge: EV_MIN_EDGE,
+        calibrationSamples,
+        source,
+      }));
+    }
+  }
 
   if (remainingMs !== null && remainingMs < 1200) {
     p.state = isAuto ? 'AUTO_FAILED' : 'READY';

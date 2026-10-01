@@ -161,6 +161,11 @@ async function pollSignal() {
     lastSignalError = null;
 
     const row = ensureRound(Number(live.round));
+    const liveTopicId = live?.facts?.predictionMarketTopicId ?? null;
+    if (!row.predictionMarketTopicId && liveTopicId) {
+      row.predictionMarketTopicId = liveTopicId;
+      saveHistory();
+    }
     const direction = live?.status === 'LOCKED' ? live?.signal?.direction : null;
     if (!row.predictedAt && (direction === 'UP' || direction === 'DOWN')) {
       row.prediction = direction;

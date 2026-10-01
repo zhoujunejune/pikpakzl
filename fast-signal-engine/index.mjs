@@ -237,21 +237,26 @@ function calculate(now = Date.now()) {
     0.10 * clamp(momentum1sBps / 2)
   );
 
-  // Continuous prior: this deliberately crosses the artificial 5m contract boundary.
-  // At 10-18s into a new round, the 60s/180s/300s windows naturally include the previous round tail.
-  const priorScore = clamp(
-    0.30 * clamp(momentum60sBps / 12) +
-    0.25 * clamp(momentum180sBps / 20) +
-    0.20 * clamp(momentum300sBps / 30) +
-    0.15 * clamp(flow60.pressure) +
-    0.10 * clamp(distanceFrom15mOpenBps / 25)
-  );
+  // Continuous prior: horizons only participate when enough real history exists.
+  // This prevents a freshly restarted service from treating its earliest sample as a fake 3m/5m observation.
+  const priorParts = [
+    historyAgeMs >= 60000 ? { w: 0.30, v: clamp(momentum60sBps / 12), h: '60s' } : null,
+    historyAgeMs >= 180000 ? { w: 0.25, v: clamp(momentum180sBps / 20), h: '180s' } : null,
+    historyAgeMs >= 300000 ? { w: 0.20, v: clamp(momentum300sBps / 30), h: '300s' } : null,
+    historyAgeMs >= 60000 ? { w: 0.15, v: clamp(flow60.pressure), h: 'flow60s' } : null,
+    Number.isFinite(currentKline15mOpen) ? { w: 0.10, v: clamp(distanceFrom15mOpenBps / 25), h: '15mOpen' } : null,
+  ].filter(Boolean);
+  const priorWeightSum = priorParts.reduce((sum, p) => sum + p.w, 0);
+  const priorScore = priorWeightSum > 0
+    ? clamp(priorParts.reduce((sum, p) => sum + p.w * p.v, 0) / priorWeightSum)
+    : 0;
+  const activePriorHorizons = priorParts.map(p => p.h);
 
   const signs = [
-    Math.sign(momentum30sBps),
-    Math.sign(momentum60sBps),
-    Math.sign(momentum180sBps),
-    Math.sign(momentum300sBps),
+    historyAgeMs >= 30000 ? Math.sign(momentum30sBps) : 0,
+    historyAgeMs >= 60000 ? Math.sign(momentum60sBps) : 0,
+    historyAgeMs >= 180000 ? Math.sign(momentum180sBps) : 0,
+    historyAgeMs >= 300000 ? Math.sign(momentum300sBps) : 0,
   ].filter(v => v !== 0);
   const signSum = signs.reduce((a, b) => a + b, 0);
   const regimeStability = signs.length ? Math.abs(signSum) / signs.length : 0;
@@ -347,6 +352,8 @@ function calculate(now = Date.now()) {
       microScore: Number(microScore.toFixed(6)),
       currentTrendScore: Number(currentTrendScore.toFixed(6)),
       priorScore: Number(priorScore.toFixed(6)),
+      activePriorHorizons,
+      priorWeightSum: Number(priorWeightSum.toFixed(4)),
       regimeStability: Number(regimeStability.toFixed(4)),
       historyWeight: Number(historyWeight.toFixed(4)),
       at: new Date(frozenAt).toISOString(),
@@ -403,6 +410,7 @@ function calculate(now = Date.now()) {
       currentTrendScore: Number(currentTrendScore.toFixed(6)),
       currentScore: Number(currentScore.toFixed(6)),
       priorScore: Number(priorScore.toFixed(6)),
+      activePriorHorizons,
       regimeStability: Number(regimeStability.toFixed(4)),
       historyWeight: Number(historyWeight.toFixed(4)),
       liveCandidateDirection: rawDirection,

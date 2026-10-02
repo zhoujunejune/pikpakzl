@@ -17,6 +17,8 @@ const SHADOW_TRAIN_MIN_SAMPLES = Math.max(100, Number(process.env.SHADOW_TRAIN_M
 const SHADOW_FORWARD_MIN_SAMPLES = Math.max(30, Number(process.env.SHADOW_FORWARD_MIN_SAMPLES || 60));
 const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
 const OFFICIAL_RESOLUTION_WAIT_MS = Math.max(10000, Number(process.env.OFFICIAL_RESOLUTION_WAIT_MS || 60000));
+const SHADOW_MODEL_SCHEMA_VERSION = 1;
+const SHADOW_MODEL_FILE = String(process.env.SHADOW_MODEL_FILE || `${HISTORY_FILE}.shadow-model.json`);
 
 const rounds = new Map();
 let signalPollBusy = false;
@@ -39,6 +41,12 @@ let shadowModelMetrics = {
   forwardAccuracy: null,
   forwardBrier: null,
   trainedAt: null,
+  modelVersion: null,
+  sampleStartRound: null,
+  sampleEndRound: null,
+  trainEndRound: null,
+  validationStartRound: null,
+  validationEndRound: null,
 };
 
 function log(event, extra = {}) {
@@ -76,6 +84,88 @@ function trimHistory() {
   if (rounds.size <= HISTORY_LIMIT) return;
   const keys = Array.from(rounds.keys()).sort((a, b) => Number(a) - Number(b));
   while (keys.length > HISTORY_LIMIT) rounds.delete(keys.shift());
+}
+
+
+function saveShadowModelArtifact() {
+  if (!shadowModel?.weights) return;
+  try {
+    const artifact = {
+      schemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
+      statsVersion: STATS_VERSION,
+      featureKeys: SHADOW_FEATURE_KEYS,
+      shadowObserveMs: SHADOW_OBSERVE_MS,
+      shadowTrainMinSamples: SHADOW_TRAIN_MIN_SAMPLES,
+      shadowForwardMinSamples: SHADOW_FORWARD_MIN_SAMPLES,
+      savedAt: Date.now(),
+      model: shadowModel,
+      metrics: shadowModelMetrics,
+    };
+    const temp = `${SHADOW_MODEL_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(temp, JSON.stringify(artifact), 'utf8');
+    fs.renameSync(temp, SHADOW_MODEL_FILE);
+    log('shadow_model_artifact_saved', {
+      file: SHADOW_MODEL_FILE,
+      modelVersion: shadowModel.modelVersion ?? null,
+      trainedAt: shadowModel.trainedAt ?? null,
+      lastTrainRound: shadowModel.lastTrainRound ?? null,
+    });
+  } catch (e) {
+    log('shadow_model_artifact_save_failed', { error: e?.message || String(e) });
+  }
+}
+
+function loadShadowModelArtifact() {
+  try {
+    const artifact = JSON.parse(fs.readFileSync(SHADOW_MODEL_FILE, 'utf8'));
+    const model = artifact?.model;
+    const featureKeysMatch =
+      Array.isArray(artifact?.featureKeys) &&
+      artifact.featureKeys.length === SHADOW_FEATURE_KEYS.length &&
+      artifact.featureKeys.every((key, index) => key === SHADOW_FEATURE_KEYS[index]);
+    const weightsValid =
+      Array.isArray(model?.weights) &&
+      model.weights.length === SHADOW_FEATURE_KEYS.length + 1 &&
+      model.weights.every(Number.isFinite);
+    if (
+      Number(artifact?.schemaVersion) !== SHADOW_MODEL_SCHEMA_VERSION ||
+      artifact?.statsVersion !== STATS_VERSION ||
+      !featureKeysMatch ||
+      !weightsValid ||
+      !Number.isFinite(Number(model?.trainedAt)) ||
+      !Number.isFinite(Number(model?.lastTrainRound))
+    ) {
+      log('shadow_model_artifact_rejected', {
+        file: SHADOW_MODEL_FILE,
+        reason: 'INCOMPATIBLE_OR_INVALID_ARTIFACT',
+        schemaVersion: artifact?.schemaVersion ?? null,
+        statsVersion: artifact?.statsVersion ?? null,
+      });
+      return false;
+    }
+    shadowModel = {
+      ...model,
+      weights: model.weights.map(Number),
+      featureKeys: SHADOW_FEATURE_KEYS,
+    };
+    if (artifact?.metrics && typeof artifact.metrics === 'object') {
+      shadowModelMetrics = { ...shadowModelMetrics, ...artifact.metrics };
+    }
+    log('shadow_model_artifact_loaded', {
+      file: SHADOW_MODEL_FILE,
+      modelVersion: shadowModel.modelVersion ?? null,
+      trainedAt: shadowModel.trainedAt,
+      lastTrainRound: shadowModel.lastTrainRound,
+      trainedSamples: shadowModel.trainedSamples ?? null,
+      validationSamples: shadowModel.validationSamples ?? null,
+    });
+    return true;
+  } catch (e) {
+    if (e?.code !== 'ENOENT') {
+      log('shadow_model_artifact_load_failed', { error: e?.message || String(e) });
+    }
+    return false;
+  }
 }
 
 
@@ -134,7 +224,7 @@ function trainLogistic(rows) {
   const samples = rows.map(r => {
     const x = shadowVector(r.shadowFacts);
     const y = r.actual === 'UP' ? 1 : r.actual === 'DOWN' ? 0 : null;
-    return x && y !== null ? { x, y } : null;
+    return x && y !== null ? { x, y, roundStartMs: Number(r.roundStartMs) } : null;
   }).filter(Boolean);
   if (samples.length < SHADOW_TRAIN_MIN_SAMPLES) return null;
 
@@ -184,16 +274,23 @@ function trainLogistic(rows) {
   const baselineBrier = valid.reduce((sum, x) => sum + (prevalence - x.y) ** 2, 0) / valid.length;
   const validation = evalRows(valid);
 
+  const trainedAt = Date.now();
   return {
     weights: w,
     featureKeys: SHADOW_FEATURE_KEYS,
-    trainedAt: Date.now(),
+    trainedAt,
+    modelVersion: `shadow-v6-${trainedAt}`,
     trainedSamples: train.length,
     validationSamples: valid.length,
     validationAccuracy: validation.accuracy,
     validationBrier: validation.brier,
     baselineAccuracy,
     baselineBrier,
+    sampleStartRound: samples[0]?.roundStartMs ?? null,
+    sampleEndRound: samples[samples.length - 1]?.roundStartMs ?? null,
+    trainEndRound: train[train.length - 1]?.roundStartMs ?? null,
+    validationStartRound: valid[0]?.roundStartMs ?? null,
+    validationEndRound: valid[valid.length - 1]?.roundStartMs ?? null,
   };
 }
 
@@ -275,7 +372,14 @@ function maybeTrainShadowModel() {
     forwardAccuracy: null,
     forwardBrier: null,
     trainedAt: trained.trainedAt,
+    modelVersion: trained.modelVersion,
+    sampleStartRound: trained.sampleStartRound,
+    sampleEndRound: trained.sampleEndRound,
+    trainEndRound: trained.trainEndRound,
+    validationStartRound: trained.validationStartRound,
+    validationEndRound: trained.validationEndRound,
   };
+  saveShadowModelArtifact();
   log('shadow_model_trained', shadowModelMetrics);
 }
 
@@ -582,6 +686,7 @@ function payload() {
 }
 
 loadHistory();
+loadShadowModelArtifact();
 maybeTrainShadowModel();
 updateShadowForwardMetrics();
 ensureCurrentRound();
@@ -624,6 +729,8 @@ http.createServer((req, res) => {
     shadowObserveMs: SHADOW_OBSERVE_MS,
     shadowTrainMinSamples: SHADOW_TRAIN_MIN_SAMPLES,
     shadowForwardMinSamples: SHADOW_FORWARD_MIN_SAMPLES,
+    shadowModelFile: SHADOW_MODEL_FILE,
+    shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
     officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
   });
 });

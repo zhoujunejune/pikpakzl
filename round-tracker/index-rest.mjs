@@ -16,6 +16,9 @@ const SHADOW_OBSERVE_MS = Math.max(10000, Number(process.env.SHADOW_OBSERVE_MS |
 const SHADOW_TRAIN_MIN_SAMPLES = Math.max(100, Number(process.env.SHADOW_TRAIN_MIN_SAMPLES || 300));
 const SHADOW_FORWARD_MIN_SAMPLES = Math.max(30, Number(process.env.SHADOW_FORWARD_MIN_SAMPLES || 60));
 const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
+const CALIBRATION_RECENT_SHORT = Math.max(20, Number(process.env.CALIBRATION_RECENT_SHORT || 40));
+const CALIBRATION_RECENT_LONG = Math.max(CALIBRATION_RECENT_SHORT, Number(process.env.CALIBRATION_RECENT_LONG || 80));
+const CALIBRATION_HALF_LIFE = Math.max(10, Number(process.env.CALIBRATION_HALF_LIFE || 40));
 const OFFICIAL_RESOLUTION_WAIT_MS = Math.max(10000, Number(process.env.OFFICIAL_RESOLUTION_WAIT_MS || 60000));
 const SHADOW_MODEL_SCHEMA_VERSION = 1;
 const SHADOW_MODEL_FILE = String(process.env.SHADOW_MODEL_FILE || `${HISTORY_FILE}.shadow-model.json`);
@@ -559,21 +562,52 @@ function calibrateProbability(direction, score, excludeRound = null) {
     r.result && (r.result === 'HIT' || r.result === 'MISS') &&
     r.prediction === dir &&
     Number.isFinite(Number(r.predictionScore))
-  );
+  ).sort((a,b) => a.roundStartMs - b.roundStartMs);
+
   let sample = Number.isFinite(strength)
     ? all.filter(r => Math.abs(Math.abs(Number(r.predictionScore)) - strength) <= CALIBRATION_BAND)
     : all;
   if (sample.length < CALIBRATION_MIN_SAMPLES) sample = all;
   if (sample.length < CALIBRATION_MIN_SAMPLES) {
-    return { probability:null, samples:sample.length, calibrated:false };
+    return { probability:null, samples:sample.length, calibrated:false, method:'insufficient_samples' };
   }
-  const hits = sample.filter(r => r.result === 'HIT').length;
-  // Beta(2,2) smoothing avoids extreme 0/1 estimates on modest samples.
-  const probability = (hits + 2) / (sample.length + 4);
+
+  const betaRate = rows => {
+    const hits = rows.filter(r => r.result === 'HIT').length;
+    return (hits + 2) / (rows.length + 4);
+  };
+  const recent40 = sample.slice(-CALIBRATION_RECENT_SHORT);
+  const recent80 = sample.slice(-CALIBRATION_RECENT_LONG);
+  const longRate = betaRate(sample);
+  const shortRate = betaRate(recent40);
+  const mediumRate = betaRate(recent80);
+
+  // Exponential time decay reacts to regime changes while still using all eligible history.
+  let weightedHits = 0, weightedTotal = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const age = sample.length - 1 - i;
+    const w = Math.pow(0.5, age / CALIBRATION_HALF_LIFE);
+    weightedTotal += w;
+    if (sample[i].result === 'HIT') weightedHits += w;
+  }
+  const decayRate = (weightedHits + 2) / (weightedTotal + 4);
+
+  // Long history remains a 20% anchor; 80% comes from adaptive recent/decayed evidence.
+  const probability = 0.20 * longRate + 0.25 * mediumRate + 0.25 * shortRate + 0.30 * decayRate;
   return {
     probability:Number(probability.toFixed(4)),
     samples:sample.length,
     calibrated:true,
+    method:'adaptive_blend_v2',
+    components:{
+      long:Number(longRate.toFixed(4)),
+      recent40:Number(shortRate.toFixed(4)),
+      recent80:Number(mediumRate.toFixed(4)),
+      decay:Number(decayRate.toFixed(4)),
+      recent40Samples:recent40.length,
+      recent80Samples:recent80.length,
+      halfLife:CALIBRATION_HALF_LIFE,
+    },
   };
 }
 
@@ -608,6 +642,8 @@ function ensureRound(roundStartMs) {
       modelProbability: null,
       calibrationSamples: 0,
       calibrationReady: false,
+      calibrationMethod: null,
+      calibrationComponents: null,
       predictedAt: null,
       predictionDelayMs: null,
       actual: null,
@@ -680,6 +716,8 @@ async function pollSignal() {
       row.modelProbability = cal.probability;
       row.calibrationSamples = cal.samples;
       row.calibrationReady = cal.calibrated;
+      row.calibrationMethod = cal.method || null;
+      row.calibrationComponents = cal.components || null;
       row.predictedAt = Number(live.generatedAt || Date.now());
       row.predictionDelayMs = Math.max(0, row.predictedAt - row.roundStartMs);
       row.source = live.model || row.source;
@@ -859,6 +897,9 @@ function payload() {
       officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
       calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
       calibrationBand: CALIBRATION_BAND,
+      calibrationRecentShort: CALIBRATION_RECENT_SHORT,
+      calibrationRecentLong: CALIBRATION_RECENT_LONG,
+      calibrationHalfLife: CALIBRATION_HALF_LIFE,
       archiveDir: ARCHIVE_DIR,
       archiveRecords: archiveMetrics.records,
       lastArchiveError: archiveMetrics.lastArchiveError,
@@ -910,6 +951,9 @@ http.createServer((req, res) => {
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
     calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
+    calibrationRecentShort: CALIBRATION_RECENT_SHORT,
+    calibrationRecentLong: CALIBRATION_RECENT_LONG,
+    calibrationHalfLife: CALIBRATION_HALF_LIFE,
     shadowObserveMs: SHADOW_OBSERVE_MS,
     shadowTrainMinSamples: SHADOW_TRAIN_MIN_SAMPLES,
     shadowForwardMinSamples: SHADOW_FORWARD_MIN_SAMPLES,

@@ -1201,6 +1201,109 @@ function summary() {
 }
 
 
+
+function v6FeatureAuditPayload() {
+  const merged = new Map();
+  for (const row of readArchiveRows()) {
+    const start = Number(row?.roundStartMs);
+    if (Number.isFinite(start)) merged.set(String(start), row);
+  }
+  for (const row of rounds.values()) {
+    const start = Number(row?.roundStartMs);
+    if (Number.isFinite(start)) merged.set(String(start), row);
+  }
+  const rows = Array.from(merged.values())
+    .filter(r => (r?.result === 'HIT' || r?.result === 'MISS') &&
+      (r?.prediction === 'UP' || r?.prediction === 'DOWN') &&
+      r?.predictionFacts && typeof r.predictionFacts === 'object')
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+
+  const hit = r => r.result === 'HIT';
+  const rate = a => a.length ? Number((a.filter(hit).length / a.length).toFixed(4)) : null;
+  const desc = a => ({ n:a.length, hits:a.filter(hit).length, accuracy:rate(a) });
+  const support = r => lockPredictionSupport(r.prediction, r.predictionFacts);
+  const current = r => Math.abs(Number(r.predictionFacts?.currentScore));
+  const absScore = r => Math.abs(Number(r.predictionScore));
+  const delay = r => Number(r.predictionDelayMs);
+  const conf = r => Number(r.predictionConfidence);
+  const pmUsable = r => Number.isFinite(Number(r.predictionFacts?.predictionMarketUpMid));
+  const absorption = r => r.predictionFacts?.absorptionRisk === true;
+  const alignment = r => String(r.predictionFacts?.alignment || 'UNKNOWN');
+  const volatility = r => String(r.predictionFacts?.volatilityRegime || 'UNKNOWN');
+  const regime = r => String(r.predictionFacts?.regimeDirection || 'UNKNOWN');
+
+  const bin = (name, getter, edges) => edges.map((edge,i) => {
+    const lo=edge[0], hi=edge[1];
+    const a=rows.filter(r => {
+      const v=getter(r);
+      return Number.isFinite(v) && v >= lo && (hi == null || v < hi);
+    });
+    return {label:name+':' + lo + '-' + (hi==null?'inf':hi), ...desc(a)};
+  });
+
+  const byCat = (name,getter) => {
+    const vals=[...new Set(rows.map(getter))];
+    return vals.map(v => ({label:name+':' + v, ...desc(rows.filter(r=>getter(r)===v))}));
+  };
+
+  const candidates = [
+    {name:'current>=0.40', fn:r=>current(r)>=0.40},
+    {name:'current>=0.50', fn:r=>current(r)>=0.50},
+    {name:'current>=0.60', fn:r=>current(r)>=0.60},
+    {name:'current>=0.65', fn:r=>current(r)>=0.65},
+    {name:'support>=0.025', fn:r=>Number.isFinite(support(r))&&support(r)>=0.025},
+    {name:'support>=0.05', fn:r=>Number.isFinite(support(r))&&support(r)>=0.05},
+    {name:'support>=0.10', fn:r=>Number.isFinite(support(r))&&support(r)>=0.10},
+    {name:'current>=0.50 & support>=0.025', fn:r=>current(r)>=0.50&&Number.isFinite(support(r))&&support(r)>=0.025},
+    {name:'current>=0.60 & support>=0.025', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025},
+    {name:'current>=0.60 & support>=0.05', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.05},
+    {name:'current>=0.65 & support>=0.05', fn:r=>current(r)>=0.65&&Number.isFinite(support(r))&&support(r)>=0.05},
+    {name:'current>=0.65 & support>=0.10', fn:r=>current(r)>=0.65&&Number.isFinite(support(r))&&support(r)>=0.10},
+    {name:'current>=0.60 & support>=0.025 & delay<15s & !absorption', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025&&delay(r)<15000&&!absorption(r)},
+    {name:'current>=0.65 & support>=0.05 & delay<18s & !absorption', fn:r=>current(r)>=0.65&&Number.isFinite(support(r))&&support(r)>=0.05&&delay(r)<18000&&!absorption(r)},
+  ];
+
+  const evalSlice = (a, fn) => {
+    const kept=a.filter(fn);
+    return {n:kept.length,hits:kept.filter(hit).length,accuracy:rate(kept),coverage:a.length?Number((kept.length/a.length).toFixed(4)):null};
+  };
+  const split=Math.floor(rows.length*0.70);
+  const train=rows.slice(0,split);
+  const holdout=rows.slice(split);
+  const candidateStats=candidates.map(x=>({
+    name:x.name,
+    all:evalSlice(rows,x.fn),
+    train:evalSlice(train,x.fn),
+    holdout:evalSlice(holdout,x.fn),
+    last80:evalSlice(rows.slice(-80),x.fn),
+    last40:evalSlice(rows.slice(-40),x.fn),
+  }));
+
+  return {
+    ok:true,
+    rows:rows.length,
+    baseline:{
+      all:desc(rows), train:desc(train), holdout:desc(holdout),
+      last80:desc(rows.slice(-80)), last40:desc(rows.slice(-40)), last20:desc(rows.slice(-20))
+    },
+    featureBins:[
+      ...bin('currentAbs',current,[[0,0.3],[0.3,0.4],[0.4,0.5],[0.5,0.6],[0.6,0.7],[0.7,null]]),
+      ...bin('support',support,[[-1,0],[0,0.025],[0.025,0.05],[0.05,0.10],[0.10,0.15],[0.15,null]]),
+      ...bin('absScore',absScore,[[0,0.3],[0.3,0.4],[0.4,0.5],[0.5,0.6],[0.6,0.7],[0.7,null]]),
+      ...bin('confidence',conf,[[0,0.3],[0.3,0.4],[0.4,0.5],[0.5,0.6],[0.6,0.7],[0.7,null]]),
+      ...bin('delayMs',delay,[[0,12000],[12000,15000],[15000,18000],[18000,22000],[22000,null]]),
+      ...byCat('alignment',alignment),
+      ...byCat('volatility',volatility),
+      ...byCat('regime',regime),
+      {label:'absorption:false',...desc(rows.filter(r=>!absorption(r)))},
+      {label:'absorption:true',...desc(rows.filter(r=>absorption(r)))},
+      {label:'predictionMarket:available',...desc(rows.filter(pmUsable))},
+      {label:'predictionMarket:missing',...desc(rows.filter(r=>!pmUsable(r)))},
+    ],
+    candidateStats,
+  };
+}
+
 function calibrationBacktestPayload() {
   const merged = new Map();
   for (const row of readArchiveRows()) {
@@ -1344,6 +1447,7 @@ loadShadowCandidateArtifact();
 maybeTrainShadowModel();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
+log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
 setInterval(settlePendingRounds, SETTLE_POLL_MS).unref();

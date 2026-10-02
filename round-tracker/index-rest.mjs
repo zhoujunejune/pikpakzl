@@ -1260,6 +1260,11 @@ function v6FeatureAuditPayload() {
     {name:'current>=0.65 & support>=0.05', fn:r=>current(r)>=0.65&&Number.isFinite(support(r))&&support(r)>=0.05},
     {name:'current>=0.65 & support>=0.10', fn:r=>current(r)>=0.65&&Number.isFinite(support(r))&&support(r)>=0.10},
     {name:'current>=0.60 & support>=0.025 & delay<15s & !absorption', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025&&delay(r)<15000&&!absorption(r)},
+    {name:'current>=0.60 & support>=0.025 & delay<22s', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025&&delay(r)<22000},
+    {name:'current>=0.60 & support>=0.025 & !absorption', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025&&!absorption(r)},
+    {name:'current>=0.60 & support>=0.025 & delay<22s & !absorption', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025&&delay(r)<22000&&!absorption(r)},
+    {name:'current>=0.60 & support>=0.025 & absScore<0.70', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025&&absScore(r)<0.70},
+    {name:'current>=0.60 & support>=0.025 & delay<22s & !absorption & absScore<0.70', fn:r=>current(r)>=0.60&&Number.isFinite(support(r))&&support(r)>=0.025&&delay(r)<22000&&!absorption(r)&&absScore(r)<0.70},
     {name:'current>=0.65 & support>=0.05 & delay<18s & !absorption', fn:r=>current(r)>=0.65&&Number.isFinite(support(r))&&support(r)>=0.05&&delay(r)<18000&&!absorption(r)},
   ];
 

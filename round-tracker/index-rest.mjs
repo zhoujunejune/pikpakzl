@@ -1200,6 +1200,88 @@ function summary() {
   };
 }
 
+
+function calibrationBacktestPayload() {
+  const merged = new Map();
+  for (const row of readArchiveRows()) {
+    const start = Number(row?.roundStartMs);
+    if (Number.isFinite(start)) merged.set(String(start), row);
+  }
+  for (const row of rounds.values()) {
+    const start = Number(row?.roundStartMs);
+    if (Number.isFinite(start)) merged.set(String(start), row);
+  }
+
+  const comparable = Array.from(merged.values())
+    .filter(r =>
+      (r?.result === 'HIT' || r?.result === 'MISS') &&
+      (r?.prediction === 'UP' || r?.prediction === 'DOWN') &&
+      Number.isFinite(Number(r?.predictionConfidence)) &&
+      Number.isFinite(Number(r?.modelProbability))
+    )
+    .sort((a, b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+
+  const summarize = rows => {
+    let hits = 0, rawBrier = 0, calibratedBrier = 0;
+    let rawAbsError = 0, calibratedAbsError = 0;
+    let directionChanges = 0;
+    for (const r of rows) {
+      const y = r.result === 'HIT' ? 1 : 0;
+      const rawP = Math.max(0, Math.min(1, Number(r.predictionConfidence)));
+      const calP = Math.max(0, Math.min(1, Number(r.modelProbability)));
+      if (y === 1) hits += 1;
+      rawBrier += (rawP - y) ** 2;
+      calibratedBrier += (calP - y) ** 2;
+      rawAbsError += Math.abs(rawP - y);
+      calibratedAbsError += Math.abs(calP - y);
+      // modelProbability is P(the locked V6 direction is correct), not P(UP),
+      // so calibration does not replace/flip the locked production direction.
+      if (r.calibratedPrediction && r.calibratedPrediction !== r.prediction) directionChanges += 1;
+    }
+    const n = rows.length;
+    const rawB = n ? rawBrier / n : null;
+    const calB = n ? calibratedBrier / n : null;
+    return {
+      n,
+      hits,
+      misses: n - hits,
+      directionAccuracy: n ? Number((hits / n).toFixed(4)) : null,
+      rawConfidenceBrier: n ? Number(rawB.toFixed(4)) : null,
+      calibratedProbabilityBrier: n ? Number(calB.toFixed(4)) : null,
+      brierDelta: n ? Number((calB - rawB).toFixed(4)) : null,
+      brierImprovementPct: n && rawB > 0 ? Number((((rawB - calB) / rawB) * 100).toFixed(2)) : null,
+      rawMeanAbsoluteProbabilityError: n ? Number((rawAbsError / n).toFixed(4)) : null,
+      calibratedMeanAbsoluteProbabilityError: n ? Number((calibratedAbsError / n).toFixed(4)) : null,
+      directionChanges,
+      directionAccuracyDelta: 0,
+    };
+  };
+
+  return {
+    ok: true,
+    service: 'binance-round-tracker',
+    analysis: 'V6_RAW_CONFIDENCE_VS_STORED_CALIBRATED_PROBABILITY_SAME_ROUNDS',
+    note: 'Calibration changes confidence/probability of the locked V6 direction, not the locked UP/DOWN direction. Therefore direction hit rate is identical by design; Brier measures probability-quality change.',
+    fields: {
+      rawProbability: 'predictionConfidence',
+      calibratedProbability: 'modelProbability',
+      outcome: 'result HIT=1 MISS=0',
+      direction: 'prediction',
+    },
+    calibration: {
+      currentMethod: 'adaptive_blend_v2',
+      minSamples: CALIBRATION_MIN_SAMPLES,
+      recentShort: CALIBRATION_RECENT_SHORT,
+      recentLong: CALIBRATION_RECENT_LONG,
+      halfLife: CALIBRATION_HALF_LIFE,
+    },
+    comparableRows: comparable.length,
+    last40: summarize(comparable.slice(-40)),
+    last80: summarize(comparable.slice(-80)),
+    all: summarize(comparable),
+  };
+}
+
 function payload() {
   const records = Array.from(rounds.values()).sort((a, b) => b.roundStartMs - a.roundStartMs);
   return {
@@ -1260,6 +1342,11 @@ http.createServer((req, res) => {
     const p = payload();
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ ok: true, health: p.health }));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/calibration-backtest') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(calibrationBacktestPayload()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/shadow-stats') {

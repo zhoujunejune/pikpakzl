@@ -136,6 +136,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     if (EV_FILTER_REQUIRE_CALIBRATED && !calibrated) {
       p.state = isAuto ? 'EV_FILTERED' : 'READY';
       p.error = '模型尚未完成概率校准，本轮不自动下单。';
+      p.blockReason = 'MODEL_NOT_CALIBRATED';
+      p.calibrationSamples = calibrationSamples;
       console.log(JSON.stringify({
         event: 'ev_filter_blocked',
         reason: 'MODEL_NOT_CALIBRATED',
@@ -153,6 +155,12 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       if (edge < EV_MIN_EDGE) {
         p.state = isAuto ? 'EV_FILTERED' : 'READY';
         p.error = '当前赔率优势不足，本轮不下单。';
+        p.blockReason = 'INSUFFICIENT_EDGE';
+        p.modelProbability = modelProbability;
+        p.quoteChance = quoteChance;
+        p.edge = Number(edge.toFixed(6));
+        p.minEdge = EV_MIN_EDGE;
+        p.calibrationSamples = calibrationSamples;
         console.log(JSON.stringify({
           event: 'ev_filter_blocked',
           reason: 'INSUFFICIENT_EDGE',
@@ -501,6 +509,19 @@ const clientJs = String.raw`(function(){
             btn.classList.remove('hidden');
           }
         }
+      }else if(currentPending.state==='EV_FILTERED'){
+        if(currentPending.blockReason==='INSUFFICIENT_EDGE'){
+          var mp=Number(currentPending.modelProbability),qc=Number(currentPending.quoteChance),ed=Number(currentPending.edge),me=Number(currentPending.minEdge);
+          text('pendingTitle','已跳过本轮：EV 优势不足');
+          text('pendingMeta','模型概率 '+(isFinite(mp)?(mp*100).toFixed(2)+'%':'-')+' · 市场报价 '+(isFinite(qc)?(qc*100).toFixed(2)+'%':'-')+' · Edge '+(isFinite(ed)?(ed*100).toFixed(2)+'%':'-')+' · 最低要求 '+(isFinite(me)?'+'+(me*100).toFixed(2)+'%':'-')+'。未向 Binance 提交订单。');
+        }else if(currentPending.blockReason==='MODEL_NOT_CALIBRATED'){
+          text('pendingTitle','已跳过本轮：模型尚未完成概率校准');
+          text('pendingMeta','当前校准样本 '+(currentPending.calibrationSamples==null?'-':currentPending.calibrationSamples)+'，本轮未向 Binance 提交订单。');
+        }else{
+          text('pendingTitle','已跳过本轮：风控未通过');
+          text('pendingMeta',(currentPending.error||'本轮未满足下单条件')+' 未向 Binance 提交订单。');
+        }
+        if(btn) btn.classList.add('hidden');
       }else if(currentPending.state==='PREPARE_ERROR'||currentPending.state==='AUTO_FAILED'||currentPending.state==='PLACE_ERROR'){
         text('pendingTitle',currentPending.state==='AUTO_FAILED'?'自动提交失败':'准备/提交失败');
         text('pendingMeta',(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':''));

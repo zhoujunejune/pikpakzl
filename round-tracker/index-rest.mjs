@@ -20,7 +20,8 @@ const CALIBRATION_RECENT_SHORT = Math.max(20, Number(process.env.CALIBRATION_REC
 const CALIBRATION_RECENT_LONG = Math.max(CALIBRATION_RECENT_SHORT, Number(process.env.CALIBRATION_RECENT_LONG || 80));
 const CALIBRATION_HALF_LIFE = Math.max(10, Number(process.env.CALIBRATION_HALF_LIFE || 40));
 const OFFICIAL_RESOLUTION_WAIT_MS = Math.max(10000, Number(process.env.OFFICIAL_RESOLUTION_WAIT_MS || 60000));
-const SHADOW_MODEL_SCHEMA_VERSION = 1;
+const SHADOW_MODEL_SCHEMA_VERSION = 2;
+const SHADOW_CANDIDATE_FILE = String(process.env.SHADOW_CANDIDATE_FILE || `${HISTORY_FILE}.shadow-candidate.json`);
 const SHADOW_MODEL_FILE = String(process.env.SHADOW_MODEL_FILE || `${HISTORY_FILE}.shadow-model.json`);
 const ARCHIVE_SCHEMA_VERSION = 1;
 const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
@@ -41,6 +42,8 @@ let lastSignalError = null;
 let lastSettlementOkAt = 0;
 let lastSettlementError = null;
 let shadowModel = null;
+let shadowCandidate = null;
+let shadowCandidateMetrics = null;
 const archivedRoundIds = new Set();
 let archiveMetrics = {
   records: 0,
@@ -347,6 +350,127 @@ function loadShadowModelArtifact() {
 }
 
 
+function saveShadowCandidateArtifact() {
+  if (!shadowCandidate?.weights) return;
+  try {
+    const artifact = {
+      schemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
+      statsVersion: STATS_VERSION,
+      featureKeys: SHADOW_FEATURE_KEYS,
+      savedAt: Date.now(),
+      model: shadowCandidate,
+      metrics: shadowCandidateMetrics,
+    };
+    const temp = `${SHADOW_CANDIDATE_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(temp, JSON.stringify(artifact), 'utf8');
+    fs.renameSync(temp, SHADOW_CANDIDATE_FILE);
+  } catch (e) {
+    log('shadow_candidate_artifact_save_failed', { error: e?.message || String(e) });
+  }
+}
+
+function loadShadowCandidateArtifact() {
+  try {
+    const artifact = JSON.parse(fs.readFileSync(SHADOW_CANDIDATE_FILE, 'utf8'));
+    const model = artifact?.model;
+    const valid = Number(artifact?.schemaVersion) === SHADOW_MODEL_SCHEMA_VERSION &&
+      artifact?.statsVersion === STATS_VERSION &&
+      Array.isArray(model?.weights) &&
+      model.weights.length === SHADOW_FEATURE_KEYS.length + 1 &&
+      model.weights.every(Number.isFinite) &&
+      Number.isFinite(Number(model?.trainedAt));
+    if (!valid) return false;
+    shadowCandidate = { ...model, weights: model.weights.map(Number), featureKeys: SHADOW_FEATURE_KEYS };
+    shadowCandidateMetrics = artifact?.metrics || null;
+    log('shadow_candidate_artifact_loaded', {
+      modelVersion: shadowCandidate.modelVersion,
+      trainedAt: shadowCandidate.trainedAt,
+    });
+    return true;
+  } catch (e) {
+    if (e?.code !== 'ENOENT') log('shadow_candidate_artifact_load_failed', { error: e?.message || String(e) });
+    return false;
+  }
+}
+
+function candidatePredict(facts) {
+  if (!shadowCandidate?.weights) return null;
+  const x = shadowVector(facts);
+  if (!x) return null;
+  let z = shadowCandidate.weights[0];
+  for (let j = 0; j < x.length; j += 1) z += shadowCandidate.weights[j + 1] * x[j];
+  return sigmoid(z);
+}
+
+function candidateForwardRows() {
+  if (!shadowCandidate?.trainedAt) return [];
+  return Array.from(rounds.values()).filter(r =>
+    Number(r.shadowCandidateTrainedAt) === Number(shadowCandidate.trainedAt) &&
+    Number.isFinite(Number(r.shadowCandidateProbability)) &&
+    (r.actual === 'UP' || r.actual === 'DOWN')
+  );
+}
+
+function candidateForwardSummary() {
+  const forward = candidateForwardRows();
+  let shadowHits = 0, shadowBrier = 0, v6Hits = 0, v6Brier = 0, v6N = 0, v6BrierN = 0;
+  for (const r of forward) {
+    const yUp = r.actual === 'UP' ? 1 : 0;
+    const p = Number(r.shadowCandidateProbability);
+    shadowHits += (p >= 0.5 ? 'UP' : 'DOWN') === r.actual ? 1 : 0;
+    shadowBrier += (p - yUp) ** 2;
+    if (r.prediction === 'UP' || r.prediction === 'DOWN') {
+      v6N += 1;
+      v6Hits += r.prediction === r.actual ? 1 : 0;
+      if (Number.isFinite(Number(r.modelProbability))) {
+        const v6UpP = r.prediction === 'UP' ? Number(r.modelProbability) : 1 - Number(r.modelProbability);
+        v6Brier += (v6UpP - yUp) ** 2;
+        v6BrierN += 1;
+      }
+    }
+  }
+  return {
+    shadowN: forward.length,
+    shadowAccuracy: forward.length ? Number((shadowHits / forward.length).toFixed(4)) : null,
+    shadowBrier: forward.length ? Number((shadowBrier / forward.length).toFixed(4)) : null,
+    v6N,
+    v6Accuracy: v6N ? Number((v6Hits / v6N).toFixed(4)) : null,
+    v6BrierN,
+    v6Brier: v6BrierN ? Number((v6Brier / v6BrierN).toFixed(4)) : null,
+    comparable: forward.length >= SHADOW_FORWARD_MIN_SAMPLES && v6N >= SHADOW_FORWARD_MIN_SAMPLES,
+  };
+}
+
+function maybePromoteShadowCandidate(trained, latestRound) {
+  const passed = trained.validationAccuracy > trained.baselineAccuracy + 0.03 &&
+    trained.validationBrier < trained.baselineBrier;
+  if (!passed) return false;
+
+  if (!shadowCandidate) {
+    shadowCandidate = { ...trained, lastTrainRound: latestRound };
+    shadowCandidateMetrics = {
+      status: 'FORWARD_COLLECTING',
+      validationAccuracy: Number(trained.validationAccuracy.toFixed(4)),
+      validationBrier: Number(trained.validationBrier.toFixed(4)),
+      baselineAccuracy: Number(trained.baselineAccuracy.toFixed(4)),
+      baselineBrier: Number(trained.baselineBrier.toFixed(4)),
+      trainedAt: trained.trainedAt,
+      modelVersion: trained.modelVersion,
+    };
+    saveShadowCandidateArtifact();
+    log('shadow_candidate_frozen', shadowCandidateMetrics);
+    return true;
+  }
+
+  const forward = candidateForwardSummary();
+  if (!forward.comparable) return false;
+
+  // Do not silently replace a validated candidate. Keep it frozen so its
+  // 60+ forward sample evidence remains interpretable across retraining.
+  return false;
+}
+
+
 
 const SHADOW_FEATURE_KEYS = [
   'regimeScore',
@@ -577,6 +701,12 @@ function shadowStatsPayload() {
     },
     shadow: {
       ...shadowModelMetrics,
+      frozenCandidate: shadowCandidate ? {
+        modelVersion: shadowCandidate.modelVersion,
+        trainedAt: shadowCandidate.trainedAt,
+        validation: shadowCandidateMetrics,
+        forwardComparison: candidateForwardSummary(),
+      } : null,
       artifactExists: Boolean(shadowModel?.weights),
       forwardComparison: {
         shadowN: forward.length,
@@ -644,6 +774,7 @@ function maybeTrainShadowModel() {
     validationEndRound: trained.validationEndRound,
   };
   saveShadowModelArtifact();
+  maybePromoteShadowCandidate(trained, latestRound);
   log('shadow_model_trained', shadowModelMetrics);
 }
 
@@ -804,6 +935,8 @@ function ensureRound(roundStartMs) {
       shadowFacts: null,
       shadowProbability: null,
       shadowModelTrainedAt: null,
+      shadowCandidateProbability: null,
+      shadowCandidateTrainedAt: null,
       modelProbability: null,
       calibrationSamples: 0,
       calibrationReady: false,
@@ -864,6 +997,9 @@ async function pollSignal() {
       const shadowP = shadowPredict(liveFacts);
       row.shadowProbability = Number.isFinite(shadowP) ? Number(shadowP.toFixed(6)) : null;
       row.shadowModelTrainedAt = shadowModel?.trainedAt ?? null;
+      const candidateP = candidatePredict(liveFacts);
+      row.shadowCandidateProbability = Number.isFinite(candidateP) ? Number(candidateP.toFixed(6)) : null;
+      row.shadowCandidateTrainedAt = shadowCandidate?.trainedAt ?? null;
       saveHistory();
     }
     const liveTopicId = liveFacts?.predictionMarketTopicId ?? null;
@@ -1106,6 +1242,7 @@ loadHistory();
 loadArchiveIndex();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
+loadShadowCandidateArtifact();
 maybeTrainShadowModel();
 updateShadowForwardMetrics();
 ensureCurrentRound();
@@ -1157,6 +1294,8 @@ http.createServer((req, res) => {
     shadowTrainMinSamples: SHADOW_TRAIN_MIN_SAMPLES,
     shadowForwardMinSamples: SHADOW_FORWARD_MIN_SAMPLES,
     shadowModelFile: SHADOW_MODEL_FILE,
+    shadowCandidateFile: SHADOW_CANDIDATE_FILE,
+    shadowCandidateModelVersion: shadowCandidate?.modelVersion ?? null,
     shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
     archiveDir: ARCHIVE_DIR,
     archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,

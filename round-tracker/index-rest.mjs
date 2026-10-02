@@ -19,6 +19,8 @@ const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAN
 const OFFICIAL_RESOLUTION_WAIT_MS = Math.max(10000, Number(process.env.OFFICIAL_RESOLUTION_WAIT_MS || 60000));
 const SHADOW_MODEL_SCHEMA_VERSION = 1;
 const SHADOW_MODEL_FILE = String(process.env.SHADOW_MODEL_FILE || `${HISTORY_FILE}.shadow-model.json`);
+const ARCHIVE_SCHEMA_VERSION = 1;
+const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
 
 const rounds = new Map();
 let signalPollBusy = false;
@@ -29,6 +31,14 @@ let lastSignalError = null;
 let lastSettlementOkAt = 0;
 let lastSettlementError = null;
 let shadowModel = null;
+const archivedRoundIds = new Set();
+let archiveMetrics = {
+  records: 0,
+  files: 0,
+  backfilled: 0,
+  lastArchivedAt: null,
+  lastArchiveError: null,
+};
 let shadowModelMetrics = {
   status: 'COLLECTING',
   trainedSamples: 0,
@@ -84,6 +94,164 @@ function trimHistory() {
   if (rounds.size <= HISTORY_LIMIT) return;
   const keys = Array.from(rounds.keys()).sort((a, b) => Number(a) - Number(b));
   while (keys.length > HISTORY_LIMIT) rounds.delete(keys.shift());
+}
+
+
+function archiveFileForRound(roundStartMs) {
+  const d = new Date(Number(roundStartMs));
+  const year = String(d.getUTCFullYear());
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${ARCHIVE_DIR}/v6-rounds-${year}-${month}.jsonl`;
+}
+
+function listArchiveFiles() {
+  try {
+    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+    return fs.readdirSync(ARCHIVE_DIR)
+      .filter(name => /^v6-rounds-\d{4}-\d{2}\.jsonl$/.test(name))
+      .sort()
+      .map(name => `${ARCHIVE_DIR}/${name}`);
+  } catch (e) {
+    archiveMetrics.lastArchiveError = e?.message || String(e);
+    log('round_archive_list_failed', { error: archiveMetrics.lastArchiveError });
+    return [];
+  }
+}
+
+function loadArchiveIndex() {
+  archivedRoundIds.clear();
+  const files = listArchiveFiles();
+  for (const file of files) {
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const row = JSON.parse(line);
+          const start = Number(row?.roundStartMs);
+          if (Number.isFinite(start) && start >= STATS_START_MS && row?.settledAt) {
+            archivedRoundIds.add(String(start));
+          }
+        } catch {
+          // A partial final line from an interrupted append is ignored safely.
+        }
+      }
+    } catch (e) {
+      archiveMetrics.lastArchiveError = e?.message || String(e);
+      log('round_archive_read_failed', { file, error: archiveMetrics.lastArchiveError });
+    }
+  }
+  archiveMetrics.records = archivedRoundIds.size;
+  archiveMetrics.files = files.length;
+  log('round_archive_index_loaded', {
+    dir: ARCHIVE_DIR,
+    records: archiveMetrics.records,
+    files: archiveMetrics.files,
+  });
+}
+
+function archiveSettledRow(row, reason = 'settlement') {
+  const start = Number(row?.roundStartMs);
+  const key = String(start);
+  if (!Number.isFinite(start) || start < STATS_START_MS || !row?.settledAt || row?.result === 'PENDING') {
+    return false;
+  }
+  if (archivedRoundIds.has(key)) return false;
+
+  const file = archiveFileForRound(start);
+  let fd = null;
+  try {
+    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+    const record = {
+      ...row,
+      archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
+      archivedAt: Date.now(),
+    };
+    fd = fs.openSync(file, 'a');
+    fs.writeSync(fd, JSON.stringify(record) + '\n', null, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+
+    archivedRoundIds.add(key);
+    archiveMetrics.records = archivedRoundIds.size;
+    archiveMetrics.files = listArchiveFiles().length;
+    archiveMetrics.lastArchivedAt = record.archivedAt;
+    archiveMetrics.lastArchiveError = null;
+    if (reason === 'startup_backfill') archiveMetrics.backfilled += 1;
+    return true;
+  } catch (e) {
+    archiveMetrics.lastArchiveError = e?.message || String(e);
+    log('round_archive_append_failed', {
+      round: start,
+      file,
+      reason,
+      error: archiveMetrics.lastArchiveError,
+    });
+    return false;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function backfillArchiveFromActiveHistory() {
+  let added = 0;
+  const settled = Array.from(rounds.values())
+    .filter(r => r?.settledAt && r?.result !== 'PENDING')
+    .sort((a, b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+  for (const row of settled) {
+    if (archiveSettledRow(row, 'startup_backfill')) added += 1;
+  }
+  log('round_archive_backfill_complete', {
+    added,
+    archivedRecords: archiveMetrics.records,
+    activeRecords: rounds.size,
+  });
+}
+
+function readArchiveRows() {
+  const byRound = new Map();
+  for (const file of listArchiveFiles()) {
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const row = JSON.parse(line);
+          const start = Number(row?.roundStartMs);
+          if (Number.isFinite(start) && start >= STATS_START_MS && row?.settledAt) {
+            byRound.set(String(start), row);
+          }
+        } catch {
+          // Ignore malformed/partial lines; valid rows remain usable.
+        }
+      }
+    } catch (e) {
+      log('round_archive_training_read_failed', { file, error: e?.message || String(e) });
+    }
+  }
+  return Array.from(byRound.values());
+}
+
+function shadowTrainingRows() {
+  const active = Array.from(rounds.values());
+  // Until the active 1000-round window can evict old samples, preserve the
+  // exact existing training path so adding archival cannot change model inputs.
+  if (archivedRoundIds.size < HISTORY_LIMIT) return active;
+
+  const merged = new Map();
+  for (const row of readArchiveRows()) {
+    const start = Number(row?.roundStartMs);
+    if (Number.isFinite(start)) merged.set(String(start), row);
+  }
+  // Active rows override archived copies because they are the freshest version.
+  for (const row of active) {
+    const start = Number(row?.roundStartMs);
+    if (Number.isFinite(start)) merged.set(String(start), row);
+  }
+  return Array.from(merged.values());
 }
 
 
@@ -337,7 +505,7 @@ function updateShadowForwardMetrics() {
 }
 
 function maybeTrainShadowModel() {
-  const labeled = Array.from(rounds.values())
+  const labeled = shadowTrainingRows()
     .filter(r => r.shadowFacts && (r.actual === 'UP' || r.actual === 'DOWN'))
     .sort((a,b) => a.roundStartMs - b.roundStartMs);
   if (labeled.length < SHADOW_TRAIN_MIN_SAMPLES) {
@@ -599,6 +767,7 @@ async function settlePendingRounds() {
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
         saveHistory();
+        archiveSettledRow(row);
         maybeTrainShadowModel();
         updateShadowForwardMetrics();
         log('round_settled', {
@@ -652,6 +821,16 @@ function summary() {
     brierScore,
     calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
     shadowLearning: shadowModelMetrics,
+    archive: {
+      enabled: true,
+      dir: ARCHIVE_DIR,
+      records: archiveMetrics.records,
+      files: archiveMetrics.files,
+      backfilled: archiveMetrics.backfilled,
+      lastArchivedAt: archiveMetrics.lastArchivedAt,
+      lastArchiveError: archiveMetrics.lastArchiveError,
+      activeHistoryLimit: HISTORY_LIMIT,
+    },
   };
 }
 
@@ -680,12 +859,17 @@ function payload() {
       officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
       calibrationMinSamples: CALIBRATION_MIN_SAMPLES,
       calibrationBand: CALIBRATION_BAND,
+      archiveDir: ARCHIVE_DIR,
+      archiveRecords: archiveMetrics.records,
+      lastArchiveError: archiveMetrics.lastArchiveError,
     },
     records: records.slice(0, 100),
   };
 }
 
 loadHistory();
+loadArchiveIndex();
+backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 maybeTrainShadowModel();
 updateShadowForwardMetrics();
@@ -731,6 +915,9 @@ http.createServer((req, res) => {
     shadowForwardMinSamples: SHADOW_FORWARD_MIN_SAMPLES,
     shadowModelFile: SHADOW_MODEL_FILE,
     shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
+    archiveDir: ARCHIVE_DIR,
+    archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
+    archivedRecords: archiveMetrics.records,
     officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
   });
 });

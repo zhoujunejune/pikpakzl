@@ -1257,6 +1257,13 @@ function calibrationBacktestPayload() {
     };
   };
 
+  const methodCounts = {};
+  for (const r of comparable) {
+    const method = String(r.calibrationMethod || 'unknown');
+    methodCounts[method] = (methodCounts[method] || 0) + 1;
+  }
+  const currentMethodRows = comparable.filter(r => r.calibrationMethod === 'adaptive_blend_v2');
+
   return {
     ok: true,
     service: 'binance-round-tracker',
@@ -1275,10 +1282,19 @@ function calibrationBacktestPayload() {
       recentLong: CALIBRATION_RECENT_LONG,
       halfLife: CALIBRATION_HALF_LIFE,
     },
+    methodCounts,
     comparableRows: comparable.length,
-    last40: summarize(comparable.slice(-40)),
-    last80: summarize(comparable.slice(-80)),
-    all: summarize(comparable),
+    mixedHistory: {
+      last40: summarize(comparable.slice(-40)),
+      last80: summarize(comparable.slice(-80)),
+      all: summarize(comparable),
+    },
+    currentMethodOnly: {
+      comparableRows: currentMethodRows.length,
+      last40: summarize(currentMethodRows.slice(-40)),
+      last80: summarize(currentMethodRows.slice(-80)),
+      all: summarize(currentMethodRows),
+    },
   };
 }
 

@@ -514,6 +514,92 @@ function updateShadowForwardMetrics() {
   }
 }
 
+
+function shadowStatsPayload() {
+  updateShadowForwardMetrics();
+  const all = Array.from(rounds.values()).sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+  const decided = all.filter(r =>
+    (r.result === 'HIT' || r.result === 'MISS') &&
+    (r.prediction === 'UP' || r.prediction === 'DOWN')
+  );
+  const summarize = rows => {
+    const hits = rows.filter(r => r.result === 'HIT').length;
+    const misses = rows.filter(r => r.result === 'MISS').length;
+    return {
+      n: rows.length,
+      hits,
+      misses,
+      accuracy: rows.length ? Number((hits / rows.length).toFixed(4)) : null,
+    };
+  };
+  const byDirection = rows => ({
+    up: summarize(rows.filter(r => r.prediction === 'UP')),
+    down: summarize(rows.filter(r => r.prediction === 'DOWN')),
+  });
+
+  const forward = all.filter(r =>
+    Number(r.shadowModelTrainedAt) === Number(shadowModel?.trainedAt) &&
+    Number.isFinite(Number(r.shadowProbability)) &&
+    (r.actual === 'UP' || r.actual === 'DOWN')
+  );
+  let shadowHits = 0, shadowBrier = 0;
+  let v6Hits = 0, v6Brier = 0, v6BrierN = 0;
+  for (const r of forward) {
+    const yUp = r.actual === 'UP' ? 1 : 0;
+    const sp = Number(r.shadowProbability);
+    shadowHits += (sp >= 0.5 ? 'UP' : 'DOWN') === r.actual ? 1 : 0;
+    shadowBrier += (sp - yUp) ** 2;
+
+    if (r.prediction === 'UP' || r.prediction === 'DOWN') {
+      v6Hits += r.prediction === r.actual ? 1 : 0;
+      if (Number.isFinite(Number(r.modelProbability))) {
+        const hitY = r.prediction === r.actual ? 1 : 0;
+        const vp = Number(r.modelProbability);
+        v6Brier += (vp - hitY) ** 2;
+        v6BrierN += 1;
+      }
+    }
+  }
+  const v6ForwardN = forward.filter(r => r.prediction === 'UP' || r.prediction === 'DOWN').length;
+  const shadowAccuracy = forward.length ? shadowHits / forward.length : null;
+  const v6Accuracy = v6ForwardN ? v6Hits / v6ForwardN : null;
+  const sBrier = forward.length ? shadowBrier / forward.length : null;
+  const vBrier = v6BrierN ? v6Brier / v6BrierN : null;
+
+  return {
+    ok: true,
+    generatedAt: Date.now(),
+    statsVersion: STATS_VERSION,
+    v6: {
+      total: summarize(decided),
+      last40: { ...summarize(decided.slice(-40)), ...byDirection(decided.slice(-40)) },
+      last80: { ...summarize(decided.slice(-80)), ...byDirection(decided.slice(-80)) },
+    },
+    shadow: {
+      ...shadowModelMetrics,
+      artifactExists: Boolean(shadowModel?.weights),
+      forwardComparison: {
+        shadowN: forward.length,
+        shadowAccuracy: shadowAccuracy === null ? null : Number(shadowAccuracy.toFixed(4)),
+        shadowBrier: sBrier === null ? null : Number(sBrier.toFixed(4)),
+        v6N: v6ForwardN,
+        v6Accuracy: v6Accuracy === null ? null : Number(v6Accuracy.toFixed(4)),
+        v6BrierN,
+        v6Brier: vBrier === null ? null : Number(vBrier.toFixed(4)),
+        accuracyDelta: shadowAccuracy === null || v6Accuracy === null ? null : Number((shadowAccuracy - v6Accuracy).toFixed(4)),
+        brierDelta: sBrier === null || vBrier === null ? null : Number((sBrier - vBrier).toFixed(4)),
+        comparable: forward.length >= SHADOW_FORWARD_MIN_SAMPLES && v6ForwardN >= SHADOW_FORWARD_MIN_SAMPLES,
+      },
+    },
+    archive: {
+      records: archiveMetrics.records,
+      files: archiveMetrics.files,
+      lastArchivedAt: archiveMetrics.lastArchivedAt,
+      lastArchiveError: archiveMetrics.lastArchiveError,
+    },
+  };
+}
+
 function maybeTrainShadowModel() {
   const labeled = shadowTrainingRows()
     .filter(r => r.shadowFacts && (r.actual === 'UP' || r.actual === 'DOWN'))
@@ -1037,6 +1123,11 @@ http.createServer((req, res) => {
     const p = payload();
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ ok: true, health: p.health }));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/shadow-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(shadowStatsPayload()));
   }
 
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/api/round-stats')) {

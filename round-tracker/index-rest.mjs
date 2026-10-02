@@ -1327,6 +1327,7 @@ loadShadowModelArtifact();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
 updateShadowForwardMetrics();
+log('calibration_backtest_snapshot', calibrationBacktestPayload());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
 setInterval(settlePendingRounds, SETTLE_POLL_MS).unref();

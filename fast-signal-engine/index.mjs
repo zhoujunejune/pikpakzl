@@ -14,18 +14,22 @@ const SCORE_THRESHOLD = Math.min(0.95, Math.max(0.05, Number(process.env.SIGNAL_
 const CONFIRM_TICKS = Math.max(2, Number(process.env.SIGNAL_CONFIRM_TICKS || 3));
 const STALE_MS = Math.max(500, Number(process.env.SIGNAL_STALE_MS || 1500));
 const OBSERVE_MIN_MS = Math.max(5000, Number(process.env.SIGNAL_OBSERVE_MIN_MS || 10000));
-const DECISION_WINDOW_MS = Math.max(OBSERVE_MIN_MS + 5000, Number(process.env.SIGNAL_DECISION_WINDOW_MS || 30000));
+const DECISION_WINDOW_MS = Math.max(OBSERVE_MIN_MS + 5000, Number(process.env.SIGNAL_DECISION_WINDOW_MS || 22000));
 const MIN_CONTEXT_MS = Math.max(30000, Number(process.env.SIGNAL_MIN_CONTEXT_MS || 60000));
 const MICRO_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_MICRO_THRESHOLD || 0.16));
-const TREND_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_TREND_THRESHOLD || 0.14));
+const TREND_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_TREND_THRESHOLD || 0.60));
 const CONTEXT_OPPOSE_LIMIT = Math.max(0.10, Number(process.env.SIGNAL_CONTEXT_OPPOSE_LIMIT || 0.28));
 const RANGE_OBSERVE_MS = Math.max(OBSERVE_MIN_MS, Number(process.env.SIGNAL_RANGE_OBSERVE_MS || 14000));
 const COUNTERTREND_OBSERVE_MS = Math.max(RANGE_OBSERVE_MS + 2000, Number(process.env.SIGNAL_COUNTERTREND_OBSERVE_MS || 22000));
 const REGIME_THRESHOLD = Math.max(0.08, Number(process.env.SIGNAL_REGIME_THRESHOLD || 0.18));
 const REVERSAL_THRESHOLD = Math.max(0.15, Number(process.env.SIGNAL_REVERSAL_THRESHOLD || 0.40));
 const PREDICTION_CONFLICT_MARGIN = Math.min(0.25, Math.max(0.05, Number(process.env.PREDICTION_CONFLICT_MARGIN || 0.10)));
+const PREDICTION_SUPPORT_MIN = Math.min(0.25, Math.max(0, Number(process.env.SIGNAL_PREDICTION_SUPPORT_MIN || 0.025)));
+const MAX_ABS_SCORE = Math.min(0.95, Math.max(0.30, Number(process.env.SIGNAL_MAX_ABS_SCORE || 0.70)));
+const REQUIRE_PREDICTION_SUPPORT = String(process.env.SIGNAL_REQUIRE_PREDICTION_SUPPORT || 'true').toLowerCase() !== 'false';
+const REJECT_ABSORPTION = String(process.env.SIGNAL_REJECT_ABSORPTION || 'true').toLowerCase() !== 'false';
 const PRICE_SAMPLE_MS = Math.max(100, Number(process.env.SIGNAL_PRICE_SAMPLE_MS || 250));
-const STRATEGY_VERSION = 'REGIME_LAYER_V6_5M';
+const STRATEGY_VERSION = 'REGIME_LAYER_V6_QUALITY_GATED_5M';
 const PREDICTION_API = 'https://api.binance.com';
 const PREDICTION_API_KEY = String(process.env.BINANCE_PREDICTION_API_KEY || '');
 const PREDICTION_API_SECRET = String(process.env.BINANCE_PREDICTION_API_SECRET || '');
@@ -751,6 +755,12 @@ function calculate(now = Date.now()) {
     (proposedDirection === 'DOWN' && predUpMid >= 0.5 + PREDICTION_CONFLICT_MARGIN)
   );
 
+  const predictionSupport = proposedDirection === 'UP'
+    ? (predBookUsable ? predUpMid - 0.5 : null)
+    : proposedDirection === 'DOWN'
+      ? (predBookUsable ? 0.5 - predUpMid : null)
+      : null;
+
   let requiredObserveMs = OBSERVE_MIN_MS;
   let requiredTicks = CONFIRM_TICKS;
   if (alignment === 'RANGE') {
@@ -792,11 +802,17 @@ function calculate(now = Date.now()) {
       : alignment === 'RANGE'
         ? 'V6_RANGE_NEEDS_MORE_CONFIRMATION'
         : 'V6_CONFIRMATION_WINDOW';
+  } else if (REQUIRE_PREDICTION_SUPPORT && !predBookUsable) {
+    reason = 'V6_PREDICTION_SUPPORT_UNAVAILABLE';
+  } else if (REQUIRE_PREDICTION_SUPPORT && Number(predictionSupport) < PREDICTION_SUPPORT_MIN) {
+    reason = 'V6_PREDICTION_SUPPORT_TOO_WEAK';
+  } else if (Math.abs(score) >= MAX_ABS_SCORE) {
+    reason = 'V6_OVEREXTENDED_SCORE';
   } else if (predictionConflict) {
     reason = 'V6_PREDICTION_MARKET_STRONG_CONFLICT';
   } else if (alignment === 'COUNTERTREND' && !reversalStructureConfirmed) {
     reason = 'V6_PULLBACK_NOT_CONFIRMED_REVERSAL';
-  } else if (absorptionRisk && alignment !== 'ALIGNED') {
+  } else if (REJECT_ABSORPTION && absorptionRisk) {
     reason = 'V6_FLOW_ABSORPTION_RISK';
   } else {
     nextCandidate = proposedDirection;
@@ -904,6 +920,15 @@ function calculate(now = Date.now()) {
       predictionMarketUpMid: predictionBook.upMid,
       predictionMarketDepthImbalance5: predictionBook.imbalance5,
       predictionMarketConflict: predictionConflict,
+      predictionMarketSupport: Number.isFinite(Number(predictionSupport)) ? Number(Number(predictionSupport).toFixed(6)) : null,
+      qualityGate: {
+        currentScoreMin: TREND_THRESHOLD,
+        predictionSupportMin: PREDICTION_SUPPORT_MIN,
+        maxDecisionMs: DECISION_WINDOW_MS,
+        maxAbsScore: MAX_ABS_SCORE,
+        rejectAbsorption: REJECT_ABSORPTION,
+        requirePredictionSupport: REQUIRE_PREDICTION_SUPPORT,
+      },
       momentum1sBps: Number(momentum1sBps.toFixed(4)),
       momentum5sBps: Number(momentum5sBps.toFixed(4)),
       momentum15sBps: Number(momentum15sBps.toFixed(4)),
@@ -1324,6 +1349,11 @@ http.createServer(async (req, res) => {
     evaluationMs: EVAL_MS,
     confirmTicks: CONFIRM_TICKS,
     scoreThreshold: SCORE_THRESHOLD,
+    trendThreshold: TREND_THRESHOLD,
+    predictionSupportMin: PREDICTION_SUPPORT_MIN,
+    maxAbsScore: MAX_ABS_SCORE,
+    rejectAbsorption: REJECT_ABSORPTION,
+    requirePredictionSupport: REQUIRE_PREDICTION_SUPPORT,
     at: new Date().toISOString(),
   }));
 });

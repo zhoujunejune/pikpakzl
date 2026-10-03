@@ -1835,8 +1835,21 @@ log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
+// Freeze the production direction in the background even when no browser is open
+// and trading is disabled. This keeps every 5-minute round auditable and ensures
+// the stats direction is exactly the same immutable direction consumers will see.
+setInterval(() => {
+  try {
+    productionSignalPayload();
+  } catch (e) {
+    log('production_signal_background_error', { error: e?.message || String(e) });
+  }
+}, POLL_MS).unref();
 setInterval(settlePendingRounds, SETTLE_POLL_MS).unref();
 pollSignal();
+try { productionSignalPayload(); } catch (e) {
+  log('production_signal_background_error', { error: e?.message || String(e) });
+}
 settlePendingRounds();
 
 http.createServer((req, res) => {

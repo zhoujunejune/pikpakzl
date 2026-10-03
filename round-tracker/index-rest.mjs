@@ -89,13 +89,45 @@ function saveHistory() {
   }
 }
 
+function settlementDirectionFromPrices(openPrice, closePrice) {
+  const open = Number(openPrice);
+  const close = Number(closePrice);
+  if (![open, close].every(Number.isFinite)) return null;
+  return close > open ? 'UP' : close < open ? 'DOWN' : 'FLAT';
+}
+
+function normalizeHistoricalSettlement(row) {
+  if (!row || typeof row !== 'object' || !row.settledAt) return row;
+  const actual = settlementDirectionFromPrices(row.openPrice, row.closePrice);
+  if (!actual) return row;
+  row.actual = actual;
+  row.actualSource = 'BINANCE_5M_KLINE_OPEN_CLOSE';
+  row.result = row.prediction === 'UP' || row.prediction === 'DOWN'
+    ? (actual === row.prediction ? 'HIT' : actual === 'FLAT' ? 'FLAT' : 'MISS')
+    : 'NO_DECISION';
+  return row;
+}
+
 function loadHistory() {
   try {
     const parsed = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
     if (!Array.isArray(parsed)) return;
+    let repaired = 0;
     for (const item of parsed.slice(-HISTORY_LIMIT)) {
       const start = Number(item?.roundStartMs);
-      if (Number.isFinite(start) && start >= STATS_START_MS) rounds.set(String(start), item);
+      if (!Number.isFinite(start) || start < STATS_START_MS) continue;
+      const beforeActual = item?.actual;
+      const beforeResult = item?.result;
+      const normalized = normalizeHistoricalSettlement({ ...item });
+      if (normalized?.actual !== beforeActual || normalized?.result !== beforeResult) repaired += 1;
+      rounds.set(String(start), normalized);
+    }
+    if (repaired > 0) {
+      saveHistory();
+      log('history_settlement_labels_repaired', {
+        repaired,
+        source: 'BINANCE_5M_KLINE_OPEN_CLOSE',
+      });
     }
     log('history_loaded', { records: rounds.size, file: HISTORY_FILE });
   } catch (e) {
@@ -232,7 +264,7 @@ function readArchiveRows() {
       for (const line of content.split('\n')) {
         if (!line.trim()) continue;
         try {
-          const row = JSON.parse(line);
+          const row = normalizeHistoricalSettlement(JSON.parse(line));
           const start = Number(row?.roundStartMs);
           if (Number.isFinite(start) && start >= STATS_START_MS && row?.settledAt) {
             byRound.set(String(start), row);
@@ -1118,31 +1150,22 @@ async function settlePendingRounds() {
     for (const row of pending) {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;
       try {
-        const afterCloseMs = Math.max(0, Date.now() - (row.roundEndMs + 1));
+        // The user's win/loss rule is strictly the completed Binance 5m candle:
+        // close > open => UP, close < open => DOWN. Prediction-market resolution
+        // is retained only as diagnostic evidence because it can refer to a
+        // mismatched topic/reference and must never override the kline label.
+        const k = await fetchRealKline(row.roundStartMs);
         const official = await fetchOfficialPredictionResolution(row.roundStartMs, row.predictionMarketTopicId);
-        let k = null;
 
-        if (official?.resolved && (official.direction === 'UP' || official.direction === 'DOWN')) {
-          row.actual = official.direction;
-          row.actualSource = 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION';
-          row.resolutionEvidence = official.evidence ?? null;
-          row.predictionMarketTopicId = official.marketTopicId ?? row.predictionMarketTopicId;
-          try { k = await fetchRealKline(row.roundStartMs); } catch {}
-        } else {
-          if (afterCloseMs < OFFICIAL_RESOLUTION_WAIT_MS) {
-            throw new Error('PREDICTION_RESOLUTION_PENDING');
-          }
-          k = await fetchRealKline(row.roundStartMs);
-          row.actual = k.close > k.open ? 'UP' : k.close < k.open ? 'DOWN' : 'FLAT';
-          row.actualSource = 'BINANCE_SPOT_KLINE_FALLBACK_AFTER_OFFICIAL_WAIT';
-          row.resolutionEvidence = official?.error || official?.status || 'OFFICIAL_NOT_RESOLVED';
-        }
-
-        if (k) {
-          row.openPrice = k.open;
-          row.closePrice = k.close;
-          row.roundEndMs = k.closeTime;
-        }
+        row.openPrice = k.open;
+        row.closePrice = k.close;
+        row.roundEndMs = k.closeTime;
+        row.actual = settlementDirectionFromPrices(k.open, k.close);
+        row.actualSource = 'BINANCE_5M_KLINE_OPEN_CLOSE';
+        row.predictionMarketTopicId = official?.marketTopicId ?? row.predictionMarketTopicId;
+        row.resolutionEvidence = official?.resolved
+          ? `OFFICIAL_${official.direction || 'UNKNOWN'}:${official.evidence || 'UNKNOWN'}`
+          : (official?.error || official?.status || 'OFFICIAL_NOT_RESOLVED');
         row.settledAt = Date.now();
         row.result = row.prediction === 'UP' || row.prediction === 'DOWN'
           ? (row.actual === row.prediction ? 'HIT' : row.actual === 'FLAT' ? 'FLAT' : 'MISS')
@@ -1187,6 +1210,10 @@ async function settlePendingRounds() {
           settleAttempts: row.settleAttempts,
           source: row.actualSource,
           resolutionEvidence: row.resolutionEvidence,
+          officialDirection: official?.direction ?? null,
+          officialDisagreesWithKline:
+            (official?.direction === 'UP' || official?.direction === 'DOWN') &&
+            official.direction !== row.actual,
         });
       } catch (e) {
         lastSettlementError = e?.message || String(e);
@@ -1687,7 +1714,7 @@ function payload() {
     service: 'binance-round-tracker',
     symbol: SYMBOL,
     signalOrigin: SIGNAL_ORIGIN,
-    settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_WITH_SPOT_FALLBACK',
+    settlementSource: 'BINANCE_5M_KLINE_OPEN_CLOSE',
     rule: 'FIRST_REGIME_LAYER_LOCK_PER_5M_ROUND_V6',
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,

@@ -67,7 +67,7 @@ async function load(){try{
 var j=await getStats();var s=j.productionSummary||j.summary||{},h=j.health||{};
 e('rsAccuracy').innerHTML=s.accuracyPct==null?'准确率：-':'准确率：<span class="on">'+Number(s.accuracyPct).toFixed(2)+'%</span>';
 e('rsSettled').textContent=s.settledRounds??0;e('rsDecided').textContent=s.decidedRounds??0;e('rsCorrect').innerHTML='<span class="on">'+(s.correct??0)+'</span>';e('rsWrong').innerHTML='<span class="bad">'+(s.wrong??0)+'</span>';e('rsWait').textContent=s.noDecision??0;e('rsCoverage').textContent=s.coveragePct==null?'-':Number(s.coveragePct).toFixed(2)+'%';
-var settlement=j.settlementSource==='BINANCE_OFFICIAL_DATA_API_KLINES'?'Binance 官方 5分钟K线结算':'真实结果源';
+var settlement=(j.settlementSource==='BINANCE_5M_KLINE_OPEN_CLOSE'||j.settlementSource==='BINANCE_OFFICIAL_DATA_API_KLINES')?'Binance 5分钟K线开盘→收盘结算':'真实结果源';
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
 e('rsMeta').textContent='生产策略：冻结影子模型主用 / V6故障回退 · 信号检查 '+(h.signalPollMs||'-')+'ms · 每轮前15秒为影子特征观察期 · '+settlement+' · 影子轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;

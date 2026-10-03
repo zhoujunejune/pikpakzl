@@ -20,7 +20,7 @@ function log(event, extra = {}) {
 const statsCard = `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
-<div class="muted" id="rsMeta">生产信号：冻结影子模型主用，V6 仅故障回退；官方结算优先。</div>
+<div class="muted" id="rsMeta">生产信号：冻结 Shadow；真实结果只采用 Binance Prediction 官方结算。</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">已结算</div><div class="v" id="rsSettled">-</div></div>
 <div class="kv"><div class="k">有效判断</div><div class="v" id="rsDecided">-</div></div>
@@ -29,8 +29,8 @@ const statsCard = `<div class="c" id="roundStatsCard">
 <div class="kv"><div class="k">未出方向</div><div class="v" id="rsWait">-</div></div>
 <div class="kv"><div class="k">判断覆盖率</div><div class="v" id="rsCoverage">-</div></div>
 </div>
-<div style="overflow:auto;max-height:460px;margin-top:12px;border:1px solid #2b313d;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px"><thead style="position:sticky;top:0;background:#151922;z-index:2"><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">生产判断</th><th style="padding:8px 6px">来源</th><th style="padding:8px 6px">强度</th><th style="padding:8px 6px">耗时</th><th style="padding:8px 6px">真实</th><th style="padding:8px 6px">结果</th><th style="padding:8px 6px">开盘→收盘</th></tr></thead><tbody id="rsRows"><tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">读取中...</td></tr></tbody></table></div>
-<div class="muted" style="margin-top:10px">准确率 = 命中 ÷ 已结算且实际给出 UP/DOWN 的轮次；WAIT 单独统计，不事后修改历史判断。</div>
+<div style="overflow:auto;max-height:460px;margin-top:12px;border:1px solid #2b313d;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px"><thead style="position:sticky;top:0;background:#151922;z-index:2"><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">生产判断</th><th style="padding:8px 6px">来源</th><th style="padding:8px 6px">强度</th><th style="padding:8px 6px">耗时</th><th style="padding:8px 6px">官方结果</th><th style="padding:8px 6px">命中结果</th><th style="padding:8px 6px">官方结算证据</th></tr></thead><tbody id="rsRows"><tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">读取中...</td></tr></tbody></table></div>
+<div class="muted" style="margin-top:10px">真实结果只认 Binance Prediction 官方 UP/DOWN；官方未结算时显示“待结算”。现货 K 线不再参与命中判定或 Shadow 训练标签。</div>
 </div>`;
 
 const statsScript = `<script>(function(){
@@ -45,7 +45,7 @@ try{
   var r=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});
   var j=await r.json();
   if(r.ok&&j&&j.ok){
-    try{localStorage.setItem('v5_round_stats_cache',JSON.stringify({at:Date.now(),data:j}))}catch(_){}
+    try{localStorage.setItem('v6_official_round_stats_cache',JSON.stringify({at:Date.now(),data:j}))}catch(_){}
     return j
   }
   errMsg=(j&&j.error)||('proxy HTTP '+r.status)
@@ -53,7 +53,7 @@ try{
   errMsg=x&&x.message?x.message:String(x)
 }
 try{
-  var c=JSON.parse(localStorage.getItem('v5_round_stats_cache')||'null');
+  var c=JSON.parse(localStorage.getItem('v6_official_round_stats_cache')||'null');
   if(c&&c.data&&c.data.ok){
     c.data.stale=true;
     c.data.staleAgeMs=Date.now()-Number(c.at||0);
@@ -67,11 +67,11 @@ async function load(){try{
 var j=await getStats();var s=j.productionSummary||j.summary||{},h=j.health||{};
 e('rsAccuracy').innerHTML=s.accuracyPct==null?'准确率：-':'准确率：<span class="on">'+Number(s.accuracyPct).toFixed(2)+'%</span>';
 e('rsSettled').textContent=s.settledRounds??0;e('rsDecided').textContent=s.decidedRounds??0;e('rsCorrect').innerHTML='<span class="on">'+(s.correct??0)+'</span>';e('rsWrong').innerHTML='<span class="bad">'+(s.wrong??0)+'</span>';e('rsWait').textContent=s.noDecision??0;e('rsCoverage').textContent=s.coveragePct==null?'-':Number(s.coveragePct).toFixed(2)+'%';
-var settlement=(j.settlementSource==='BINANCE_5M_KLINE_OPEN_CLOSE'||j.settlementSource==='BINANCE_OFFICIAL_DATA_API_KLINES')?'Binance 5分钟K线开盘→收盘结算':'真实结果源';
+var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent='生产策略：冻结影子模型主用 / V6故障回退 · 命中判定严格按本轮开盘→收盘价格方向 · 信号检查 '+(h.signalPollMs||'-')+'ms · 每轮前15秒为影子特征观察期 · '+settlement+' · 影子轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
-var a=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)}).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var px=x.openPrice==null?'-':Number(x.openPrice).toFixed(2),pc=x.closePrice==null?'-':Number(x.closePrice).toFixed(2),st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=x.productionSource==='SHADOW_CANDIDATE_PRIMARY'?'影子':(x.productionSource==='V6_FALLBACK'?'V6回退':'WAIT');return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(x.productionActual||x.actual)+'</td><td style="padding:9px 6px">'+badge(x.productionResult)+'</td><td style="padding:9px 6px">'+px+' → '+pc+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产影子模型首个轮次...</td></tr>';
+e('rsMeta').textContent='生产策略：冻结 Shadow 主信号 · 命中判定只认 Binance Prediction 官方 UP/DOWN · 官方未结算保持待结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · 前15秒为 Shadow 特征观察期 · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
+var a=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)}).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=x.productionSource==='SHADOW_CANDIDATE_PRIMARY'?'Shadow':(x.productionSource==='V6_FALLBACK'?'V6回退':'WAIT'),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(x.productionResult)+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;

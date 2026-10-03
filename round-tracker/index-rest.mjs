@@ -1469,6 +1469,35 @@ function calibrationBacktestPayload() {
 }
 
 
+let lastProductionSignalLogKey = null;
+
+function logProductionSignalState(live) {
+  const key = [
+    live?.round ?? null,
+    live?.status ?? null,
+    live?.signal?.direction ?? null,
+    live?.source ?? null,
+    live?.fallbackUsed ?? null,
+    live?.waitReason ?? null,
+    live?.fallbackReason ?? null,
+  ].join(':');
+  if (key === lastProductionSignalLogKey) return;
+  lastProductionSignalLogKey = key;
+  log('production_signal_state', {
+    round: live?.round ?? null,
+    status: live?.status ?? null,
+    direction: live?.signal?.direction ?? null,
+    source: live?.source ?? null,
+    model: live?.model ?? null,
+    fallbackUsed: Boolean(live?.fallbackUsed),
+    waitReason: live?.waitReason ?? null,
+    fallbackReason: live?.fallbackReason ?? null,
+    generatedAt: live?.generatedAt ?? null,
+    shadowForwardStatus: live?.shadowForwardStatus ?? null,
+    shadowForwardSamples: live?.shadowForwardSamples ?? null,
+  });
+}
+
 function productionSignalPayload(now = Date.now()) {
   const expectedRound = Math.floor(Number(now) / 300000) * 300000;
   const row = rounds.get(String(expectedRound)) || null;
@@ -1503,6 +1532,7 @@ function productionSignalPayload(now = Date.now()) {
       shadowForwardStatus: shadowModelMetrics.status,
       shadowForwardSamples: shadowModelMetrics.forwardSamples,
     };
+    logProductionSignalState(live);
     return { ok: true, live };
   }
 
@@ -1534,6 +1564,7 @@ function productionSignalPayload(now = Date.now()) {
       shadowForwardStatus: shadowModelMetrics.status,
       shadowForwardSamples: shadowModelMetrics.forwardSamples,
     };
+    logProductionSignalState(live);
     return { ok: true, live };
   }
 
@@ -1560,6 +1591,7 @@ function productionSignalPayload(now = Date.now()) {
     shadowForwardStatus: shadowModelMetrics.status,
     shadowForwardSamples: shadowModelMetrics.forwardSamples,
   };
+  logProductionSignalState(live);
   return { ok: true, live };
 }
 

@@ -442,41 +442,169 @@ function loadShadowCandidateArtifact() {
 }
 
 
+
+function solveLinearSystem(matrix, vector) {
+  const n = vector.length;
+  const a = matrix.map((row, i) => [...row, vector[i]]);
+  for (let col = 0; col < n; col += 1) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r += 1) {
+      if (Math.abs(a[r][col]) > Math.abs(a[pivot][col])) pivot = r;
+    }
+    if (Math.abs(a[pivot][col]) < 1e-10) return null;
+    if (pivot !== col) [a[col], a[pivot]] = [a[pivot], a[col]];
+    const d = a[col][col];
+    for (let j = col; j <= n; j += 1) a[col][j] /= d;
+    for (let r = 0; r < n; r += 1) {
+      if (r === col) continue;
+      const factor = a[r][col];
+      if (Math.abs(factor) < 1e-14) continue;
+      for (let j = col; j <= n; j += 1) a[r][j] -= factor * a[col][j];
+    }
+  }
+  return a.map(row => row[n]);
+}
+
+function recoverPinnedShadowFromHistory(modelVersion) {
+  const m = String(modelVersion || '').match(/^shadow-v6-(\d+)$/);
+  const trainedAt = m ? Number(m[1]) : NaN;
+  if (!Number.isFinite(trainedAt)) return null;
+
+  const rows = Array.from(rounds.values())
+    .filter(r =>
+      Number(r?.shadowCandidateTrainedAt) === trainedAt &&
+      Number.isFinite(Number(r?.shadowCandidateProbability)) &&
+      r?.shadowFacts
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+
+  const dim = SHADOW_FEATURE_KEYS.length + 1;
+  if (rows.length < Math.max(40, dim * 2)) {
+    log('shadow_production_recovery_insufficient_history', {
+      modelVersion,
+      trainedAt,
+      rows: rows.length,
+      required: Math.max(40, dim * 2),
+    });
+    return null;
+  }
+
+  const xtx = Array.from({ length: dim }, () => new Array(dim).fill(0));
+  const xty = new Array(dim).fill(0);
+  const samples = [];
+  for (const row of rows) {
+    const vec = shadowVector(row.shadowFacts);
+    if (!vec) continue;
+    const p0 = Number(row.shadowCandidateProbability);
+    if (!Number.isFinite(p0)) continue;
+    const p = Math.max(1e-6, Math.min(1 - 1e-6, p0));
+    const y = Math.log(p / (1 - p));
+    const x = [1, ...vec];
+    samples.push({ x, p });
+    for (let i = 0; i < dim; i += 1) {
+      xty[i] += x[i] * y;
+      for (let j = 0; j < dim; j += 1) xtx[i][j] += x[i] * x[j];
+    }
+  }
+
+  if (samples.length < Math.max(40, dim * 2)) return null;
+  for (let i = 0; i < dim; i += 1) xtx[i][i] += 1e-8;
+  const weights = solveLinearSystem(xtx, xty);
+  if (!weights || weights.length !== dim || !weights.every(Number.isFinite)) {
+    log('shadow_production_recovery_solve_failed', { modelVersion, trainedAt, samples: samples.length });
+    return null;
+  }
+
+  let squared = 0;
+  let maxAbsError = 0;
+  for (const s of samples) {
+    let z = weights[0];
+    for (let j = 0; j < s.x.length - 1; j += 1) z += weights[j + 1] * s.x[j + 1];
+    const pred = sigmoid(z);
+    const err = Math.abs(pred - s.p);
+    squared += err * err;
+    if (err > maxAbsError) maxAbsError = err;
+  }
+  const rmse = Math.sqrt(squared / samples.length);
+  if (rmse > 0.002 || maxAbsError > 0.02) {
+    log('shadow_production_recovery_quality_failed', {
+      modelVersion, trainedAt, samples: samples.length, rmse, maxAbsError,
+    });
+    return null;
+  }
+
+  const recovered = {
+    weights,
+    featureKeys: SHADOW_FEATURE_KEYS,
+    trainedAt,
+    modelVersion,
+    lastTrainRound: rows[0]?.roundStartMs ?? trainedAt,
+    recoveredFromHistory: true,
+    recoverySamples: samples.length,
+    recoveryRmse: Number(rmse.toFixed(8)),
+    recoveryMaxAbsError: Number(maxAbsError.toFixed(8)),
+  };
+  log('shadow_production_model_recovered', {
+    modelVersion,
+    trainedAt,
+    recoverySamples: samples.length,
+    recoveryRmse: recovered.recoveryRmse,
+    recoveryMaxAbsError: recovered.recoveryMaxAbsError,
+  });
+  return recovered;
+}
+
 function applyPinnedProductionShadow() {
   if (!SHADOW_PRODUCTION_MODEL_VERSION) return false;
-  if (!shadowModel?.weights || shadowModel.modelVersion !== SHADOW_PRODUCTION_MODEL_VERSION) {
-    log('shadow_production_pin_not_available', {
-      requestedModelVersion: SHADOW_PRODUCTION_MODEL_VERSION,
-      loadedRollingModelVersion: shadowModel?.modelVersion ?? null,
-    });
-    return false;
-  }
 
   const alreadyPinned =
     shadowCandidate?.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION &&
     shadowCandidateMetrics?.productionApproved === true;
   if (alreadyPinned) return true;
 
-  shadowCandidate = {
-    ...shadowModel,
-    weights: shadowModel.weights.map(Number),
-    featureKeys: SHADOW_FEATURE_KEYS,
-  };
+  let approvedModel = null;
+  let approvalMode = null;
+  if (shadowModel?.weights && shadowModel.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION) {
+    approvedModel = {
+      ...shadowModel,
+      weights: shadowModel.weights.map(Number),
+      featureKeys: SHADOW_FEATURE_KEYS,
+    };
+    approvalMode = 'ROLLING_MODEL_ARTIFACT';
+  } else {
+    approvedModel = recoverPinnedShadowFromHistory(SHADOW_PRODUCTION_MODEL_VERSION);
+    approvalMode = approvedModel ? 'HISTORICAL_PROBABILITY_RECOVERY' : null;
+  }
+
+  if (!approvedModel?.weights) {
+    log('shadow_production_pin_not_available', {
+      requestedModelVersion: SHADOW_PRODUCTION_MODEL_VERSION,
+      loadedRollingModelVersion: shadowModel?.modelVersion ?? null,
+      loadedCandidateModelVersion: shadowCandidate?.modelVersion ?? null,
+    });
+    return false;
+  }
+
+  shadowCandidate = approvedModel;
   shadowCandidateMetrics = {
     status: 'MANUALLY_APPROVED_PRODUCTION',
     productionApproved: true,
     approvalSource: 'USER_EXPLICIT',
+    approvalMode,
     approvedAt: Date.now(),
-    validationAccuracy: Number.isFinite(Number(shadowModel.validationAccuracy))
-      ? Number(Number(shadowModel.validationAccuracy).toFixed(4)) : null,
-    validationBrier: Number.isFinite(Number(shadowModel.validationBrier))
-      ? Number(Number(shadowModel.validationBrier).toFixed(4)) : null,
-    baselineAccuracy: Number.isFinite(Number(shadowModel.baselineAccuracy))
-      ? Number(Number(shadowModel.baselineAccuracy).toFixed(4)) : null,
-    baselineBrier: Number.isFinite(Number(shadowModel.baselineBrier))
-      ? Number(Number(shadowModel.baselineBrier).toFixed(4)) : null,
-    trainedAt: shadowModel.trainedAt,
-    modelVersion: shadowModel.modelVersion,
+    validationAccuracy: Number.isFinite(Number(approvedModel.validationAccuracy))
+      ? Number(Number(approvedModel.validationAccuracy).toFixed(4)) : null,
+    validationBrier: Number.isFinite(Number(approvedModel.validationBrier))
+      ? Number(Number(approvedModel.validationBrier).toFixed(4)) : null,
+    baselineAccuracy: Number.isFinite(Number(approvedModel.baselineAccuracy))
+      ? Number(Number(approvedModel.baselineAccuracy).toFixed(4)) : null,
+    baselineBrier: Number.isFinite(Number(approvedModel.baselineBrier))
+      ? Number(Number(approvedModel.baselineBrier).toFixed(4)) : null,
+    trainedAt: approvedModel.trainedAt,
+    modelVersion: approvedModel.modelVersion,
+    recoverySamples: approvedModel.recoverySamples ?? null,
+    recoveryRmse: approvedModel.recoveryRmse ?? null,
+    recoveryMaxAbsError: approvedModel.recoveryMaxAbsError ?? null,
   };
   saveShadowCandidateArtifact();
   log('shadow_production_model_pinned', {
@@ -487,6 +615,7 @@ function applyPinnedProductionShadow() {
     baselineAccuracy: shadowCandidateMetrics.baselineAccuracy,
     baselineBrier: shadowCandidateMetrics.baselineBrier,
     productionApproved: true,
+    approvalMode,
     autoReplacement: false,
   });
   return true;

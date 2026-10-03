@@ -1198,6 +1198,91 @@ async function settlePendingRounds() {
   }
 }
 
+
+const PRODUCTION_SHADOW_START_MS = 1791000600000;
+
+function productionRecordView(row) {
+  const p = Number(row?.shadowCandidateProbability);
+  const candidateReady =
+    Number(row?.roundStartMs) >= PRODUCTION_SHADOW_START_MS &&
+    Boolean(shadowCandidate?.weights) &&
+    Number(row?.shadowCandidateTrainedAt) === Number(shadowCandidate?.trainedAt) &&
+    Number.isFinite(p);
+
+  let direction = 'WAIT';
+  let confidence = null;
+  let score = null;
+  let source = 'WAIT';
+  let generatedAt = null;
+  let delayMs = null;
+
+  if (candidateReady) {
+    direction = p >= 0.5 ? 'UP' : 'DOWN';
+    confidence = Number(Math.max(p, 1 - p).toFixed(6));
+    score = Number((p * 2 - 1).toFixed(6));
+    source = 'SHADOW_CANDIDATE_PRIMARY';
+    generatedAt = row.shadowObservedAt ?? null;
+    delayMs = Number.isFinite(Number(generatedAt))
+      ? Math.max(0, Number(generatedAt) - Number(row.roundStartMs))
+      : null;
+  } else if (
+    Number(row?.roundStartMs) >= PRODUCTION_SHADOW_START_MS &&
+    (row?.prediction === 'UP' || row?.prediction === 'DOWN')
+  ) {
+    direction = row.prediction;
+    confidence = row.predictionConfidence ?? null;
+    score = row.predictionScore ?? null;
+    source = 'V6_FALLBACK';
+    generatedAt = row.predictedAt ?? null;
+    delayMs = row.predictionDelayMs ?? null;
+  }
+
+  const actual = row?.actual;
+  const result =
+    actual === 'UP' || actual === 'DOWN'
+      ? direction === 'UP' || direction === 'DOWN'
+        ? (direction === actual ? 'HIT' : 'MISS')
+        : 'NO_DECISION'
+      : 'PENDING';
+
+  return {
+    ...row,
+    productionPrediction: direction,
+    productionConfidence: confidence,
+    productionScore: score,
+    productionSource: source,
+    productionGeneratedAt: generatedAt,
+    productionDelayMs: delayMs,
+    productionResult: result,
+  };
+}
+
+function productionSummary() {
+  const records = Array.from(rounds.values())
+    .filter(r => Number(r.roundStartMs) >= PRODUCTION_SHADOW_START_MS)
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs))
+    .map(productionRecordView);
+  const settled = records.filter(r => r.actual === 'UP' || r.actual === 'DOWN');
+  const decided = settled.filter(r => r.productionPrediction === 'UP' || r.productionPrediction === 'DOWN');
+  const correct = decided.filter(r => r.productionResult === 'HIT').length;
+  const wrong = decided.filter(r => r.productionResult === 'MISS').length;
+  const noDecision = settled.filter(r => r.productionResult === 'NO_DECISION').length;
+  return {
+    startMs: PRODUCTION_SHADOW_START_MS,
+    totalTrackedRounds: records.length,
+    settledRounds: settled.length,
+    decidedRounds: decided.length,
+    correct,
+    wrong,
+    noDecision,
+    accuracyPct: decided.length ? Number(((correct / decided.length) * 100).toFixed(2)) : null,
+    coveragePct: settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null,
+    primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
+    v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
+    policy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+  };
+}
+
 function summary() {
   const records = Array.from(rounds.values()).sort((a, b) => b.roundStartMs - a.roundStartMs);
   const settled = records.filter(r => r.actual === 'UP' || r.actual === 'DOWN');
@@ -1608,6 +1693,9 @@ function payload() {
     statsStartMs: STATS_START_MS,
     accuracyRule: 'HIT_DIVIDED_BY_DECIDED_SETTLED_ROUNDS',
     summary: summary(),
+    productionSummary: productionSummary(),
+    productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+    productionStartMs: PRODUCTION_SHADOW_START_MS,
     health: {
       signalPollMs: POLL_MS,
       settlePollMs: SETTLE_POLL_MS,
@@ -1629,7 +1717,7 @@ function payload() {
       lockQualityShadowVersion: LOCK_QUALITY_SHADOW_VERSION,
       lockQualityShadowStartMs: LOCK_QUALITY_SHADOW_START_MS,
     },
-    records: records.slice(0, 100),
+    records: records.slice(0, 100).map(productionRecordView),
   };
 }
 

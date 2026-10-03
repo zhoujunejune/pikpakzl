@@ -97,23 +97,85 @@ function settlementDirectionFromPrices(openPrice, closePrice) {
   return close > open ? 'UP' : close < open ? 'DOWN' : 'FLAT';
 }
 
-function normalizeHistoricalSettlement(row) {
-  if (!row || typeof row !== 'object' || !row.settledAt) return row;
-  const actual = settlementDirectionFromPrices(row.openPrice, row.closePrice);
-  if (!actual) return row;
-  row.actual = actual;
-  row.actualSource = 'BINANCE_5M_KLINE_OPEN_CLOSE';
+function officialDirectionFromRow(row) {
+  const explicit = String(row?.officialDirection || '').toUpperCase();
+  if (explicit === 'UP' || explicit === 'DOWN') return explicit;
+
+  const evidence = String(row?.resolutionEvidence || '').toUpperCase();
+  const m = evidence.match(/^OFFICIAL_(UP|DOWN)(?::|$)/);
+  if (m) return m[1];
+
+  if (
+    row?.actualSource === 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' &&
+    (row?.actual === 'UP' || row?.actual === 'DOWN')
+  ) {
+    return row.actual;
+  }
+  return null;
+}
+
+function applyOfficialSettlement(row, direction, evidence = null, settledAt = Date.now()) {
+  if (!row || (direction !== 'UP' && direction !== 'DOWN')) return false;
+  row.actual = direction;
+  row.actualSource = 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION';
+  row.officialDirection = direction;
+  if (evidence) row.resolutionEvidence = evidence;
+  row.settledAt = settledAt;
   row.result = row.prediction === 'UP' || row.prediction === 'DOWN'
-    ? (actual === row.prediction ? 'HIT' : actual === 'FLAT' ? 'FLAT' : 'MISS')
+    ? (direction === row.prediction ? 'HIT' : 'MISS')
     : 'NO_DECISION';
 
-  // Production accuracy is based only on the immutable, persisted first LOCKED direction.
-  // Never infer a historical production decision from the current model or the legacy V6 field.
-  row.productionActual = actual;
+  row.productionActual = direction;
   row.productionResult = row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN'
-    ? (actual === row.productionPrediction ? 'HIT' : actual === 'FLAT' ? 'FLAT' : 'MISS')
+    ? (direction === row.productionPrediction ? 'HIT' : 'MISS')
     : 'NO_DECISION';
-  row.productionSettledAt = row.settledAt;
+  row.productionSettledAt = settledAt;
+  row.nextSettleAt = 0;
+  return true;
+}
+
+function normalizeHistoricalSettlement(row) {
+  if (!row || typeof row !== 'object') return row;
+
+  const official = officialDirectionFromRow(row);
+  if (official) {
+    const beforeActual = row.actual;
+    const beforeSource = row.actualSource;
+    const beforeProductionActual = row.productionActual;
+    applyOfficialSettlement(
+      row,
+      official,
+      row.resolutionEvidence || `OFFICIAL_${official}:PERSISTED_EVIDENCE`,
+      row.settledAt || row.productionSettledAt || Date.now()
+    );
+    if (
+      beforeActual !== official ||
+      beforeSource !== 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' ||
+      beforeProductionActual !== official
+    ) {
+      row.needsOfficialArchiveCorrection = true;
+    }
+    return row;
+  }
+
+  // Never treat a historical spot-kline label as a Prediction Market truth label.
+  // If no official UP/DOWN evidence is persisted, make it pending and re-resolve it.
+  if (
+    row.actualSource === 'BINANCE_5M_KLINE_OPEN_CLOSE' ||
+    row.actual === 'FLAT' ||
+    row.productionActual === 'FLAT'
+  ) {
+    row.actual = null;
+    row.actualSource = null;
+    row.result = 'PENDING';
+    row.productionActual = null;
+    row.productionResult = 'PENDING';
+    row.settledAt = null;
+    row.productionSettledAt = null;
+    row.settleAttempts = 0;
+    row.nextSettleAt = 0;
+    row.needsOfficialArchiveCorrection = true;
+  }
   return row;
 }
 
@@ -142,7 +204,7 @@ function loadHistory() {
       saveHistory();
       log('history_settlement_labels_repaired', {
         repaired,
-        source: 'BINANCE_5M_KLINE_OPEN_CLOSE',
+        source: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
       });
     }
     log('history_loaded', { records: rounds.size, file: HISTORY_FILE });
@@ -217,7 +279,8 @@ function archiveSettledRow(row, reason = 'settlement') {
   if (!Number.isFinite(start) || start < STATS_START_MS || !row?.settledAt || row?.result === 'PENDING') {
     return false;
   }
-  if (archivedRoundIds.has(key)) return false;
+  const forceCorrection = reason === 'official_correction';
+  if (archivedRoundIds.has(key) && !forceCorrection) return false;
 
   const file = archiveFileForRound(start);
   let fd = null;
@@ -262,11 +325,22 @@ function backfillArchiveFromActiveHistory() {
   const settled = Array.from(rounds.values())
     .filter(r => r?.settledAt && r?.result !== 'PENDING')
     .sort((a, b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+  let corrected = 0;
   for (const row of settled) {
-    if (archiveSettledRow(row, 'startup_backfill')) added += 1;
+    if (row?.needsOfficialArchiveCorrection) {
+      if (archiveSettledRow(row, 'official_correction')) {
+        corrected += 1;
+        row.needsOfficialArchiveCorrection = false;
+        row.officialArchiveCorrectedAt = Date.now();
+      }
+    } else if (archiveSettledRow(row, 'startup_backfill')) {
+      added += 1;
+    }
   }
+  if (corrected > 0) saveHistory();
   log('round_archive_backfill_complete', {
     added,
+    corrected,
     archivedRecords: archiveMetrics.records,
     activeRecords: rounds.size,
   });
@@ -1366,39 +1440,32 @@ async function settlePendingRounds() {
     for (const row of pending) {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;
       try {
-        // The user's win/loss rule is strictly the completed Binance 5m candle:
-        // close > open => UP, close < open => DOWN. Prediction-market resolution
-        // is retained only as diagnostic evidence because it can refer to a
-        // mismatched topic/reference and must never override the kline label.
-        const k = await fetchRealKline(row.roundStartMs);
         const official = await fetchOfficialPredictionResolution(row.roundStartMs, row.predictionMarketTopicId);
+        const direction = String(official?.direction || '').toUpperCase();
 
-        row.openPrice = k.open;
-        row.closePrice = k.close;
-        row.roundEndMs = k.closeTime;
-        row.actual = settlementDirectionFromPrices(k.open, k.close);
-        row.actualSource = 'BINANCE_5M_KLINE_OPEN_CLOSE';
+        if (!official?.resolved || (direction !== 'UP' && direction !== 'DOWN')) {
+          const why = official?.error || official?.status || 'OFFICIAL_RESOLUTION_PENDING';
+          row.resolutionEvidence = why;
+          row.nextSettleAt = Date.now() + Math.min(30000, 2000 * row.settleAttempts);
+          lastSettlementError = why;
+          continue;
+        }
+
         row.predictionMarketTopicId = official?.marketTopicId ?? row.predictionMarketTopicId;
-        row.resolutionEvidence = official?.resolved
-          ? `OFFICIAL_${official.direction || 'UNKNOWN'}:${official.evidence || 'UNKNOWN'}`
-          : (official?.error || official?.status || 'OFFICIAL_NOT_RESOLVED');
-        row.settledAt = Date.now();
-        row.result = row.prediction === 'UP' || row.prediction === 'DOWN'
-          ? (row.actual === row.prediction ? 'HIT' : row.actual === 'FLAT' ? 'FLAT' : 'MISS')
-          : 'NO_DECISION';
+        const evidence = `OFFICIAL_${direction}:${official?.evidence || 'RESOLVED'}`;
+        applyOfficialSettlement(row, direction, evidence, Date.now());
 
-        // Freeze the production result from the same immutable direction that was exposed
-        // to downstream consumers for this round.
-        row.productionActual = row.actual;
-        row.productionResult = row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN'
-          ? (row.actual === row.productionPrediction ? 'HIT' : row.actual === 'FLAT' ? 'FLAT' : 'MISS')
-          : 'NO_DECISION';
-        row.productionSettledAt = Date.now();
-        row.nextSettleAt = 0;
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
         saveHistory();
-        archiveSettledRow(row);
+
+        const archiveReason = row.needsOfficialArchiveCorrection ? 'official_correction' : 'settlement';
+        if (archiveSettledRow(row, archiveReason) && row.needsOfficialArchiveCorrection) {
+          row.needsOfficialArchiveCorrection = false;
+          row.officialArchiveCorrectedAt = Date.now();
+          saveHistory();
+        }
+
         maybeTrainShadowModel();
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
@@ -1424,6 +1491,7 @@ async function settlePendingRounds() {
             status: shadowModelMetrics.status,
           });
         }
+
         log('round_settled', {
           round: row.roundStartMs,
           prediction: row.prediction,
@@ -1434,10 +1502,7 @@ async function settlePendingRounds() {
           settleAttempts: row.settleAttempts,
           source: row.actualSource,
           resolutionEvidence: row.resolutionEvidence,
-          officialDirection: official?.direction ?? null,
-          officialDisagreesWithKline:
-            (official?.direction === 'UP' || official?.direction === 'DOWN') &&
-            official.direction !== row.actual,
+          officialDirection: direction,
           productionPrediction: row.productionPrediction ?? null,
           productionActual: row.productionActual ?? null,
           productionResult: row.productionResult ?? null,
@@ -1445,7 +1510,7 @@ async function settlePendingRounds() {
         });
       } catch (e) {
         lastSettlementError = e?.message || String(e);
-        row.nextSettleAt = Date.now() + Math.min(15000, 1500 * row.settleAttempts);
+        row.nextSettleAt = Date.now() + Math.min(30000, 2000 * row.settleAttempts);
       }
     }
   } finally {
@@ -1481,38 +1546,25 @@ function freezeProductionLock(row, live) {
   return true;
 }
 
-function productionPriceActual(row) {
-  const open = Number(row?.openPrice);
-  const close = Number(row?.closePrice);
-  if (Number.isFinite(open) && Number.isFinite(close)) {
-    if (close > open) return 'UP';
-    if (close < open) return 'DOWN';
-    return 'FLAT';
-  }
-  return row?.actual ?? null;
-}
-
 function productionRecordView(row) {
   const direction = row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN'
     ? row.productionPrediction
     : 'WAIT';
-  const productionActual = row?.productionActual ?? productionPriceActual(row);
+  const official = row?.productionActual === 'UP' || row?.productionActual === 'DOWN'
+    ? row.productionActual
+    : officialDirectionFromRow(row);
   const productionResult =
-    row?.productionResult && row.productionResult !== 'PENDING'
-      ? row.productionResult
-      : productionActual === 'UP' || productionActual === 'DOWN'
-        ? direction === 'UP' || direction === 'DOWN'
-          ? (direction === productionActual ? 'HIT' : 'MISS')
-          : 'NO_DECISION'
-        : productionActual === 'FLAT'
-          ? 'FLAT'
-          : 'PENDING';
+    official === 'UP' || official === 'DOWN'
+      ? direction === 'UP' || direction === 'DOWN'
+        ? (direction === official ? 'HIT' : 'MISS')
+        : 'NO_DECISION'
+      : 'PENDING';
 
   return {
     ...row,
     productionPrediction: direction,
     productionSource: row?.productionSource || 'WAIT',
-    productionActual,
+    productionActual: official,
     productionResult,
   };
 }
@@ -1984,11 +2036,11 @@ function payload() {
     service: 'binance-round-tracker',
     symbol: SYMBOL,
     signalOrigin: SIGNAL_ORIGIN,
-    settlementSource: 'BINANCE_5M_KLINE_OPEN_CLOSE',
+    settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
     rule: 'FIRST_REGIME_LAYER_LOCK_PER_5M_ROUND_V6',
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
-    accuracyRule: 'PRODUCTION_LOCKED_DIRECTION_VS_5M_OPEN_CLOSE_PRICE_DIRECTION',
+    accuracyRule: 'PRODUCTION_LOCKED_DIRECTION_VS_BINANCE_PREDICTION_OFFICIAL_DIRECTION',
     summary: summary(),
     productionSummary: productionSummary(),
     productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
@@ -2090,7 +2142,7 @@ http.createServer((req, res) => {
     settlePollMs: SETTLE_POLL_MS,
     historyLimit: HISTORY_LIMIT,
     marketDataBase: MARKET_DATA_BASE,
-    settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_WITH_SPOT_FALLBACK',
+    settlementSource: 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
     statsVersion: STATS_VERSION,
     statsStartMs: STATS_START_MS,
     calibrationMinSamples: CALIBRATION_MIN_SAMPLES,

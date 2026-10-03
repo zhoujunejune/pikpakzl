@@ -15,6 +15,7 @@ const CALIBRATION_MIN_SAMPLES = Math.max(20, Number(process.env.CALIBRATION_MIN_
 const SHADOW_OBSERVE_MS = Math.max(10000, Number(process.env.SHADOW_OBSERVE_MS || 15000));
 const SHADOW_TRAIN_MIN_SAMPLES = Math.max(100, Number(process.env.SHADOW_TRAIN_MIN_SAMPLES || 300));
 const SHADOW_FORWARD_MIN_SAMPLES = Math.max(30, Number(process.env.SHADOW_FORWARD_MIN_SAMPLES || 60));
+const SHADOW_PRODUCTION_MODEL_VERSION = String(process.env.SHADOW_PRODUCTION_MODEL_VERSION || '').trim();
 const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
 const CALIBRATION_RECENT_SHORT = Math.max(20, Number(process.env.CALIBRATION_RECENT_SHORT || 40));
 const CALIBRATION_RECENT_LONG = Math.max(CALIBRATION_RECENT_SHORT, Number(process.env.CALIBRATION_RECENT_LONG || 80));
@@ -438,6 +439,66 @@ function loadShadowCandidateArtifact() {
     if (e?.code !== 'ENOENT') log('shadow_candidate_artifact_load_failed', { error: e?.message || String(e) });
     return false;
   }
+}
+
+
+function applyPinnedProductionShadow() {
+  if (!SHADOW_PRODUCTION_MODEL_VERSION) return false;
+  if (!shadowModel?.weights || shadowModel.modelVersion !== SHADOW_PRODUCTION_MODEL_VERSION) {
+    log('shadow_production_pin_not_available', {
+      requestedModelVersion: SHADOW_PRODUCTION_MODEL_VERSION,
+      loadedRollingModelVersion: shadowModel?.modelVersion ?? null,
+    });
+    return false;
+  }
+
+  const alreadyPinned =
+    shadowCandidate?.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION &&
+    shadowCandidateMetrics?.productionApproved === true;
+  if (alreadyPinned) return true;
+
+  shadowCandidate = {
+    ...shadowModel,
+    weights: shadowModel.weights.map(Number),
+    featureKeys: SHADOW_FEATURE_KEYS,
+  };
+  shadowCandidateMetrics = {
+    status: 'MANUALLY_APPROVED_PRODUCTION',
+    productionApproved: true,
+    approvalSource: 'USER_EXPLICIT',
+    approvedAt: Date.now(),
+    validationAccuracy: Number.isFinite(Number(shadowModel.validationAccuracy))
+      ? Number(Number(shadowModel.validationAccuracy).toFixed(4)) : null,
+    validationBrier: Number.isFinite(Number(shadowModel.validationBrier))
+      ? Number(Number(shadowModel.validationBrier).toFixed(4)) : null,
+    baselineAccuracy: Number.isFinite(Number(shadowModel.baselineAccuracy))
+      ? Number(Number(shadowModel.baselineAccuracy).toFixed(4)) : null,
+    baselineBrier: Number.isFinite(Number(shadowModel.baselineBrier))
+      ? Number(Number(shadowModel.baselineBrier).toFixed(4)) : null,
+    trainedAt: shadowModel.trainedAt,
+    modelVersion: shadowModel.modelVersion,
+  };
+  saveShadowCandidateArtifact();
+  log('shadow_production_model_pinned', {
+    modelVersion: shadowCandidate.modelVersion,
+    trainedAt: shadowCandidate.trainedAt,
+    validationAccuracy: shadowCandidateMetrics.validationAccuracy,
+    validationBrier: shadowCandidateMetrics.validationBrier,
+    baselineAccuracy: shadowCandidateMetrics.baselineAccuracy,
+    baselineBrier: shadowCandidateMetrics.baselineBrier,
+    productionApproved: true,
+    autoReplacement: false,
+  });
+  return true;
+}
+
+function productionShadowApproved() {
+  if (!shadowCandidate?.weights) return false;
+  if (SHADOW_PRODUCTION_MODEL_VERSION) {
+    return shadowCandidate.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION;
+  }
+  return shadowCandidateMetrics?.productionApproved === true ||
+    shadowModelMetrics.status === 'FORWARD_VALIDATED_CANDIDATE';
 }
 
 function candidatePredict(facts) {
@@ -1688,13 +1749,13 @@ function productionSignalPayload(now = Date.now()) {
   }
 
   const candidateProbability = Number(row?.shadowCandidateProbability);
-  const candidateValidated =
-    Boolean(shadowCandidate?.weights) &&
-    shadowModelMetrics.status === 'FORWARD_VALIDATED_CANDIDATE' &&
+  const candidateApproved = productionShadowApproved();
+  const candidateReady =
+    candidateApproved &&
     Number(row?.shadowCandidateTrainedAt) === Number(shadowCandidate?.trainedAt) &&
     Number.isFinite(candidateProbability);
 
-  if (row && candidateValidated) {
+  if (row && candidateReady) {
     const direction = candidateProbability >= 0.5 ? 'UP' : 'DOWN';
     const directionProbability = direction === 'UP' ? candidateProbability : 1 - candidateProbability;
     const signedScore = candidateProbability * 2 - 1;
@@ -1724,7 +1785,11 @@ function productionSignalPayload(now = Date.now()) {
   }
 
   const v6Direction = row?.prediction === 'UP' || row?.prediction === 'DOWN' ? row.prediction : null;
-  if (row && v6Direction) {
+  const shadowHardUnavailable =
+    !shadowCandidate?.weights ||
+    !candidateApproved ||
+    (SHADOW_PRODUCTION_MODEL_VERSION && shadowCandidate?.modelVersion !== SHADOW_PRODUCTION_MODEL_VERSION);
+  if (row && v6Direction && shadowHardUnavailable) {
     const live = {
       round: row.roundStartMs,
       status: 'LOCKED',
@@ -1743,11 +1808,9 @@ function productionSignalPayload(now = Date.now()) {
       fallbackUsed: true,
       fallbackReason: !shadowCandidate?.weights
         ? 'SHADOW_CANDIDATE_UNAVAILABLE'
-        : shadowModelMetrics.status !== 'FORWARD_VALIDATED_CANDIDATE'
-          ? 'SHADOW_CANDIDATE_NOT_FORWARD_VALIDATED'
-          : !Number.isFinite(candidateProbability)
-            ? 'SHADOW_CANDIDATE_PROBABILITY_NOT_READY'
-            : 'SHADOW_CANDIDATE_ROUND_MISMATCH',
+        : !candidateApproved
+          ? 'SHADOW_PRODUCTION_MODEL_NOT_APPROVED'
+          : 'SHADOW_PRODUCTION_MODEL_VERSION_MISMATCH',
       shadowForwardStatus: shadowModelMetrics.status,
       shadowForwardSamples: shadowModelMetrics.forwardSamples,
     };
@@ -1771,11 +1834,13 @@ function productionSignalPayload(now = Date.now()) {
       ? 'CURRENT_ROUND_NOT_OBSERVED'
       : !shadowCandidate?.weights
         ? 'SHADOW_CANDIDATE_UNAVAILABLE'
-        : shadowModelMetrics.status !== 'FORWARD_VALIDATED_CANDIDATE'
-          ? 'SHADOW_CANDIDATE_NOT_FORWARD_VALIDATED'
-          : !Number.isFinite(candidateProbability)
-            ? 'WAITING_FOR_SHADOW_OBSERVATION'
-            : 'NO_VALID_SIGNAL',
+        : !candidateApproved
+          ? 'SHADOW_PRODUCTION_MODEL_NOT_APPROVED'
+          : Number(row?.shadowCandidateTrainedAt) !== Number(shadowCandidate?.trainedAt)
+            ? 'WAITING_FOR_PINNED_SHADOW_OBSERVATION'
+            : !Number.isFinite(candidateProbability)
+              ? 'WAITING_FOR_SHADOW_OBSERVATION'
+              : 'NO_VALID_SIGNAL',
     shadowForwardStatus: shadowModelMetrics.status,
     shadowForwardSamples: shadowModelMetrics.forwardSamples,
   };
@@ -1830,6 +1895,7 @@ backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
+applyPinnedProductionShadow();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
@@ -1908,6 +1974,8 @@ http.createServer((req, res) => {
     shadowModelFile: SHADOW_MODEL_FILE,
     shadowCandidateFile: SHADOW_CANDIDATE_FILE,
     shadowCandidateModelVersion: shadowCandidate?.modelVersion ?? null,
+    shadowProductionModelVersion: SHADOW_PRODUCTION_MODEL_VERSION || shadowCandidate?.modelVersion || null,
+    shadowProductionApproved: productionShadowApproved(),
     shadowForwardMetricScope: shadowCandidate ? 'FROZEN_CANDIDATE' : 'LATEST_RETRAINED_MODEL',
     shadowForwardSamples: startupForward.shadowN,
     shadowForwardTargetSamples: SHADOW_FORWARD_MIN_SAMPLES,

@@ -1550,6 +1550,7 @@ http.createServer((req, res) => {
   res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ ok: false, error: 'Not found' }));
 }).listen(PORT, '0.0.0.0', () => {
+  const startupForward = candidateForwardSummary();
   log('round_tracker_started', {
     port: PORT,
     symbol: SYMBOL,
@@ -1571,6 +1572,16 @@ http.createServer((req, res) => {
     shadowModelFile: SHADOW_MODEL_FILE,
     shadowCandidateFile: SHADOW_CANDIDATE_FILE,
     shadowCandidateModelVersion: shadowCandidate?.modelVersion ?? null,
+    shadowForwardMetricScope: shadowCandidate ? 'FROZEN_CANDIDATE' : 'LATEST_RETRAINED_MODEL',
+    shadowForwardSamples: startupForward.shadowN,
+    shadowForwardTargetSamples: SHADOW_FORWARD_MIN_SAMPLES,
+    shadowForwardRemainingSamples: Math.max(0, SHADOW_FORWARD_MIN_SAMPLES - startupForward.shadowN),
+    shadowForwardAccuracy: startupForward.shadowAccuracy,
+    shadowForwardBrier: startupForward.shadowBrier,
+    shadowForwardV6Samples: startupForward.v6N,
+    shadowForwardV6Accuracy: startupForward.v6Accuracy,
+    shadowForwardComparable: startupForward.comparable,
+    shadowForwardStatus: shadowModelMetrics.status,
     shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
     archiveDir: ARCHIVE_DIR,
     archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,

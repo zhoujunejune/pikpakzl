@@ -105,6 +105,14 @@ function normalizeHistoricalSettlement(row) {
   row.result = row.prediction === 'UP' || row.prediction === 'DOWN'
     ? (actual === row.prediction ? 'HIT' : actual === 'FLAT' ? 'FLAT' : 'MISS')
     : 'NO_DECISION';
+
+  // Production accuracy is based only on the immutable, persisted first LOCKED direction.
+  // Never infer a historical production decision from the current model or the legacy V6 field.
+  row.productionActual = actual;
+  row.productionResult = row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN'
+    ? (actual === row.productionPrediction ? 'HIT' : actual === 'FLAT' ? 'FLAT' : 'MISS')
+    : 'NO_DECISION';
+  row.productionSettledAt = row.settledAt;
   return row;
 }
 
@@ -118,8 +126,15 @@ function loadHistory() {
       if (!Number.isFinite(start) || start < STATS_START_MS) continue;
       const beforeActual = item?.actual;
       const beforeResult = item?.result;
+      const beforeProductionActual = item?.productionActual;
+      const beforeProductionResult = item?.productionResult;
       const normalized = normalizeHistoricalSettlement({ ...item });
-      if (normalized?.actual !== beforeActual || normalized?.result !== beforeResult) repaired += 1;
+      if (
+        normalized?.actual !== beforeActual ||
+        normalized?.result !== beforeResult ||
+        normalized?.productionActual !== beforeProductionActual ||
+        normalized?.productionResult !== beforeProductionResult
+      ) repaired += 1;
       rounds.set(String(start), normalized);
     }
     if (repaired > 0) {
@@ -1032,6 +1047,9 @@ function ensureRound(roundStartMs) {
       productionDelayMs: null,
       productionModel: null,
       productionLockedAt: null,
+      productionActual: null,
+      productionResult: 'PENDING',
+      productionSettledAt: null,
       source: STATS_VERSION,
       settleAttempts: 0,
       nextSettleAt: 0,
@@ -1178,6 +1196,14 @@ async function settlePendingRounds() {
         row.result = row.prediction === 'UP' || row.prediction === 'DOWN'
           ? (row.actual === row.prediction ? 'HIT' : row.actual === 'FLAT' ? 'FLAT' : 'MISS')
           : 'NO_DECISION';
+
+        // Freeze the production result from the same immutable direction that was exposed
+        // to downstream consumers for this round.
+        row.productionActual = row.actual;
+        row.productionResult = row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN'
+          ? (row.actual === row.productionPrediction ? 'HIT' : row.actual === 'FLAT' ? 'FLAT' : 'MISS')
+          : 'NO_DECISION';
+        row.productionSettledAt = Date.now();
         row.nextSettleAt = 0;
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -1222,6 +1248,10 @@ async function settlePendingRounds() {
           officialDisagreesWithKline:
             (official?.direction === 'UP' || official?.direction === 'DOWN') &&
             official.direction !== row.actual,
+          productionPrediction: row.productionPrediction ?? null,
+          productionActual: row.productionActual ?? null,
+          productionResult: row.productionResult ?? null,
+          productionSource: row.productionSource ?? null,
         });
       } catch (e) {
         lastSettlementError = e?.message || String(e);
@@ -1273,66 +1303,27 @@ function productionPriceActual(row) {
 }
 
 function productionRecordView(row) {
-  const p = Number(row?.shadowCandidateProbability);
-  const candidateReady =
-    Number(row?.roundStartMs) >= PRODUCTION_SHADOW_START_MS &&
-    Boolean(shadowCandidate?.weights) &&
-    Number(row?.shadowCandidateTrainedAt) === Number(shadowCandidate?.trainedAt) &&
-    Number.isFinite(p);
-
-  let direction = row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN'
+  const direction = row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN'
     ? row.productionPrediction
     : 'WAIT';
-  let confidence = row?.productionConfidence ?? null;
-  let score = row?.productionScore ?? null;
-  let source = row?.productionSource || 'WAIT';
-  let generatedAt = row?.productionGeneratedAt ?? null;
-  let delayMs = row?.productionDelayMs ?? null;
-
-  // Legacy rows created before production locks were persisted are reconstructed once
-  // for display only. New rows are immutable because productionSignalPayload freezes them.
-  if (direction === 'WAIT' && candidateReady) {
-    direction = p >= 0.5 ? 'UP' : 'DOWN';
-    confidence = Number(Math.max(p, 1 - p).toFixed(6));
-    score = Number((p * 2 - 1).toFixed(6));
-    source = 'SHADOW_CANDIDATE_PRIMARY';
-    generatedAt = row.shadowObservedAt ?? null;
-    delayMs = Number.isFinite(Number(generatedAt))
-      ? Math.max(0, Number(generatedAt) - Number(row.roundStartMs))
-      : null;
-  } else if (
-    direction === 'WAIT' &&
-    Number(row?.roundStartMs) >= PRODUCTION_SHADOW_START_MS &&
-    (row?.prediction === 'UP' || row?.prediction === 'DOWN')
-  ) {
-    direction = row.prediction;
-    confidence = row.predictionConfidence ?? null;
-    score = row.predictionScore ?? null;
-    source = 'V6_FALLBACK';
-    generatedAt = row.predictedAt ?? null;
-    delayMs = row.predictionDelayMs ?? null;
-  }
-
-  const productionActual = productionPriceActual(row);
-  const result =
-    productionActual === 'UP' || productionActual === 'DOWN'
-      ? direction === 'UP' || direction === 'DOWN'
-        ? (direction === productionActual ? 'HIT' : 'MISS')
-        : 'NO_DECISION'
-      : productionActual === 'FLAT'
-        ? 'FLAT'
-        : 'PENDING';
+  const productionActual = row?.productionActual ?? productionPriceActual(row);
+  const productionResult =
+    row?.productionResult && row.productionResult !== 'PENDING'
+      ? row.productionResult
+      : productionActual === 'UP' || productionActual === 'DOWN'
+        ? direction === 'UP' || direction === 'DOWN'
+          ? (direction === productionActual ? 'HIT' : 'MISS')
+          : 'NO_DECISION'
+        : productionActual === 'FLAT'
+          ? 'FLAT'
+          : 'PENDING';
 
   return {
     ...row,
     productionPrediction: direction,
-    productionConfidence: confidence,
-    productionScore: score,
-    productionSource: source,
-    productionGeneratedAt: generatedAt,
-    productionDelayMs: delayMs,
+    productionSource: row?.productionSource || 'WAIT',
     productionActual,
-    productionResult: result,
+    productionResult,
   };
 }
 
@@ -1358,7 +1349,7 @@ function productionSummary() {
     coveragePct: settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null,
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
-    policy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+    policy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
   };
 }
 
@@ -1665,6 +1656,37 @@ function logProductionSignalState(live) {
 function productionSignalPayload(now = Date.now()) {
   const expectedRound = Math.floor(Number(now) / 300000) * 300000;
   const row = rounds.get(String(expectedRound)) || null;
+  // A production direction is immutable for the entire 5-minute round.
+  // If it has already been frozen, every subsequent request returns exactly that lock.
+  if (row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN') {
+    const frozenLive = {
+      round: row.roundStartMs,
+      status: 'LOCKED',
+      signal: {
+        direction: row.productionPrediction,
+        score: row.productionScore ?? null,
+        confidence: row.productionConfidence ?? null,
+        modelProbability: row.productionConfidence ?? null,
+      },
+      input: { round: row.roundStartMs },
+      generatedAt: row.productionGeneratedAt ?? row.productionLockedAt ?? null,
+      source: row.productionSource || 'UNKNOWN',
+      model: row.productionModel || null,
+      facts: row.productionSource === 'SHADOW_CANDIDATE_PRIMARY'
+        ? (row.shadowFacts ?? null)
+        : (row.predictionFacts ?? null),
+      productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+      fallbackUsed: row.productionSource === 'V6_FALLBACK',
+      fallbackReason: row.productionSource === 'V6_FALLBACK' ? 'FROZEN_V6_FALLBACK' : null,
+      shadowForwardStatus: shadowModelMetrics.status,
+      shadowForwardSamples: shadowModelMetrics.forwardSamples,
+      frozen: true,
+      productionLockedAt: row.productionLockedAt ?? null,
+    };
+    logProductionSignalState(frozenLive);
+    return { ok: true, live: frozenLive };
+  }
+
   const candidateProbability = Number(row?.shadowCandidateProbability);
   const candidateValidated =
     Boolean(shadowCandidate?.weights) &&
@@ -1691,7 +1713,7 @@ function productionSignalPayload(now = Date.now()) {
       source: 'SHADOW_CANDIDATE_PRIMARY',
       model: shadowCandidate.modelVersion,
       facts: row.shadowFacts ?? null,
-      productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+      productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
       fallbackUsed: false,
       shadowForwardStatus: shadowModelMetrics.status,
       shadowForwardSamples: shadowModelMetrics.forwardSamples,
@@ -1717,7 +1739,7 @@ function productionSignalPayload(now = Date.now()) {
       source: 'V6_FALLBACK',
       model: row.source || STATS_VERSION,
       facts: row.predictionFacts ?? null,
-      productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+      productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
       fallbackUsed: true,
       fallbackReason: !shadowCandidate?.weights
         ? 'SHADOW_CANDIDATE_UNAVAILABLE'
@@ -1743,7 +1765,7 @@ function productionSignalPayload(now = Date.now()) {
     source: 'SHADOW_CANDIDATE_PRIMARY',
     model: shadowCandidate?.modelVersion ?? null,
     facts: row?.shadowFacts ?? row?.predictionFacts ?? null,
-    productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+    productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
     fallbackUsed: false,
     waitReason: !row
       ? 'CURRENT_ROUND_NOT_OBSERVED'
@@ -1775,7 +1797,7 @@ function payload() {
     accuracyRule: 'PRODUCTION_LOCKED_DIRECTION_VS_5M_OPEN_CLOSE_PRICE_DIRECTION',
     summary: summary(),
     productionSummary: productionSummary(),
-    productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+    productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
     productionStartMs: PRODUCTION_SHADOW_START_MS,
     health: {
       signalPollMs: POLL_MS,
@@ -1883,7 +1905,7 @@ http.createServer((req, res) => {
     shadowForwardV6Accuracy: startupForward.v6Accuracy,
     shadowForwardComparable: startupForward.comparable,
     shadowForwardStatus: shadowModelMetrics.status,
-    productionSignalPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+    productionSignalPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
     productionSignalEndpoint: '/api/production-signal',
     shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
     archiveDir: ARCHIVE_DIR,

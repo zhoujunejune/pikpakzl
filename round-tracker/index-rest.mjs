@@ -1468,6 +1468,101 @@ function calibrationBacktestPayload() {
   };
 }
 
+
+function productionSignalPayload(now = Date.now()) {
+  const expectedRound = Math.floor(Number(now) / 300000) * 300000;
+  const row = rounds.get(String(expectedRound)) || null;
+  const candidateProbability = Number(row?.shadowCandidateProbability);
+  const candidateValidated =
+    Boolean(shadowCandidate?.weights) &&
+    shadowModelMetrics.status === 'FORWARD_VALIDATED_CANDIDATE' &&
+    Number(row?.shadowCandidateTrainedAt) === Number(shadowCandidate?.trainedAt) &&
+    Number.isFinite(candidateProbability);
+
+  if (row && candidateValidated) {
+    const direction = candidateProbability >= 0.5 ? 'UP' : 'DOWN';
+    const directionProbability = direction === 'UP' ? candidateProbability : 1 - candidateProbability;
+    const signedScore = candidateProbability * 2 - 1;
+    const live = {
+      round: row.roundStartMs,
+      status: 'LOCKED',
+      signal: {
+        direction,
+        score: Number(signedScore.toFixed(6)),
+        confidence: Number(directionProbability.toFixed(6)),
+        modelProbability: Number(directionProbability.toFixed(6)),
+        upProbability: Number(candidateProbability.toFixed(6)),
+      },
+      input: { round: row.roundStartMs },
+      generatedAt: row.shadowObservedAt || null,
+      source: 'SHADOW_CANDIDATE_PRIMARY',
+      model: shadowCandidate.modelVersion,
+      facts: row.shadowFacts ?? null,
+      productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+      fallbackUsed: false,
+      shadowForwardStatus: shadowModelMetrics.status,
+      shadowForwardSamples: shadowModelMetrics.forwardSamples,
+    };
+    return { ok: true, live };
+  }
+
+  const v6Direction = row?.prediction === 'UP' || row?.prediction === 'DOWN' ? row.prediction : null;
+  if (row && v6Direction) {
+    const live = {
+      round: row.roundStartMs,
+      status: 'LOCKED',
+      signal: {
+        direction: v6Direction,
+        score: row.predictionScore ?? null,
+        confidence: row.predictionConfidence ?? null,
+        modelProbability: row.modelProbability ?? null,
+      },
+      input: { round: row.roundStartMs },
+      generatedAt: row.predictedAt ?? null,
+      source: 'V6_FALLBACK',
+      model: row.source || STATS_VERSION,
+      facts: row.predictionFacts ?? null,
+      productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+      fallbackUsed: true,
+      fallbackReason: !shadowCandidate?.weights
+        ? 'SHADOW_CANDIDATE_UNAVAILABLE'
+        : shadowModelMetrics.status !== 'FORWARD_VALIDATED_CANDIDATE'
+          ? 'SHADOW_CANDIDATE_NOT_FORWARD_VALIDATED'
+          : !Number.isFinite(candidateProbability)
+            ? 'SHADOW_CANDIDATE_PROBABILITY_NOT_READY'
+            : 'SHADOW_CANDIDATE_ROUND_MISMATCH',
+      shadowForwardStatus: shadowModelMetrics.status,
+      shadowForwardSamples: shadowModelMetrics.forwardSamples,
+    };
+    return { ok: true, live };
+  }
+
+  const live = {
+    round: row?.roundStartMs ?? expectedRound,
+    status: 'WAIT',
+    signal: null,
+    input: { round: row?.roundStartMs ?? expectedRound },
+    generatedAt: row?.shadowObservedAt ?? row?.predictedAt ?? null,
+    source: 'SHADOW_CANDIDATE_PRIMARY',
+    model: shadowCandidate?.modelVersion ?? null,
+    facts: row?.shadowFacts ?? row?.predictionFacts ?? null,
+    productionPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+    fallbackUsed: false,
+    waitReason: !row
+      ? 'CURRENT_ROUND_NOT_OBSERVED'
+      : !shadowCandidate?.weights
+        ? 'SHADOW_CANDIDATE_UNAVAILABLE'
+        : shadowModelMetrics.status !== 'FORWARD_VALIDATED_CANDIDATE'
+          ? 'SHADOW_CANDIDATE_NOT_FORWARD_VALIDATED'
+          : !Number.isFinite(candidateProbability)
+            ? 'WAITING_FOR_SHADOW_OBSERVATION'
+            : 'NO_VALID_SIGNAL',
+    shadowForwardStatus: shadowModelMetrics.status,
+    shadowForwardSamples: shadowModelMetrics.forwardSamples,
+  };
+  return { ok: true, live };
+}
+
 function payload() {
   const records = Array.from(rounds.values()).sort((a, b) => b.roundStartMs - a.roundStartMs);
   return {
@@ -1542,6 +1637,11 @@ http.createServer((req, res) => {
     return res.end(JSON.stringify(shadowStatsPayload()));
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/production-signal') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(productionSignalPayload()));
+  }
+
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/api/round-stats')) {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(payload()));
@@ -1582,6 +1682,8 @@ http.createServer((req, res) => {
     shadowForwardV6Accuracy: startupForward.v6Accuracy,
     shadowForwardComparable: startupForward.comparable,
     shadowForwardStatus: shadowModelMetrics.status,
+    productionSignalPolicy: 'FROZEN_SHADOW_CANDIDATE_PRIMARY_V6_FALLBACK',
+    productionSignalEndpoint: '/api/production-signal',
     shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
     archiveDir: ARCHIVE_DIR,
     archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,

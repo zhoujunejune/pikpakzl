@@ -606,6 +606,40 @@ function shadowPredict(facts) {
 }
 
 function updateShadowForwardMetrics() {
+  // Forward validation must follow the frozen candidate, not the rolling model.
+  // The rolling shadow model retrains every 20 rounds, so counting against it
+  // resets forwardSamples to zero on every retrain and can never accumulate a
+  // stable 60-round forward window.
+  if (shadowCandidate?.trainedAt) {
+    const forward = candidateForwardSummary();
+    shadowModelMetrics.forwardSamples = forward.shadowN;
+    shadowModelMetrics.forwardAccuracy = forward.shadowAccuracy;
+    shadowModelMetrics.forwardBrier = forward.shadowBrier;
+
+    if (forward.shadowN < SHADOW_FORWARD_MIN_SAMPLES) {
+      shadowModelMetrics.status = 'FORWARD_COLLECTING';
+      return;
+    }
+
+    const validationAccuracy = Number(shadowCandidateMetrics?.validationAccuracy);
+    const validationBrier = Number(shadowCandidateMetrics?.validationBrier);
+    const accuracyPass =
+      Number.isFinite(forward.shadowAccuracy) &&
+      Number.isFinite(validationAccuracy) &&
+      forward.shadowAccuracy >= validationAccuracy - 0.03;
+    const brierPass =
+      Number.isFinite(forward.shadowBrier) &&
+      Number.isFinite(validationBrier) &&
+      forward.shadowBrier <= validationBrier + 0.03;
+
+    shadowModelMetrics.status =
+      accuracyPass && brierPass
+        ? 'FORWARD_VALIDATED_CANDIDATE'
+        : 'FORWARD_VALIDATION_FAILED';
+    return;
+  }
+
+  // Fallback before any candidate has passed validation and been frozen.
   if (!shadowModel?.trainedAt) return;
   const forward = Array.from(rounds.values()).filter(r =>
     Number(r.shadowModelTrainedAt) === Number(shadowModel.trainedAt) &&
@@ -629,13 +663,6 @@ function updateShadowForwardMetrics() {
   shadowModelMetrics.forwardSamples = forward.length;
   shadowModelMetrics.forwardAccuracy = Number((hits / forward.length).toFixed(4));
   shadowModelMetrics.forwardBrier = Number((brier / forward.length).toFixed(4));
-  if (
-    forward.length >= SHADOW_FORWARD_MIN_SAMPLES &&
-    shadowModelMetrics.forwardAccuracy >= Number(shadowModel.validationAccuracy || 0) - 0.03 &&
-    shadowModelMetrics.forwardBrier <= Number(shadowModel.validationBrier || 1) + 0.03
-  ) {
-    shadowModelMetrics.status = 'FORWARD_VALIDATED_CANDIDATE';
-  }
 }
 
 
@@ -701,6 +728,9 @@ function shadowStatsPayload() {
     },
     shadow: {
       ...shadowModelMetrics,
+      forwardMetricScope: shadowCandidate ? 'FROZEN_CANDIDATE' : 'LATEST_RETRAINED_MODEL',
+      forwardTargetSamples: SHADOW_FORWARD_MIN_SAMPLES,
+      forwardRemainingSamples: Math.max(0, SHADOW_FORWARD_MIN_SAMPLES - Number(shadowModelMetrics.forwardSamples || 0)),
       frozenCandidate: shadowCandidate ? {
         modelVersion: shadowCandidate.modelVersion,
         trainedAt: shadowCandidate.trainedAt,
@@ -773,9 +803,18 @@ function maybeTrainShadowModel() {
     validationStartRound: trained.validationStartRound,
     validationEndRound: trained.validationEndRound,
   };
-  saveShadowModelArtifact();
   maybePromoteShadowCandidate(trained, latestRound);
-  log('shadow_model_trained', shadowModelMetrics);
+  updateShadowForwardMetrics();
+  saveShadowModelArtifact();
+  const candidateForward = candidateForwardSummary();
+  log('shadow_model_trained', {
+    ...shadowModelMetrics,
+    forwardMetricScope: shadowCandidate ? 'FROZEN_CANDIDATE' : 'LATEST_RETRAINED_MODEL',
+    forwardTargetSamples: SHADOW_FORWARD_MIN_SAMPLES,
+    candidateForwardSamples: candidateForward.shadowN,
+    candidateForwardAccuracy: candidateForward.shadowAccuracy,
+    candidateForwardBrier: candidateForward.shadowBrier,
+  });
 }
 
 function lockPredictionSupport(direction, facts) {
@@ -1115,6 +1154,29 @@ async function settlePendingRounds() {
         archiveSettledRow(row);
         maybeTrainShadowModel();
         updateShadowForwardMetrics();
+        const candidateForwardProgress = candidateForwardSummary();
+        if (
+          shadowCandidate &&
+          candidateForwardProgress.shadowN > 0 &&
+          (
+            candidateForwardProgress.shadowN === SHADOW_FORWARD_MIN_SAMPLES ||
+            candidateForwardProgress.shadowN % 10 === 0
+          )
+        ) {
+          log('shadow_candidate_forward_progress', {
+            modelVersion: shadowCandidate.modelVersion ?? null,
+            trainedAt: shadowCandidate.trainedAt ?? null,
+            forwardSamples: candidateForwardProgress.shadowN,
+            targetSamples: SHADOW_FORWARD_MIN_SAMPLES,
+            remainingSamples: Math.max(0, SHADOW_FORWARD_MIN_SAMPLES - candidateForwardProgress.shadowN),
+            forwardAccuracy: candidateForwardProgress.shadowAccuracy,
+            forwardBrier: candidateForwardProgress.shadowBrier,
+            v6Samples: candidateForwardProgress.v6N,
+            v6Accuracy: candidateForwardProgress.v6Accuracy,
+            comparable: candidateForwardProgress.comparable,
+            status: shadowModelMetrics.status,
+          });
+        }
         log('round_settled', {
           round: row.roundStartMs,
           prediction: row.prediction,

@@ -689,16 +689,24 @@ let legacyOfficialRevalidation = { active:false, total:0, startedAt:null, comple
 
 function invalidateLegacyWinnerFlagSettlements() {
   const affected = new Set();
+  const preexistingPending = new Set();
   const now = Date.now();
+
   for (const row of rounds.values()) {
     const evidence = String(row?.resolutionEvidence || '');
+    const start = Number(row?.roundStartMs);
+    if (!Number.isFinite(start)) continue;
+
+    if (evidence === 'REVALIDATING_LEGACY_OUTCOME_WINNER_FLAG' && !row?.actual) {
+      preexistingPending.add(String(start));
+      continue;
+    }
+
     if (
       row?.actualSource !== 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' ||
       evidence.includes('STRICT_ROUND_ALIGNED_TOPIC')
     ) continue;
 
-    const start = Number(row.roundStartMs);
-    if (!Number.isFinite(start)) continue;
     row.legacyOfficialDirectionBeforeRevalidation =
       row.actual === 'UP' || row.actual === 'DOWN' ? row.actual : null;
     row.legacyResolutionEvidenceBeforeRevalidation = evidence;
@@ -718,12 +726,13 @@ function invalidateLegacyWinnerFlagSettlements() {
     affected.add(String(start));
   }
 
-  if (!affected.size) return 0;
+  const allPending = new Set([...preexistingPending, ...affected]);
+  if (!allPending.size) return 0;
 
   let registryLabelsReset = 0;
   for (const candidate of shadowForwardRegistry.candidates) {
     for (const obs of candidate.observations || []) {
-      if (!affected.has(String(Number(obs.roundStartMs)))) continue;
+      if (!allPending.has(String(Number(obs.roundStartMs)))) continue;
       if (obs.actual === 'UP' || obs.actual === 'DOWN') {
         obs.actual = null;
         obs.settledAt = null;
@@ -734,18 +743,20 @@ function invalidateLegacyWinnerFlagSettlements() {
 
   legacyOfficialRevalidation = {
     active:true,
-    total:affected.size,
+    total:allPending.size,
     startedAt:now,
     completedAt:null,
   };
-  saveHistory();
+  if (affected.size) saveHistory();
   saveShadowForwardRegistry();
   log('legacy_official_settlement_revalidation_started', {
-    rounds:affected.size,
+    rounds:allPending.size,
+    newlyInvalidated:affected.size,
+    resumedPending:preexistingPending.size,
     registryLabelsReset,
     parser:'BINANCE_VARIANT_PRICE_STRICT_ROUND_ALIGNED_TOPIC',
   });
-  return affected.size;
+  return allPending.size;
 }
 
 function legacyOfficialRevalidationRemaining() {
@@ -763,8 +774,8 @@ function maybeFinalizeLegacyOfficialRevalidation() {
   legacyOfficialRevalidation.active = false;
   legacyOfficialRevalidation.completedAt = Date.now();
   const changed = Array.from(rounds.values()).filter(row =>
-    row?.officialDirectionCorrectedAt &&
-    row?.legacyRevalidationRequestedAt >= legacyOfficialRevalidation.startedAt
+    (row?.officialDirectionCorrectedFrom === 'UP' || row?.officialDirectionCorrectedFrom === 'DOWN') &&
+    String(row?.resolutionEvidence || '').includes('STRICT_ROUND_ALIGNED_TOPIC')
   ).length;
 
   // Force only the rolling/background model to retrain on corrected labels.

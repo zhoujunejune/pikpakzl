@@ -66,6 +66,9 @@ let predictionReconnectTimer = null;
 let predictionRefreshBusy = false;
 let predictionMarketRound = null;
 let predictionMarketTopicId = null;
+let predictionMarketTopicStartDate = null;
+let predictionMarketTopicEndDate = null;
+let predictionMarketTopicScore = null;
 let predictionMarketId = null;
 let predictionYesDirection = null;
 let predictionMarketMeta = null;
@@ -505,6 +508,9 @@ async function refreshPredictionMarket() {
     const mapping = inferPredictionBookMapping(found.topic);
     predictionMarketRound = round;
     predictionMarketTopicId = found.topic?.marketTopicId ?? null;
+    predictionMarketTopicStartDate = Number.isFinite(Number(found.topic?.startDate)) ? Number(found.topic.startDate) : null;
+    predictionMarketTopicEndDate = Number.isFinite(Number(found.topic?.endDate)) ? Number(found.topic.endDate) : null;
+    predictionMarketTopicScore = Number.isFinite(predTopicScore(found.topic, round)) ? predTopicScore(found.topic, round) : null;
     predictionMarketMeta = mapping;
     if (!mapping?.marketId) return;
     if (Number(predictionMarketId) !== Number(mapping.marketId) || predictionWs?.readyState !== WebSocket.OPEN) {
@@ -992,6 +998,10 @@ function calculate(now = Date.now()) {
       depthAgeMs: Number.isFinite(depthAgeMs) ? depthAgeMs : null,
       historyAgeMs,
       predictionMarketTopicId,
+      predictionMarketTopicStartDate,
+      predictionMarketTopicEndDate,
+      predictionMarketTopicScore,
+      predictionMarketRoundAligned: Number.isFinite(Number(predictionMarketTopicScore)) && Number(predictionMarketTopicScore) <= 30000,
       predictionMarketId,
       predictionMarketBookAgeMs: predictionBook.receivedAt ? Math.max(0, now - predictionBook.receivedAt) : null,
       predictionMarketUpdateTimestampMs: predictionBook.updateTimestampMs || null,

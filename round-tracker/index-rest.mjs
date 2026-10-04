@@ -1,5 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import { createClient } from 'redis';
+import { WebSocketServer } from 'ws';
 
 const PORT = Number(process.env.PORT || 3000);
 const SYMBOL = String(process.env.SYMBOL || 'BTCUSDT').toUpperCase();
@@ -36,6 +38,166 @@ const LOCK_QUALITY_CURRENT_SCORE_MIN = 0.65;
 const LOCK_QUALITY_BALANCED_CURRENT_SCORE_MIN = 0.50;
 const LOCK_QUALITY_MAX_DELAY_MS = 22000;
 const LOCK_QUALITY_REJECT_ABSORPTION = true;
+const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
+const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
+const SIGNAL_REDIS_LATEST_KEY = String(process.env.SIGNAL_REDIS_LATEST_KEY || 'binance:prediction:lock:latest');
+const SIGNAL_REDIS_STREAM = String(process.env.SIGNAL_REDIS_STREAM || 'binance:prediction:lock:events');
+const SIGNAL_REDIS_STREAM_MAXLEN = Math.max(100, Number(process.env.SIGNAL_REDIS_STREAM_MAXLEN || 2000));
+const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MODEL_V1');
+const SIGNAL_WS_PATH = String(process.env.SIGNAL_WS_PATH || '/ws/locked-signal');
+
+
+
+let signalRedisPublisher = null;
+let signalRedisConnectPromise = null;
+let signalRedisConnected = false;
+let signalRedisLastError = null;
+let latestSignalEnvelope = null;
+let lastPublishedSignalId = null;
+const signalWsClients = new Set();
+const signalWss = new WebSocketServer({ noServer: true });
+
+function buildLockedSignalEnvelope(row, live) {
+  const round = Number(row?.roundStartMs ?? live?.round);
+  const direction = String(row?.productionPrediction ?? live?.signal?.direction ?? '').toUpperCase();
+  if (!Number.isFinite(round) || (direction !== 'UP' && direction !== 'DOWN')) return null;
+  const lockedAt = Number(row?.productionLockedAt ?? live?.productionLockedAt ?? Date.now());
+  const generatedAt = Number(row?.productionGeneratedAt ?? live?.generatedAt ?? lockedAt);
+  return {
+    schemaVersion: 1,
+    signalId: SIGNAL_MODEL_NAME + ':' + round,
+    model: SIGNAL_MODEL_NAME,
+    status: 'LOCKED',
+    symbol: SYMBOL,
+    round,
+    direction,
+    lockedAt,
+    generatedAt,
+    score: Number.isFinite(Number(row?.productionScore ?? live?.signal?.score))
+      ? Number(row?.productionScore ?? live?.signal?.score)
+      : null,
+    confidence: Number.isFinite(Number(row?.productionConfidence ?? live?.signal?.confidence))
+      ? Number(row?.productionConfidence ?? live?.signal?.confidence)
+      : null,
+    modelProbability: Number.isFinite(Number(live?.signal?.modelProbability))
+      ? Number(live.signal.modelProbability)
+      : (Number.isFinite(Number(row?.productionConfidence)) ? Number(row.productionConfidence) : null),
+    source: 'SITE_PRODUCTION_LOCK',
+    upstreamSource: row?.productionSource ?? live?.source ?? null,
+    upstreamModel: row?.productionModel ?? live?.model ?? null,
+    productionPolicy: live?.productionPolicy || 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+    immutable: true,
+  };
+}
+
+function broadcastLockedSignal(envelope) {
+  if (!envelope) return;
+  const data = JSON.stringify({ type: 'locked_signal', signal: envelope });
+  let delivered = 0;
+  for (const ws of signalWsClients) {
+    if (ws.readyState !== 1) continue;
+    try {
+      ws.send(data);
+      delivered += 1;
+    } catch {}
+  }
+  log('locked_signal_websocket_broadcast', {
+    signalId: envelope.signalId,
+    round: envelope.round,
+    direction: envelope.direction,
+    clients: delivered,
+  });
+}
+
+async function ensureSignalRedisPublisher() {
+  if (!SIGNAL_REDIS_URL) return null;
+  if (signalRedisPublisher?.isReady) return signalRedisPublisher;
+  if (!signalRedisPublisher) {
+    signalRedisPublisher = createClient({ url: SIGNAL_REDIS_URL });
+    signalRedisPublisher.on('error', err => {
+      signalRedisConnected = false;
+      signalRedisLastError = err?.message || String(err);
+      log('locked_signal_redis_error', { error: signalRedisLastError });
+    });
+    signalRedisPublisher.on('ready', () => {
+      signalRedisConnected = true;
+      signalRedisLastError = null;
+      log('locked_signal_redis_ready', { channel: SIGNAL_REDIS_CHANNEL });
+    });
+    signalRedisPublisher.on('end', () => {
+      signalRedisConnected = false;
+    });
+  }
+  if (!signalRedisConnectPromise) {
+    signalRedisConnectPromise = signalRedisPublisher.connect()
+      .catch(err => {
+        signalRedisConnected = false;
+        signalRedisLastError = err?.message || String(err);
+        log('locked_signal_redis_connect_failed', { error: signalRedisLastError });
+        return null;
+      })
+      .finally(() => { signalRedisConnectPromise = null; });
+  }
+  await signalRedisConnectPromise;
+  return signalRedisPublisher?.isReady ? signalRedisPublisher : null;
+}
+
+async function persistAndPublishLockedSignal(envelope) {
+  const client = await ensureSignalRedisPublisher();
+  if (!client || !envelope) return false;
+  const body = JSON.stringify(envelope);
+  try {
+    await client.set(SIGNAL_REDIS_LATEST_KEY, body, { EX: 900 });
+    const subscribers = await client.publish(SIGNAL_REDIS_CHANNEL, body);
+    await client.sendCommand([
+      'XADD',
+      SIGNAL_REDIS_STREAM,
+      'MAXLEN',
+      '~',
+      String(SIGNAL_REDIS_STREAM_MAXLEN),
+      '*',
+      'payload',
+      body,
+    ]);
+    log('locked_signal_redis_published', {
+      signalId: envelope.signalId,
+      round: envelope.round,
+      direction: envelope.direction,
+      subscribers,
+      stream: SIGNAL_REDIS_STREAM,
+    });
+    return true;
+  } catch (err) {
+    signalRedisLastError = err?.message || String(err);
+    log('locked_signal_redis_publish_failed', {
+      signalId: envelope.signalId,
+      error: signalRedisLastError,
+    });
+    return false;
+  }
+}
+
+function emitLockedSignal(row, live) {
+  const envelope = buildLockedSignalEnvelope(row, live);
+  if (!envelope) return null;
+  latestSignalEnvelope = envelope;
+  if (lastPublishedSignalId === envelope.signalId) return envelope;
+  lastPublishedSignalId = envelope.signalId;
+  broadcastLockedSignal(envelope);
+  void persistAndPublishLockedSignal(envelope);
+  return envelope;
+}
+
+signalWss.on('connection', ws => {
+  signalWsClients.add(ws);
+  if (latestSignalEnvelope) {
+    try {
+      ws.send(JSON.stringify({ type: 'snapshot', signal: latestSignalEnvelope }));
+    } catch {}
+  }
+  ws.on('close', () => signalWsClients.delete(ws));
+  ws.on('error', () => signalWsClients.delete(ws));
+});
 
 const rounds = new Map();
 let signalPollBusy = false;
@@ -2066,6 +2228,7 @@ function freezeProductionLock(row, live) {
     model: row.productionModel,
     generatedAt: row.productionGeneratedAt,
   });
+  emitLockedSignal(row, live);
   return true;
 }
 
@@ -2628,12 +2791,28 @@ setInterval(() => {
 }, POLL_MS).unref();
 setInterval(settlePendingRounds, SETTLE_POLL_MS).unref();
 pollSignal();
-try { productionSignalPayload(); } catch (e) {
+try {
+  const bootProduction = productionSignalPayload();
+  const live = bootProduction?.live || null;
+  if (live?.status === 'LOCKED' && (live?.signal?.direction === 'UP' || live?.signal?.direction === 'DOWN')) {
+    const row = rounds.get(String(live.round)) || null;
+    latestSignalEnvelope = buildLockedSignalEnvelope(row, live);
+    lastPublishedSignalId = latestSignalEnvelope?.signalId || null;
+  }
+} catch (e) {
   log('production_signal_background_error', { error: e?.message || String(e) });
 }
+void ensureSignalRedisPublisher();
+log('locked_signal_transport_bootstrap', {
+  model: SIGNAL_MODEL_NAME,
+  redisConfigured: Boolean(SIGNAL_REDIS_URL),
+  redisChannel: SIGNAL_REDIS_CHANNEL,
+  redisStream: SIGNAL_REDIS_STREAM,
+  websocketPath: SIGNAL_WS_PATH,
+});
 settlePendingRounds();
 
-http.createServer((req, res) => {
+const signalHttpServer = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('cache-control', 'no-store');
   res.setHeader('access-control-allow-origin', '*');
@@ -2659,6 +2838,32 @@ http.createServer((req, res) => {
     return res.end(JSON.stringify(productionSignalPayload()));
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/signals/latest') {
+    const production = productionSignalPayload();
+    const live = production?.live || null;
+    if (live?.status === 'LOCKED' && (live?.signal?.direction === 'UP' || live?.signal?.direction === 'DOWN')) {
+      const row = rounds.get(String(live.round)) || null;
+      const current = buildLockedSignalEnvelope(row, live);
+      if (current) latestSignalEnvelope = current;
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({
+      ok: true,
+      model: SIGNAL_MODEL_NAME,
+      signal: latestSignalEnvelope,
+      transport: {
+        redisConfigured: Boolean(SIGNAL_REDIS_URL),
+        redisConnected: signalRedisConnected,
+        redisChannel: SIGNAL_REDIS_CHANNEL,
+        redisStream: SIGNAL_REDIS_STREAM,
+        websocketPath: SIGNAL_WS_PATH,
+        websocketClients: signalWsClients.size,
+        lastRedisError: signalRedisLastError,
+      },
+    }));
+  }
+
+
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/api/round-stats')) {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(payload()));
@@ -2666,7 +2871,26 @@ http.createServer((req, res) => {
 
   res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ ok: false, error: 'Not found' }));
-}).listen(PORT, '0.0.0.0', () => {
+});
+
+signalHttpServer.on('upgrade', (req, socket, head) => {
+  let url;
+  try {
+    url = new URL(req.url, 'http://localhost');
+  } catch {
+    socket.destroy();
+    return;
+  }
+  if (url.pathname !== SIGNAL_WS_PATH) {
+    socket.destroy();
+    return;
+  }
+  signalWss.handleUpgrade(req, socket, head, ws => {
+    signalWss.emit('connection', ws, req);
+  });
+});
+
+signalHttpServer.listen(PORT, '0.0.0.0', () => {
   const startupForward = candidateForwardSummary();
   log('round_tracker_started', {
     port: PORT,

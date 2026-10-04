@@ -162,6 +162,7 @@ export function createShadowV3Client({
   async function maybeTrain(latestRound = 0) {
     const round = Number(latestRound || 0);
     if (trainingBusy) return null;
+    if (round <= 0 && Number(state.lastAttemptRound || 0) > 0) return null;
     if (
       round > 0 &&
       Number(state.lastAttemptRound || 0) > 0 &&

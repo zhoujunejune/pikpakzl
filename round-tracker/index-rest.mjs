@@ -1777,10 +1777,19 @@ async function settlePendingRounds() {
     const revalidating = Boolean(legacyOfficialRevalidation?.active);
     const pending = Array.from(rounds.values())
       .filter(r => !r.actual && now > r.roundEndMs + 1200 && now >= Number(r.nextSettleAt || 0))
-      .sort((a, b) => revalidating
-        ? Number(b.roundStartMs) - Number(a.roundStartMs)
-        : Number(a.roundStartMs) - Number(b.roundStartMs))
-      .slice(0, revalidating ? 10 : 3);
+      .sort((a, b) => {
+        if (revalidating) return Number(b.roundStartMs) - Number(a.roundStartMs);
+
+        // Never let a large legacy backfill block live production settlement.
+        // Production-era rounds are resolved first, newest first; older history
+        // continues draining afterwards.
+        const aProduction = Number(a.roundStartMs) >= PRODUCTION_SHADOW_START_MS ? 1 : 0;
+        const bProduction = Number(b.roundStartMs) >= PRODUCTION_SHADOW_START_MS ? 1 : 0;
+        if (aProduction !== bProduction) return bProduction - aProduction;
+        if (aProduction) return Number(b.roundStartMs) - Number(a.roundStartMs);
+        return Number(a.roundStartMs) - Number(b.roundStartMs);
+      })
+      .slice(0, revalidating ? 10 : 6);
 
     // Launch historical revalidation lookups concurrently, but keep all state
     // mutation/archive/model updates sequential below.

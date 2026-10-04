@@ -471,6 +471,9 @@ async function auditSettledHistoryTopics(topicIds = []) {
     const positions = Array.isArray(call.data?.positions) ? call.data.positions : [];
     for (const p of positions) {
       if (!wanted.has(String(p?.marketTopicId))) continue;
+      let variantData = null;
+      const detail = await signedGet('/sapi/v1/w3w/wallet/prediction/market/detail', { marketTopicId:p?.marketTopicId });
+      if (detail.ok) variantData = detail.data?.variantData || null;
       console.log(JSON.stringify({
         event:'settled_history_audit',
         marketTopicId:p?.marketTopicId ?? null,
@@ -484,6 +487,10 @@ async function auditSettledHistoryTopics(topicIds = []) {
         realizedPnl:p?.realizedPnl ?? null,
         endDate:p?.endDate ?? null,
         settledDate:p?.settledDate ?? null,
+        variantStartPrice:variantData?.startPrice ?? null,
+        variantEndPrice:variantData?.endPrice ?? null,
+        priceFeedProvider:variantData?.priceFeedProvider ?? null,
+        priceFeedSymbol:variantData?.priceFeedSymbol ?? null,
       }));
     }
   } catch (e) {

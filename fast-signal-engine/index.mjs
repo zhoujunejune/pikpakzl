@@ -611,24 +611,47 @@ function extractOfficialResolution(topic) {
 }
 
 async function getOfficialPredictionResolution(round, marketTopicId = null) {
+  const target = Number(round);
   let topic = null;
+  let rejectedTopicId = null;
+
+  // A persisted marketTopicId may be stale from the previous 5-minute round.
+  // Never use it unless its own start/end timestamps match the requested round.
   if (marketTopicId) {
     const detail = await signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/detail', { marketTopicId });
-    if (!detail.ok) return { ok:false, resolved:false, error:'PREDICTION_DETAIL_FAILED', marketTopicId, status:detail.status };
-    topic = { ...(detail.data || {}), marketTopicId };
-  } else {
-    const found = await discoverPredictionTopic(round, 1000);
-    if (!found.ok) return { ok:false, resolved:false, error:found.error || 'TOPIC_NOT_FOUND' };
+    if (detail.ok) {
+      const candidate = { ...(detail.data || {}), marketTopicId };
+      const aligned =
+        predDurationLooks5m(candidate) &&
+        Number.isFinite(target) &&
+        predTopicScore(candidate, target) <= 30000;
+      if (aligned) topic = candidate;
+      else rejectedTopicId = marketTopicId;
+    }
+  }
+
+  if (!topic) {
+    const found = await discoverPredictionTopic(target, 0);
+    if (!found.ok) {
+      return {
+        ok:false,
+        resolved:false,
+        error:found.error || 'TOPIC_NOT_FOUND',
+        rejectedTopicId,
+      };
+    }
     topic = found.topic;
   }
+
   const extracted = extractOfficialResolution(topic);
   return {
     ok:true,
     resolved:Boolean(extracted?.direction),
     direction:extracted?.direction || null,
-    evidence:extracted?.evidence || null,
-    marketTopicId:topic?.marketTopicId ?? marketTopicId ?? null,
-    status:topic?.status ?? topic?.tradingStatus ?? null,
+    evidence:extracted?.evidence ? extracted.evidence + ':STRICT_ROUND_ALIGNED_TOPIC' : null,
+    marketTopicId:topic?.marketTopicId ?? null,
+    rejectedTopicId,
+    startDate:topic?.startDate ?? null,
     endDate:topic?.endDate ?? null,
   };
 }

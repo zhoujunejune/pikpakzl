@@ -1549,11 +1549,11 @@ function calibrateProbability(direction, score, excludeRound = null) {
 
 async function fetchOfficialPredictionResolution(roundStartMs, marketTopicId = null) {
   try {
-    // Settlement must be resolved from the round timestamps themselves.
-    // Persisted marketTopicId can be stale from the previous 5-minute market,
-    // so it is intentionally never sent to the resolver.
-    const u = SIGNAL_ORIGIN + '/api/prediction-resolution?round=' + encodeURIComponent(String(roundStartMs));
-    const r = await fetch(u, { cache:'no-store', signal:AbortSignal.timeout(5000) });
+    // marketTopicId is only a hint. V3 must validate its own start/end timestamps
+    // against roundStartMs before it may use it.
+    let u = SIGNAL_ORIGIN + '/api/prediction-resolution?round=' + encodeURIComponent(String(roundStartMs));
+    if (marketTopicId) u += '&marketTopicId=' + encodeURIComponent(String(marketTopicId));
+    const r = await fetch(u, { cache:'no-store', signal:AbortSignal.timeout(12000) });
     if (!r.ok) return { ok:false, resolved:false, error:'HTTP_' + r.status };
     return await r.json();
   } catch (e) {
@@ -1736,7 +1736,12 @@ async function settlePendingRounds() {
     for (const row of pending) {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;
       try {
-        const official = await fetchOfficialPredictionResolution(row.roundStartMs, row.predictionMarketTopicId);
+        // Historical rows often captured the previous market topic at t=0.
+        // The following row commonly carries this row's actual topic; use it only
+        // as a validated hint. V3 rejects it unless timestamps match exactly.
+        const nextRow = rounds.get(String(Number(row.roundStartMs) + 300000));
+        const topicHint = nextRow?.predictionMarketTopicId || row.predictionMarketTopicId || null;
+        const official = await fetchOfficialPredictionResolution(row.roundStartMs, topicHint);
         const direction = String(official?.direction || '').toUpperCase();
 
         if (!official?.resolved || (direction !== 'UP' && direction !== 'DOWN')) {

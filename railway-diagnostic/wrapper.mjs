@@ -369,7 +369,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
 }
 `;
 
-const prepareMarker = 'async function prepareWorker() {';
+const prepareMarker = "async function prepareWorker(signalOverride = null, trigger = 'poll') {";
 if (!source.includes(prepareMarker)) throw new Error('PREPARE_WORKER_MARKER_NOT_FOUND');
 source = source.replace(prepareMarker, backendPatch + '\n' + prepareMarker);
 

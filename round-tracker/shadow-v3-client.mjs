@@ -87,6 +87,7 @@ export function createShadowV3Client({
         state = parsed;
         state.engineVersion = ENGINE_VERSION;
       }
+      deleteRetiredCandidates();
       log('shadow_v3_registry_loaded', {
         candidates: state.candidates.length,
         lastAttemptRound: state.lastAttemptRound || 0,
@@ -148,6 +149,38 @@ export function createShadowV3Client({
       drift: c.drift || null,
       status,
     };
+  }
+
+  function deleteRetiredCandidates(){
+    const removed=[];
+    state.candidates=state.candidates.filter(c=>{
+      const s=summaryOf(c);
+      const retired=s.forwardSamples>=forwardTarget &&
+        Number.isFinite(Number(s.forwardAccuracy)) &&
+        Number(s.forwardAccuracy)<0.60;
+      if(!retired) return true;
+      if(c.modelPath){
+        try{
+          if(fs.existsSync(c.modelPath)) fs.unlinkSync(c.modelPath);
+        }catch(e){
+          log('shadow_v3_model_file_delete_failed',{modelVersion:c.modelVersion,modelPath:c.modelPath,error:e?.message||String(e)});
+        }
+      }
+      removed.push({
+        modelVersion:c.modelVersion,
+        estimator:c.bestEstimator||null,
+        forwardSamples:s.forwardSamples,
+        forwardAccuracy:s.forwardAccuracy,
+        modelPath:c.modelPath||null,
+        reason:'STRICT_FORWARD_BELOW_60',
+      });
+      return false;
+    });
+    if(removed.length){
+      save();
+      log('shadow_v3_retired_models_deleted',{count:removed.length,models:removed});
+    }
+    return removed;
   }
 
   function prune() {
@@ -335,6 +368,7 @@ export function createShadowV3Client({
     if (changed) {
       save();
       for (const c of touched) void updateDrift(c);
+      deleteRetiredCandidates();
     }
   }
 
@@ -377,5 +411,5 @@ export function createShadowV3Client({
     };
   }
 
-  return { load, save, maybeTrain, observe, settle, invalidateRounds, stats };
+  return { load, save, maybeTrain, observe, settle, invalidateRounds, deleteRetiredCandidates, stats };
 }

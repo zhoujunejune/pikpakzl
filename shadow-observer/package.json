@@ -1,0 +1,8 @@
+{
+  "name":"shadow-observer-readonly",
+  "version":"1.0.0",
+  "private":true,
+  "type":"module",
+  "scripts":{"start":"node index.mjs"},
+  "engines":{"node":">=22"}
+}

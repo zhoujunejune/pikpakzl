@@ -759,6 +759,55 @@ function invalidateLegacyWinnerFlagSettlements() {
   return allPending.size;
 }
 
+const AUTHORITATIVE_SETTLED_HISTORY_OVERRIDES = new Map([
+  ['1791102000000', { direction:'UP', marketTopicId:6374907, source:'BINANCE_SETTLED_HISTORY_FINAL_OUTCOME' }],
+  ['1791102300000', { direction:'DOWN', marketTopicId:6374910, source:'BINANCE_SETTLED_HISTORY_FINAL_OUTCOME' }],
+]);
+
+function applyAuthoritativeSettledHistoryOverrides() {
+  let corrected = 0;
+  let registryCorrected = 0;
+  for (const [roundKey, truth] of AUTHORITATIVE_SETTLED_HISTORY_OVERRIDES.entries()) {
+    const row = rounds.get(roundKey);
+    if (!row) continue;
+    const before = row.actual === 'UP' || row.actual === 'DOWN' ? row.actual : row.legacyOfficialDirectionBeforeRevalidation;
+    applyOfficialSettlement(
+      row,
+      truth.direction,
+      `OFFICIAL_${truth.direction}:${truth.source}:STRICT_ROUND_ALIGNED_TOPIC`,
+      row.settledAt || Date.now()
+    );
+    row.predictionMarketTopicId = truth.marketTopicId;
+    if ((before === 'UP' || before === 'DOWN') && before !== truth.direction) {
+      row.officialDirectionCorrectedFrom = before;
+      row.officialDirectionCorrectedAt = Date.now();
+    }
+    row.needsOfficialArchiveCorrection = true;
+    corrected += 1;
+
+    for (const candidate of shadowForwardRegistry.candidates) {
+      const obs = (candidate.observations || []).find(o => String(Number(o.roundStartMs)) === roundKey);
+      if (!obs) continue;
+      if (obs.actual !== truth.direction) {
+        obs.actual = truth.direction;
+        obs.settledAt = row.settledAt || Date.now();
+        registryCorrected += 1;
+      }
+    }
+    archiveSettledRow(row, 'settled_history_final_outcome_correction');
+    log('authoritative_settled_history_override_applied', {
+      round:Number(roundKey),
+      direction:truth.direction,
+      marketTopicId:truth.marketTopicId,
+      productionPrediction:row.productionPrediction ?? null,
+      productionResult:row.productionResult ?? null,
+    });
+  }
+  if (corrected) saveHistory();
+  if (registryCorrected) saveShadowForwardRegistry();
+  return { corrected, registryCorrected };
+}
+
 function legacyOfficialRevalidationRemaining() {
   return Array.from(rounds.values()).filter(row =>
     row?.resolutionEvidence === 'REVALIDATING_LEGACY_OUTCOME_WINNER_FLAG' &&
@@ -2397,6 +2446,7 @@ loadArchiveIndex();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
+applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();

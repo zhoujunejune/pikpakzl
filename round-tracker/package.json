@@ -3,7 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {"start": "node index-rest.mjs"},
-  "engines": {"node": ">=22"},
-  "dependencies": {"ws": "^8.18.0"}
+  "scripts": {
+    "start": "node index-rest.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "redis": "^4.7.0"
+  }
 }

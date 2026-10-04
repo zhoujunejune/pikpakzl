@@ -1745,10 +1745,18 @@ function productionRecordView(row) {
 
   return {
     ...row,
+    // Public/display fields are canonical production statistics only.
+    // Prevent clients from rendering legacy V6 outcome as production Shadow outcome.
+    prediction: direction,
+    actual: official,
+    result: productionResult,
+    predictionSource: row?.productionSource || 'WAIT',
+    predictionModel: row?.productionModel || null,
     productionPrediction: direction,
     productionSource: row?.productionSource || 'WAIT',
     productionActual: official,
     productionResult,
+    resultRule: 'PRODUCTION_LOCKED_DIRECTION_VS_BINANCE_PREDICTION_OFFICIAL_DIRECTION',
   };
 }
 

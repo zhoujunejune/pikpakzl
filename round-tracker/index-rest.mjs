@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import { createShadowV2Engine } from './shadow-v2.mjs';
+import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -31,6 +32,9 @@ const SHADOW_ROLLING_FORWARD_FILE = String(process.env.SHADOW_ROLLING_FORWARD_FI
 const SHADOW_FORWARD_REGISTRY_FILE = String(process.env.SHADOW_FORWARD_REGISTRY_FILE || `${HISTORY_FILE}.shadow-forward-registry.json`);
 const SHADOW_FORWARD_REGISTRY_MAX = Math.max(3, Number(process.env.SHADOW_FORWARD_REGISTRY_MAX || 12));
 const SHADOW_V2_FILE = String(process.env.SHADOW_V2_FILE || `${HISTORY_FILE}.shadow-v2.json`);
+const SHADOW_V3_DIR = String(process.env.SHADOW_V3_DIR || '/data/shadow-v3');
+const SHADOW_V3_TRAIN_EVERY_ROUNDS = Math.max(10, Number(process.env.SHADOW_V3_TRAIN_EVERY_ROUNDS || 20));
+const SHADOW_V3_TRAIN_TIME_BUDGET = Math.max(30, Number(process.env.SHADOW_V3_TRAIN_TIME_BUDGET || 75));
 const ARCHIVE_SCHEMA_VERSION = 1;
 const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
 const LOCK_QUALITY_SHADOW_VERSION = 'LOCK_QUALITY_SHADOW_V1';
@@ -256,6 +260,17 @@ const shadowV2 = createShadowV2Engine({
   minSamples: SHADOW_TRAIN_MIN_SAMPLES,
   forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
   maxCandidates: 10,
+  log,
+});
+
+const shadowV3 = createShadowV3Client({
+  historyFile: HISTORY_FILE,
+  dir: SHADOW_V3_DIR,
+  minSamples: SHADOW_TRAIN_MIN_SAMPLES,
+  forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
+  maxCandidates: 8,
+  trainEveryRounds: SHADOW_V3_TRAIN_EVERY_ROUNDS,
+  trainTimeBudget: SHADOW_V3_TRAIN_TIME_BUDGET,
   log,
 });
 
@@ -914,6 +929,7 @@ function invalidateLegacyWinnerFlagSettlements() {
   }
 
   const shadowV2LabelsReset = shadowV2.invalidateRounds(allPending);
+  const shadowV3LabelsReset = shadowV3.invalidateRounds(allPending);
   legacyOfficialRevalidation = {
     active:true,
     total:allPending.size,
@@ -928,6 +944,7 @@ function invalidateLegacyWinnerFlagSettlements() {
     resumedPending:preexistingPending.size,
     registryLabelsReset,
     shadowV2LabelsReset,
+    shadowV3LabelsReset,
     parser:'BINANCE_VARIANT_PRICE_STRICT_ROUND_ALIGNED_TOPIC',
   });
   return allPending.size;
@@ -969,6 +986,7 @@ function applyAuthoritativeSettledHistoryOverrides() {
       }
     }
     shadowV2.settle(row);
+    shadowV3.settle(row);
     archiveSettledRow(row, 'settled_history_final_outcome_correction');
     log('authoritative_settled_history_override_applied', {
       round:Number(roundKey),
@@ -2014,6 +2032,9 @@ async function pollSignal() {
       shadowV2.observe(row, liveFacts);
       saveHistory();
     }
+    if (row.shadowObservedAt && row.shadowFacts) {
+      void shadowV3.observe(row, row.shadowFacts);
+    }
     const liveTopicId = liveFacts?.predictionMarketTopicId ?? null;
     if (!row.predictionMarketTopicId && liveTopicId) {
       row.predictionMarketTopicId = liveTopicId;
@@ -2168,6 +2189,7 @@ async function settlePendingRounds() {
         }
         settleShadowForwardRegistry(row);
         shadowV2.settle(row);
+        shadowV3.settle(row);
 
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -2183,6 +2205,7 @@ async function settlePendingRounds() {
         maybeFinalizeLegacyOfficialRevalidation();
         maybeTrainShadowModel();
         shadowV2.maybeTrain(shadowTrainingRows());
+        void shadowV3.maybeTrain(row.roundStartMs);
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
         if (
@@ -2801,11 +2824,13 @@ backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
 shadowV2.load();
+shadowV3.load();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
 shadowV2.maybeTrain(shadowTrainingRows());
+void shadowV3.maybeTrain();
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
@@ -2869,6 +2894,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-v2-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadowV2.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/shadow-v3-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(shadowV3.stats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {
@@ -2954,6 +2984,10 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowForwardRegistryMax: SHADOW_FORWARD_REGISTRY_MAX,
     shadowV2File: SHADOW_V2_FILE,
     shadowV2: shadowV2.stats(),
+    shadowV3Dir: SHADOW_V3_DIR,
+    shadowV3: shadowV3.stats(),
+    shadowV3TrainEveryRounds: SHADOW_V3_TRAIN_EVERY_ROUNDS,
+    shadowV3TrainTimeBudget: SHADOW_V3_TRAIN_TIME_BUDGET,
     shadowRollingForward: rollingForwardSummary(),
     shadowForwardCandidates: shadowForwardRegistrySummary(),
     shadowCandidateFile: SHADOW_CANDIDATE_FILE,

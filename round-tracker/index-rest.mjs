@@ -1782,6 +1782,19 @@ async function settlePendingRounds() {
         : Number(a.roundStartMs) - Number(b.roundStartMs))
       .slice(0, revalidating ? 10 : 3);
 
+    // Launch historical revalidation lookups concurrently, but keep all state
+    // mutation/archive/model updates sequential below.
+    const officialPrefetch = revalidating
+      ? new Map(pending.map(row => {
+          const nextRow = rounds.get(String(Number(row.roundStartMs) + 300000));
+          const topicHint = nextRow?.predictionMarketTopicId || row.predictionMarketTopicId || null;
+          return [
+            String(row.roundStartMs),
+            fetchOfficialPredictionResolution(row.roundStartMs, topicHint),
+          ];
+        }))
+      : null;
+
     for (const row of pending) {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;
       try {
@@ -1790,7 +1803,9 @@ async function settlePendingRounds() {
         // as a validated hint. V3 rejects it unless timestamps match exactly.
         const nextRow = rounds.get(String(Number(row.roundStartMs) + 300000));
         const topicHint = nextRow?.predictionMarketTopicId || row.predictionMarketTopicId || null;
-        const official = await fetchOfficialPredictionResolution(row.roundStartMs, topicHint);
+        const official = officialPrefetch
+          ? await officialPrefetch.get(String(row.roundStartMs))
+          : await fetchOfficialPredictionResolution(row.roundStartMs, topicHint);
         const direction = String(official?.direction || '').toUpperCase();
 
         if (!official?.resolved || (direction !== 'UP' && direction !== 'DOWN')) {

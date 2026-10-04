@@ -24,6 +24,7 @@ const OFFICIAL_RESOLUTION_WAIT_MS = Math.max(10000, Number(process.env.OFFICIAL_
 const SHADOW_MODEL_SCHEMA_VERSION = 2;
 const SHADOW_CANDIDATE_FILE = String(process.env.SHADOW_CANDIDATE_FILE || `${HISTORY_FILE}.shadow-candidate.json`);
 const SHADOW_MODEL_FILE = String(process.env.SHADOW_MODEL_FILE || `${HISTORY_FILE}.shadow-model.json`);
+const SHADOW_ROLLING_FORWARD_FILE = String(process.env.SHADOW_ROLLING_FORWARD_FILE || `${HISTORY_FILE}.shadow-rolling-forward.json`);
 const ARCHIVE_SCHEMA_VERSION = 1;
 const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
 const LOCK_QUALITY_SHADOW_VERSION = 'LOCK_QUALITY_SHADOW_V1';
@@ -45,6 +46,12 @@ let lastSettlementError = null;
 let shadowModel = null;
 let shadowCandidate = null;
 let shadowCandidateMetrics = null;
+let rollingForwardTracker = {
+  schemaVersion: 1,
+  modelVersion: null,
+  trainedAt: null,
+  observations: [],
+};
 const archivedRoundIds = new Set();
 let archiveMetrics = {
   records: 0,
@@ -516,6 +523,116 @@ function loadShadowCandidateArtifact() {
 }
 
 
+
+function saveRollingForwardTracker() {
+  try {
+    const temp = `${SHADOW_ROLLING_FORWARD_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(temp, JSON.stringify(rollingForwardTracker), 'utf8');
+    fs.renameSync(temp, SHADOW_ROLLING_FORWARD_FILE);
+  } catch (e) {
+    log('shadow_rolling_forward_save_failed', { error: e?.message || String(e) });
+  }
+}
+
+function loadRollingForwardTracker() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(SHADOW_ROLLING_FORWARD_FILE, 'utf8'));
+    if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed?.observations)) return false;
+    rollingForwardTracker = parsed;
+    log('shadow_rolling_forward_loaded', {
+      modelVersion: rollingForwardTracker.modelVersion ?? null,
+      trainedAt: rollingForwardTracker.trainedAt ?? null,
+      samples: rollingForwardTracker.observations.filter(x => x.actual === 'UP' || x.actual === 'DOWN').length,
+    });
+    return true;
+  } catch (e) {
+    if (e?.code !== 'ENOENT') log('shadow_rolling_forward_load_failed', { error: e?.message || String(e) });
+    return false;
+  }
+}
+
+function resetRollingForwardTracker(model) {
+  if (!model?.weights || !model?.modelVersion || !Number.isFinite(Number(model?.trainedAt))) return;
+  if (rollingForwardTracker.modelVersion === model.modelVersion) return;
+  rollingForwardTracker = {
+    schemaVersion: 1,
+    modelVersion: model.modelVersion,
+    trainedAt: Number(model.trainedAt),
+    validationAccuracy: Number.isFinite(Number(model.validationAccuracy)) ? Number(model.validationAccuracy.toFixed(4)) : null,
+    validationBrier: Number.isFinite(Number(model.validationBrier)) ? Number(model.validationBrier.toFixed(4)) : null,
+    observations: [],
+  };
+  saveRollingForwardTracker();
+  log('shadow_rolling_forward_started', {
+    modelVersion: model.modelVersion,
+    trainedAt: model.trainedAt,
+    targetSamples: SHADOW_FORWARD_MIN_SAMPLES,
+  });
+}
+
+function rollingForwardPredict(facts) {
+  if (!shadowModel?.weights || rollingForwardTracker.modelVersion !== shadowModel.modelVersion) return null;
+  const x = shadowVector(facts);
+  if (!x) return null;
+  let z = shadowModel.weights[0];
+  for (let j = 0; j < x.length; j += 1) z += shadowModel.weights[j + 1] * x[j];
+  return sigmoid(z);
+}
+
+function rollingForwardSummary() {
+  const settled = rollingForwardTracker.observations.filter(x =>
+    (x.actual === 'UP' || x.actual === 'DOWN') && Number.isFinite(Number(x.probability))
+  );
+  let hits = 0, brier = 0;
+  for (const x of settled) {
+    const p = Number(x.probability);
+    const y = x.actual === 'UP' ? 1 : 0;
+    hits += (p >= 0.5 ? 'UP' : 'DOWN') === x.actual ? 1 : 0;
+    brier += (p - y) ** 2;
+  }
+  return {
+    modelVersion: rollingForwardTracker.modelVersion,
+    trainedAt: rollingForwardTracker.trainedAt,
+    forwardSamples: settled.length,
+    targetSamples: SHADOW_FORWARD_MIN_SAMPLES,
+    remainingSamples: Math.max(0, SHADOW_FORWARD_MIN_SAMPLES - settled.length),
+    forwardAccuracy: settled.length ? Number((hits / settled.length).toFixed(4)) : null,
+    forwardBrier: settled.length ? Number((brier / settled.length).toFixed(4)) : null,
+    validationAccuracy: rollingForwardTracker.validationAccuracy ?? null,
+    validationBrier: rollingForwardTracker.validationBrier ?? null,
+  };
+}
+
+function observeRollingForward(row, facts) {
+  if (!shadowModel?.weights || !facts || Number(row?.roundStartMs) < Number(shadowModel.trainedAt)) return;
+  resetRollingForwardTracker(shadowModel);
+  if (rollingForwardTracker.observations.some(x => Number(x.roundStartMs) === Number(row.roundStartMs))) return;
+  const p = rollingForwardPredict(facts);
+  if (!Number.isFinite(p)) return;
+  rollingForwardTracker.observations.push({
+    roundStartMs: Number(row.roundStartMs),
+    observedAt: Date.now(),
+    modelVersion: shadowModel.modelVersion,
+    trainedAt: Number(shadowModel.trainedAt),
+    probability: Number(p.toFixed(6)),
+    actual: null,
+    settledAt: null,
+  });
+  saveRollingForwardTracker();
+}
+
+function settleRollingForward(row) {
+  const x = rollingForwardTracker.observations.find(o => Number(o.roundStartMs) === Number(row?.roundStartMs));
+  if (!x || (x.actual === 'UP' || x.actual === 'DOWN')) return;
+  if (row?.actual !== 'UP' && row?.actual !== 'DOWN') return;
+  x.actual = row.actual;
+  x.settledAt = row.settledAt ?? Date.now();
+  saveRollingForwardTracker();
+  const summary = rollingForwardSummary();
+  if (summary.forwardSamples === SHADOW_FORWARD_MIN_SAMPLES || summary.forwardSamples % 10 === 0) {
+    log('shadow_rolling_forward_progress', summary);
+  }
+}
 
 function solveLinearSystem(matrix, vector) {
   const n = vector.length;
@@ -1042,6 +1159,7 @@ function shadowStatsPayload() {
       forwardMetricScope: shadowCandidate ? 'FROZEN_CANDIDATE' : 'LATEST_RETRAINED_MODEL',
       forwardTargetSamples: SHADOW_FORWARD_MIN_SAMPLES,
       forwardRemainingSamples: Math.max(0, SHADOW_FORWARD_MIN_SAMPLES - Number(shadowModelMetrics.forwardSamples || 0)),
+      rollingModelStrictForward: rollingForwardSummary(),
       frozenCandidate: shadowCandidate ? {
         modelVersion: shadowCandidate.modelVersion,
         trainedAt: shadowCandidate.trainedAt,
@@ -1091,6 +1209,7 @@ function maybeTrainShadowModel() {
   const trained = trainLogistic(labeled);
   if (!trained) return;
   shadowModel = { ...trained, lastTrainRound: latestRound };
+  resetRollingForwardTracker(shadowModel);
   shadowModelMetrics = {
     status:
       trained.validationAccuracy > trained.baselineAccuracy + 0.03 &&
@@ -1361,6 +1480,7 @@ async function pollSignal() {
       const candidateP = candidatePredict(liveFacts);
       row.shadowCandidateProbability = Number.isFinite(candidateP) ? Number(candidateP.toFixed(6)) : null;
       row.shadowCandidateTrainedAt = shadowCandidate?.trainedAt ?? null;
+      observeRollingForward(row, liveFacts);
       saveHistory();
     }
     const liveTopicId = liveFacts?.predictionMarketTopicId ?? null;
@@ -1454,6 +1574,7 @@ async function settlePendingRounds() {
         row.predictionMarketTopicId = official?.marketTopicId ?? row.predictionMarketTopicId;
         const evidence = `OFFICIAL_${direction}:${official?.evidence || 'RESOLVED'}`;
         applyOfficialSettlement(row, direction, evidence, Date.now());
+        settleRollingForward(row);
 
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -2074,6 +2195,7 @@ loadHistory();
 loadArchiveIndex();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
+loadRollingForwardTracker();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
 applyPinnedProductionShadow();
@@ -2153,6 +2275,8 @@ http.createServer((req, res) => {
     shadowTrainMinSamples: SHADOW_TRAIN_MIN_SAMPLES,
     shadowForwardMinSamples: SHADOW_FORWARD_MIN_SAMPLES,
     shadowModelFile: SHADOW_MODEL_FILE,
+    shadowRollingForwardFile: SHADOW_ROLLING_FORWARD_FILE,
+    shadowRollingForward: rollingForwardSummary(),
     shadowCandidateFile: SHADOW_CANDIDATE_FILE,
     shadowCandidateModelVersion: shadowCandidate?.modelVersion ?? null,
     shadowProductionModelVersion: SHADOW_PRODUCTION_MODEL_VERSION || shadowCandidate?.modelVersion || null,

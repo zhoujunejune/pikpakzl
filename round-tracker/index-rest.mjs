@@ -1787,7 +1787,9 @@ async function settlePendingRounds() {
     const officialPrefetch = revalidating
       ? new Map(pending.map(row => {
           const nextRow = rounds.get(String(Number(row.roundStartMs) + 300000));
-          const topicHint = nextRow?.predictionMarketTopicId || row.predictionMarketTopicId || null;
+          // Prefer the topic captured on this round. The next row is only a
+          // legacy fallback because its topic normally belongs to the next 5m round.
+          const topicHint = row.predictionMarketTopicId || nextRow?.predictionMarketTopicId || null;
           return [
             String(row.roundStartMs),
             fetchOfficialPredictionResolution(row.roundStartMs, topicHint),
@@ -1798,14 +1800,29 @@ async function settlePendingRounds() {
     for (const row of pending) {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;
       try {
-        // Historical rows often captured the previous market topic at t=0.
-        // The following row commonly carries this row's actual topic; use it only
-        // as a validated hint. V3 rejects it unless timestamps match exactly.
+        // Always try the topic captured on this round first. Passing the next
+        // round's topic first caused already-finished rounds to lose their direct
+        // lookup path once Binance removed them from the active topic list.
         const nextRow = rounds.get(String(Number(row.roundStartMs) + 300000));
-        const topicHint = nextRow?.predictionMarketTopicId || row.predictionMarketTopicId || null;
-        const official = officialPrefetch
+        const ownTopicHint = row.predictionMarketTopicId || null;
+        const nextTopicHint = nextRow?.predictionMarketTopicId || null;
+        let official = officialPrefetch
           ? await officialPrefetch.get(String(row.roundStartMs))
-          : await fetchOfficialPredictionResolution(row.roundStartMs, topicHint);
+          : await fetchOfficialPredictionResolution(row.roundStartMs, ownTopicHint || nextTopicHint);
+
+        // Legacy rows can still contain a stale previous-round topic. If direct
+        // discovery says the topic is missing, try the following row's persisted
+        // topic once; V3 independently validates its timestamps before accepting it.
+        const firstWhy = official?.error || official?.status || null;
+        if (
+          !official?.resolved &&
+          nextTopicHint &&
+          String(nextTopicHint) !== String(ownTopicHint || '') &&
+          (firstWhy === 'PREDICTION_TOPIC_NOT_FOUND' || firstWhy === 'TOPIC_NOT_FOUND')
+        ) {
+          const retry = await fetchOfficialPredictionResolution(row.roundStartMs, nextTopicHint);
+          if (retry?.resolved || retry?.ok) official = retry;
+        }
         const direction = String(official?.direction || '').toUpperCase();
 
         if (!official?.resolved || (direction !== 'UP' && direction !== 'DOWN')) {

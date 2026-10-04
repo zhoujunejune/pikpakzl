@@ -567,12 +567,27 @@ function candidateRegistrySummary(c) {
     hits += pred === x.actual ? 1 : 0;
     brier += (p - y) ** 2;
   }
+  const recentResults = settled.slice(-20).map(x => {
+    const p = Number(x.probability);
+    const prediction = p >= 0.5 ? 'UP' : 'DOWN';
+    return {
+      roundStartMs: Number(x.roundStartMs),
+      observedAt: x.observedAt ?? null,
+      settledAt: x.settledAt ?? null,
+      probability: Number(p.toFixed(6)),
+      prediction,
+      actual: x.actual,
+      result: prediction === x.actual ? 'HIT' : 'MISS',
+    };
+  });
   return {
     modelVersion: c?.modelVersion ?? null,
     trainedAt: c?.trainedAt ?? null,
     forwardSamples: settled.length,
     targetSamples: SHADOW_FORWARD_MIN_SAMPLES,
     remainingSamples: Math.max(0, SHADOW_FORWARD_MIN_SAMPLES - settled.length),
+    hits,
+    misses: settled.length - hits,
     forwardAccuracy: settled.length ? Number((hits / settled.length).toFixed(4)) : null,
     forwardBrier: settled.length ? Number((brier / settled.length).toFixed(4)) : null,
     validationAccuracy: c?.validationAccuracy ?? null,
@@ -582,6 +597,7 @@ function candidateRegistrySummary(c) {
     upPredictions: up,
     downPredictions: down,
     maxConsecutiveErrors: maxErrors,
+    recentResults,
     status: settled.length < SHADOW_FORWARD_MIN_SAMPLES ? 'COLLECTING' :
       (hits / settled.length >= 0.70 ? 'FORWARD_GATE_MET' : 'FORWARD_VALIDATION_FAILED'),
   };

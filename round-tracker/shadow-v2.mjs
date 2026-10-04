@@ -16,31 +16,58 @@ const FEATURE_KEYS = [
   'rangePosition180',
   'predictionMarketUpMidCentered',
   'absorptionRisk',
+  'absCurrentScore',
+  'absRegimeScore',
+  'absTrendScore',
+  'predictionMarketStrength',
+  'currentMidAgreement',
+  'trendMidAgreement',
+  'ofiPressureInteraction',
+  'momentumAgreement60x300',
+  'shortLongMomentumGap',
+  'pressureImbalance',
+  'rangeExtremity',
+  'absorptionCurrentInteraction',
 ];
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const sigmoid = z => z >= 0 ? 1 / (1 + Math.exp(-z)) : Math.exp(z) / (1 + Math.exp(z));
 const logit = p => Math.log(clamp(p, 1e-5, 1 - 1e-5) / (1 - clamp(p, 1e-5, 1 - 1e-5)));
+const ENGINE_VERSION = 'ROLLING_GBDT_REGIME_PROGRESSIVE_V2_1';
 
 function vectorize(facts) {
   if (!facts || typeof facts !== 'object') return null;
   const upMid = Number(facts.predictionMarketUpMid);
+  const midCentered = Number.isFinite(upMid) ? (upMid - 0.5) * 2 : 0;
+  const regime = Number(facts.regimeScore);
+  const current = Number(facts.currentScore);
+  const micro = Number(facts.microScore);
+  const trend = Number(facts.currentTrendScore);
+  const m15 = Number(facts.normalizedMomentum15s);
+  const m30 = Number(facts.normalizedMomentum30s);
+  const m60 = Number(facts.normalizedMomentum60s);
+  const m180 = Number(facts.normalizedMomentum180s);
+  const m300 = Number(facts.normalizedMomentum300s);
+  const p15 = Number(facts.tradePressure15s);
+  const p60 = Number(facts.tradePressure60s);
+  const ofi = Number(facts.ofiNormalized5s);
+  const range = Number(facts.rangePosition180);
+  const absorption = facts.absorptionRisk ? 1 : 0;
   return [
-    Number(facts.regimeScore),
-    Number(facts.currentScore),
-    Number(facts.microScore),
-    Number(facts.currentTrendScore),
-    Number(facts.normalizedMomentum15s),
-    Number(facts.normalizedMomentum30s),
-    Number(facts.normalizedMomentum60s),
-    Number(facts.normalizedMomentum180s),
-    Number(facts.normalizedMomentum300s),
-    Number(facts.tradePressure15s),
-    Number(facts.tradePressure60s),
-    Number(facts.ofiNormalized5s),
-    Number(facts.rangePosition180),
-    Number.isFinite(upMid) ? (upMid - 0.5) * 2 : 0,
-    facts.absorptionRisk ? 1 : 0,
+    regime, current, micro, trend, m15, m30, m60, m180, m300, p15, p60, ofi, range,
+    midCentered, absorption,
+    Math.abs(current),
+    Math.abs(regime),
+    Math.abs(trend),
+    Math.abs(midCentered),
+    current * midCentered,
+    trend * midCentered,
+    ofi * p60,
+    m60 * m300,
+    m15 - m300,
+    p15 - p60,
+    Number.isFinite(range) ? Math.abs(range - 0.5) * 2 : 0,
+    absorption * Math.abs(current),
   ].map(v => Number.isFinite(v) ? clamp(v, -3, 3) : 0);
 }
 
@@ -246,7 +273,7 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
     for(const x of settled){const y=x.actual==='UP'?1:0;const pred=Number(x.probability)>=Number(c.threshold??0.5)?1:0; if(pred===y)streak=0;else{streak++;maxErrors=Math.max(maxErrors,streak);} hit+=pred===y?1:0;brier+=(Number(x.probability)-y)**2;}
     const recent20=settled.slice(-20); let rh=0; for(const x of recent20){const y=x.actual==='UP'?1:0;rh+=((Number(x.probability)>=Number(c.threshold??0.5)?1:0)===y)?1:0;}
     return {
-      modelVersion:c.modelVersion,trainingMethod:c.trainingMethod,trainedAt:c.trainedAt,lastTrainRound:c.lastTrainRound,
+      modelVersion:c.modelVersion,engineVersion:c.engineVersion||c.trainingMethod,trainingMethod:c.trainingMethod,trainedAt:c.trainedAt,lastTrainRound:c.lastTrainRound,
       windowSize:c.windowSize,threshold:c.threshold,validationAccuracy:c.validationAccuracy,validationBrier:c.validationBrier,
       baselineAccuracy:c.baselineAccuracy,walkForwardMinAccuracy:c.walkForwardMinAccuracy,walkForwardRecentAccuracy:c.walkForwardRecentAccuracy,
       forwardSamples:settled.length,targetSamples:forwardTarget,remainingSamples:Math.max(0,forwardTarget-settled.length),
@@ -265,8 +292,9 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
     const samples=makeSamples(rows);
     if(samples.length<minSamples)return null;
     const latest=samples.at(-1)?.roundStartMs||0;
-    if(state.lastTrainRound && latest-state.lastTrainRound<20*300000)return null;
-    const windows=[300,600,900].filter(w=>samples.length>=Math.min(w,300));
+    const latestEngineVersion=state.candidates.at(-1)?.engineVersion||null;
+    if(state.lastTrainRound && latestEngineVersion===ENGINE_VERSION && latest-state.lastTrainRound<20*300000)return null;
+    const windows=[300,450,600,900].filter(w=>samples.length>=w);
     const configs=[];
     for(const windowSize of windows){
       configs.push({windowSize,rounds:24,eta:0.10,halfLife:Math.max(80,Math.round(windowSize*0.45))});
@@ -281,7 +309,7 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
     if(!model){save();return null;}
     const trainedAt=Date.now();
     const candidate={
-      modelVersion:`shadow-v2-gbdt-${trainedAt}`,trainedAt,lastTrainRound:latest,trainingMethod:'ROLLING_GBDT_REGIME_PROGRESSIVE_V2',
+      modelVersion:`shadow-v2-gbdt-${trainedAt}`,engineVersion:ENGINE_VERSION,trainedAt,lastTrainRound:latest,trainingMethod:ENGINE_VERSION,
       windowSize:best.config.windowSize,config:best.config,threshold:Number(best.wf.threshold.toFixed(2)),model,
       validationAccuracy:Number(best.wf.accuracy.toFixed(4)),validationBrier:Number(best.wf.brier.toFixed(4)),
       baselineAccuracy:Number(best.wf.baselineAccuracy.toFixed(4)),baselineBrier:Number(best.wf.baselineBrier.toFixed(4)),
@@ -313,7 +341,7 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
   function stats(){
     const candidates=state.candidates.map(candidateSummary).sort((a,b)=>Number(b.trainedAt)-Number(a.trainedAt));
     const completed=candidates.filter(x=>x.forwardSamples>=forwardTarget).sort((a,b)=>(b.forwardAccuracy??-1)-(a.forwardAccuracy??-1));
-    return {ok:true,schemaVersion:1,trainingMethod:'ROLLING_GBDT_REGIME_PROGRESSIVE_V2',productionEffect:'NONE_SHADOW_ONLY',lastTrainRound:state.lastTrainRound||0,candidates,bestCompleted:completed[0]||null};
+    return {ok:true,schemaVersion:1,trainingMethod:ENGINE_VERSION,productionEffect:'NONE_SHADOW_ONLY',lastTrainRound:state.lastTrainRound||0,candidates,bestCompleted:completed[0]||null};
   }
   return {load,save,maybeTrain,observe,settle,stats};
 }

@@ -913,6 +913,7 @@ function invalidateLegacyWinnerFlagSettlements() {
     }
   }
 
+  const shadowV2LabelsReset = shadowV2.invalidateRounds(allPending);
   legacyOfficialRevalidation = {
     active:true,
     total:allPending.size,
@@ -926,6 +927,7 @@ function invalidateLegacyWinnerFlagSettlements() {
     newlyInvalidated:affected.size,
     resumedPending:preexistingPending.size,
     registryLabelsReset,
+    shadowV2LabelsReset,
     parser:'BINANCE_VARIANT_PRICE_STRICT_ROUND_ALIGNED_TOPIC',
   });
   return allPending.size;
@@ -966,6 +968,7 @@ function applyAuthoritativeSettledHistoryOverrides() {
         registryCorrected += 1;
       }
     }
+    shadowV2.settle(row);
     archiveSettledRow(row, 'settled_history_final_outcome_correction');
     log('authoritative_settled_history_override_applied', {
       round:Number(roundKey),

@@ -1,1 +1,15 @@
-{"name":"prediction-signal-diagnostic","private":true,"type":"module","scripts":{"start":"node index.mjs"},"engines":{"node":">=22"}}
+{
+  "name": "prediction-signal-diagnostic",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "redis": "^4.7.0",
+    "ws": "^8.18.0"
+  }
+}

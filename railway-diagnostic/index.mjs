@@ -447,6 +447,50 @@ async function lookupOrder(orderId, walletAddress) {
   return { ok: false };
 }
 
+async function auditSettledHistoryTopics(topicIds = []) {
+  try {
+    const wanted = new Set(topicIds.map(String));
+    if (!wanted.size) return;
+    const wallet = await resolveWallet();
+    if (!wallet.ok) {
+      console.log(JSON.stringify({ event:'settled_history_audit_failed', error:wallet.error || 'WALLET_UNAVAILABLE' }));
+      return;
+    }
+    const call = await signedGet('/sapi/v1/w3w/wallet/prediction/position/settled-history', {
+      walletAddress: wallet.walletAddress,
+      l1Category: 'crypto',
+      startDate: '2026-10-04',
+      endDate: '2026-10-04',
+      offset: 0,
+      limit: 100,
+    });
+    if (!call.ok) {
+      console.log(JSON.stringify({ event:'settled_history_audit_failed', httpStatus:call.status, error:call.data?.msg || call.error || null }));
+      return;
+    }
+    const positions = Array.isArray(call.data?.positions) ? call.data.positions : [];
+    for (const p of positions) {
+      if (!wanted.has(String(p?.marketTopicId))) continue;
+      console.log(JSON.stringify({
+        event:'settled_history_audit',
+        marketTopicId:p?.marketTopicId ?? null,
+        marketId:p?.marketId ?? null,
+        marketTopicTitle:p?.marketTopicTitle ?? null,
+        marketTitle:p?.marketTitle ?? null,
+        outcomeName:p?.outcomeName ?? null,
+        outcomeIndex:p?.outcomeIndex ?? null,
+        isWinner:p?.isWinner ?? null,
+        finalOutcome:p?.finalOutcome ?? null,
+        realizedPnl:p?.realizedPnl ?? null,
+        endDate:p?.endDate ?? null,
+        settledDate:p?.settledDate ?? null,
+      }));
+    }
+  } catch (e) {
+    console.log(JSON.stringify({ event:'settled_history_audit_failed', error:e?.message || String(e) }));
+  }
+}
+
 function terminalFailureStatus(status) {
   const s = norm(status);
   return ['FAILED', 'REJECTED', 'CANCELLED', 'CANCELED', 'EXPIRED'].includes(s);
@@ -754,4 +798,5 @@ http.createServer(async (req, res) => {
     items: lastBalance.items || [],
     error: lastBalance.error || null,
   }));
+  await auditSettledHistoryTopics(['6374907','6374910']);
 });

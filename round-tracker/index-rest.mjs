@@ -1549,8 +1549,10 @@ function calibrateProbability(direction, score, excludeRound = null) {
 
 async function fetchOfficialPredictionResolution(roundStartMs, marketTopicId = null) {
   try {
-    let u = SIGNAL_ORIGIN + '/api/prediction-resolution?round=' + encodeURIComponent(String(roundStartMs));
-    if (marketTopicId) u += '&marketTopicId=' + encodeURIComponent(String(marketTopicId));
+    // Settlement must be resolved from the round timestamps themselves.
+    // Persisted marketTopicId can be stale from the previous 5-minute market,
+    // so it is intentionally never sent to the resolver.
+    const u = SIGNAL_ORIGIN + '/api/prediction-resolution?round=' + encodeURIComponent(String(roundStartMs));
     const r = await fetch(u, { cache:'no-store', signal:AbortSignal.timeout(5000) });
     if (!r.ok) return { ok:false, resolved:false, error:'HTTP_' + r.status };
     return await r.json();

@@ -128,37 +128,48 @@ function cleanAmount(value) {
 }
 
 async function getSignal() {
-  // Single source of truth: exactly the same production Shadow record shown
-  // in the monitoring panel. Never trade from legacy local-predictions/live.
+  // Single source of truth for trading: the canonical immutable production signal.
+  // The monitoring table is derived from the same frozen production lock.
   if (!PRODUCTION_SIGNAL_ORIGIN) return null;
   try {
-    const r = await fetch(`${PRODUCTION_SIGNAL_ORIGIN}/api/round-stats?ts=${Date.now()}`, {
+    const r = await fetch(`${PRODUCTION_SIGNAL_ORIGIN}/api/production-signal?ts=${Date.now()}`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(6000),
     });
     if (!r.ok) return null;
     const json = await r.json();
+    const live = json?.live || null;
     const currentRound = Math.floor(Date.now() / 300000) * 300000;
-    const records = Array.isArray(json?.records) ? json.records : [];
-    const source = records.find(x =>
-      Number(x?.roundStartMs) === currentRound &&
-      ['UP', 'DOWN'].includes(String(x?.productionPrediction || '').toUpperCase())
-    ) || null;
-    if (!source) return {
-      round: currentRound,
-      status: 'WAIT',
-      direction: null,
-      score: null,
-      source: 'PRODUCTION_ROUND_STATS',
-    };
-    const direction = String(source.productionPrediction).toUpperCase();
+    const round = Number(live?.round ?? live?.input?.round);
+    const direction = String(live?.signal?.direction || '').toUpperCase();
+    if (
+      !live ||
+      live.status !== 'LOCKED' ||
+      round !== currentRound ||
+      !['UP', 'DOWN'].includes(direction)
+    ) {
+      return {
+        round: Number.isFinite(round) ? round : currentRound,
+        status: 'WAIT',
+        direction: null,
+        score: null,
+        model: live?.model ?? null,
+        source: live?.source ?? 'PRODUCTION_SIGNAL',
+        generatedAt: live?.generatedAt ?? null,
+      };
+    }
     return {
-      round: Number(source.roundStartMs),
+      round,
       status: 'LOCKED',
       direction,
-      score: source.productionConfidence ?? null,
-      model: source.productionModel ?? null,
-      source: source.productionSource ?? 'PRODUCTION_ROUND_STATS',
+      score: live?.signal?.score ?? null,
+      confidence: live?.signal?.confidence ?? null,
+      modelProbability: live?.signal?.modelProbability ?? null,
+      model: live?.model ?? null,
+      source: live?.source ?? 'PRODUCTION_SIGNAL',
+      generatedAt: live?.generatedAt ?? null,
+      productionPolicy: live?.productionPolicy ?? null,
+      frozen: live?.frozen === true,
     };
   } catch {
     return null;
@@ -410,6 +421,8 @@ async function prepareWorker() {
       round: signal.round,
       signal: signal.direction,
       score: signal.score,
+      model: signal.model ?? null,
+      signalGeneratedAt: signal.generatedAt ?? null,
       action: signal.direction === 'UP' ? 'BUY_UP' : 'BUY_DOWN',
       amount: tradeAmountText,
       marketTopicId: intent.topic.marketTopicId,
@@ -424,6 +437,8 @@ async function prepareWorker() {
       event: 'api_intent_ready',
       round: pendingAction.round,
       signal: pendingAction.signal,
+      model: pendingAction.model,
+      signalGeneratedAt: pendingAction.signalGeneratedAt,
       amount: pendingAction.amount,
       marketTopicId: pendingAction.marketTopicId,
       quoteMode: pendingAction.quoteMode,

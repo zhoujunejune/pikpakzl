@@ -303,7 +303,10 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
     try{
       const parsed=JSON.parse(fs.readFileSync(file,'utf8'));
       if(parsed?.schemaVersion!==1||!Array.isArray(parsed?.candidates))return false;
-      state=parsed; log('shadow_v2_registry_loaded',{candidates:state.candidates.length,lastTrainRound:state.lastTrainRound||0}); return true;
+      state=parsed;
+      deleteRetiredCandidates();
+      log('shadow_v2_registry_loaded',{candidates:state.candidates.length,lastTrainRound:state.lastTrainRound||0});
+      return true;
     }catch(e){if(e?.code!=='ENOENT')log('shadow_v2_load_failed',{error:e?.message||String(e)});return false;}
   }
   function makeSamples(rows){
@@ -347,6 +350,31 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
           : (hit/settled.length>=0.70?'FORWARD_70_MET':'FORWARD_COMPLETE'),
     };
   }
+  function deleteRetiredCandidates(){
+    const removed=[];
+    state.candidates = state.candidates.filter(c=>{
+      const s=candidateSummary(c);
+      const legacy=(c.engineVersion||c.trainingMethod)!==ENGINE_VERSION;
+      const retired=s.forwardSamples>=forwardTarget && Number.isFinite(Number(s.forwardAccuracy)) && Number(s.forwardAccuracy)<0.60;
+      if(legacy||retired){
+        removed.push({
+          modelVersion:c.modelVersion,
+          engineVersion:c.engineVersion||c.trainingMethod||null,
+          forwardSamples:s.forwardSamples,
+          forwardAccuracy:s.forwardAccuracy,
+          reason:legacy?'LEGACY_PIPELINE':'STRICT_FORWARD_BELOW_60',
+        });
+        return false;
+      }
+      return true;
+    });
+    if(removed.length){
+      save();
+      log('shadow_v2_retired_models_deleted',{count:removed.length,models:removed});
+    }
+    return removed;
+  }
+
   function prune(){
     while(state.candidates.length>maxCandidates){
       let idx=state.candidates.findIndex(c=>candidateSummary(c).forwardSamples>=forwardTarget);
@@ -474,7 +502,10 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
       const s=candidateSummary(c);
       if(s.forwardSamples===forwardTarget||s.forwardSamples%10===0)log('shadow_v2_forward_progress',s);
     }
-    if(changed)save();
+    if(changed){
+      save();
+      deleteRetiredCandidates();
+    }
   }
 
   function invalidateRounds(roundIds){
@@ -498,5 +529,5 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
     const completed=candidates.filter(x=>x.engineVersion===ENGINE_VERSION&&x.forwardSamples>=forwardTarget).sort((a,b)=>(b.forwardAccuracy??-1)-(a.forwardAccuracy??-1));
     return {ok:true,schemaVersion:1,trainingMethod:ENGINE_VERSION,productionEffect:'NONE_SHADOW_ONLY',lastTrainRound:state.lastTrainRound||0,candidates,bestCompleted:completed[0]||null};
   }
-  return {load,save,maybeTrain,observe,settle,invalidateRounds,stats};
+  return {load,save,maybeTrain,observe,settle,invalidateRounds,deleteRetiredCandidates,stats};
 }

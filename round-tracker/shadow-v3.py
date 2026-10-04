@@ -296,7 +296,7 @@ def train_command(args):
         emit({"ok": True, "status": "INSUFFICIENT_TUNING_SAMPLES", "samples": len(samples), "lastTrainRound": last_round, "engineVersion": ENGINE_VERSION})
         return
 
-    candidate_windows = [w for w in WINDOWS if len(tuning) >= min(w, len(tuning))]
+    candidate_windows = [w for w in WINDOWS if len(tuning) >= w]
     if not candidate_windows:
         candidate_windows = [len(tuning)]
 

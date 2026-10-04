@@ -1769,6 +1769,7 @@ async function fetchRealKline(roundStartMs) {
   return { open, close, closeTime };
 }
 
+// Settlement queue prioritizes live production rounds before historical backfill.
 async function settlePendingRounds() {
   if (settleBusy) return;
   settleBusy = true;

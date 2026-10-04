@@ -529,11 +529,24 @@ function directionFromResolutionValue(v) {
 
 function isWinningOutcome(o) {
   return o?.isWinner === true || o?.winner === true ||
-    ['WINNER','WON','WIN','RESOLVED_TRUE','TRUE'].includes(predNorm(o?.status)) ||
-    ['WINNER','WON','WIN','TRUE'].includes(predNorm(o?.result));
+    ['WINNER','WON','WIN','RESOLVED_TRUE'].includes(predNorm(o?.status)) ||
+    ['WINNER','WON','WIN'].includes(predNorm(o?.result));
+}
+
+function directionFromVariantPrices(topic) {
+  const v = topic?.variantData || topic?.variant_data || null;
+  if (!v) return null;
+  const start = Number(v?.startPrice ?? v?.start_price);
+  const end = Number(v?.endPrice ?? v?.end_price);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) return null;
+  return end > start
+    ? { direction:'UP', evidence:'variantData.startPrice_endPrice' }
+    : { direction:'DOWN', evidence:'variantData.startPrice_endPrice' };
 }
 
 function extractOfficialResolution(topic) {
+  const byPrice = directionFromVariantPrices(topic);
+  if (byPrice) return byPrice;
   const directKeys = ['result','resolution','resolvedOutcome','winningOutcome','winner','answer','finalResult'];
 
   // Explicit topic-level UP/DOWN is authoritative.

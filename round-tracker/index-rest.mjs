@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -29,6 +30,7 @@ const SHADOW_MODEL_FILE = String(process.env.SHADOW_MODEL_FILE || `${HISTORY_FIL
 const SHADOW_ROLLING_FORWARD_FILE = String(process.env.SHADOW_ROLLING_FORWARD_FILE || `${HISTORY_FILE}.shadow-rolling-forward.json`);
 const SHADOW_FORWARD_REGISTRY_FILE = String(process.env.SHADOW_FORWARD_REGISTRY_FILE || `${HISTORY_FILE}.shadow-forward-registry.json`);
 const SHADOW_FORWARD_REGISTRY_MAX = Math.max(3, Number(process.env.SHADOW_FORWARD_REGISTRY_MAX || 12));
+const SHADOW_V2_FILE = String(process.env.SHADOW_V2_FILE || `${HISTORY_FILE}.shadow-v2.json`);
 const ARCHIVE_SCHEMA_VERSION = 1;
 const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
 const LOCK_QUALITY_SHADOW_VERSION = 'LOCK_QUALITY_SHADOW_V1';
@@ -248,6 +250,14 @@ let shadowModelMetrics = {
 function log(event, extra = {}) {
   console.log(JSON.stringify({ event, service: 'round-tracker', at: new Date().toISOString(), ...extra }));
 }
+
+const shadowV2 = createShadowV2Engine({
+  file: SHADOW_V2_FILE,
+  minSamples: SHADOW_TRAIN_MIN_SAMPLES,
+  forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
+  maxCandidates: 10,
+  log,
+});
 
 function saveHistory() {
   try {
@@ -1998,6 +2008,7 @@ async function pollSignal() {
       row.shadowCandidateProbability = Number.isFinite(candidateP) ? Number(candidateP.toFixed(6)) : null;
       row.shadowCandidateTrainedAt = shadowCandidate?.trainedAt ?? null;
       observeShadowForwardRegistry(row, liveFacts);
+      shadowV2.observe(row, liveFacts);
       saveHistory();
     }
     const liveTopicId = liveFacts?.predictionMarketTopicId ?? null;
@@ -2153,6 +2164,7 @@ async function settlePendingRounds() {
           });
         }
         settleShadowForwardRegistry(row);
+        shadowV2.settle(row);
 
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -2167,6 +2179,7 @@ async function settlePendingRounds() {
 
         maybeFinalizeLegacyOfficialRevalidation();
         maybeTrainShadowModel();
+        shadowV2.maybeTrain(shadowTrainingRows());
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
         if (
@@ -2784,10 +2797,12 @@ loadArchiveIndex();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
+shadowV2.load();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
+shadowV2.maybeTrain(shadowTrainingRows());
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
@@ -2846,6 +2861,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadowStatsPayload()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/shadow-v2-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(shadowV2.stats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {
@@ -2929,6 +2949,8 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowRollingForwardFile: SHADOW_ROLLING_FORWARD_FILE,
     shadowForwardRegistryFile: SHADOW_FORWARD_REGISTRY_FILE,
     shadowForwardRegistryMax: SHADOW_FORWARD_REGISTRY_MAX,
+    shadowV2File: SHADOW_V2_FILE,
+    shadowV2: shadowV2.stats(),
     shadowRollingForward: rollingForwardSummary(),
     shadowForwardCandidates: shadowForwardRegistrySummary(),
     shadowCandidateFile: SHADOW_CANDIDATE_FILE,

@@ -694,7 +694,7 @@ function invalidateLegacyWinnerFlagSettlements() {
     const evidence = String(row?.resolutionEvidence || '');
     if (
       row?.actualSource !== 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' ||
-      !evidence.includes('outcome_winner_flag')
+      evidence.includes('STRICT_ROUND_ALIGNED_TOPIC')
     ) continue;
 
     const start = Number(row.roundStartMs);
@@ -743,7 +743,7 @@ function invalidateLegacyWinnerFlagSettlements() {
   log('legacy_official_settlement_revalidation_started', {
     rounds:affected.size,
     registryLabelsReset,
-    parser:'BINANCE_VARIANT_PRICE_FIRST',
+    parser:'BINANCE_VARIANT_PRICE_STRICT_ROUND_ALIGNED_TOPIC',
   });
   return affected.size;
 }

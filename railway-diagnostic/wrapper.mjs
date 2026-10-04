@@ -74,7 +74,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   p.error = null;
   p.code = null;
 
-  const current = await getSignal();
+  const current = await getSignal({ forceHttp: true });
   if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || current.direction !== p.signal) {
     pendingAction = null;
     console.log(JSON.stringify({

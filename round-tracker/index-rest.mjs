@@ -685,6 +685,104 @@ function settleShadowForwardRegistry(row) {
   for (const summary of progress) log('shadow_forward_candidate_progress', summary);
 }
 
+let legacyOfficialRevalidation = { active:false, total:0, startedAt:null, completedAt:null };
+
+function invalidateLegacyWinnerFlagSettlements() {
+  const affected = new Set();
+  const now = Date.now();
+  for (const row of rounds.values()) {
+    const evidence = String(row?.resolutionEvidence || '');
+    if (
+      row?.actualSource !== 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' ||
+      !evidence.includes('outcome_winner_flag')
+    ) continue;
+
+    const start = Number(row.roundStartMs);
+    if (!Number.isFinite(start)) continue;
+    row.legacyOfficialDirectionBeforeRevalidation =
+      row.actual === 'UP' || row.actual === 'DOWN' ? row.actual : null;
+    row.legacyResolutionEvidenceBeforeRevalidation = evidence;
+    row.legacyRevalidationRequestedAt = now;
+    row.actual = null;
+    row.actualSource = null;
+    row.officialDirection = null;
+    row.result = 'PENDING';
+    row.productionActual = null;
+    row.productionResult = 'PENDING';
+    row.settledAt = null;
+    row.productionSettledAt = null;
+    row.settleAttempts = 0;
+    row.nextSettleAt = 0;
+    row.resolutionEvidence = 'REVALIDATING_LEGACY_OUTCOME_WINNER_FLAG';
+    row.needsOfficialArchiveCorrection = true;
+    affected.add(String(start));
+  }
+
+  if (!affected.size) return 0;
+
+  let registryLabelsReset = 0;
+  for (const candidate of shadowForwardRegistry.candidates) {
+    for (const obs of candidate.observations || []) {
+      if (!affected.has(String(Number(obs.roundStartMs)))) continue;
+      if (obs.actual === 'UP' || obs.actual === 'DOWN') {
+        obs.actual = null;
+        obs.settledAt = null;
+        registryLabelsReset += 1;
+      }
+    }
+  }
+
+  legacyOfficialRevalidation = {
+    active:true,
+    total:affected.size,
+    startedAt:now,
+    completedAt:null,
+  };
+  saveHistory();
+  saveShadowForwardRegistry();
+  log('legacy_official_settlement_revalidation_started', {
+    rounds:affected.size,
+    registryLabelsReset,
+    parser:'BINANCE_VARIANT_PRICE_FIRST',
+  });
+  return affected.size;
+}
+
+function legacyOfficialRevalidationRemaining() {
+  return Array.from(rounds.values()).filter(row =>
+    row?.resolutionEvidence === 'REVALIDATING_LEGACY_OUTCOME_WINNER_FLAG' &&
+    !row?.actual
+  ).length;
+}
+
+function maybeFinalizeLegacyOfficialRevalidation() {
+  if (!legacyOfficialRevalidation.active) return false;
+  const remaining = legacyOfficialRevalidationRemaining();
+  if (remaining > 0) return false;
+
+  legacyOfficialRevalidation.active = false;
+  legacyOfficialRevalidation.completedAt = Date.now();
+  const changed = Array.from(rounds.values()).filter(row =>
+    row?.officialDirectionCorrectedAt &&
+    row?.legacyRevalidationRequestedAt >= legacyOfficialRevalidation.startedAt
+  ).length;
+
+  // Force only the rolling/background model to retrain on corrected labels.
+  // The explicitly pinned production Shadow candidate is left untouched.
+  const previousRollingModelVersion = shadowModel?.modelVersion ?? null;
+  shadowModel = null;
+  shadowModelMetrics.status = 'RETRAIN_REQUIRED_AFTER_OFFICIAL_LABEL_CORRECTION';
+  saveHistory();
+  saveShadowForwardRegistry();
+  log('legacy_official_settlement_revalidation_complete', {
+    total:legacyOfficialRevalidation.total,
+    correctedDirections:changed,
+    previousRollingModelVersion,
+    productionModelUnchanged:shadowCandidate?.modelVersion ?? SHADOW_PRODUCTION_MODEL_VERSION ?? null,
+  });
+  return true;
+}
+
 // Backward-compatible view: latest registered candidate only.
 function rollingForwardSummary() {
   const latest = shadowForwardRegistrySummary()[0];
@@ -1635,7 +1733,18 @@ async function settlePendingRounds() {
 
         row.predictionMarketTopicId = official?.marketTopicId ?? row.predictionMarketTopicId;
         const evidence = `OFFICIAL_${direction}:${official?.evidence || 'RESOLVED'}`;
+        const legacyBefore = row.legacyOfficialDirectionBeforeRevalidation;
         applyOfficialSettlement(row, direction, evidence, Date.now());
+        if ((legacyBefore === 'UP' || legacyBefore === 'DOWN') && legacyBefore !== direction) {
+          row.officialDirectionCorrectedFrom = legacyBefore;
+          row.officialDirectionCorrectedAt = Date.now();
+          log('official_settlement_direction_corrected', {
+            round:row.roundStartMs,
+            from:legacyBefore,
+            to:direction,
+            evidence,
+          });
+        }
         settleShadowForwardRegistry(row);
 
         lastSettlementOkAt = Date.now();
@@ -1649,6 +1758,7 @@ async function settlePendingRounds() {
           saveHistory();
         }
 
+        maybeFinalizeLegacyOfficialRevalidation();
         maybeTrainShadowModel();
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
@@ -2266,6 +2376,7 @@ loadArchiveIndex();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
+invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
 applyPinnedProductionShadow();

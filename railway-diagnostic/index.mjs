@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
+const PRODUCTION_SIGNAL_ORIGIN = String(process.env.ROUND_STATS_ORIGIN || process.env.FROZEN_SIGNAL_ORIGIN || '').replace(/\/+$/, '');
 const CONTROL_PIN_SHA256 = process.env.CONTROL_PIN_SHA256 || '';
 const BINANCE_API_KEY = process.env.BINANCE_PREDICTION_API_KEY || '';
 const BINANCE_API_SECRET = process.env.BINANCE_PREDICTION_API_SECRET || '';
@@ -127,21 +128,37 @@ function cleanAmount(value) {
 }
 
 async function getSignal() {
-  if (!SITE_ORIGIN) return null;
+  // Single source of truth: exactly the same production Shadow record shown
+  // in the monitoring panel. Never trade from legacy local-predictions/live.
+  if (!PRODUCTION_SIGNAL_ORIGIN) return null;
   try {
-    const r = await fetch(`${SITE_ORIGIN}/api/local-predictions`, {
+    const r = await fetch(`${PRODUCTION_SIGNAL_ORIGIN}/api/round-stats?ts=${Date.now()}`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(6000),
     });
     if (!r.ok) return null;
     const json = await r.json();
-    const source = json?.live || null;
-    if (!source) return null;
+    const currentRound = Math.floor(Date.now() / 300000) * 300000;
+    const records = Array.isArray(json?.records) ? json.records : [];
+    const source = records.find(x =>
+      Number(x?.roundStartMs) === currentRound &&
+      ['UP', 'DOWN'].includes(String(x?.productionPrediction || '').toUpperCase())
+    ) || null;
+    if (!source) return {
+      round: currentRound,
+      status: 'WAIT',
+      direction: null,
+      score: null,
+      source: 'PRODUCTION_ROUND_STATS',
+    };
+    const direction = String(source.productionPrediction).toUpperCase();
     return {
-      round: source.round ?? source.input?.round ?? null,
-      status: source.status ?? (source.signal ? 'LOCKED' : 'WAIT'),
-      direction: source.signal?.direction ?? null,
-      score: source.signal?.score ?? null,
+      round: Number(source.roundStartMs),
+      status: 'LOCKED',
+      direction,
+      score: source.productionConfidence ?? null,
+      model: source.productionModel ?? null,
+      source: source.productionSource ?? 'PRODUCTION_ROUND_STATS',
     };
   } catch {
     return null;

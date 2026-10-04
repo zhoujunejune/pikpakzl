@@ -729,9 +729,10 @@ function loadShadowForwardRegistry() {
     const parsed = JSON.parse(fs.readFileSync(SHADOW_FORWARD_REGISTRY_FILE, 'utf8'));
     if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed?.candidates)) return false;
     shadowForwardRegistry = parsed;
+    deleteRetiredShadowForwardCandidates();
     log('shadow_forward_registry_loaded', {
-      candidates: parsed.candidates.length,
-      active: parsed.candidates.filter(c => candidateRegistrySummary(c).forwardSamples < SHADOW_FORWARD_MIN_SAMPLES).length,
+      candidates: shadowForwardRegistry.candidates.length,
+      active: shadowForwardRegistry.candidates.filter(c => candidateRegistrySummary(c).forwardSamples < SHADOW_FORWARD_MIN_SAMPLES).length,
     });
     return true;
   } catch (e) {
@@ -788,6 +789,40 @@ function candidateRegistrySummary(c) {
     status: settled.length < SHADOW_FORWARD_MIN_SAMPLES ? 'COLLECTING' :
       (hits / settled.length >= 0.75 ? 'FORWARD_GATE_MET' : 'FORWARD_VALIDATION_FAILED'),
   };
+}
+
+function deleteRetiredShadowForwardCandidates() {
+  const protectedVersions = new Set([
+    SHADOW_PRODUCTION_MODEL_VERSION,
+    shadowCandidate?.modelVersion ?? null,
+  ].filter(Boolean));
+  const removed = [];
+  shadowForwardRegistry.candidates = shadowForwardRegistry.candidates.filter(c => {
+    const s = candidateRegistrySummary(c);
+    const retired = s.forwardSamples >= SHADOW_FORWARD_MIN_SAMPLES &&
+      Number.isFinite(Number(s.forwardAccuracy)) &&
+      Number(s.forwardAccuracy) < 0.60;
+    if (!retired || protectedVersions.has(c.modelVersion)) return true;
+    removed.push({
+      modelVersion: c.modelVersion,
+      trainedAt: c.trainedAt ?? null,
+      forwardSamples: s.forwardSamples,
+      hits: s.hits,
+      misses: s.misses,
+      forwardAccuracy: s.forwardAccuracy,
+      reason: 'STRICT_FORWARD_BELOW_60',
+    });
+    return false;
+  });
+  if (removed.length) {
+    saveShadowForwardRegistry();
+    log('shadow_retired_models_deleted', {
+      count: removed.length,
+      protectedProductionModel: SHADOW_PRODUCTION_MODEL_VERSION || shadowCandidate?.modelVersion || null,
+      models: removed,
+    });
+  }
+  return removed;
 }
 
 function shadowForwardRegistrySummary() {
@@ -868,7 +903,10 @@ function settleShadowForwardRegistry(row) {
     const summary = candidateRegistrySummary(c);
     if (summary.forwardSamples === SHADOW_FORWARD_MIN_SAMPLES || summary.forwardSamples % 10 === 0) progress.push(summary);
   }
-  if (changed) saveShadowForwardRegistry();
+  if (changed) {
+    saveShadowForwardRegistry();
+    deleteRetiredShadowForwardCandidates();
+  }
   for (const summary of progress) log('shadow_forward_candidate_progress', summary);
 }
 
@@ -2825,6 +2863,9 @@ loadShadowModelArtifact();
 loadShadowForwardRegistry();
 shadowV2.load();
 shadowV3.load();
+deleteRetiredShadowForwardCandidates();
+shadowV2.deleteRetiredCandidates();
+shadowV3.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();

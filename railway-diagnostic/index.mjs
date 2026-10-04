@@ -1,5 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import { createClient } from 'redis';
+import WebSocket from 'ws';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
@@ -10,6 +12,11 @@ const BINANCE_API_SECRET = process.env.BINANCE_PREDICTION_API_SECRET || '';
 const ENV_WALLET_ADDRESS = process.env.BINANCE_PREDICTION_WALLET_ADDRESS || '';
 const ENV_WALLET_ID = process.env.BINANCE_PREDICTION_WALLET_ID || '';
 const API = 'https://api.binance.com';
+const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
+const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
+const SIGNAL_WS_URL = String(process.env.SIGNAL_WS_URL || '').trim();
+const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MODEL_V1');
+
 
 let enabled = false;
 let tradeAmountText = null;
@@ -23,6 +30,22 @@ let lastOrder = null;
 let prepareInFlight = false;
 let lastPrepareAttemptAt = 0;
 const submittedRounds = new Set();
+let pushedSignal = null;
+let lastPushedSignalId = null;
+let signalRedisSubscriber = null;
+let signalWs = null;
+let signalWsReconnectTimer = null;
+const signalTransport = {
+  redisConfigured: Boolean(SIGNAL_REDIS_URL),
+  redisConnected: false,
+  websocketConfigured: Boolean(SIGNAL_WS_URL),
+  websocketConnected: false,
+  lastTransport: null,
+  lastSignalId: null,
+  lastEventAt: null,
+  lastError: null,
+};
+
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -127,50 +150,194 @@ function cleanAmount(value) {
   return String(value).trim();
 }
 
-async function getSignal() {
-  // Single source of truth for trading: the canonical immutable production signal.
-  // The monitoring table is derived from the same frozen production lock.
+
+function currentRoundMs() {
+  return Math.floor(Date.now() / 300000) * 300000;
+}
+
+function signalFromProductionLive(live, transport = 'http') {
+  const currentRound = currentRoundMs();
+  const round = Number(live?.round ?? live?.input?.round);
+  const direction = String(live?.signal?.direction || '').toUpperCase();
+  if (
+    !live ||
+    live.status !== 'LOCKED' ||
+    round !== currentRound ||
+    !['UP', 'DOWN'].includes(direction)
+  ) {
+    return {
+      round: Number.isFinite(round) ? round : currentRound,
+      status: 'WAIT',
+      direction: null,
+      score: null,
+      confidence: null,
+      modelProbability: null,
+      model: SIGNAL_MODEL_NAME,
+      upstreamModel: live?.model ?? null,
+      source: live?.source ?? 'PRODUCTION_SIGNAL',
+      generatedAt: live?.generatedAt ?? null,
+      signalId: null,
+      transport,
+    };
+  }
+  return {
+    round,
+    status: 'LOCKED',
+    direction,
+    score: live?.signal?.score ?? null,
+    confidence: live?.signal?.confidence ?? null,
+    modelProbability: live?.signal?.modelProbability ?? null,
+    model: SIGNAL_MODEL_NAME,
+    upstreamModel: live?.model ?? null,
+    source: live?.source ?? 'PRODUCTION_SIGNAL',
+    generatedAt: live?.generatedAt ?? null,
+    productionPolicy: live?.productionPolicy ?? null,
+    frozen: live?.frozen === true,
+    signalId: SIGNAL_MODEL_NAME + ':' + round,
+    lockedAt: live?.productionLockedAt ?? live?.generatedAt ?? null,
+    transport,
+  };
+}
+
+function normalizePushedSignal(envelope, transport) {
+  if (!envelope || typeof envelope !== 'object') return null;
+  const round = Number(envelope.round);
+  const direction = String(envelope.direction || '').toUpperCase();
+  if (
+    envelope.status !== 'LOCKED' ||
+    round !== currentRoundMs() ||
+    !['UP', 'DOWN'].includes(direction) ||
+    envelope.immutable !== true
+  ) return null;
+  const expectedId = SIGNAL_MODEL_NAME + ':' + round;
+  const signalId = String(envelope.signalId || expectedId);
+  if (signalId !== expectedId) return null;
+  return {
+    round,
+    status: 'LOCKED',
+    direction,
+    score: envelope.score ?? null,
+    confidence: envelope.confidence ?? null,
+    modelProbability: envelope.modelProbability ?? null,
+    model: SIGNAL_MODEL_NAME,
+    upstreamModel: envelope.upstreamModel ?? null,
+    source: envelope.upstreamSource ?? envelope.source ?? 'SITE_PRODUCTION_LOCK',
+    generatedAt: envelope.generatedAt ?? null,
+    productionPolicy: envelope.productionPolicy ?? null,
+    frozen: true,
+    signalId,
+    lockedAt: envelope.lockedAt ?? envelope.generatedAt ?? null,
+    transport,
+  };
+}
+
+function handlePushedSignal(envelope, transport) {
+  const signal = normalizePushedSignal(envelope, transport);
+  if (!signal) return false;
+  pushedSignal = signal;
+  signalTransport.lastTransport = transport;
+  signalTransport.lastSignalId = signal.signalId;
+  signalTransport.lastEventAt = Date.now();
+  signalTransport.lastError = null;
+
+  const duplicate = lastPushedSignalId === signal.signalId;
+  lastPushedSignalId = signal.signalId;
+  console.log(JSON.stringify({
+    event: duplicate ? 'locked_signal_push_duplicate' : 'locked_signal_push_received',
+    transport,
+    signalId: signal.signalId,
+    round: signal.round,
+    direction: signal.direction,
+    upstreamModel: signal.upstreamModel,
+    eventLatencyMs: Number.isFinite(Number(signal.lockedAt)) ? Math.max(0, Date.now() - Number(signal.lockedAt)) : null,
+  }));
+
+  if (!duplicate) void prepareWorker(signal, transport);
+  return true;
+}
+
+async function startSignalRedisSubscriber() {
+  if (!SIGNAL_REDIS_URL || signalRedisSubscriber) return;
+  const client = createClient({ url: SIGNAL_REDIS_URL });
+  signalRedisSubscriber = client;
+  client.on('error', err => {
+    signalTransport.redisConnected = false;
+    signalTransport.lastError = err?.message || String(err);
+    console.error(JSON.stringify({ event: 'locked_signal_redis_subscriber_error', error: signalTransport.lastError }));
+  });
+  client.on('ready', () => {
+    signalTransport.redisConnected = true;
+    signalTransport.lastError = null;
+    console.log(JSON.stringify({ event: 'locked_signal_redis_subscriber_ready', channel: SIGNAL_REDIS_CHANNEL }));
+  });
+  client.on('end', () => {
+    signalTransport.redisConnected = false;
+  });
+  try {
+    await client.connect();
+    await client.subscribe(SIGNAL_REDIS_CHANNEL, raw => {
+      try {
+        handlePushedSignal(JSON.parse(raw), 'redis_pubsub');
+      } catch (err) {
+        console.error(JSON.stringify({ event: 'locked_signal_redis_message_invalid', error: err?.message || String(err) }));
+      }
+    });
+  } catch (err) {
+    signalTransport.redisConnected = false;
+    signalTransport.lastError = err?.message || String(err);
+    console.error(JSON.stringify({ event: 'locked_signal_redis_subscribe_failed', error: signalTransport.lastError }));
+    try { await client.disconnect(); } catch {}
+    signalRedisSubscriber = null;
+    setTimeout(() => void startSignalRedisSubscriber(), 1500).unref();
+  }
+}
+
+function startSignalWebSocket() {
+  if (!SIGNAL_WS_URL || signalWs) return;
+  const ws = new WebSocket(SIGNAL_WS_URL, { perMessageDeflate: false, handshakeTimeout: 5000 });
+  signalWs = ws;
+  ws.on('open', () => {
+    signalTransport.websocketConnected = true;
+    signalTransport.lastError = null;
+    console.log(JSON.stringify({ event: 'locked_signal_websocket_connected', url: SIGNAL_WS_URL }));
+  });
+  ws.on('message', raw => {
+    try {
+      const message = JSON.parse(raw.toString());
+      handlePushedSignal(message?.signal ?? message, 'websocket');
+    } catch (err) {
+      console.error(JSON.stringify({ event: 'locked_signal_websocket_message_invalid', error: err?.message || String(err) }));
+    }
+  });
+  ws.on('error', err => {
+    signalTransport.websocketConnected = false;
+    signalTransport.lastError = err?.message || String(err);
+    console.error(JSON.stringify({ event: 'locked_signal_websocket_error', error: signalTransport.lastError }));
+  });
+  ws.on('close', () => {
+    signalTransport.websocketConnected = false;
+    signalWs = null;
+    clearTimeout(signalWsReconnectTimer);
+    signalWsReconnectTimer = setTimeout(startSignalWebSocket, 1500);
+    signalWsReconnectTimer.unref?.();
+  });
+}
+
+async function getSignal({ forceHttp = false } = {}) {
+  if (!forceHttp && pushedSignal?.status === 'LOCKED' && pushedSignal.round === currentRoundMs()) {
+    return pushedSignal;
+  }
   if (!PRODUCTION_SIGNAL_ORIGIN) return null;
   try {
-    const r = await fetch(`${PRODUCTION_SIGNAL_ORIGIN}/api/production-signal?ts=${Date.now()}`, {
+    const r = await fetch(PRODUCTION_SIGNAL_ORIGIN + '/api/production-signal?ts=' + Date.now(), {
       cache: 'no-store',
       signal: AbortSignal.timeout(6000),
     });
     if (!r.ok) return null;
     const json = await r.json();
-    const live = json?.live || null;
-    const currentRound = Math.floor(Date.now() / 300000) * 300000;
-    const round = Number(live?.round ?? live?.input?.round);
-    const direction = String(live?.signal?.direction || '').toUpperCase();
-    if (
-      !live ||
-      live.status !== 'LOCKED' ||
-      round !== currentRound ||
-      !['UP', 'DOWN'].includes(direction)
-    ) {
-      return {
-        round: Number.isFinite(round) ? round : currentRound,
-        status: 'WAIT',
-        direction: null,
-        score: null,
-        model: live?.model ?? null,
-        source: live?.source ?? 'PRODUCTION_SIGNAL',
-        generatedAt: live?.generatedAt ?? null,
-      };
-    }
-    return {
-      round,
-      status: 'LOCKED',
-      direction,
-      score: live?.signal?.score ?? null,
-      confidence: live?.signal?.confidence ?? null,
-      modelProbability: live?.signal?.modelProbability ?? null,
-      model: live?.model ?? null,
-      source: live?.source ?? 'PRODUCTION_SIGNAL',
-      generatedAt: live?.generatedAt ?? null,
-      productionPolicy: live?.productionPolicy ?? null,
-      frozen: live?.frozen === true,
-    };
+    const signal = signalFromProductionLive(json?.live || null, 'http_fallback');
+    if (signal.status === 'LOCKED') pushedSignal = signal;
+    return signal;
   } catch {
     return null;
   }
@@ -385,15 +552,15 @@ function publicPending() {
   return safe;
 }
 
-async function prepareWorker() {
+async function prepareWorker(signalOverride = null, trigger = 'poll') {
   if (!enabled || !tradeAmountText || prepareInFlight) return;
-  const signal = await getSignal();
+  const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
   if (startAfterRound != null && String(signal.round) === String(startAfterRound)) return;
   if (submittedRounds.has(String(signal.round))) return;
   if (pendingAction?.state === 'READY' && String(pendingAction.round) === String(signal.round)) return;
   if (pendingAction?.state === 'QUOTING' || pendingAction?.state === 'SUBMITTING') return;
-  if (Date.now() - lastPrepareAttemptAt < 2500) return;
+  if (!signalOverride && Date.now() - lastPrepareAttemptAt < 2500) return;
 
   prepareInFlight = true;
   lastPrepareAttemptAt = Date.now();
@@ -405,6 +572,10 @@ async function prepareWorker() {
         round: signal.round,
         signal: signal.direction,
         score: signal.score,
+        signalId: signal.signalId ?? null,
+        model: signal.model ?? SIGNAL_MODEL_NAME,
+        upstreamModel: signal.upstreamModel ?? null,
+        signalTransport: signal.transport ?? trigger,
         amount: tradeAmountText,
         error: intent.error,
         code: intent.code ?? null,
@@ -421,7 +592,10 @@ async function prepareWorker() {
       round: signal.round,
       signal: signal.direction,
       score: signal.score,
-      model: signal.model ?? null,
+      signalId: signal.signalId ?? null,
+      model: signal.model ?? SIGNAL_MODEL_NAME,
+      upstreamModel: signal.upstreamModel ?? null,
+      signalTransport: signal.transport ?? trigger,
       signalGeneratedAt: signal.generatedAt ?? null,
       action: signal.direction === 'UP' ? 'BUY_UP' : 'BUY_DOWN',
       amount: tradeAmountText,
@@ -438,6 +612,9 @@ async function prepareWorker() {
       round: pendingAction.round,
       signal: pendingAction.signal,
       model: pendingAction.model,
+      upstreamModel: pendingAction.upstreamModel,
+      signalId: pendingAction.signalId,
+      signalTransport: pendingAction.signalTransport,
       signalGeneratedAt: pendingAction.signalGeneratedAt,
       amount: pendingAction.amount,
       marketTopicId: pendingAction.marketTopicId,
@@ -552,6 +729,8 @@ async function refreshLastOrderStatus(force = false) {
   }
 }
 
+void startSignalRedisSubscriber();
+startSignalWebSocket();
 setInterval(prepareWorker, 1200);
 setInterval(() => refreshLastOrderStatus(false), 2500);
 
@@ -594,6 +773,8 @@ http.createServer(async (req, res) => {
       hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),
       hasPredictionWallet: Boolean(ENV_WALLET_ADDRESS),
       hasWalletId: Boolean(ENV_WALLET_ID),
+      signalModel: SIGNAL_MODEL_NAME,
+      signalTransport: { ...signalTransport },
     });
   }
 
@@ -610,6 +791,8 @@ http.createServer(async (req, res) => {
       mode: 'API_CONFIRM_LIVE',
       quoteMode: 'FRESH_ON_CONFIRM',
       signal,
+      signalModel: SIGNAL_MODEL_NAME,
+      signalTransport: { ...signalTransport },
       balance,
       startAfterRound,
       pendingAction: publicPending(),

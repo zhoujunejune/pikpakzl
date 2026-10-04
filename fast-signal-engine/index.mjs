@@ -527,24 +527,70 @@ function directionFromResolutionValue(v) {
   return null;
 }
 
+function isWinningOutcome(o) {
+  return o?.isWinner === true || o?.winner === true ||
+    ['WINNER','WON','WIN','RESOLVED_TRUE','TRUE'].includes(predNorm(o?.status)) ||
+    ['WINNER','WON','WIN','TRUE'].includes(predNorm(o?.result));
+}
+
 function extractOfficialResolution(topic) {
   const directKeys = ['result','resolution','resolvedOutcome','winningOutcome','winner','answer','finalResult'];
+
+  // Explicit topic-level UP/DOWN is authoritative.
   for (const k of directKeys) {
     const d = directionFromResolutionValue(topic?.[k]);
     if (d) return { direction:d, evidence:'topic.' + k };
   }
-  for (const m of Array.isArray(topic?.markets) ? topic.markets : []) {
+
+  // Resolve winner only from one canonical binary market instead of scanning
+  // every YES/NO market and guessing from titles that may contain BOTH UP/DOWN.
+  const canonicalUp = choosePredictionOutcome(topic, 'UP');
+  const canonicalMarket = canonicalUp?.market || null;
+  if (canonicalMarket) {
     for (const k of directKeys) {
-      const d = directionFromResolutionValue(m?.[k]);
-      if (d) return { direction:d, evidence:'market.' + k };
+      const d = directionFromResolutionValue(canonicalMarket?.[k]);
+      if (d) return { direction:d, evidence:'canonical_market.' + k };
     }
+
+    const selectedName = predNorm(canonicalUp?.outcome?.name);
+    const yesDirection =
+      selectedName === 'YES' ? 'UP' :
+      selectedName === 'NO' ? 'DOWN' :
+      null;
+
+    for (const o of Array.isArray(canonicalMarket?.outcomes) ? canonicalMarket.outcomes : []) {
+      if (!isWinningOutcome(o)) continue;
+      const name = predNorm(o?.name);
+      if (name === 'UP' || name === 'DOWN') {
+        return { direction:name, evidence:'canonical_outcome_winner_direct' };
+      }
+      if (yesDirection && (name === 'YES' || name === 'NO')) {
+        const d = name === 'YES'
+          ? yesDirection
+          : (yesDirection === 'UP' ? 'DOWN' : 'UP');
+        return { direction:d, evidence:'canonical_outcome_winner_yes_no' };
+      }
+    }
+  }
+
+  // Fallback is intentionally strict: only accept unambiguous market text.
+  for (const m of Array.isArray(topic?.markets) ? topic.markets : []) {
+    const mt = predNorm((m?.title || '') + ' ' + (m?.question || ''));
+    const hasUp = mt.includes('UP');
+    const hasDown = mt.includes('DOWN');
+    if (hasUp === hasDown) continue;
+    const yesDirection = hasUp ? 'UP' : 'DOWN';
     for (const o of Array.isArray(m?.outcomes) ? m.outcomes : []) {
-      const flag = o?.isWinner === true || o?.winner === true ||
-        ['WINNER','WON','WIN','RESOLVED_TRUE','TRUE'].includes(predNorm(o?.status)) ||
-        ['WINNER','WON','WIN','TRUE'].includes(predNorm(o?.result));
-      if (flag) {
-        const d = mapOutcomeDirection(m,o);
-        if (d) return { direction:d, evidence:'outcome_winner_flag' };
+      if (!isWinningOutcome(o)) continue;
+      const name = predNorm(o?.name);
+      if (name === 'UP' || name === 'DOWN') {
+        return { direction:name, evidence:'unambiguous_outcome_winner_direct' };
+      }
+      if (name === 'YES' || name === 'NO') {
+        const d = name === 'YES'
+          ? yesDirection
+          : (yesDirection === 'UP' ? 'DOWN' : 'UP');
+        return { direction:d, evidence:'unambiguous_outcome_winner_yes_no' };
       }
     }
   }

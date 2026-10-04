@@ -599,7 +599,7 @@ function candidateRegistrySummary(c) {
     maxConsecutiveErrors: maxErrors,
     recentResults,
     status: settled.length < SHADOW_FORWARD_MIN_SAMPLES ? 'COLLECTING' :
-      (hits / settled.length >= 0.70 ? 'FORWARD_GATE_MET' : 'FORWARD_VALIDATION_FAILED'),
+      (hits / settled.length >= 0.75 ? 'FORWARD_GATE_MET' : 'FORWARD_VALIDATION_FAILED'),
   };
 }
 
@@ -1169,6 +1169,110 @@ function sigmoid(z) {
   return e / (1 + e);
 }
 
+function fitWeightedLogistic(samples, config = {}) {
+  const lr = Number(config.lr || 0.05);
+  const l2 = Number(config.l2 || 0.02);
+  const epochs = Math.max(120, Number(config.epochs || 260));
+  const halfLife = Math.max(40, Number(config.halfLife || 120));
+  const w = new Array(SHADOW_FEATURE_KEYS.length + 1).fill(0);
+
+  for (let epoch = 0; epoch < epochs; epoch += 1) {
+    const grad = new Array(w.length).fill(0);
+    let totalWeight = 0;
+    for (let i = 0; i < samples.length; i += 1) {
+      const s = samples[i];
+      const age = samples.length - 1 - i;
+      const sampleWeight = Math.pow(0.5, age / halfLife);
+      let z = w[0];
+      for (let j = 0; j < s.x.length; j += 1) z += w[j + 1] * s.x[j];
+      const e = sigmoid(z) - s.y;
+      grad[0] += sampleWeight * e;
+      for (let j = 0; j < s.x.length; j += 1) grad[j + 1] += sampleWeight * e * s.x[j];
+      totalWeight += sampleWeight;
+    }
+    const denom = totalWeight || 1;
+    w[0] -= lr * grad[0] / denom;
+    for (let j = 1; j < w.length; j += 1) {
+      w[j] -= lr * (grad[j] / denom + l2 * w[j]);
+    }
+  }
+  return w;
+}
+
+function evaluateLogisticWeights(weights, samples) {
+  let hit = 0;
+  let brier = 0;
+  for (const s of samples) {
+    let z = weights[0];
+    for (let j = 0; j < s.x.length; j += 1) z += weights[j + 1] * s.x[j];
+    const p = sigmoid(z);
+    hit += (p >= 0.5 ? 1 : 0) === s.y ? 1 : 0;
+    brier += (p - s.y) * (p - s.y);
+  }
+  return {
+    accuracy: samples.length ? hit / samples.length : null,
+    brier: samples.length ? brier / samples.length : null,
+  };
+}
+
+function walkForwardEvaluate(samples, config) {
+  const validationWindow = Math.max(30, Math.min(50, Math.floor(samples.length * 0.08)));
+  const folds = 3;
+  const firstValidationStart = samples.length - validationWindow * folds;
+  if (firstValidationStart < 180) return null;
+
+  const windows = [];
+  for (let fold = 0; fold < folds; fold += 1) {
+    const validationStart = firstValidationStart + fold * validationWindow;
+    const train = samples.slice(0, validationStart);
+    const valid = samples.slice(validationStart, validationStart + validationWindow);
+    if (train.length < 180 || valid.length < 20) return null;
+
+    const weights = fitWeightedLogistic(train, config);
+    const metric = evaluateLogisticWeights(weights, valid);
+    const prevalence = train.reduce((sum, x) => sum + x.y, 0) / train.length;
+    const baselineClass = prevalence >= 0.5 ? 1 : 0;
+    const baselineAccuracy = valid.filter(x => x.y === baselineClass).length / valid.length;
+    const baselineBrier = valid.reduce((sum, x) => sum + (prevalence - x.y) ** 2, 0) / valid.length;
+
+    windows.push({
+      trainSamples: train.length,
+      validationSamples: valid.length,
+      validationStartRound: valid[0]?.roundStartMs ?? null,
+      validationEndRound: valid[valid.length - 1]?.roundStartMs ?? null,
+      accuracy: metric.accuracy,
+      brier: metric.brier,
+      baselineAccuracy,
+      baselineBrier,
+    });
+  }
+
+  const avg = key => windows.reduce((sum, x) => sum + Number(x[key] || 0), 0) / windows.length;
+  const accuracy = avg('accuracy');
+  const brier = avg('brier');
+  const baselineAccuracy = avg('baselineAccuracy');
+  const baselineBrier = avg('baselineBrier');
+  const minAccuracy = Math.min(...windows.map(x => x.accuracy));
+  const recentAccuracy = windows[windows.length - 1].accuracy;
+  const recentBaselineAccuracy = windows[windows.length - 1].baselineAccuracy;
+
+  return {
+    windows,
+    accuracy,
+    brier,
+    baselineAccuracy,
+    baselineBrier,
+    minAccuracy,
+    recentAccuracy,
+    recentBaselineAccuracy,
+    score:
+      accuracy * 0.50 +
+      recentAccuracy * 0.35 +
+      minAccuracy * 0.15 -
+      Math.max(0, brier - baselineBrier) * 0.20,
+  };
+}
+
 function trainLogistic(rows) {
   const samples = rows.map(r => {
     const x = shadowVector(r.shadowFacts);
@@ -1177,72 +1281,55 @@ function trainLogistic(rows) {
   }).filter(Boolean);
   if (samples.length < SHADOW_TRAIN_MIN_SAMPLES) return null;
 
-  const split = Math.max(1, Math.floor(samples.length * 0.8));
-  const train = samples.slice(0, split);
-  const valid = samples.slice(split);
-  if (valid.length < 20) return null;
+  // Optimize only for out-of-time behavior: every validation fold is strictly
+  // later than its corresponding training data. Keep the search deliberately
+  // small to reduce validation overfitting.
+  const configs = [
+    { halfLife: 80,  l2: 0.02, lr: 0.05, epochs: 260 },
+    { halfLife: 120, l2: 0.02, lr: 0.05, epochs: 260 },
+    { halfLife: 180, l2: 0.02, lr: 0.05, epochs: 260 },
+    { halfLife: 120, l2: 0.04, lr: 0.05, epochs: 300 },
+  ];
 
-  const w = new Array(SHADOW_FEATURE_KEYS.length + 1).fill(0);
-  const lr = 0.06;
-  const l2 = 0.01;
-  for (let epoch = 0; epoch < 220; epoch += 1) {
-    const grad = new Array(w.length).fill(0);
-    for (const s of train) {
-      let z = w[0];
-      for (let j = 0; j < s.x.length; j += 1) z += w[j + 1] * s.x[j];
-      const e = sigmoid(z) - s.y;
-      grad[0] += e;
-      for (let j = 0; j < s.x.length; j += 1) grad[j + 1] += e * s.x[j];
-    }
-    const n = train.length || 1;
-    w[0] -= lr * grad[0] / n;
-    for (let j = 1; j < w.length; j += 1) {
-      w[j] -= lr * (grad[j] / n + l2 * w[j]);
-    }
+  let best = null;
+  for (const config of configs) {
+    const wf = walkForwardEvaluate(samples, config);
+    if (!wf) continue;
+    if (!best || wf.score > best.walkForward.score) best = { config, walkForward: wf };
   }
+  if (!best) return null;
 
-  const evalRows = (arr) => {
-    let hit = 0;
-    let brier = 0;
-    for (const s of arr) {
-      let z = w[0];
-      for (let j = 0; j < s.x.length; j += 1) z += w[j + 1] * s.x[j];
-      const p = sigmoid(z);
-      hit += (p >= 0.5 ? 1 : 0) === s.y ? 1 : 0;
-      brier += (p - s.y) * (p - s.y);
-    }
-    return {
-      accuracy: arr.length ? hit / arr.length : null,
-      brier: arr.length ? brier / arr.length : null,
-    };
-  };
-
-  const prevalence = train.reduce((sum, x) => sum + x.y, 0) / train.length;
-  const baselineClass = prevalence >= 0.5 ? 1 : 0;
-  const baselineAccuracy = valid.filter(x => x.y === baselineClass).length / valid.length;
-  const baselineBrier = valid.reduce((sum, x) => sum + (prevalence - x.y) ** 2, 0) / valid.length;
-  const validation = evalRows(valid);
-
+  // After choosing the hyperparameters using strict past->future folds, train
+  // the candidate on all information available at this point. Real quality is
+  // still decided only by subsequent strict-forward observations.
+  const weights = fitWeightedLogistic(samples, best.config);
   const trainedAt = Date.now();
+  const wf = best.walkForward;
+
   return {
-    weights: w,
+    weights,
     featureKeys: SHADOW_FEATURE_KEYS,
     trainedAt,
     modelVersion: `shadow-v6-${trainedAt}`,
-    trainedSamples: train.length,
-    validationSamples: valid.length,
-    validationAccuracy: validation.accuracy,
-    validationBrier: validation.brier,
-    baselineAccuracy,
-    baselineBrier,
+    trainingMethod: 'WALK_FORWARD_RECENCY_V1',
+    trainingConfig: best.config,
+    trainedSamples: samples.length,
+    validationSamples: wf.windows.reduce((sum, x) => sum + x.validationSamples, 0),
+    validationAccuracy: wf.accuracy,
+    validationBrier: wf.brier,
+    baselineAccuracy: wf.baselineAccuracy,
+    baselineBrier: wf.baselineBrier,
+    walkForwardMinAccuracy: wf.minAccuracy,
+    walkForwardRecentAccuracy: wf.recentAccuracy,
+    walkForwardRecentBaselineAccuracy: wf.recentBaselineAccuracy,
+    walkForwardWindows: wf.windows,
     sampleStartRound: samples[0]?.roundStartMs ?? null,
     sampleEndRound: samples[samples.length - 1]?.roundStartMs ?? null,
-    trainEndRound: train[train.length - 1]?.roundStartMs ?? null,
-    validationStartRound: valid[0]?.roundStartMs ?? null,
-    validationEndRound: valid[valid.length - 1]?.roundStartMs ?? null,
+    trainEndRound: samples[samples.length - 1]?.roundStartMs ?? null,
+    validationStartRound: wf.windows[0]?.validationStartRound ?? null,
+    validationEndRound: wf.windows[wf.windows.length - 1]?.validationEndRound ?? null,
   };
 }
-
 function shadowPredict(facts) {
   if (!shadowModel?.weights) return null;
   const x = shadowVector(facts);
@@ -1421,7 +1508,11 @@ function maybeTrainShadowModel() {
 
   const latestRound = labeled[labeled.length - 1]?.roundStartMs || 0;
   const lastTrainRound = Number(shadowModel?.lastTrainRound || 0);
-  if (shadowModel && latestRound - lastTrainRound < 20 * 300000) {
+  if (
+    shadowModel &&
+    shadowModel.trainingMethod === 'WALK_FORWARD_RECENCY_V1' &&
+    latestRound - lastTrainRound < 20 * 300000
+  ) {
     updateShadowForwardMetrics();
     return;
   }
@@ -1429,13 +1520,40 @@ function maybeTrainShadowModel() {
   const trained = trainLogistic(labeled);
   if (!trained) return;
   shadowModel = { ...trained, lastTrainRound: latestRound };
-  registerShadowForwardCandidate(shadowModel);
+
+  const walkForwardPassed =
+    Number.isFinite(Number(trained.validationAccuracy)) &&
+    Number.isFinite(Number(trained.baselineAccuracy)) &&
+    Number.isFinite(Number(trained.validationBrier)) &&
+    Number.isFinite(Number(trained.baselineBrier)) &&
+    Number.isFinite(Number(trained.walkForwardRecentAccuracy)) &&
+    Number.isFinite(Number(trained.walkForwardRecentBaselineAccuracy)) &&
+    Number.isFinite(Number(trained.walkForwardMinAccuracy)) &&
+    trained.validationAccuracy >= trained.baselineAccuracy + 0.02 &&
+    trained.validationBrier <= trained.baselineBrier &&
+    trained.walkForwardRecentAccuracy >= trained.walkForwardRecentBaselineAccuracy &&
+    trained.walkForwardMinAccuracy >= 0.50;
+
+  if (walkForwardPassed) {
+    registerShadowForwardCandidate(shadowModel);
+  } else {
+    log('shadow_candidate_rejected_before_forward', {
+      modelVersion: trained.modelVersion,
+      trainingMethod: trained.trainingMethod,
+      walkForwardAccuracy: Number(trained.validationAccuracy.toFixed(4)),
+      walkForwardBaselineAccuracy: Number(trained.baselineAccuracy.toFixed(4)),
+      walkForwardRecentAccuracy: Number(trained.walkForwardRecentAccuracy.toFixed(4)),
+      walkForwardRecentBaselineAccuracy: Number(trained.walkForwardRecentBaselineAccuracy.toFixed(4)),
+      walkForwardMinAccuracy: Number(trained.walkForwardMinAccuracy.toFixed(4)),
+      walkForwardBrier: Number(trained.validationBrier.toFixed(4)),
+      walkForwardBaselineBrier: Number(trained.baselineBrier.toFixed(4)),
+    });
+  }
+
   shadowModelMetrics = {
-    status:
-      trained.validationAccuracy > trained.baselineAccuracy + 0.03 &&
-      trained.validationBrier < trained.baselineBrier
-        ? 'SHADOW_VALIDATION_PASSED'
-        : 'SHADOW_VALIDATION_NOT_BETTER_THAN_BASELINE',
+    status: walkForwardPassed
+      ? 'SHADOW_WALK_FORWARD_PASSED'
+      : 'SHADOW_WALK_FORWARD_REJECTED',
     trainedSamples: trained.trainedSamples,
     validationSamples: trained.validationSamples,
     forwardSamples: 0,
@@ -1453,7 +1571,7 @@ function maybeTrainShadowModel() {
     validationStartRound: trained.validationStartRound,
     validationEndRound: trained.validationEndRound,
   };
-  maybePromoteShadowCandidate(trained, latestRound);
+  if (walkForwardPassed) maybePromoteShadowCandidate(trained, latestRound);
   updateShadowForwardMetrics();
   saveShadowModelArtifact();
   const candidateForward = candidateForwardSummary();

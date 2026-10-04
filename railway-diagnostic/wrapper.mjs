@@ -596,5 +596,5 @@ if(!source.includes(marker)) throw new Error('HEALTH_ROUTE_MARKER_NOT_FOUND');
 const route="  if (req.method === 'GET' && url.pathname === '/panel-client.js') {\n    return send(res, 200, "+JSON.stringify(clientJs)+", 'application/javascript; charset=utf-8');\n  }\n\n";
 source=source.replace(marker,route+marker);
 
-fs.writeFileSync('/tmp/trade-control-fixed.mjs',source);
-await import('file:///tmp/trade-control-fixed.mjs');
+fs.writeFileSync('/app/trade-control-fixed.mjs',source);
+await import('file:///app/trade-control-fixed.mjs');

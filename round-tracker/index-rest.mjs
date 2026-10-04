@@ -1712,10 +1712,13 @@ async function settlePendingRounds() {
   settleBusy = true;
   try {
     const now = Date.now();
+    const revalidating = Boolean(legacyOfficialRevalidation?.active);
     const pending = Array.from(rounds.values())
       .filter(r => !r.actual && now > r.roundEndMs + 1200 && now >= Number(r.nextSettleAt || 0))
-      .sort((a, b) => a.roundStartMs - b.roundStartMs)
-      .slice(0, 3);
+      .sort((a, b) => revalidating
+        ? Number(b.roundStartMs) - Number(a.roundStartMs)
+        : Number(a.roundStartMs) - Number(b.roundStartMs))
+      .slice(0, revalidating ? 10 : 3);
 
     for (const row of pending) {
       row.settleAttempts = Number(row.settleAttempts || 0) + 1;

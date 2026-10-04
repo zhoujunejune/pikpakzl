@@ -1144,8 +1144,23 @@ function applyPinnedProductionShadow() {
     };
     approvalMode = 'ROLLING_MODEL_ARTIFACT';
   } else {
-    approvedModel = recoverPinnedShadowFromHistory(SHADOW_PRODUCTION_MODEL_VERSION);
-    approvalMode = approvedModel ? 'HISTORICAL_PROBABILITY_RECOVERY' : null;
+    const registryModel = shadowForwardRegistry.candidates.find(c =>
+      c?.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION &&
+      Array.isArray(c?.weights) &&
+      c.weights.length === SHADOW_FEATURE_KEYS.length + 1
+    );
+    if (registryModel) {
+      approvedModel = {
+        ...registryModel,
+        weights: registryModel.weights.map(Number),
+        featureKeys: SHADOW_FEATURE_KEYS,
+        lastTrainRound: registryModel.lastTrainRound ?? registryModel.trainedAt,
+      };
+      approvalMode = 'FORWARD_REGISTRY_ARTIFACT';
+    } else {
+      approvedModel = recoverPinnedShadowFromHistory(SHADOW_PRODUCTION_MODEL_VERSION);
+      approvalMode = approvedModel ? 'HISTORICAL_PROBABILITY_RECOVERY' : null;
+    }
   }
 
   if (!approvedModel?.weights) {

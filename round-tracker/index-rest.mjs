@@ -55,6 +55,11 @@ const LOCK_QUALITY_CURRENT_SCORE_MIN = 0.65;
 const LOCK_QUALITY_BALANCED_CURRENT_SCORE_MIN = 0.50;
 const LOCK_QUALITY_MAX_DELAY_MS = 22000;
 const LOCK_QUALITY_REJECT_ABSORPTION = true;
+const LOCK_QUALITY_V2_VERSION = 'LOCK_QUALITY_SELECTIVE_V2';
+const LOCK_QUALITY_V2_START_MS = Math.max(0, Number(process.env.LOCK_QUALITY_V2_START_MS || 1791180300000));
+const LOCK_QUALITY_V2_SUPPORT_MIN = 0.05;
+const LOCK_QUALITY_V2_CURRENT_MIN = 0.65;
+const LOCK_QUALITY_V2_MAX_DELAY_MS = 18000;
 const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
 const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
 const SIGNAL_REDIS_LATEST_KEY = String(process.env.SIGNAL_REDIS_LATEST_KEY || 'binance:prediction:lock:latest');
@@ -1997,6 +2002,94 @@ function evaluateLockQuality(direction, facts, delayMs, currentMin = LOCK_QUALIT
   };
 }
 
+function evaluateSelectiveQualityV2(direction, facts, delayMs) {
+  const support = lockPredictionSupport(direction, facts);
+  const currentAbs = Math.abs(Number(facts?.currentScore));
+  const delay = Number(delayMs);
+  const absorption = facts?.absorptionRisk === true;
+  const reasons = [];
+  let eligible = true;
+
+  if (!Number.isFinite(support)) { eligible = false; reasons.push('MISSING_PREDICTION_SUPPORT'); }
+  if (!Number.isFinite(currentAbs)) { eligible = false; reasons.push('MISSING_CURRENT_SCORE'); }
+  if (!Number.isFinite(delay)) { eligible = false; reasons.push('MISSING_LOCK_DELAY'); }
+  if (Number.isFinite(support) && support < LOCK_QUALITY_V2_SUPPORT_MIN) reasons.push('PREDICTION_SUPPORT_LT_0_05');
+  if (Number.isFinite(currentAbs) && currentAbs < LOCK_QUALITY_V2_CURRENT_MIN) reasons.push('CURRENT_SCORE_LT_0_65');
+  if (Number.isFinite(delay) && delay >= LOCK_QUALITY_V2_MAX_DELAY_MS) reasons.push('LOCK_DELAY_GTE_18S');
+  if (absorption) reasons.push('ABSORPTION_RISK');
+
+  const pass = eligible && reasons.length === 0;
+  return {
+    version: LOCK_QUALITY_V2_VERSION,
+    eligible,
+    pass,
+    decision: eligible ? (pass ? direction : 'WAIT') : 'WAIT',
+    reasons,
+    predictionSupport: Number.isFinite(support) ? Number(support.toFixed(4)) : null,
+    currentScoreAbs: Number.isFinite(currentAbs) ? Number(currentAbs.toFixed(4)) : null,
+    lockDelayMs: Number.isFinite(delay) ? delay : null,
+    absorptionRisk: absorption,
+    thresholds: {
+      predictionSupportMin: LOCK_QUALITY_V2_SUPPORT_MIN,
+      currentScoreMin: LOCK_QUALITY_V2_CURRENT_MIN,
+      maxDelayMs: LOCK_QUALITY_V2_MAX_DELAY_MS,
+      rejectAbsorption: true,
+    },
+  };
+}
+
+function selectiveQualityV2Summary() {
+  const rows = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) >= LOCK_QUALITY_V2_START_MS &&
+      (r.actual === 'UP' || r.actual === 'DOWN')
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+
+  const evaluated = rows.map(r => {
+    const q = r.lockQualitySelectiveV2 ||
+      ((r.prediction === 'UP' || r.prediction === 'DOWN')
+        ? evaluateSelectiveQualityV2(r.prediction, r.predictionFacts, r.predictionDelayMs)
+        : { decision:'WAIT', pass:false, eligible:false, reasons:['NO_BASE_DIRECTION'] });
+    const decision = q?.pass && (r.prediction === 'UP' || r.prediction === 'DOWN') ? r.prediction : 'WAIT';
+    return { row:r, q, decision };
+  });
+  const decided = evaluated.filter(x => x.decision === 'UP' || x.decision === 'DOWN');
+  const hits = decided.filter(x => x.decision === x.row.actual).length;
+  const misses = decided.length - hits;
+  const accuracy = decided.length ? hits / decided.length : null;
+  const coverage = evaluated.length ? decided.length / evaluated.length : null;
+  const recent20 = decided.slice(-20);
+  const recentHits = recent20.filter(x => x.decision === x.row.actual).length;
+  let status = 'COLLECTING';
+  if (decided.length >= 20 && Number.isFinite(accuracy) && accuracy < 0.65) status = 'RETIRED_LOW_ACCURACY';
+  else if (evaluated.length >= 40 && Number.isFinite(coverage) && coverage < 0.20) status = 'RETIRED_LOW_COVERAGE';
+  else if (decided.length >= 60 && Number.isFinite(accuracy) && accuracy >= 0.70 && coverage >= 0.25) status = 'FORWARD_70_MET';
+  else if (decided.length >= 60) status = 'FORWARD_COMPLETE';
+
+  return {
+    ok:true,
+    modelVersion: LOCK_QUALITY_V2_VERSION,
+    productionEffect:'NONE_SHADOW_ONLY',
+    startMs:LOCK_QUALITY_V2_START_MS,
+    forwardRounds:evaluated.length,
+    forwardSamples:decided.length,
+    waits:evaluated.length-decided.length,
+    hits,
+    misses,
+    forwardAccuracy:decided.length ? Number(accuracy.toFixed(4)) : null,
+    coverage:evaluated.length ? Number(coverage.toFixed(4)) : null,
+    recent20Accuracy:recent20.length ? Number((recentHits/recent20.length).toFixed(4)) : null,
+    thresholds:{
+      predictionSupportMin:LOCK_QUALITY_V2_SUPPORT_MIN,
+      currentScoreMin:LOCK_QUALITY_V2_CURRENT_MIN,
+      maxDelayMs:LOCK_QUALITY_V2_MAX_DELAY_MS,
+      rejectAbsorption:true,
+    },
+    status,
+  };
+}
+
 function summarizeLockQuality(rows, currentMin = LOCK_QUALITY_CURRENT_SCORE_MIN) {
   const decided = rows.filter(r => (r.result === 'HIT' || r.result === 'MISS') && (r.prediction === 'UP' || r.prediction === 'DOWN'));
   const evaluated = decided.map(r => ({ row:r, q:evaluateLockQuality(r.prediction, r.predictionFacts, r.predictionDelayMs, currentMin) }));
@@ -2242,6 +2335,9 @@ async function pollSignal() {
       row.predictedAt = Number(live.generatedAt || Date.now());
       row.predictionDelayMs = Math.max(0, row.predictedAt - row.roundStartMs);
       row.lockQualityShadow = evaluateLockQuality(direction, row.predictionFacts, row.predictionDelayMs);
+      if (Number(row.roundStartMs) >= LOCK_QUALITY_V2_START_MS) {
+        row.lockQualitySelectiveV2 = evaluateSelectiveQualityV2(direction, row.predictionFacts, row.predictionDelayMs);
+      }
       row.source = live.model || row.source;
       saveHistory();
       log('round_prediction_locked', {
@@ -2257,6 +2353,8 @@ async function pollSignal() {
         lockQualityShadowReasons: row.lockQualityShadow?.reasons ?? [],
         lockQualityPredictionSupport: row.lockQualityShadow?.predictionSupport ?? null,
         lockQualityCurrentScoreAbs: row.lockQualityShadow?.currentScoreAbs ?? null,
+        lockQualitySelectiveV2Decision: row.lockQualitySelectiveV2?.decision ?? null,
+        lockQualitySelectiveV2Reasons: row.lockQualitySelectiveV2?.reasons ?? [],
       });
     }
   } catch (e) {
@@ -3164,6 +3262,11 @@ const signalHttpServer = http.createServer((req, res) => {
     return res.end(JSON.stringify(shadowV7.stats()));
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/shadow-quality-v2-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(selectiveQualityV2Summary()));
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(productionSignalPayload()));
@@ -3288,6 +3391,7 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     officialResolutionWaitMs: OFFICIAL_RESOLUTION_WAIT_MS,
     lockQualityShadowVersion: LOCK_QUALITY_SHADOW_VERSION,
     lockQualityShadowStartMs: LOCK_QUALITY_SHADOW_START_MS,
+    lockQualitySelectiveV2: selectiveQualityV2Summary(),
     lockQualityProductionEffect: 'NONE_SHADOW_ONLY',
   });
 });

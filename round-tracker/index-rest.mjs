@@ -22,6 +22,8 @@ const SHADOW_OBSERVE_MS = Math.max(10000, Number(process.env.SHADOW_OBSERVE_MS |
 const SHADOW_TRAIN_MIN_SAMPLES = Math.max(100, Number(process.env.SHADOW_TRAIN_MIN_SAMPLES || 300));
 const SHADOW_FORWARD_MIN_SAMPLES = Math.max(30, Number(process.env.SHADOW_FORWARD_MIN_SAMPLES || 60));
 const SHADOW_PRODUCTION_MODEL_VERSION = String(process.env.SHADOW_PRODUCTION_MODEL_VERSION || '').trim();
+const PRODUCTION_MIN_FORWARD_SAMPLES = Math.max(20, Number(process.env.PRODUCTION_MIN_FORWARD_SAMPLES || 20));
+const PRODUCTION_MIN_FORWARD_ACCURACY = Math.max(0.5, Math.min(1, Number(process.env.PRODUCTION_MIN_FORWARD_ACCURACY || 0.65)));
 const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
 const CALIBRATION_RECENT_SHORT = Math.max(20, Number(process.env.CALIBRATION_RECENT_SHORT || 40));
 const CALIBRATION_RECENT_LONG = Math.max(CALIBRATION_RECENT_SHORT, Number(process.env.CALIBRATION_RECENT_LONG || 80));
@@ -1246,7 +1248,22 @@ function productionUsesShadowV3() {
 
 function pinnedShadowV3Candidate() {
   if (!productionUsesShadowV3()) return null;
-  return shadowV3.getCandidate(SHADOW_PRODUCTION_MODEL_VERSION);
+  const c = shadowV3.getCandidate(SHADOW_PRODUCTION_MODEL_VERSION);
+  const s = c?.summary || null;
+  if (!c || !s) return null;
+  if (Number(s.forwardSamples || 0) < PRODUCTION_MIN_FORWARD_SAMPLES) return null;
+  if (!Number.isFinite(Number(s.forwardAccuracy)) || Number(s.forwardAccuracy) < PRODUCTION_MIN_FORWARD_ACCURACY) return null;
+  return c;
+}
+
+function qualifiedShadowV6Candidate() {
+  if (!shadowCandidate?.modelVersion || !shadowCandidate?.weights) return null;
+  const reg = shadowForwardRegistry.candidates.find(c => c.modelVersion === shadowCandidate.modelVersion);
+  if (!reg) return null;
+  const s = candidateRegistrySummary(reg);
+  if (Number(s.forwardSamples || 0) < PRODUCTION_MIN_FORWARD_SAMPLES) return null;
+  if (!Number.isFinite(Number(s.forwardAccuracy)) || Number(s.forwardAccuracy) < PRODUCTION_MIN_FORWARD_ACCURACY) return null;
+  return { candidate: shadowCandidate, summary: s };
 }
 
 function productionPolicyName() {
@@ -1363,7 +1380,8 @@ function productionShadowApproved() {
   if (productionUsesShadowV3()) {
     return Boolean(pinnedShadowV3Candidate());
   }
-  if (!shadowCandidate?.weights) return false;
+  const qualified = qualifiedShadowV6Candidate();
+  if (!qualified) return false;
   if (SHADOW_PRODUCTION_MODEL_VERSION) {
     return shadowCandidate.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION;
   }
@@ -2936,13 +2954,10 @@ function productionSignalPayload(now = Date.now()) {
     return { ok: true, live };
   }
 
-  const v6Direction = row?.prediction === 'UP' || row?.prediction === 'DOWN' ? row.prediction : null;
-  const shadowHardUnavailable =
-    !shadowCandidate?.weights ||
-    !candidateApproved ||
-    (SHADOW_PRODUCTION_MODEL_VERSION && shadowCandidate?.modelVersion !== SHADOW_PRODUCTION_MODEL_VERSION);
-  if (row && v6Direction && shadowHardUnavailable) {
-    const live = {
+  // Do not fall back to an unqualified legacy model. If no model has at least
+  // PRODUCTION_MIN_FORWARD_SAMPLES strict-forward decisions at or above
+  // PRODUCTION_MIN_FORWARD_ACCURACY, production must abstain.
+  const live = {
       round: row.roundStartMs,
       status: 'LOCKED',
       signal: {
@@ -2977,22 +2992,16 @@ function productionSignalPayload(now = Date.now()) {
     signal: null,
     input: { round: row?.roundStartMs ?? expectedRound },
     generatedAt: row?.shadowObservedAt ?? row?.predictedAt ?? null,
-    source: 'SHADOW_CANDIDATE_PRIMARY',
-    model: shadowCandidate?.modelVersion ?? null,
+    source: 'QUALIFIED_MODEL_GATE',
+    model: productionUsesShadowV3()
+      ? SHADOW_PRODUCTION_MODEL_VERSION
+      : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
     facts: row?.shadowFacts ?? row?.predictionFacts ?? null,
     productionPolicy: productionPolicyName(),
     fallbackUsed: false,
     waitReason: !row
       ? 'CURRENT_ROUND_NOT_OBSERVED'
-      : !shadowCandidate?.weights
-        ? 'SHADOW_CANDIDATE_UNAVAILABLE'
-        : !candidateApproved
-          ? 'SHADOW_PRODUCTION_MODEL_NOT_APPROVED'
-          : Number(row?.shadowCandidateTrainedAt) !== Number(shadowCandidate?.trainedAt)
-            ? 'WAITING_FOR_PINNED_SHADOW_OBSERVATION'
-            : !Number.isFinite(candidateProbability)
-              ? 'WAITING_FOR_SHADOW_OBSERVATION'
-              : 'NO_VALID_SIGNAL',
+      : 'NO_MODEL_MEETS_65_GATE',
     shadowForwardStatus: shadowModelMetrics.status,
     shadowForwardSamples: shadowModelMetrics.forwardSamples,
   };
@@ -3015,6 +3024,10 @@ function payload() {
     summary: summary(),
     productionSummary: productionSummary(),
     productionPolicy: productionPolicyName(),
+    productionQualification: {
+      minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
+      minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
+    },
     productionStartMs: PRODUCTION_SHADOW_START_MS,
     health: {
       signalPollMs: POLL_MS,
@@ -3254,6 +3267,8 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowForwardComparable: startupForward.comparable,
     shadowForwardStatus: shadowModelMetrics.status,
     productionSignalPolicy: productionPolicyName(),
+    productionMinForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
+    productionMinForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
     productionSignalEndpoint: '/api/production-signal',
     shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
     archiveDir: ARCHIVE_DIR,

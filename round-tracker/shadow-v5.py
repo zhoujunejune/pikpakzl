@@ -121,12 +121,12 @@ def train_cmd(a):
     selections=[]
     for context in CONTEXTS:
         X,y,rounds=build_examples(rows,context)
-        if len(y)<360:continue
+        if len(y)<300:continue
         outer_n=60; valid_n=60
         outer_start=len(y)-outer_n
         valid_start=outer_start-context-valid_n
         train_end=valid_start-context
-        if train_end<200:continue
+        if train_end<180:continue
         Xtr,ytr=X[:train_end],y[:train_end]
         Xv,yv=X[valid_start:valid_start+valid_n],y[valid_start:valid_start+valid_n]
         seed=20261005+context

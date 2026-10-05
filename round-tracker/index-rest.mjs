@@ -795,16 +795,13 @@ function candidateRegistrySummary(c) {
 }
 
 function deleteRetiredShadowForwardCandidates() {
-  const protectedVersions = new Set([
-    SHADOW_PRODUCTION_MODEL_VERSION || shadowCandidate?.modelVersion || null,
-  ].filter(Boolean));
   const removed = [];
   shadowForwardRegistry.candidates = shadowForwardRegistry.candidates.filter(c => {
     const s = candidateRegistrySummary(c);
-    const retired = s.forwardSamples >= SHADOW_FORWARD_MIN_SAMPLES &&
+    const retired = s.forwardSamples >= 20 &&
       Number.isFinite(Number(s.forwardAccuracy)) &&
-      Number(s.forwardAccuracy) < 0.60;
-    if (!retired || protectedVersions.has(c.modelVersion)) return true;
+      Number(s.forwardAccuracy) < 0.65;
+    if (!retired) return true;
     removed.push({
       modelVersion: c.modelVersion,
       trainedAt: c.trainedAt ?? null,
@@ -812,7 +809,8 @@ function deleteRetiredShadowForwardCandidates() {
       hits: s.hits,
       misses: s.misses,
       forwardAccuracy: s.forwardAccuracy,
-      reason: 'STRICT_FORWARD_BELOW_60',
+      wasProductionModel: c.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION,
+      reason: 'STRICT_FORWARD_BELOW_65_AFTER_20',
     });
     return false;
   });
@@ -820,7 +818,8 @@ function deleteRetiredShadowForwardCandidates() {
     saveShadowForwardRegistry();
     log('shadow_retired_models_deleted', {
       count: removed.length,
-      protectedProductionModel: SHADOW_PRODUCTION_MODEL_VERSION || shadowCandidate?.modelVersion || null,
+      retentionAccuracy: 0.65,
+      retentionMinSamples: 20,
       models: removed,
     });
   }

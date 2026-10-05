@@ -271,6 +271,9 @@ const shadowV3 = createShadowV3Client({
   maxCandidates: 8,
   trainEveryRounds: SHADOW_V3_TRAIN_EVERY_ROUNDS,
   trainTimeBudget: SHADOW_V3_TRAIN_TIME_BUDGET,
+  protectedModelVersion: SHADOW_PRODUCTION_MODEL_VERSION.startsWith('shadow-v3-automl-')
+    ? SHADOW_PRODUCTION_MODEL_VERSION
+    : null,
   log,
 });
 
@@ -793,8 +796,7 @@ function candidateRegistrySummary(c) {
 
 function deleteRetiredShadowForwardCandidates() {
   const protectedVersions = new Set([
-    SHADOW_PRODUCTION_MODEL_VERSION,
-    shadowCandidate?.modelVersion ?? null,
+    SHADOW_PRODUCTION_MODEL_VERSION || shadowCandidate?.modelVersion || null,
   ].filter(Boolean));
   const removed = [];
   shadowForwardRegistry.candidates = shadowForwardRegistry.candidates.filter(c => {
@@ -1195,8 +1197,42 @@ function recoverPinnedShadowFromHistory(modelVersion) {
   return recovered;
 }
 
+function productionUsesShadowV3() {
+  return Boolean(
+    SHADOW_PRODUCTION_MODEL_VERSION &&
+    SHADOW_PRODUCTION_MODEL_VERSION.startsWith('shadow-v3-automl-')
+  );
+}
+
+function pinnedShadowV3Candidate() {
+  if (!productionUsesShadowV3()) return null;
+  return shadowV3.getCandidate(SHADOW_PRODUCTION_MODEL_VERSION);
+}
+
 function applyPinnedProductionShadow() {
   if (!SHADOW_PRODUCTION_MODEL_VERSION) return false;
+
+  if (productionUsesShadowV3()) {
+    const v3 = pinnedShadowV3Candidate();
+    if (!v3) {
+      log('shadow_v3_production_pin_not_available', {
+        requestedModelVersion: SHADOW_PRODUCTION_MODEL_VERSION,
+      });
+      return false;
+    }
+    log('shadow_v3_production_model_pinned', {
+      modelVersion: v3.modelVersion,
+      trainedAt: v3.trainedAt,
+      estimator: v3.estimator,
+      threshold: v3.threshold,
+      outerHoldoutAccuracy: v3.outerHoldout?.accuracy ?? null,
+      outerHoldoutBaselineAccuracy: v3.outerHoldout?.baselineAccuracy ?? null,
+      productionApproved: true,
+      approvalMode: 'V3_AUTOML_MODEL_ARTIFACT',
+      autoReplacement: false,
+    });
+    return true;
+  }
 
   const alreadyPinned =
     shadowCandidate?.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION &&
@@ -1278,6 +1314,9 @@ function applyPinnedProductionShadow() {
 }
 
 function productionShadowApproved() {
+  if (productionUsesShadowV3()) {
+    return Boolean(pinnedShadowV3Candidate());
+  }
   if (!shadowCandidate?.weights) return false;
   if (SHADOW_PRODUCTION_MODEL_VERSION) {
     return shadowCandidate.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION;
@@ -2072,6 +2111,29 @@ async function pollSignal() {
     }
     if (row.shadowObservedAt && row.shadowFacts) {
       void shadowV3.observe(row, row.shadowFacts);
+      if (productionUsesShadowV3()) {
+        void shadowV3.predictProduction(SHADOW_PRODUCTION_MODEL_VERSION, row, row.shadowFacts)
+          .then(result => {
+            if (!result?.ok) return;
+            saveHistory();
+            try {
+              productionSignalPayload();
+            } catch (e) {
+              log('shadow_v3_production_lock_failed', {
+                round: row.roundStartMs,
+                modelVersion: SHADOW_PRODUCTION_MODEL_VERSION,
+                error: e?.message || String(e),
+              });
+            }
+          })
+          .catch(e => {
+            log('shadow_v3_production_prediction_failed', {
+              round: row.roundStartMs,
+              modelVersion: SHADOW_PRODUCTION_MODEL_VERSION,
+              error: e?.message || String(e),
+            });
+          });
+      }
     }
     const liveTopicId = liveFacts?.predictionMarketTopicId ?? null;
     if (!row.predictionMarketTopicId && liveTopicId) {
@@ -2376,6 +2438,7 @@ function productionSummary() {
     accuracyPct: decided.length ? Number(((correct / decided.length) * 100).toFixed(2)) : null,
     coveragePct: settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null,
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
+    v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     policy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
   };
@@ -2700,7 +2763,8 @@ function productionSignalPayload(now = Date.now()) {
       generatedAt: row.productionGeneratedAt ?? row.productionLockedAt ?? null,
       source: row.productionSource || 'UNKNOWN',
       model: row.productionModel || null,
-      facts: row.productionSource === 'SHADOW_CANDIDATE_PRIMARY'
+      facts: row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
+        row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY'
         ? (row.shadowFacts ?? null)
         : (row.predictionFacts ?? null),
       productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
@@ -2713,6 +2777,75 @@ function productionSignalPayload(now = Date.now()) {
     };
     logProductionSignalState(frozenLive);
     return { ok: true, live: frozenLive };
+  }
+
+  if (productionUsesShadowV3()) {
+    const v3 = pinnedShadowV3Candidate();
+    const probability = Number(row?.shadowV3ProductionProbability);
+    const threshold = Number(row?.shadowV3ProductionThreshold ?? v3?.threshold ?? 0.5);
+    const ready =
+      Boolean(v3) &&
+      row?.shadowV3ProductionModelVersion === SHADOW_PRODUCTION_MODEL_VERSION &&
+      Number.isFinite(probability) &&
+      Number.isFinite(threshold);
+
+    if (row && ready) {
+      const direction = probability >= threshold ? 'UP' : 'DOWN';
+      const directionProbability = direction === 'UP' ? probability : 1 - probability;
+      const signedScore = probability * 2 - 1;
+      const live = {
+        round: row.roundStartMs,
+        status: 'LOCKED',
+        signal: {
+          direction,
+          score: Number(signedScore.toFixed(6)),
+          confidence: Number(directionProbability.toFixed(6)),
+          modelProbability: Number(directionProbability.toFixed(6)),
+          upProbability: Number(probability.toFixed(6)),
+          threshold: Number(threshold.toFixed(6)),
+        },
+        input: { round: row.roundStartMs },
+        generatedAt: row.shadowV3ProductionPredictedAt || row.shadowObservedAt || null,
+        source: 'SHADOW_V3_AUTOML_PRIMARY',
+        model: SHADOW_PRODUCTION_MODEL_VERSION,
+        facts: row.shadowFacts ?? null,
+        productionPolicy: 'IMMUTABLE_FIRST_LOCK_PINNED_SHADOW_PRIMARY',
+        fallbackUsed: false,
+        shadowForwardStatus: v3.summary?.status ?? null,
+        shadowForwardSamples: v3.summary?.forwardSamples ?? null,
+      };
+      freezeProductionLock(row, live);
+      logProductionSignalState(live);
+      return { ok: true, live };
+    }
+
+    const live = {
+      round: row?.roundStartMs ?? expectedRound,
+      status: 'WAIT',
+      signal: null,
+      input: { round: row?.roundStartMs ?? expectedRound },
+      generatedAt: row?.shadowObservedAt ?? null,
+      source: 'SHADOW_V3_AUTOML_PRIMARY',
+      model: SHADOW_PRODUCTION_MODEL_VERSION,
+      facts: row?.shadowFacts ?? null,
+      productionPolicy: 'IMMUTABLE_FIRST_LOCK_PINNED_SHADOW_PRIMARY',
+      fallbackUsed: false,
+      waitReason: !row
+        ? 'CURRENT_ROUND_NOT_OBSERVED'
+        : !v3
+          ? 'PINNED_V3_MODEL_UNAVAILABLE'
+          : !row.shadowObservedAt || !row.shadowFacts
+            ? 'WAITING_FOR_V3_FEATURE_SNAPSHOT'
+            : row.shadowV3ProductionModelVersion !== SHADOW_PRODUCTION_MODEL_VERSION
+              ? 'WAITING_FOR_PINNED_V3_PREDICTION'
+              : !Number.isFinite(probability)
+                ? 'WAITING_FOR_V3_PREDICTION'
+                : 'NO_VALID_V3_SIGNAL',
+      shadowForwardStatus: v3?.summary?.status ?? null,
+      shadowForwardSamples: v3?.summary?.forwardSamples ?? null,
+    };
+    logProductionSignalState(live);
+    return { ok: true, live };
   }
 
   const candidateProbability = Number(row?.shadowCandidateProbability);
@@ -3027,6 +3160,7 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV2: shadowV2.stats(),
     shadowV3Dir: SHADOW_V3_DIR,
     shadowV3: shadowV3.stats(),
+    shadowV3ProductionCandidate: productionUsesShadowV3() ? pinnedShadowV3Candidate() : null,
     shadowV3TrainEveryRounds: SHADOW_V3_TRAIN_EVERY_ROUNDS,
     shadowV3TrainTimeBudget: SHADOW_V3_TRAIN_TIME_BUDGET,
     shadowRollingForward: rollingForwardSummary(),

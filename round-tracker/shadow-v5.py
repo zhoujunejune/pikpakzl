@@ -46,7 +46,7 @@ def feature_row(f):
     current=req["currentScore"]; trend=req["currentTrendScore"]; m15=req["normalizedMomentum15s"]; m60=req["normalizedMomentum60s"]; m300=req["normalizedMomentum300s"]; p15=req["tradePressure15s"]; p60=req["tradePressure60s"]; ofi5=req["ofiNormalized5s"]
     return {**req,"ofiNormalized60s":ofi60,"absorptionRisk":absorption,"predictionMarketUpMidCentered":mid,"predictionMarketMissing":miss,"currentMidAgreement":clip(current*mid),"trendMidAgreement":clip(trend*mid),"ofiPressureInteraction":clip(ofi5*p60),"momentumAgreement60x300":clip(m60*m300),"shortLongMomentumGap":clip(m15-m300),"pressureImbalance":clip(p15-p60)}
 
-def load_rows(path, require_label=True):
+def load_rows(path, require_label=False):
     with open(path,"r",encoding="utf-8") as f: rows=json.load(f)
     out=[]
     for r in rows if isinstance(rows,list) else []:
@@ -55,12 +55,15 @@ def load_rows(path, require_label=True):
         x=feature_row(r.get("shadowFacts"))
         if x is None: continue
         y=None
-        if require_label:
-            if r.get("actualSource")!="BINANCE_PREDICTION_OFFICIAL_RESOLUTION": continue
-            if "STRICT_ROUND_ALIGNED_TOPIC" not in str(r.get("resolutionEvidence") or ""): continue
-            a=r.get("actual")
-            if a not in ("UP","DOWN"): continue
-            y=1 if a=="UP" else 0
+        strict_label=(
+            r.get("actualSource")=="BINANCE_PREDICTION_OFFICIAL_RESOLUTION"
+            and "STRICT_ROUND_ALIGNED_TOPIC" in str(r.get("resolutionEvidence") or "")
+            and r.get("actual") in ("UP","DOWN")
+        )
+        if strict_label:
+            y=1 if r.get("actual")=="UP" else 0
+        if require_label and y is None:
+            continue
         out.append({"roundStartMs":int(rs),"x":x,"y":y})
     out.sort(key=lambda z:z["roundStartMs"]); return out
 
@@ -115,9 +118,10 @@ def predict_pipe(pipe,X):
     return clf.predict_proba(sc.transform(Z))[:,1]
 
 def train_cmd(a):
-    rows=load_rows(a.history,True)
-    if len(rows)<a.min_samples+160:
-        emit({"ok":True,"status":"INSUFFICIENT_SAMPLES","samples":len(rows),"engineVersion":ENGINE_VERSION});return
+    rows=load_rows(a.history,False)
+    strict_labels=sum(1 for r in rows if r.get("y") is not None)
+    if strict_labels<a.min_samples:
+        emit({"ok":True,"status":"INSUFFICIENT_SAMPLES","samples":strict_labels,"featureRows":len(rows),"engineVersion":ENGINE_VERSION});return
     selections=[]
     for context in CONTEXTS:
         X,y,rounds=build_examples(rows,context)

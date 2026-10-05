@@ -91,7 +91,7 @@ function buildLockedSignalEnvelope(row, live) {
     source: 'SITE_PRODUCTION_LOCK',
     upstreamSource: row?.productionSource ?? live?.source ?? null,
     upstreamModel: row?.productionModel ?? live?.model ?? null,
-    productionPolicy: live?.productionPolicy || 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+    productionPolicy: live?.productionPolicy || productionPolicyName(),
     immutable: true,
   };
 }
@@ -1207,6 +1207,12 @@ function productionUsesShadowV3() {
 function pinnedShadowV3Candidate() {
   if (!productionUsesShadowV3()) return null;
   return shadowV3.getCandidate(SHADOW_PRODUCTION_MODEL_VERSION);
+}
+
+function productionPolicyName() {
+  return productionUsesShadowV3()
+    ? 'IMMUTABLE_FIRST_LOCK_PINNED_SHADOW_V3_AUTOML'
+    : productionPolicyName();
 }
 
 function applyPinnedProductionShadow() {
@@ -2440,7 +2446,7 @@ function productionSummary() {
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
-    policy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+    policy: productionPolicyName(),
   };
 }
 
@@ -2767,7 +2773,7 @@ function productionSignalPayload(now = Date.now()) {
         row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY'
         ? (row.shadowFacts ?? null)
         : (row.predictionFacts ?? null),
-      productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+      productionPolicy: productionPolicyName(),
       fallbackUsed: row.productionSource === 'V6_FALLBACK',
       fallbackReason: row.productionSource === 'V6_FALLBACK' ? 'FROZEN_V6_FALLBACK' : null,
       shadowForwardStatus: shadowModelMetrics.status,
@@ -2874,7 +2880,7 @@ function productionSignalPayload(now = Date.now()) {
       source: 'SHADOW_CANDIDATE_PRIMARY',
       model: shadowCandidate.modelVersion,
       facts: row.shadowFacts ?? null,
-      productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+      productionPolicy: productionPolicyName(),
       fallbackUsed: false,
       shadowForwardStatus: shadowModelMetrics.status,
       shadowForwardSamples: shadowModelMetrics.forwardSamples,
@@ -2904,7 +2910,7 @@ function productionSignalPayload(now = Date.now()) {
       source: 'V6_FALLBACK',
       model: row.source || STATS_VERSION,
       facts: row.predictionFacts ?? null,
-      productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+      productionPolicy: productionPolicyName(),
       fallbackUsed: true,
       fallbackReason: !shadowCandidate?.weights
         ? 'SHADOW_CANDIDATE_UNAVAILABLE'
@@ -2928,7 +2934,7 @@ function productionSignalPayload(now = Date.now()) {
     source: 'SHADOW_CANDIDATE_PRIMARY',
     model: shadowCandidate?.modelVersion ?? null,
     facts: row?.shadowFacts ?? row?.predictionFacts ?? null,
-    productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+    productionPolicy: productionPolicyName(),
     fallbackUsed: false,
     waitReason: !row
       ? 'CURRENT_ROUND_NOT_OBSERVED'
@@ -2962,7 +2968,7 @@ function payload() {
     accuracyRule: 'PRODUCTION_LOCKED_DIRECTION_VS_BINANCE_PREDICTION_OFFICIAL_DIRECTION',
     summary: summary(),
     productionSummary: productionSummary(),
-    productionPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+    productionPolicy: productionPolicyName(),
     productionStartMs: PRODUCTION_SHADOW_START_MS,
     health: {
       signalPollMs: POLL_MS,
@@ -3179,7 +3185,7 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowForwardV6Accuracy: startupForward.v6Accuracy,
     shadowForwardComparable: startupForward.comparable,
     shadowForwardStatus: shadowModelMetrics.status,
-    productionSignalPolicy: 'IMMUTABLE_FIRST_LOCK_SHADOW_PRIMARY_V6_FALLBACK',
+    productionSignalPolicy: productionPolicyName(),
     productionSignalEndpoint: '/api/production-signal',
     shadowModelSchemaVersion: SHADOW_MODEL_SCHEMA_VERSION,
     archiveDir: ARCHIVE_DIR,

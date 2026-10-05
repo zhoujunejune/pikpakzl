@@ -58,6 +58,7 @@ export function createShadowV3Client({
   maxCandidates = 8,
   trainEveryRounds = 20,
   trainTimeBudget = 75,
+  protectedModelVersion = null,
   log = () => {},
 } = {}) {
   const registryFile = `${dir}/registry.json`;
@@ -69,6 +70,7 @@ export function createShadowV3Client({
   };
   let trainingBusy = false;
   const predictingRounds = new Set();
+  const productionPredictingRounds = new Set();
 
   function save() {
     try {
@@ -158,7 +160,7 @@ export function createShadowV3Client({
       const retired=s.forwardSamples>=forwardTarget &&
         Number.isFinite(Number(s.forwardAccuracy)) &&
         Number(s.forwardAccuracy)<0.60;
-      if(!retired) return true;
+      if(!retired || (protectedModelVersion && c.modelVersion===protectedModelVersion)) return true;
       if(c.modelPath){
         try{
           if(fs.existsSync(c.modelPath)) fs.unlinkSync(c.modelPath);
@@ -307,6 +309,111 @@ export function createShadowV3Client({
     }
   }
 
+  function getCandidate(modelVersion) {
+    const c = state.candidates.find(x => x.modelVersion === modelVersion);
+    if (!c) return null;
+    return {
+      modelVersion: c.modelVersion,
+      engineVersion: c.engineVersion,
+      trainedAt: c.trainedAt,
+      lastTrainRound: c.lastTrainRound,
+      trainedSamples: c.trainedSamples,
+      windowSize: c.windowSize,
+      estimator: c.bestEstimator,
+      threshold: Number(c.threshold ?? 0.5),
+      modelPath: c.modelPath,
+      outerHoldout: c.outerHoldout || null,
+      summary: summaryOf(c),
+    };
+  }
+
+  async function predictProduction(modelVersion, row, facts) {
+    const c = state.candidates.find(x => x.modelVersion === modelVersion);
+    const round = Number(row?.roundStartMs);
+    const observedAt = Number(row?.shadowObservedAt);
+    if (!c || !Number.isFinite(round) || !Number.isFinite(observedAt) || !facts) {
+      return { ok:false, status:'V3_PRODUCTION_CANDIDATE_UNAVAILABLE' };
+    }
+    if (round <= Number(c.lastTrainRound || 0)) {
+      return { ok:false, status:'V3_PRODUCTION_ROUND_NOT_FORWARD' };
+    }
+    const existing = (c.observations || []).find(o =>
+      Number(o.roundStartMs) === round && Number.isFinite(Number(o.probability))
+    );
+    if (existing) {
+      row.shadowV3ProductionProbability = Number(existing.probability);
+      row.shadowV3ProductionModelVersion = c.modelVersion;
+      row.shadowV3ProductionPredictedAt = Number(existing.observedAt) || observedAt;
+      row.shadowV3ProductionThreshold = Number(c.threshold ?? 0.5);
+      return {
+        ok:true,
+        status:'PREDICTED',
+        modelVersion:c.modelVersion,
+        probability:Number(existing.probability),
+        threshold:Number(c.threshold ?? 0.5),
+        cached:true,
+      };
+    }
+    if (productionPredictingRounds.has(round)) {
+      return { ok:false, status:'V3_PRODUCTION_PREDICTION_IN_FLIGHT' };
+    }
+    productionPredictingRounds.add(round);
+    try {
+      const result = await runPython(['predict'], {
+        facts,
+        models: [{ modelVersion: c.modelVersion, modelPath: c.modelPath }],
+      }, 60000);
+      const pred = (result?.predictions || []).find(x => x.modelVersion === c.modelVersion);
+      if (!pred || !Number.isFinite(Number(pred.probability))) {
+        return { ok:false, status:'V3_PRODUCTION_PREDICTION_FAILED' };
+      }
+      const probability = Number(pred.probability);
+      row.shadowV3ProductionProbability = probability;
+      row.shadowV3ProductionModelVersion = c.modelVersion;
+      row.shadowV3ProductionPredictedAt = Date.now();
+      row.shadowV3ProductionThreshold = Number(c.threshold ?? 0.5);
+
+      if (summaryOf(c).forwardSamples < forwardTarget) {
+        c.observations ||= [];
+        if (!c.observations.some(o => Number(o.roundStartMs) === round)) {
+          c.observations.push({
+            roundStartMs: round,
+            observedAt,
+            observedDelayMs: observedAt - round,
+            probability,
+            actual: null,
+            settledAt: null,
+          });
+          save();
+        }
+      }
+      log('shadow_v3_production_prediction_ready', {
+        modelVersion:c.modelVersion,
+        round,
+        probability:Number(probability.toFixed(6)),
+        threshold:Number(c.threshold ?? 0.5),
+        direction: probability >= Number(c.threshold ?? 0.5) ? 'UP' : 'DOWN',
+      });
+      return {
+        ok:true,
+        status:'PREDICTED',
+        modelVersion:c.modelVersion,
+        probability,
+        threshold:Number(c.threshold ?? 0.5),
+        cached:false,
+      };
+    } catch (e) {
+      log('shadow_v3_production_prediction_failed', {
+        modelVersion:c.modelVersion,
+        round,
+        error:e?.message || String(e),
+      });
+      return { ok:false, status:'V3_PRODUCTION_PREDICTION_FAILED', error:e?.message || String(e) };
+    } finally {
+      productionPredictingRounds.delete(round);
+    }
+  }
+
   async function updateDrift(c) {
     const settled = (c.observations || []).filter(o => o.actual === 'UP' || o.actual === 'DOWN');
     if (settled.length < 20) return;
@@ -411,5 +518,5 @@ export function createShadowV3Client({
     };
   }
 
-  return { load, save, maybeTrain, observe, settle, invalidateRounds, deleteRetiredCandidates, stats };
+  return { load, save, maybeTrain, observe, settle, invalidateRounds, deleteRetiredCandidates, getCandidate, predictProduction, stats };
 }

@@ -4,6 +4,7 @@ import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
+import { createShadowV7Client } from './shadow-v7-client.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -43,6 +44,8 @@ const SHADOW_V4_DIR = String(process.env.SHADOW_V4_DIR || '/data/shadow-v4');
 const SHADOW_V4_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V4_TRAIN_EVERY_ROUNDS || 60));
 const SHADOW_V5_DIR = String(process.env.SHADOW_V5_DIR || '/data/shadow-v5');
 const SHADOW_V5_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V5_TRAIN_EVERY_ROUNDS || 60));
+const SHADOW_V7_DIR = String(process.env.SHADOW_V7_DIR || '/data/shadow-v7');
+const SHADOW_V7_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V7_TRAIN_EVERY_ROUNDS || 60));
 const ARCHIVE_SCHEMA_VERSION = 1;
 const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
 const LOCK_QUALITY_SHADOW_VERSION = 'LOCK_QUALITY_SHADOW_V1';
@@ -302,6 +305,16 @@ const shadowV5 = createShadowV5Client({
   forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
   maxCandidates: 4,
   trainEveryRounds: SHADOW_V5_TRAIN_EVERY_ROUNDS,
+  log,
+});
+
+const shadowV7 = createShadowV7Client({
+  historyFile: HISTORY_FILE,
+  dir: SHADOW_V7_DIR,
+  minSamples: SHADOW_TRAIN_MIN_SAMPLES,
+  forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
+  maxCandidates: 4,
+  trainEveryRounds: SHADOW_V7_TRAIN_EVERY_ROUNDS,
   log,
 });
 
@@ -2177,6 +2190,7 @@ async function pollSignal() {
       void shadowV3.observe(row, row.shadowFacts);
       void shadowV4.observe(row, row.shadowFacts);
       void shadowV5.observe(row);
+      void shadowV7.observe(row, row.shadowFacts);
       if (productionUsesShadowV3()) {
         void shadowV3.predictProduction(SHADOW_PRODUCTION_MODEL_VERSION, row, row.shadowFacts)
           .then(result => {
@@ -2358,6 +2372,7 @@ async function settlePendingRounds() {
         shadowV3.settle(row);
         void shadowV4.settle(row);
         shadowV5.settle(row);
+        void shadowV7.settle(row);
 
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -2376,6 +2391,7 @@ async function settlePendingRounds() {
         void shadowV3.maybeTrain(row.roundStartMs);
         void shadowV4.maybeTrain(row.roundStartMs);
         void shadowV5.maybeTrain(row.roundStartMs);
+        void shadowV7.maybeTrain(row.roundStartMs);
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
         if (
@@ -2510,6 +2526,13 @@ function productionSummary() {
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
+    currentQualifiedModel: productionUsesShadowV3()
+      ? (pinnedShadowV3Candidate()?.modelVersion ?? null)
+      : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
+    currentQualificationStatus: productionShadowApproved() ? 'QUALIFIED' : 'NO_QUALIFIED_MODEL',
+    minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
+    minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
+    statsScope: 'HISTORICAL_PRODUCTION_AGGREGATE',
     policy: productionPolicyName(),
   };
 }
@@ -3063,11 +3086,13 @@ shadowV2.load();
 shadowV3.load();
 shadowV4.load();
 shadowV5.load();
+shadowV7.load();
 deleteRetiredShadowForwardCandidates();
 shadowV2.deleteRetiredCandidates();
 shadowV3.deleteRetiredCandidates();
 shadowV4.deleteRetiredCandidates();
 shadowV5.deleteRetiredCandidates();
+shadowV7.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
@@ -3076,6 +3101,7 @@ shadowV2.maybeTrain(shadowTrainingRows());
 void shadowV3.maybeTrain();
 void shadowV4.maybeTrain();
 void shadowV5.maybeTrain();
+void shadowV7.maybeTrain();
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
@@ -3154,6 +3180,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-v5-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadowV5.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/shadow-v7-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(shadowV7.stats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {
@@ -3248,6 +3279,9 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV5Dir: SHADOW_V5_DIR,
     shadowV5: shadowV5.stats(),
     shadowV5TrainEveryRounds: SHADOW_V5_TRAIN_EVERY_ROUNDS,
+    shadowV7Dir: SHADOW_V7_DIR,
+    shadowV7: shadowV7.stats(),
+    shadowV7TrainEveryRounds: SHADOW_V7_TRAIN_EVERY_ROUNDS,
     shadowV3TrainEveryRounds: SHADOW_V3_TRAIN_EVERY_ROUNDS,
     shadowV3TrainTimeBudget: SHADOW_V3_TRAIN_TIME_BUDGET,
     shadowRollingForward: rollingForwardSummary(),

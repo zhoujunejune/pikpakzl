@@ -126,7 +126,7 @@ export function createShadowV3Client({
     const acc = n ? hits / n : null;
     let status = n < forwardTarget ? 'COLLECTING' : 'FORWARD_COMPLETE';
     if (n >= forwardTarget && acc >= 0.70) status = 'FORWARD_70_MET';
-    else if (n >= forwardTarget && acc < 0.60) status = 'RETIRED_LOW_ACCURACY';
+    else if (n >= 20 && acc < 0.65) status = 'RETIRED_LOW_ACCURACY';
     if (c.drift?.driftDetected && n < forwardTarget) status = 'DRIFT_WARNING';
     return {
       modelVersion: c.modelVersion,
@@ -157,10 +157,10 @@ export function createShadowV3Client({
     const removed=[];
     state.candidates=state.candidates.filter(c=>{
       const s=summaryOf(c);
-      const retired=s.forwardSamples>=forwardTarget &&
+      const retired=s.forwardSamples>=20 &&
         Number.isFinite(Number(s.forwardAccuracy)) &&
-        Number(s.forwardAccuracy)<0.60;
-      if(!retired || (protectedModelVersion && c.modelVersion===protectedModelVersion)) return true;
+        Number(s.forwardAccuracy)<0.65;
+      if(!retired) return true;
       if(c.modelPath){
         try{
           if(fs.existsSync(c.modelPath)) fs.unlinkSync(c.modelPath);
@@ -174,13 +174,14 @@ export function createShadowV3Client({
         forwardSamples:s.forwardSamples,
         forwardAccuracy:s.forwardAccuracy,
         modelPath:c.modelPath||null,
-        reason:'STRICT_FORWARD_BELOW_60',
+        wasProductionModel:Boolean(protectedModelVersion && c.modelVersion===protectedModelVersion),
+        reason:'STRICT_FORWARD_BELOW_65_AFTER_20',
       });
       return false;
     });
     if(removed.length){
       save();
-      log('shadow_v3_retired_models_deleted',{count:removed.length,models:removed});
+      log('shadow_v3_retired_models_deleted',{count:removed.length,retentionAccuracy:0.65,retentionMinSamples:20,models:removed});
     }
     return removed;
   }

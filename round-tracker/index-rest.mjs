@@ -2096,7 +2096,7 @@ function selectiveQualityV2Summary() {
   return {
     ok:true,
     modelVersion: LOCK_QUALITY_V2_VERSION,
-    productionEffect:'NONE_SHADOW_ONLY',
+    productionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
     startMs:LOCK_QUALITY_V2_START_MS,
     forwardRounds:evaluated.length,
     forwardSamples:decided.length,
@@ -3508,6 +3508,6 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     lockQualityShadowVersion: LOCK_QUALITY_SHADOW_VERSION,
     lockQualityShadowStartMs: LOCK_QUALITY_SHADOW_START_MS,
     lockQualitySelectiveV2: selectiveQualityV2Summary(),
-    lockQualityProductionEffect: 'NONE_SHADOW_ONLY',
+    lockQualityProductionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
   });
 });

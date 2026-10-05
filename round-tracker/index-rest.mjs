@@ -728,6 +728,21 @@ function loadShadowCandidateArtifact() {
       model.weights.every(Number.isFinite) &&
       Number.isFinite(Number(model?.trainedAt));
     if (!valid) return false;
+    const modelVersion = String(model?.modelVersion || '');
+    const registered = shadowForwardRegistry.candidates.some(c => c.modelVersion === modelVersion);
+    const configuredProduction = Boolean(SHADOW_PRODUCTION_MODEL_VERSION) &&
+      SHADOW_PRODUCTION_MODEL_VERSION === modelVersion;
+    if (!registered && !configuredProduction) {
+      try { fs.unlinkSync(SHADOW_CANDIDATE_FILE); } catch {}
+      shadowCandidate = null;
+      shadowCandidateMetrics = null;
+      log('shadow_candidate_artifact_deleted_as_retired', {
+        modelVersion: modelVersion || null,
+        trainedAt: model?.trainedAt ?? null,
+        reason: 'NOT_IN_ACTIVE_FORWARD_REGISTRY',
+      });
+      return false;
+    }
     shadowCandidate = { ...model, weights: model.weights.map(Number), featureKeys: SHADOW_FEATURE_KEYS };
     shadowCandidateMetrics = artifact?.metrics || null;
     log('shadow_candidate_artifact_loaded', {

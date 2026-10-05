@@ -1264,6 +1264,10 @@ function productionUsesShadowV3() {
   );
 }
 
+function productionUsesSelectiveV2() {
+  return SHADOW_PRODUCTION_MODEL_VERSION === LOCK_QUALITY_V2_VERSION;
+}
+
 function pinnedShadowV3Candidate() {
   if (!productionUsesShadowV3()) return null;
   const c = shadowV3.getCandidate(SHADOW_PRODUCTION_MODEL_VERSION);
@@ -1285,6 +1289,9 @@ function qualifiedShadowV6Candidate() {
 }
 
 function productionPolicyName() {
+  if (productionUsesSelectiveV2()) {
+    return 'IMMUTABLE_FIRST_LOCK_SELECTIVE_V2';
+  }
   if (productionUsesShadowV3()) {
     return pinnedShadowV3Candidate()
       ? 'IMMUTABLE_FIRST_LOCK_PINNED_SHADOW_V3_AUTOML_65_GATE'
@@ -1298,6 +1305,24 @@ function productionPolicyName() {
 
 function applyPinnedProductionShadow() {
   if (!SHADOW_PRODUCTION_MODEL_VERSION) return false;
+
+  if (productionUsesSelectiveV2()) {
+    const s = selectiveQualityV2Summary();
+    log('lock_quality_selective_v2_production_pinned', {
+      modelVersion: LOCK_QUALITY_V2_VERSION,
+      productionApproved: true,
+      approvalSource: 'USER_EXPLICIT',
+      forwardRounds: s.forwardRounds,
+      forwardSamples: s.forwardSamples,
+      hits: s.hits,
+      misses: s.misses,
+      forwardAccuracy: s.forwardAccuracy,
+      coverage: s.coverage,
+      thresholds: s.thresholds,
+      autoReplacement: false,
+    });
+    return true;
+  }
 
   if (productionUsesShadowV3()) {
     const v3 = pinnedShadowV3Candidate();
@@ -1401,6 +1426,7 @@ function applyPinnedProductionShadow() {
 }
 
 function productionShadowApproved() {
+  if (productionUsesSelectiveV2()) return true;
   if (productionUsesShadowV3()) {
     return Boolean(pinnedShadowV3Candidate());
   }
@@ -2629,11 +2655,16 @@ function productionSummary() {
     coveragePct: settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null,
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
+    selectiveV2Rounds: decided.filter(r => r.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
-    currentQualifiedModel: productionUsesShadowV3()
-      ? (pinnedShadowV3Candidate()?.modelVersion ?? null)
-      : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
-    currentQualificationStatus: productionShadowApproved() ? 'QUALIFIED' : 'NO_QUALIFIED_MODEL',
+    currentQualifiedModel: productionUsesSelectiveV2()
+      ? LOCK_QUALITY_V2_VERSION
+      : productionUsesShadowV3()
+        ? (pinnedShadowV3Candidate()?.modelVersion ?? null)
+        : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
+    currentQualificationStatus: productionUsesSelectiveV2()
+      ? 'USER_PINNED_SELECTIVE_COLLECTING'
+      : (productionShadowApproved() ? 'QUALIFIED' : 'NO_QUALIFIED_MODEL'),
     minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
     minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
     statsScope: 'HISTORICAL_PRODUCTION_AGGREGATE',
@@ -2974,6 +3005,91 @@ function productionSignalPayload(now = Date.now()) {
     };
     logProductionSignalState(frozenLive);
     return { ok: true, live: frozenLive };
+  }
+
+  if (productionUsesSelectiveV2()) {
+    if (!row) {
+      const live = {
+        round: expectedRound,
+        status: 'WAIT',
+        signal: null,
+        input: { round: expectedRound },
+        generatedAt: null,
+        source: 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY',
+        model: LOCK_QUALITY_V2_VERSION,
+        facts: null,
+        productionPolicy: productionPolicyName(),
+        fallbackUsed: false,
+        waitReason: 'CURRENT_ROUND_NOT_OBSERVED',
+        selectiveQuality: selectiveQualityV2Summary(),
+      };
+      logProductionSignalState(live);
+      return { ok: true, live };
+    }
+
+    const baseDirection = row.prediction === 'UP' || row.prediction === 'DOWN'
+      ? row.prediction
+      : null;
+    const q = baseDirection
+      ? (row.lockQualitySelectiveV2 ||
+          evaluateSelectiveQualityV2(baseDirection, row.predictionFacts, row.predictionDelayMs))
+      : null;
+    const direction = q?.pass && (q?.decision === 'UP' || q?.decision === 'DOWN')
+      ? q.decision
+      : null;
+
+    if (direction) {
+      const confidence = Number.isFinite(Number(row.modelProbability))
+        ? Number(row.modelProbability)
+        : (Number.isFinite(Number(row.predictionConfidence)) ? Number(row.predictionConfidence) : null);
+      const score = Number.isFinite(Number(row.predictionScore)) ? Number(row.predictionScore) : null;
+      const live = {
+        round: row.roundStartMs,
+        status: 'LOCKED',
+        signal: {
+          direction,
+          score,
+          confidence,
+          modelProbability: confidence,
+        },
+        input: { round: row.roundStartMs },
+        generatedAt: Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
+        source: 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY',
+        model: LOCK_QUALITY_V2_VERSION,
+        facts: row.predictionFacts ?? null,
+        productionPolicy: productionPolicyName(),
+        fallbackUsed: false,
+        selectiveQuality: q,
+        shadowForwardStatus: selectiveQualityV2Summary().status,
+        shadowForwardSamples: selectiveQualityV2Summary().forwardSamples,
+      };
+      freezeProductionLock(row, live);
+      logProductionSignalState(live);
+      return { ok: true, live };
+    }
+
+    const reasons = !baseDirection
+      ? ['WAITING_FOR_BASE_DIRECTION']
+      : (Array.isArray(q?.reasons) && q.reasons.length ? q.reasons : ['SELECTIVE_FILTER_WAIT']);
+    const s = selectiveQualityV2Summary();
+    const live = {
+      round: row.roundStartMs,
+      status: 'WAIT',
+      signal: null,
+      input: { round: row.roundStartMs },
+      generatedAt: row.predictedAt ?? null,
+      source: 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY',
+      model: LOCK_QUALITY_V2_VERSION,
+      facts: row.predictionFacts ?? null,
+      productionPolicy: productionPolicyName(),
+      fallbackUsed: false,
+      waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|'),
+      selectiveQuality: q,
+      shadowForwardStatus: s.status,
+      shadowForwardSamples: s.forwardSamples,
+    };
+    logProductionSignalState(live);
+    return { ok: true, live };
   }
 
   if (productionUsesShadowV3()) {

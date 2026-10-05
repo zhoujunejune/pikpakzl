@@ -2987,35 +2987,6 @@ function productionSignalPayload(now = Date.now()) {
   // PRODUCTION_MIN_FORWARD_SAMPLES strict-forward decisions at or above
   // PRODUCTION_MIN_FORWARD_ACCURACY, production must abstain.
   const live = {
-      round: row.roundStartMs,
-      status: 'LOCKED',
-      signal: {
-        direction: v6Direction,
-        score: row.predictionScore ?? null,
-        confidence: row.predictionConfidence ?? null,
-        modelProbability: row.modelProbability ?? null,
-      },
-      input: { round: row.roundStartMs },
-      generatedAt: row.predictedAt ?? null,
-      source: 'V6_FALLBACK',
-      model: row.source || STATS_VERSION,
-      facts: row.predictionFacts ?? null,
-      productionPolicy: productionPolicyName(),
-      fallbackUsed: true,
-      fallbackReason: !shadowCandidate?.weights
-        ? 'SHADOW_CANDIDATE_UNAVAILABLE'
-        : !candidateApproved
-          ? 'SHADOW_PRODUCTION_MODEL_NOT_APPROVED'
-          : 'SHADOW_PRODUCTION_MODEL_VERSION_MISMATCH',
-      shadowForwardStatus: shadowModelMetrics.status,
-      shadowForwardSamples: shadowModelMetrics.forwardSamples,
-    };
-    freezeProductionLock(row, live);
-    logProductionSignalState(live);
-    return { ok: true, live };
-  }
-
-  const live = {
     round: row?.roundStartMs ?? expectedRound,
     status: 'WAIT',
     signal: null,

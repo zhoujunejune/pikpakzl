@@ -5,6 +5,7 @@ import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
+import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -46,6 +47,8 @@ const SHADOW_V5_DIR = String(process.env.SHADOW_V5_DIR || '/data/shadow-v5');
 const SHADOW_V5_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V5_TRAIN_EVERY_ROUNDS || 60));
 const SHADOW_V7_DIR = String(process.env.SHADOW_V7_DIR || '/data/shadow-v7');
 const SHADOW_V7_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V7_TRAIN_EVERY_ROUNDS || 60));
+const ADAPTIVE_GATE_SHADOW_FILE = String(process.env.ADAPTIVE_GATE_SHADOW_FILE || `${HISTORY_FILE}.adaptive-gate-shadow-v1.json`);
+const ADAPTIVE_GATE_FORWARD_TARGET = Math.max(30, Number(process.env.ADAPTIVE_GATE_FORWARD_TARGET || 60));
 const ARCHIVE_SCHEMA_VERSION = 1;
 const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
 const LOCK_QUALITY_SHADOW_VERSION = 'LOCK_QUALITY_SHADOW_V1';
@@ -320,6 +323,20 @@ const shadowV7 = createShadowV7Client({
   forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
   maxCandidates: 4,
   trainEveryRounds: SHADOW_V7_TRAIN_EVERY_ROUNDS,
+  log,
+});
+
+const adaptiveGateShadow = createAdaptiveGateShadow({
+  file: ADAPTIVE_GATE_SHADOW_FILE,
+  minTrainSamples: 180,
+  forwardTarget: ADAPTIVE_GATE_FORWARD_TARGET,
+  currentMin: LOCK_QUALITY_V2_CURRENT_MIN,
+  supportMin: LOCK_QUALITY_V2_SUPPORT_MIN,
+  maxDelayMs: LOCK_QUALITY_V2_MAX_DELAY_MS,
+  edgeCurrentMin: 0.52,
+  edgeSupportMin: 0.02,
+  edgeMaxDelayMs: 26000,
+  targetAccuracy: 0.72,
   log,
 });
 
@@ -2239,6 +2256,7 @@ function ensureRound(roundStartMs) {
       calibrationMethod: null,
       calibrationComponents: null,
       lockQualityShadow: null,
+      adaptiveGateShadow: null,
       predictedAt: null,
       predictionDelayMs: null,
       actual: null,
@@ -2363,6 +2381,7 @@ async function pollSignal() {
       row.lockQualityShadow = evaluateLockQuality(direction, row.predictionFacts, row.predictionDelayMs);
       if (Number(row.roundStartMs) >= LOCK_QUALITY_V2_START_MS) {
         row.lockQualitySelectiveV2 = evaluateSelectiveQualityV2(direction, row.predictionFacts, row.predictionDelayMs);
+        row.adaptiveGateShadow = adaptiveGateShadow.evaluate(row);
       }
       row.source = live.model || row.source;
       saveHistory();
@@ -2503,6 +2522,7 @@ async function settlePendingRounds() {
         void shadowV4.settle(row);
         shadowV5.settle(row);
         void shadowV7.settle(row);
+        adaptiveGateShadow.onSettled(row, Array.from(rounds.values()));
 
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -3273,6 +3293,7 @@ loadArchiveIndex();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
+adaptiveGateShadow.load();
 shadowV2.load();
 shadowV3.load();
 shadowV4.load();
@@ -3287,6 +3308,7 @@ shadowV7.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
+adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
 maybeTrainShadowModel();
 shadowV2.maybeTrain(shadowTrainingRows());
 void shadowV3.maybeTrain();
@@ -3381,6 +3403,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-quality-v2-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(selectiveQualityV2Summary()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/adaptive-gate-shadow-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(adaptiveGateShadow.stats(Array.from(rounds.values()))));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {
@@ -3478,6 +3505,8 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV7Dir: SHADOW_V7_DIR,
     shadowV7: shadowV7.stats(),
     shadowV7TrainEveryRounds: SHADOW_V7_TRAIN_EVERY_ROUNDS,
+    adaptiveGateShadowFile: ADAPTIVE_GATE_SHADOW_FILE,
+    adaptiveGateShadow: adaptiveGateShadow.stats(Array.from(rounds.values())),
     shadowV3TrainEveryRounds: SHADOW_V3_TRAIN_EVERY_ROUNDS,
     shadowV3TrainTimeBudget: SHADOW_V3_TRAIN_TIME_BUDGET,
     shadowRollingForward: rollingForwardSummary(),

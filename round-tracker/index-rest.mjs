@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
+import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -38,6 +39,8 @@ const SHADOW_V3_TRAIN_EVERY_ROUNDS = Math.max(10, Number(process.env.SHADOW_V3_T
 const SHADOW_V3_TRAIN_TIME_BUDGET = Math.max(30, Number(process.env.SHADOW_V3_TRAIN_TIME_BUDGET || 75));
 const SHADOW_V4_DIR = String(process.env.SHADOW_V4_DIR || '/data/shadow-v4');
 const SHADOW_V4_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V4_TRAIN_EVERY_ROUNDS || 60));
+const SHADOW_V5_DIR = String(process.env.SHADOW_V5_DIR || '/data/shadow-v5');
+const SHADOW_V5_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V5_TRAIN_EVERY_ROUNDS || 60));
 const ARCHIVE_SCHEMA_VERSION = 1;
 const ARCHIVE_DIR = String(process.env.ROUND_ARCHIVE_DIR || `${HISTORY_FILE}.archive`).replace(/\/+$/, '');
 const LOCK_QUALITY_SHADOW_VERSION = 'LOCK_QUALITY_SHADOW_V1';
@@ -287,6 +290,16 @@ const shadowV4 = createShadowV4Client({
   forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
   maxCandidates: 4,
   trainEveryRounds: SHADOW_V4_TRAIN_EVERY_ROUNDS,
+  log,
+});
+
+const shadowV5 = createShadowV5Client({
+  historyFile: HISTORY_FILE,
+  dir: SHADOW_V5_DIR,
+  minSamples: SHADOW_TRAIN_MIN_SAMPLES,
+  forwardTarget: SHADOW_FORWARD_MIN_SAMPLES,
+  maxCandidates: 4,
+  trainEveryRounds: SHADOW_V5_TRAIN_EVERY_ROUNDS,
   log,
 });
 
@@ -2130,6 +2143,7 @@ async function pollSignal() {
     if (row.shadowObservedAt && row.shadowFacts) {
       void shadowV3.observe(row, row.shadowFacts);
       void shadowV4.observe(row, row.shadowFacts);
+      void shadowV5.observe(row);
       if (productionUsesShadowV3()) {
         void shadowV3.predictProduction(SHADOW_PRODUCTION_MODEL_VERSION, row, row.shadowFacts)
           .then(result => {
@@ -2310,6 +2324,7 @@ async function settlePendingRounds() {
         shadowV2.settle(row);
         shadowV3.settle(row);
         void shadowV4.settle(row);
+        shadowV5.settle(row);
 
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -2327,6 +2342,7 @@ async function settlePendingRounds() {
         shadowV2.maybeTrain(shadowTrainingRows());
         void shadowV3.maybeTrain(row.roundStartMs);
         void shadowV4.maybeTrain(row.roundStartMs);
+        void shadowV5.maybeTrain(row.roundStartMs);
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
         if (
@@ -3018,10 +3034,12 @@ loadShadowForwardRegistry();
 shadowV2.load();
 shadowV3.load();
 shadowV4.load();
+shadowV5.load();
 deleteRetiredShadowForwardCandidates();
 shadowV2.deleteRetiredCandidates();
 shadowV3.deleteRetiredCandidates();
 shadowV4.deleteRetiredCandidates();
+shadowV5.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
@@ -3029,6 +3047,7 @@ maybeTrainShadowModel();
 shadowV2.maybeTrain(shadowTrainingRows());
 void shadowV3.maybeTrain();
 void shadowV4.maybeTrain();
+void shadowV5.maybeTrain();
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
@@ -3102,6 +3121,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-v4-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadowV4.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/shadow-v5-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(shadowV5.stats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {
@@ -3193,6 +3217,9 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV4Dir: SHADOW_V4_DIR,
     shadowV4: shadowV4.stats(),
     shadowV4TrainEveryRounds: SHADOW_V4_TRAIN_EVERY_ROUNDS,
+    shadowV5Dir: SHADOW_V5_DIR,
+    shadowV5: shadowV5.stats(),
+    shadowV5TrainEveryRounds: SHADOW_V5_TRAIN_EVERY_ROUNDS,
     shadowV3TrainEveryRounds: SHADOW_V3_TRAIN_EVERY_ROUNDS,
     shadowV3TrainTimeBudget: SHADOW_V3_TRAIN_TIME_BUDGET,
     shadowRollingForward: rollingForwardSummary(),

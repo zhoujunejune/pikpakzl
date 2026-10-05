@@ -1280,9 +1280,15 @@ function qualifiedShadowV6Candidate() {
 }
 
 function productionPolicyName() {
-  return productionUsesShadowV3()
-    ? 'IMMUTABLE_FIRST_LOCK_PINNED_SHADOW_V3_AUTOML'
-    : productionPolicyName();
+  if (productionUsesShadowV3()) {
+    return pinnedShadowV3Candidate()
+      ? 'IMMUTABLE_FIRST_LOCK_PINNED_SHADOW_V3_AUTOML_65_GATE'
+      : 'QUALIFIED_MODEL_65_GATE_WAIT';
+  }
+  if (qualifiedShadowV6Candidate()) {
+    return 'IMMUTABLE_FIRST_LOCK_QUALIFIED_SHADOW_V6_65_GATE';
+  }
+  return 'QUALIFIED_MODEL_65_GATE_WAIT';
 }
 
 function applyPinnedProductionShadow() {

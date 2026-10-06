@@ -2078,6 +2078,29 @@ function selectiveV2RecentProductionQuality(excludeRound = null) {
   };
 }
 
+
+function selectiveV2RecentDirectionQuality(direction, excludeRound = null, recentN = 10) {
+  const dir = direction === 'UP' || direction === 'DOWN' ? direction : null;
+  if (!dir) return { direction:null, samples:0, hits:0, misses:0, accuracy:null };
+  const settled = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) !== Number(excludeRound) &&
+      r.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&
+      r.productionPrediction === dir &&
+      (r.productionResult === 'HIT' || r.productionResult === 'MISS')
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+  const recent = settled.slice(-Math.max(1, Number(recentN) || 10));
+  const hits = recent.filter(r => r.productionResult === 'HIT').length;
+  return {
+    direction: dir,
+    samples: recent.length,
+    hits,
+    misses: recent.length - hits,
+    accuracy: recent.length ? hits / recent.length : null,
+  };
+}
+
 function selectiveV2AdaptiveThresholds(excludeRound = null) {
   const recent = selectiveV2RecentProductionQuality(excludeRound);
   let mode = 'NORMAL';
@@ -2123,13 +2146,28 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
   const delay = Number(delayMs);
   const absorption = facts?.absorptionRisk === true;
   const adaptive = selectiveV2AdaptiveThresholds(excludeRound);
+  const directionQuality = selectiveV2RecentDirectionQuality(direction, excludeRound, 10);
+  // Direction-local drift guard: do not punish the healthy side when only one
+  // direction deteriorates. Historical settled replay showed support is the
+  // strongest discriminator for the weak DOWN side.
+  let effectiveSupportMin = adaptive.supportMin;
+  let directionalMode = 'NONE';
+  if (
+    directionQuality.samples >= 10 &&
+    Number.isFinite(directionQuality.accuracy) &&
+    directionQuality.accuracy < 0.60
+  ) {
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.14);
+    directionalMode = 'DIRECTION_SUPPORT_FOCUS';
+  }
+
   const reasons = [];
   let eligible = true;
 
   if (!Number.isFinite(support)) { eligible = false; reasons.push('MISSING_PREDICTION_SUPPORT'); }
   if (!Number.isFinite(currentAbs)) { eligible = false; reasons.push('MISSING_CURRENT_SCORE'); }
   if (!Number.isFinite(delay)) { eligible = false; reasons.push('MISSING_LOCK_DELAY'); }
-  if (Number.isFinite(support) && support < adaptive.supportMin) reasons.push('PREDICTION_SUPPORT_BELOW_ADAPTIVE_MIN');
+  if (Number.isFinite(support) && support < effectiveSupportMin) reasons.push('PREDICTION_SUPPORT_BELOW_ADAPTIVE_MIN');
   if (Number.isFinite(currentAbs) && currentAbs < adaptive.currentMin) reasons.push('CURRENT_SCORE_BELOW_ADAPTIVE_MIN');
   if (Number.isFinite(delay) && delay >= adaptive.maxDelayMs) reasons.push('LOCK_DELAY_ABOVE_ADAPTIVE_MAX');
   if (absorption) reasons.push('ABSORPTION_RISK');
@@ -2146,14 +2184,22 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
     lockDelayMs: Number.isFinite(delay) ? delay : null,
     absorptionRisk: absorption,
     adaptiveMode: adaptive.mode,
+    directionalMode,
     recentProductionQuality: {
       samples: adaptive.recent.samples,
       hits: adaptive.recent.hits,
       misses: adaptive.recent.misses,
       accuracy: Number.isFinite(adaptive.recent.accuracy) ? Number(adaptive.recent.accuracy.toFixed(4)) : null,
     },
+    recentDirectionQuality: {
+      direction: directionQuality.direction,
+      samples: directionQuality.samples,
+      hits: directionQuality.hits,
+      misses: directionQuality.misses,
+      accuracy: Number.isFinite(directionQuality.accuracy) ? Number(directionQuality.accuracy.toFixed(4)) : null,
+    },
     thresholds: {
-      predictionSupportMin: adaptive.supportMin,
+      predictionSupportMin: effectiveSupportMin,
       currentScoreMin: adaptive.currentMin,
       maxDelayMs: adaptive.maxDelayMs,
       rejectAbsorption: true,
@@ -2335,6 +2381,80 @@ function selectiveV2InternalDirectionBacktest() {
     searchSpace:results.length,
     qualifiedCount:qualified.length,
     top:qualified.slice(0,12),
+  };
+}
+
+
+function selectiveV2NoBaseConsensusBacktest() {
+  const rows = Array.from(rounds.values())
+    .filter(r =>
+      (r.actual === 'UP' || r.actual === 'DOWN') &&
+      r.prediction !== 'UP' && r.prediction !== 'DOWN' &&
+      r.shadowFacts && typeof r.shadowFacts === 'object'
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+
+  const configs = [];
+  const bools = [false, true];
+  for (const currentMin of [0.60,0.65,0.70,0.75,0.80]) {
+    for (const trendMin of [0.50,0.60,0.70,0.80]) {
+      for (const pmMargin of [0.03,0.05,0.08,0.10,0.12]) {
+        for (const requireMicroAgree of bools) {
+          for (const requireMomentumAgree of bools) {
+            let n=0,h=0,upN=0,upH=0,downN=0,downH=0;
+            for (const r of rows) {
+              const f=r.shadowFacts;
+              if (f.absorptionRisk === true) continue;
+              const current=Number(f.currentScore);
+              const trend=Number(f.currentTrendScore);
+              const micro=Number(f.microScore);
+              const mom30=Number(f.normalizedMomentum30s);
+              const upMid=Number(f.predictionMarketUpMid);
+              if (![current,trend,upMid].every(Number.isFinite)) continue;
+              if (Math.abs(current) < currentMin || Math.abs(trend) < trendMin) continue;
+              const sign=current>0?1:current<0?-1:0;
+              if (!sign || sign*trend <= 0) continue;
+              if (sign>0 && upMid < 0.5 + pmMargin) continue;
+              if (sign<0 && upMid > 0.5 - pmMargin) continue;
+              if (requireMicroAgree && (!Number.isFinite(micro) || sign*micro <= 0)) continue;
+              if (requireMomentumAgree && (!Number.isFinite(mom30) || sign*mom30 <= 0)) continue;
+
+              const regime=String(f.regimeDirection||'').toUpperCase();
+              const agreement=Number(f.regimeAgreement);
+              if (
+                Number.isFinite(agreement) && agreement >= 0.67 &&
+                ((sign>0 && regime==='DOWN') || (sign<0 && regime==='UP'))
+              ) continue;
+
+              const decision=sign>0?'UP':'DOWN';
+              const hit=decision===r.actual;
+              n++; if(hit)h++;
+              if(decision==='UP'){upN++;if(hit)upH++;}
+              else {downN++;if(hit)downH++;}
+            }
+            configs.push({
+              currentMin,trendMin,pmMargin,requireMicroAgree,requireMomentumAgree,
+              samples:n,hits:h,misses:n-h,
+              accuracy:n?Number((h/n).toFixed(4)):null,
+              upSamples:upN,upAccuracy:upN?Number((upH/upN).toFixed(4)):null,
+              downSamples:downN,downAccuracy:downN?Number((downH/downN).toFixed(4)):null,
+              incrementalCoverage:rows.length?Number((n/rows.length).toFixed(4)):null,
+            });
+          }
+        }
+      }
+    }
+  }
+  const qualified=configs
+    .filter(x=>x.samples>=8 && Number(x.accuracy)>=0.70)
+    .sort((a,b)=>b.samples-a.samples || b.accuracy-a.accuracy);
+  return {
+    ok:true,
+    analysis:'SELECTIVE_V2_NO_BASE_CONSENSUS_BACKTEST',
+    waitRowsWithFacts:rows.length,
+    searchSpace:configs.length,
+    qualifiedCount:qualified.length,
+    top:qualified.slice(0,15),
   };
 }
 
@@ -3530,6 +3650,7 @@ updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
+log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsensusBacktest());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
 // Freeze the production direction in the background even when no browser is open

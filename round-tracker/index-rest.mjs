@@ -66,6 +66,9 @@ const LOCK_QUALITY_V2_START_MS = Math.max(0, Number(process.env.LOCK_QUALITY_V2_
 const LOCK_QUALITY_V2_SUPPORT_MIN = Math.min(0.25, Math.max(0, Number(process.env.LOCK_QUALITY_V2_SUPPORT_MIN || 0.05)));
 const LOCK_QUALITY_V2_CURRENT_MIN = Math.min(0.95, Math.max(0.08, Number(process.env.LOCK_QUALITY_V2_CURRENT_MIN || 0.60)));
 const LOCK_QUALITY_V2_MAX_DELAY_MS = Math.max(10000, Number(process.env.LOCK_QUALITY_V2_MAX_DELAY_MS || 22000));
+const LOCK_QUALITY_V2_DRIFT_RECENT_N = Math.max(10, Number(process.env.LOCK_QUALITY_V2_DRIFT_RECENT_N || 20));
+const LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY = Math.max(0.5, Math.min(0.9, Number(process.env.LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY || 0.65)));
+const LOCK_QUALITY_V2_RECOVERY_ACCURACY = Math.max(LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY, Math.min(0.95, Number(process.env.LOCK_QUALITY_V2_RECOVERY_ACCURACY || 0.70)));
 const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
 const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
 const SIGNAL_REDIS_LATEST_KEY = String(process.env.SIGNAL_REDIS_LATEST_KEY || 'binance:prediction:lock:latest');
@@ -2057,20 +2060,76 @@ function evaluateLockQuality(direction, facts, delayMs, currentMin = LOCK_QUALIT
   };
 }
 
-function evaluateSelectiveQualityV2(direction, facts, delayMs) {
+function selectiveV2RecentProductionQuality(excludeRound = null) {
+  const settled = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) !== Number(excludeRound) &&
+      r.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&
+      (r.productionResult === 'HIT' || r.productionResult === 'MISS')
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+  const recent = settled.slice(-LOCK_QUALITY_V2_DRIFT_RECENT_N);
+  const hits = recent.filter(r => r.productionResult === 'HIT').length;
+  return {
+    samples: recent.length,
+    hits,
+    misses: recent.length - hits,
+    accuracy: recent.length ? hits / recent.length : null,
+  };
+}
+
+function selectiveV2AdaptiveThresholds(excludeRound = null) {
+  const recent = selectiveV2RecentProductionQuality(excludeRound);
+  let mode = 'NORMAL';
+  let supportMin = LOCK_QUALITY_V2_SUPPORT_MIN;
+  let currentMin = LOCK_QUALITY_V2_CURRENT_MIN;
+  let maxDelayMs = LOCK_QUALITY_V2_MAX_DELAY_MS;
+
+  if (recent.samples >= LOCK_QUALITY_V2_DRIFT_RECENT_N) {
+    if (recent.accuracy < 0.55) {
+      mode = 'DRIFT_CRITICAL';
+      supportMin = Math.max(supportMin, 0.15);
+      currentMin = Math.max(currentMin, 0.75);
+      maxDelayMs = Math.min(maxDelayMs, 16000);
+    } else if (recent.accuracy < LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY) {
+      mode = 'DRIFT_STRICT';
+      // Recent live replay: current>=0.70, support>=0.12, delay<18s
+      // restored recent sample accuracy above the 65% floor while retaining coverage.
+      supportMin = Math.max(supportMin, 0.12);
+      currentMin = Math.max(currentMin, 0.70);
+      maxDelayMs = Math.min(maxDelayMs, 18000);
+    } else if (recent.accuracy < LOCK_QUALITY_V2_RECOVERY_ACCURACY) {
+      mode = 'RECOVERY_CAUTION';
+      supportMin = Math.max(supportMin, 0.08);
+      currentMin = Math.max(currentMin, 0.65);
+      maxDelayMs = Math.min(maxDelayMs, 20000);
+    }
+  }
+
+  return {
+    mode,
+    recent,
+    supportMin,
+    currentMin,
+    maxDelayMs,
+  };
+}
+
+function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = null) {
   const support = lockPredictionSupport(direction, facts);
   const currentAbs = Math.abs(Number(facts?.currentScore));
   const delay = Number(delayMs);
   const absorption = facts?.absorptionRisk === true;
+  const adaptive = selectiveV2AdaptiveThresholds(excludeRound);
   const reasons = [];
   let eligible = true;
 
   if (!Number.isFinite(support)) { eligible = false; reasons.push('MISSING_PREDICTION_SUPPORT'); }
   if (!Number.isFinite(currentAbs)) { eligible = false; reasons.push('MISSING_CURRENT_SCORE'); }
   if (!Number.isFinite(delay)) { eligible = false; reasons.push('MISSING_LOCK_DELAY'); }
-  if (Number.isFinite(support) && support < LOCK_QUALITY_V2_SUPPORT_MIN) reasons.push('PREDICTION_SUPPORT_LT_0_05');
-  if (Number.isFinite(currentAbs) && currentAbs < LOCK_QUALITY_V2_CURRENT_MIN) reasons.push('CURRENT_SCORE_LT_0_65');
-  if (Number.isFinite(delay) && delay >= LOCK_QUALITY_V2_MAX_DELAY_MS) reasons.push('LOCK_DELAY_GTE_18S');
+  if (Number.isFinite(support) && support < adaptive.supportMin) reasons.push('PREDICTION_SUPPORT_BELOW_ADAPTIVE_MIN');
+  if (Number.isFinite(currentAbs) && currentAbs < adaptive.currentMin) reasons.push('CURRENT_SCORE_BELOW_ADAPTIVE_MIN');
+  if (Number.isFinite(delay) && delay >= adaptive.maxDelayMs) reasons.push('LOCK_DELAY_ABOVE_ADAPTIVE_MAX');
   if (absorption) reasons.push('ABSORPTION_RISK');
 
   const pass = eligible && reasons.length === 0;
@@ -2084,10 +2143,17 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs) {
     currentScoreAbs: Number.isFinite(currentAbs) ? Number(currentAbs.toFixed(4)) : null,
     lockDelayMs: Number.isFinite(delay) ? delay : null,
     absorptionRisk: absorption,
+    adaptiveMode: adaptive.mode,
+    recentProductionQuality: {
+      samples: adaptive.recent.samples,
+      hits: adaptive.recent.hits,
+      misses: adaptive.recent.misses,
+      accuracy: Number.isFinite(adaptive.recent.accuracy) ? Number(adaptive.recent.accuracy.toFixed(4)) : null,
+    },
     thresholds: {
-      predictionSupportMin: LOCK_QUALITY_V2_SUPPORT_MIN,
-      currentScoreMin: LOCK_QUALITY_V2_CURRENT_MIN,
-      maxDelayMs: LOCK_QUALITY_V2_MAX_DELAY_MS,
+      predictionSupportMin: adaptive.supportMin,
+      currentScoreMin: adaptive.currentMin,
+      maxDelayMs: adaptive.maxDelayMs,
       rejectAbsorption: true,
     },
   };
@@ -2141,6 +2207,7 @@ function selectiveQualityV2Summary() {
       maxDelayMs:LOCK_QUALITY_V2_MAX_DELAY_MS,
       rejectAbsorption:true,
     },
+    adaptive: selectiveV2AdaptiveThresholds(),
     status,
   };
 }
@@ -2394,7 +2461,7 @@ async function pollSignal() {
       row.predictionDelayMs = Math.max(0, row.predictedAt - row.roundStartMs);
       row.lockQualityShadow = evaluateLockQuality(direction, row.predictionFacts, row.predictionDelayMs);
       if (Number(row.roundStartMs) >= LOCK_QUALITY_V2_START_MS) {
-        row.lockQualitySelectiveV2 = evaluateSelectiveQualityV2(direction, row.predictionFacts, row.predictionDelayMs);
+        row.lockQualitySelectiveV2 = evaluateSelectiveQualityV2(direction, row.predictionFacts, row.predictionDelayMs, row.roundStartMs);
         row.adaptiveGateShadow = adaptiveGateShadow.evaluate(row);
       }
       row.source = live.model || row.source;
@@ -3067,7 +3134,7 @@ function productionSignalPayload(now = Date.now()) {
       : null;
     const q = baseDirection
       ? (row.lockQualitySelectiveV2 ||
-          evaluateSelectiveQualityV2(baseDirection, row.predictionFacts, row.predictionDelayMs))
+          evaluateSelectiveQualityV2(baseDirection, row.predictionFacts, row.predictionDelayMs, row.roundStartMs))
       : null;
     const direction = q?.pass && (q?.decision === 'UP' || q?.decision === 'DOWN')
       ? q.decision

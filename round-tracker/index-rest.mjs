@@ -69,6 +69,10 @@ const LOCK_QUALITY_V2_MAX_DELAY_MS = Math.max(10000, Number(process.env.LOCK_QUA
 const LOCK_QUALITY_V2_DRIFT_RECENT_N = Math.max(10, Number(process.env.LOCK_QUALITY_V2_DRIFT_RECENT_N || 20));
 const LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY = Math.max(0.5, Math.min(0.9, Number(process.env.LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY || 0.65)));
 const LOCK_QUALITY_V2_RECOVERY_ACCURACY = Math.max(LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY, Math.min(0.95, Number(process.env.LOCK_QUALITY_V2_RECOVERY_ACCURACY || 0.70)));
+const SELECTIVE_V2_NO_BASE_SHADOW_VERSION = 'SELECTIVE_V2_NO_BASE_CONSENSUS_SHADOW_V1';
+const SELECTIVE_V2_NO_BASE_SHADOW_START_MS = Math.max(0, Number(process.env.SELECTIVE_V2_NO_BASE_SHADOW_START_MS || 1791297900000));
+const SELECTIVE_V2_NO_BASE_FORWARD_TARGET = Math.max(30, Number(process.env.SELECTIVE_V2_NO_BASE_FORWARD_TARGET || 60));
+
 const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
 const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
 const SIGNAL_REDIS_LATEST_KEY = String(process.env.SIGNAL_REDIS_LATEST_KEY || 'binance:prediction:lock:latest');
@@ -2385,6 +2389,110 @@ function selectiveV2InternalDirectionBacktest() {
 }
 
 
+
+function selectiveV2NoBaseConsensusDecision(facts) {
+  const f = facts && typeof facts === 'object' ? facts : null;
+  const reasons = [];
+  if (!f) return {
+    version: SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
+    decision:'WAIT',
+    reasons:['MISSING_FACTS'],
+  };
+
+  const current = Number(f.currentScore);
+  const trend = Number(f.currentTrendScore);
+  const upMid = Number(f.predictionMarketUpMid);
+  const currentMin = 0.65;
+  const trendMin = 0.70;
+  const pmMargin = 0.03;
+
+  if (![current,trend,upMid].every(Number.isFinite)) reasons.push('MISSING_CORE_FEATURE');
+  if (f.absorptionRisk === true) reasons.push('ABSORPTION_RISK');
+
+  const sign = current > 0 ? 1 : current < 0 ? -1 : 0;
+  if (!sign) reasons.push('NO_CURRENT_DIRECTION');
+  if (Number.isFinite(current) && Math.abs(current) < currentMin) reasons.push('CURRENT_BELOW_MIN');
+  if (Number.isFinite(trend) && Math.abs(trend) < trendMin) reasons.push('TREND_BELOW_MIN');
+  if (sign && Number.isFinite(trend) && sign * trend <= 0) reasons.push('CURRENT_TREND_CONFLICT');
+  if (sign > 0 && Number.isFinite(upMid) && upMid < 0.5 + pmMargin) reasons.push('PREDICTION_MARKET_NOT_SUPPORT_UP');
+  if (sign < 0 && Number.isFinite(upMid) && upMid > 0.5 - pmMargin) reasons.push('PREDICTION_MARKET_NOT_SUPPORT_DOWN');
+
+  const regime = String(f.regimeDirection || '').toUpperCase();
+  const agreement = Number(f.regimeAgreement);
+  if (
+    sign &&
+    Number.isFinite(agreement) &&
+    agreement >= 0.67 &&
+    ((sign > 0 && regime === 'DOWN') || (sign < 0 && regime === 'UP'))
+  ) reasons.push('STRONG_REGIME_CONFLICT');
+
+  const pass = reasons.length === 0;
+  return {
+    version: SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
+    modelVersion: SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
+    evaluatedAt: Date.now(),
+    productionEffect:'NONE_SHADOW_ONLY',
+    decision: pass ? (sign > 0 ? 'UP' : 'DOWN') : 'WAIT',
+    reasons,
+    facts:{
+      currentScore:Number.isFinite(current)?Number(current.toFixed(4)):null,
+      currentTrendScore:Number.isFinite(trend)?Number(trend.toFixed(4)):null,
+      predictionMarketUpMid:Number.isFinite(upMid)?Number(upMid.toFixed(4)):null,
+      regimeDirection:regime||null,
+      regimeAgreement:Number.isFinite(agreement)?Number(agreement.toFixed(4)):null,
+    },
+    thresholds:{currentMin,trendMin,pmMargin,rejectAbsorption:true},
+  };
+}
+
+function selectiveV2NoBaseShadowSummary() {
+  const settled = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) >= SELECTIVE_V2_NO_BASE_SHADOW_START_MS &&
+      (r.actual === 'UP' || r.actual === 'DOWN') &&
+      r?.selectiveV2NoBaseShadow?.modelVersion === SELECTIVE_V2_NO_BASE_SHADOW_VERSION
+    )
+    .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
+
+  const incremental = settled.filter(r =>
+    r.prediction !== 'UP' &&
+    r.prediction !== 'DOWN' &&
+    (r.selectiveV2NoBaseShadow?.decision === 'UP' || r.selectiveV2NoBaseShadow?.decision === 'DOWN')
+  );
+  const hits = incremental.filter(r => r.selectiveV2NoBaseShadow.decision === r.actual).length;
+  const samples = incremental.length;
+  const accuracy = samples ? hits / samples : null;
+  const up = incremental.filter(r=>r.selectiveV2NoBaseShadow.decision==='UP');
+  const down = incremental.filter(r=>r.selectiveV2NoBaseShadow.decision==='DOWN');
+  const sum = arr => {
+    const h=arr.filter(r=>r.selectiveV2NoBaseShadow.decision===r.actual).length;
+    return {samples:arr.length,hits:h,misses:arr.length-h,accuracy:arr.length?Number((h/arr.length).toFixed(4)):null};
+  };
+
+  let status='FORWARD_COLLECTING';
+  if (samples >= 20 && Number.isFinite(accuracy) && accuracy < 0.65) status='LOW_ACCURACY';
+  else if (samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET && Number.isFinite(accuracy) && accuracy >= 0.70) status='FORWARD_70_MET';
+  else if (samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET) status='FORWARD_COMPLETE';
+
+  return {
+    ok:true,
+    version:SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
+    productionEffect:'NONE_SHADOW_ONLY',
+    startMs:SELECTIVE_V2_NO_BASE_SHADOW_START_MS,
+    targetSamples:SELECTIVE_V2_NO_BASE_FORWARD_TARGET,
+    settledObserved: settled.length,
+    incrementalSamples:samples,
+    hits,
+    misses:samples-hits,
+    forwardAccuracy:Number.isFinite(accuracy)?Number(accuracy.toFixed(4)):null,
+    remainingSamples:Math.max(0,SELECTIVE_V2_NO_BASE_FORWARD_TARGET-samples),
+    incrementalCoverage:settled.length?Number((samples/settled.length).toFixed(4)):null,
+    up:sum(up),
+    down:sum(down),
+    status,
+  };
+}
+
 function selectiveV2NoBaseConsensusBacktest() {
   const rows = Array.from(rounds.values())
     .filter(r =>
@@ -2583,6 +2691,7 @@ function ensureRound(roundStartMs) {
       lockQualityShadow: null,
       adaptiveGateShadow: null,
       preLockAdaptiveShadow: null,
+      selectiveV2NoBaseShadow: null,
       predictedAt: null,
       predictionDelayMs: null,
       actual: null,
@@ -2652,6 +2761,19 @@ async function pollSignal() {
       row.shadowCandidateProbability = Number.isFinite(candidateP) ? Number(candidateP.toFixed(6)) : null;
       row.shadowCandidateTrainedAt = shadowCandidate?.trainedAt ?? null;
       row.preLockAdaptiveShadow = preLockAdaptiveShadow.evaluate(row);
+      if (
+        Number(row.roundStartMs) >= SELECTIVE_V2_NO_BASE_SHADOW_START_MS &&
+        !row.selectiveV2NoBaseShadow
+      ) {
+        row.selectiveV2NoBaseShadow = selectiveV2NoBaseConsensusDecision(liveFacts);
+        log('selective_v2_no_base_shadow_evaluated', {
+          round: row.roundStartMs,
+          modelVersion: SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
+          decision: row.selectiveV2NoBaseShadow?.decision ?? 'WAIT',
+          reasons: row.selectiveV2NoBaseShadow?.reasons ?? [],
+          productionEffect:'NONE_SHADOW_ONLY',
+        });
+      }
       observeShadowForwardRegistry(row, liveFacts);
       shadowV2.observe(row, liveFacts);
       saveHistory();
@@ -2851,6 +2973,15 @@ async function settlePendingRounds() {
         void shadowV7.settle(row);
         adaptiveGateShadow.onSettled(row, Array.from(rounds.values()));
         preLockAdaptiveShadow.onSettled(row, Array.from(rounds.values()));
+        if (row?.selectiveV2NoBaseShadow?.modelVersion === SELECTIVE_V2_NO_BASE_SHADOW_VERSION) {
+          const nb = selectiveV2NoBaseShadowSummary();
+          if (
+            nb.incrementalSamples > 0 &&
+            (nb.incrementalSamples % 5 === 0 || nb.incrementalSamples === SELECTIVE_V2_NO_BASE_FORWARD_TARGET)
+          ) {
+            log('selective_v2_no_base_shadow_forward_progress', nb);
+          }
+        }
 
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
@@ -3651,6 +3782,7 @@ log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
 log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsensusBacktest());
+log('selective_v2_no_base_shadow_status', selectiveV2NoBaseShadowSummary());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
 // Freeze the production direction in the background even when no browser is open
@@ -3735,6 +3867,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/selective-v2-optimization-backtest') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(selectiveV2InternalDirectionBacktest()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/selective-v2-no-base-shadow-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(selectiveV2NoBaseShadowSummary()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/shadow-quality-v2-stats') {

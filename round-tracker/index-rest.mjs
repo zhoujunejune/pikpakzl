@@ -2092,12 +2092,14 @@ function selectiveV2AdaptiveThresholds(excludeRound = null) {
       currentMin = Math.max(currentMin, 0.75);
       maxDelayMs = Math.min(maxDelayMs, 16000);
     } else if (recent.accuracy < LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY) {
-      mode = 'DRIFT_STRICT';
-      // Recent live replay: current>=0.70, support>=0.12, delay<18s
-      // restored recent sample accuracy above the 65% floor while retaining coverage.
+      mode = 'DRIFT_SUPPORT_FOCUS';
+      // Live settled replay (2026-10-06): the previous triple-tightening
+      // support>=0.12 + current>=0.70 + delay<18s yielded 6/9 = 66.7%.
+      // Keeping support>=0.12 while retaining the normal current-score and
+      // delay bounds yielded 14/19 = 73.68% with materially better coverage.
+      // Support is currently the useful discriminator; over-tightening the
+      // other two gates was rejecting good directions without improving edge.
       supportMin = Math.max(supportMin, 0.12);
-      currentMin = Math.max(currentMin, 0.70);
-      maxDelayMs = Math.min(maxDelayMs, 18000);
     } else if (recent.accuracy < LOCK_QUALITY_V2_RECOVERY_ACCURACY) {
       mode = 'RECOVERY_CAUTION';
       supportMin = Math.max(supportMin, 0.08);

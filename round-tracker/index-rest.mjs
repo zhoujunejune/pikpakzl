@@ -2212,6 +2212,130 @@ function selectiveQualityV2Summary() {
   };
 }
 
+
+function selectiveV2InternalDirectionBacktest() {
+  const rows = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) >= LOCK_QUALITY_V2_START_MS &&
+      (r.actual === 'UP' || r.actual === 'DOWN')
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+
+  const baseline = rows.map(r => {
+    const hasBase = r.prediction === 'UP' || r.prediction === 'DOWN';
+    const q = hasBase
+      ? (r.lockQualitySelectiveV2 ||
+          evaluateSelectiveQualityV2(r.prediction, r.predictionFacts, r.predictionDelayMs))
+      : null;
+    const decision = hasBase && q?.pass ? r.prediction : 'WAIT';
+    return { row:r, decision };
+  });
+  const baselineDecided = baseline.filter(x => x.decision === 'UP' || x.decision === 'DOWN');
+  const baselineHits = baselineDecided.filter(x => x.decision === x.row.actual).length;
+
+  const currentMins = [0.45,0.50,0.55,0.60];
+  const scoreMins = [0.08,0.12,0.16,0.20,0.22];
+  const momentum30Mins = [0,0.05,0.10];
+  const distanceMins = [0,0.5,1.0];
+  const results = [];
+
+  for (const currentMin of currentMins) {
+    for (const scoreMin of scoreMins) {
+      for (const momentum30Min of momentum30Mins) {
+        for (const distanceMinBps of distanceMins) {
+          let added = 0, addedHits = 0, considered = 0;
+          for (const x of baseline) {
+            if (x.decision !== 'WAIT') continue;
+            const r = x.row;
+            // This optimization targets the dominant WAIT cause: no base direction.
+            if (r.prediction === 'UP' || r.prediction === 'DOWN') continue;
+            const f = r.shadowFacts;
+            if (!f || typeof f !== 'object') continue;
+
+            const current = Number(f.currentScore);
+            const score = Number(f.liveScore);
+            const distance = Number(f.distanceFromOpenBps);
+            const m30 = Number(f.normalizedMomentum30s);
+            if (![current, score, distance, m30].every(Number.isFinite)) continue;
+            considered += 1;
+            if (Math.abs(distance) < distanceMinBps) continue;
+
+            const sign = distance > 0 ? 1 : distance < 0 ? -1 : 0;
+            if (!sign) continue;
+            if (sign * current < currentMin) continue;
+            if (sign * score < scoreMin) continue;
+            if (sign * m30 < momentum30Min) continue;
+            if (f.absorptionRisk === true) continue;
+
+            const regime = String(f.regimeDirection || '').toUpperCase();
+            const regimeAgreement = Number(f.regimeAgreement);
+            if (
+              Number.isFinite(regimeAgreement) &&
+              regimeAgreement >= 0.67 &&
+              ((sign > 0 && regime === 'DOWN') || (sign < 0 && regime === 'UP'))
+            ) continue;
+
+            const upMid = Number(f.predictionMarketUpMid);
+            if (Number.isFinite(upMid)) {
+              if (sign > 0 && upMid < 0.47) continue;
+              if (sign < 0 && upMid > 0.53) continue;
+            }
+
+            const decision = sign > 0 ? 'UP' : 'DOWN';
+            added += 1;
+            if (decision === r.actual) addedHits += 1;
+          }
+
+          const combinedSamples = baselineDecided.length + added;
+          const combinedHits = baselineHits + addedHits;
+          const incrementalAccuracy = added ? addedHits / added : null;
+          const combinedAccuracy = combinedSamples ? combinedHits / combinedSamples : null;
+          const combinedCoverage = rows.length ? combinedSamples / rows.length : null;
+          results.push({
+            currentMin,
+            scoreMin,
+            momentum30Min,
+            distanceMinBps,
+            considered,
+            added,
+            addedHits,
+            addedMisses: added - addedHits,
+            incrementalAccuracy: Number.isFinite(incrementalAccuracy) ? Number(incrementalAccuracy.toFixed(4)) : null,
+            combinedSamples,
+            combinedAccuracy: Number.isFinite(combinedAccuracy) ? Number(combinedAccuracy.toFixed(4)) : null,
+            combinedCoverage: Number.isFinite(combinedCoverage) ? Number(combinedCoverage.toFixed(4)) : null,
+          });
+        }
+      }
+    }
+  }
+
+  const qualified = results
+    .filter(x => x.added >= 5 && Number(x.incrementalAccuracy) >= 0.70 && Number(x.combinedAccuracy) >= 0.70)
+    .sort((a,b) =>
+      Number(b.combinedCoverage) - Number(a.combinedCoverage) ||
+      Number(b.incrementalAccuracy) - Number(a.incrementalAccuracy) ||
+      Number(b.combinedAccuracy) - Number(a.combinedAccuracy)
+    );
+
+  return {
+    ok:true,
+    analysis:'SELECTIVE_V2_INTERNAL_DIRECTION_BACKTEST',
+    target:'WAITING_FOR_BASE_DIRECTION_ONLY',
+    settledRounds:rows.length,
+    baseline:{
+      samples:baselineDecided.length,
+      hits:baselineHits,
+      misses:baselineDecided.length-baselineHits,
+      accuracy:baselineDecided.length ? Number((baselineHits/baselineDecided.length).toFixed(4)) : null,
+      coverage:rows.length ? Number((baselineDecided.length/rows.length).toFixed(4)) : null,
+    },
+    searchSpace:results.length,
+    qualifiedCount:qualified.length,
+    top:qualified.slice(0,12),
+  };
+}
+
 function summarizeLockQuality(rows, currentMin = LOCK_QUALITY_CURRENT_SCORE_MIN) {
   const decided = rows.filter(r => (r.result === 'HIT' || r.result === 'MISS') && (r.prediction === 'UP' || r.prediction === 'DOWN'));
   const evaluated = decided.map(r => ({ row:r, q:evaluateLockQuality(r.prediction, r.predictionFacts, r.predictionDelayMs, currentMin) }));
@@ -3403,6 +3527,7 @@ applyPinnedProductionShadow();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
+log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
 // Freeze the production direction in the background even when no browser is open
@@ -3482,6 +3607,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-v7-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadowV7.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/selective-v2-optimization-backtest') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(selectiveV2InternalDirectionBacktest()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/shadow-quality-v2-stats') {

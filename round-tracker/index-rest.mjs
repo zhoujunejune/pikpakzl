@@ -2476,16 +2476,16 @@ function selectiveV2NoBaseShadowSummary() {
   if (samples >= 20 && Number.isFinite(accuracy) && accuracy < 0.65) status='LOW_ACCURACY';
   else if (
     samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET &&
-    Number.isFinite(accuracy) && accuracy >= 0.70 &&
+    Number.isFinite(accuracy) && accuracy >= 0.75 &&
     recent20.length >= 20 &&
-    Number.isFinite(recent20Accuracy) && recent20Accuracy >= 0.70
-  ) status='FORWARD_70_MET';
+    Number.isFinite(recent20Accuracy) && recent20Accuracy >= 0.75
+  ) status='FORWARD_75_MET';
   else if (samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET) status='FORWARD_COMPLETE';
 
   return {
     ok:true,
     version:SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
-    productionEffect:status==='FORWARD_70_MET'?'ELIGIBLE_INTERNAL_PRODUCTION_BRANCH':'NONE_SHADOW_ONLY',
+    productionEffect:status==='FORWARD_75_MET'?'ELIGIBLE_INTERNAL_PRODUCTION_BRANCH':'NONE_SHADOW_ONLY',
     startMs:SELECTIVE_V2_NO_BASE_SHADOW_START_MS,
     targetSamples:SELECTIVE_V2_NO_BASE_FORWARD_TARGET,
     settledObserved: settled.length,
@@ -3562,7 +3562,7 @@ function productionSignalPayload(now = Date.now()) {
       const noBaseDecision = row.selectiveV2NoBaseShadow;
       const elapsedMs = Math.max(0, Number(now) - Number(row.roundStartMs));
       if (
-        noBase.status === 'FORWARD_70_MET' &&
+        noBase.status === 'FORWARD_75_MET' &&
         elapsedMs >= LOCK_QUALITY_V2_MAX_DELAY_MS &&
         (noBaseDecision?.decision === 'UP' || noBaseDecision?.decision === 'DOWN')
       ) {

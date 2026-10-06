@@ -2068,7 +2068,7 @@ function selectiveV2RecentProductionQuality(excludeRound = null) {
   const settled = Array.from(rounds.values())
     .filter(r =>
       Number(r.roundStartMs) !== Number(excludeRound) &&
-      r.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&
+      String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2') &&
       (r.productionResult === 'HIT' || r.productionResult === 'MISS')
     )
     .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
@@ -2462,6 +2462,9 @@ function selectiveV2NoBaseShadowSummary() {
   const hits = incremental.filter(r => r.selectiveV2NoBaseShadow.decision === r.actual).length;
   const samples = incremental.length;
   const accuracy = samples ? hits / samples : null;
+  const recent20 = incremental.slice(-20);
+  const recent20Hits = recent20.filter(r => r.selectiveV2NoBaseShadow.decision === r.actual).length;
+  const recent20Accuracy = recent20.length ? recent20Hits / recent20.length : null;
   const up = incremental.filter(r=>r.selectiveV2NoBaseShadow.decision==='UP');
   const down = incremental.filter(r=>r.selectiveV2NoBaseShadow.decision==='DOWN');
   const sum = arr => {
@@ -2471,13 +2474,18 @@ function selectiveV2NoBaseShadowSummary() {
 
   let status='FORWARD_COLLECTING';
   if (samples >= 20 && Number.isFinite(accuracy) && accuracy < 0.65) status='LOW_ACCURACY';
-  else if (samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET && Number.isFinite(accuracy) && accuracy >= 0.70) status='FORWARD_70_MET';
+  else if (
+    samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET &&
+    Number.isFinite(accuracy) && accuracy >= 0.70 &&
+    recent20.length >= 20 &&
+    Number.isFinite(recent20Accuracy) && recent20Accuracy >= 0.70
+  ) status='FORWARD_70_MET';
   else if (samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET) status='FORWARD_COMPLETE';
 
   return {
     ok:true,
     version:SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
-    productionEffect:'NONE_SHADOW_ONLY',
+    productionEffect:status==='FORWARD_70_MET'?'ELIGIBLE_INTERNAL_PRODUCTION_BRANCH':'NONE_SHADOW_ONLY',
     startMs:SELECTIVE_V2_NO_BASE_SHADOW_START_MS,
     targetSamples:SELECTIVE_V2_NO_BASE_FORWARD_TARGET,
     settledObserved: settled.length,
@@ -2485,6 +2493,7 @@ function selectiveV2NoBaseShadowSummary() {
     hits,
     misses:samples-hits,
     forwardAccuracy:Number.isFinite(accuracy)?Number(accuracy.toFixed(4)):null,
+    recent20Accuracy:Number.isFinite(recent20Accuracy)?Number(recent20Accuracy.toFixed(4)):null,
     remainingSamples:Math.max(0,SELECTIVE_V2_NO_BASE_FORWARD_TARGET-samples),
     incrementalCoverage:settled.length?Number((samples/settled.length).toFixed(4)):null,
     up:sum(up),
@@ -3134,7 +3143,7 @@ function productionSummary() {
     coveragePct: settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null,
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
-    selectiveV2Rounds: decided.filter(r => r.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY').length,
+    selectiveV2Rounds: decided.filter(r => String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2')).length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     currentQualifiedModel: productionUsesSelectiveV2()
       ? LOCK_QUALITY_V2_VERSION
@@ -3471,7 +3480,8 @@ function productionSignalPayload(now = Date.now()) {
       source: row.productionSource || 'UNKNOWN',
       model: row.productionModel || null,
       facts: row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
-        row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY'
+        row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY' ||
+        row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY'
         ? (row.shadowFacts ?? null)
         : (row.predictionFacts ?? null),
       productionPolicy: productionPolicyName(),
@@ -3545,6 +3555,47 @@ function productionSignalPayload(now = Date.now()) {
       freezeProductionLock(row, live);
       logProductionSignalState(live);
       return { ok: true, live };
+    }
+
+    if (!baseDirection) {
+      const noBase = selectiveV2NoBaseShadowSummary();
+      const noBaseDecision = row.selectiveV2NoBaseShadow;
+      const elapsedMs = Math.max(0, Number(now) - Number(row.roundStartMs));
+      if (
+        noBase.status === 'FORWARD_70_MET' &&
+        elapsedMs >= LOCK_QUALITY_V2_MAX_DELAY_MS &&
+        (noBaseDecision?.decision === 'UP' || noBaseDecision?.decision === 'DOWN')
+      ) {
+        const direction = noBaseDecision.decision;
+        const live = {
+          round: row.roundStartMs,
+          status: 'LOCKED',
+          signal: {
+            direction,
+            score: Number.isFinite(Number(row.shadowFacts?.currentScore))
+              ? Number(row.shadowFacts.currentScore)
+              : null,
+            confidence: null,
+            modelProbability: null,
+          },
+          input: { round: row.roundStartMs },
+          generatedAt: Number(now),
+          source: 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY',
+          model: LOCK_QUALITY_V2_VERSION,
+          facts: row.shadowFacts ?? null,
+          productionPolicy: productionPolicyName(),
+          fallbackUsed: false,
+          selectiveQuality: {
+            ...noBaseDecision,
+            forwardQualification: noBase,
+          },
+          shadowForwardStatus: selectiveQualityV2Summary().status,
+          shadowForwardSamples: selectiveQualityV2Summary().forwardSamples,
+        };
+        freezeProductionLock(row, live);
+        logProductionSignalState(live);
+        return { ok:true, live };
+      }
     }
 
     const reasons = !baseDirection

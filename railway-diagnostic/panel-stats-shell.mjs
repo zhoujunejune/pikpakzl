@@ -171,6 +171,31 @@ async function refreshStatsCache() {
   }
 }
 
+async function proxyTrainingStatus(res) {
+  const origins = [ROUND_STATS_ORIGIN, ROUND_STATS_PUBLIC_ORIGIN].filter((v, i, a) => v && a.indexOf(v) === i);
+  let lastError = null;
+  for (const origin of origins) {
+    try {
+      const r = await fetch(origin + '/api/training-status', {
+        cache:'no-store',
+        signal:AbortSignal.timeout(STATS_PROXY_FALLBACK_TIMEOUT_MS),
+      });
+      const text = await r.text();
+      if (!r.ok) throw new Error('HTTP_' + r.status);
+      let json;
+      try { json = JSON.parse(text); } catch { throw new Error('INVALID_JSON'); }
+      if (!json?.ok) throw new Error(json?.error || 'NOT_OK');
+      res.writeHead(200, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+      return res.end(JSON.stringify(json));
+    } catch (err) {
+      lastError = err?.message || String(err);
+      log('training_status_proxy_failed', { origin, error:lastError });
+    }
+  }
+  res.writeHead(502, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+  return res.end(JSON.stringify({ ok:false, error:lastError || 'TRAINING_STATUS_UNAVAILABLE' }));
+}
+
 async function proxyStats(res) {
   // UI reads the panel-local cache instead of hitting V2 for every browser/tab.
   if (!lastGoodStats) await refreshStatsCache();
@@ -192,6 +217,7 @@ startInner();
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (req.method === 'GET' && url.pathname === '/api/round-stats') return proxyStats(res);
+  if (req.method === 'GET' && url.pathname === '/api/training-status') return proxyTrainingStatus(res);
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);
   return proxyInner(req, res, false);
 }).listen(PORT, '0.0.0.0', () => {

@@ -125,6 +125,9 @@ let lastSignal = {
   reason: 'STARTING',
 };
 
+let diagnosticRoundStart = null;
+const diagnosticCheckpointsLogged = new Set();
+
 function prune(now) {
   const cutoff = now - STORAGE_MS;
   while (trades.length && trades[0].marketTs < cutoff) trades.shift();
@@ -409,9 +412,12 @@ function inferPredictionBookMapping(topic) {
 function closePredictionWs() {
   clearTimeout(predictionReconnectTimer);
   predictionReconnectTimer = null;
-  if (predictionWs) {
-    try { predictionWs.terminate(); } catch {}
-    predictionWs = null;
+  const socket = predictionWs;
+  // Detach the global reference before terminate(). The old socket's async
+  // close handler must never be able to null out a newly-created socket.
+  predictionWs = null;
+  if (socket) {
+    try { socket.terminate(); } catch {}
   }
 }
 
@@ -427,16 +433,22 @@ function connectPredictionOrderbook(marketId, yesDirection) {
   };
   const sorted = Object.keys(params).sort().map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k])).join('&');
   const url = 'wss://api.binance.com/sapi/wss?' + sorted + '&signature=' + predictionSign(sorted);
-  predictionWs = new WebSocket(url, {
+  const socket = new WebSocket(url, {
     headers: { 'X-MBX-APIKEY': PREDICTION_API_KEY },
     perMessageDeflate: false,
     handshakeTimeout: 10000,
   });
+  predictionWs = socket;
 
-  predictionWs.on('open', () => {
+  socket.on('open', () => {
+    // Ignore a late open from a socket that was superseded during round switch.
+    if (predictionWs !== socket || Number(predictionMarketId) !== Number(marketId)) return;
     console.log(JSON.stringify({ event:'prediction_orderbook_connected', marketId, yesDirection, strategyVersion:STRATEGY_VERSION }));
   });
-  predictionWs.on('message', raw => {
+  socket.on('message', raw => {
+    // Critical round-integrity guard: only the currently active socket/current
+    // market may mutate the shared predictionBook.
+    if (predictionWs !== socket || Number(predictionMarketId) !== Number(marketId)) return;
     let env;
     try { env = JSON.parse(raw.toString()); } catch { return; }
     let d = env?.data;
@@ -484,13 +496,17 @@ function connectPredictionOrderbook(marketId, yesDirection) {
       }));
     }
   });
-  predictionWs.on('ping', data => { try { predictionWs?.pong(data); } catch {} });
-  predictionWs.on('error', err => {
+  socket.on('ping', data => { try { socket.pong(data); } catch {} });
+  socket.on('error', err => {
+    if (predictionWs !== socket && Number(predictionMarketId) !== Number(marketId)) return;
     console.error(JSON.stringify({ event:'prediction_orderbook_error', marketId, error:err?.message || String(err) }));
   });
-  predictionWs.on('close', () => {
-    predictionWs = null;
-    if (Number(predictionMarketId) === Number(marketId)) {
+  socket.on('close', () => {
+    const isCurrentSocket = predictionWs === socket;
+    const isCurrentMarket = Number(predictionMarketId) === Number(marketId);
+    // Never let a superseded socket clobber the reference to the current one.
+    if (isCurrentSocket) predictionWs = null;
+    if (isCurrentSocket && isCurrentMarket) {
       predictionReconnectTimer = setTimeout(() => connectPredictionOrderbook(marketId, yesDirection), 1500);
     }
   });
@@ -799,6 +815,11 @@ function calculate(now = Date.now()) {
     candidateTicks = 0;
   }
 
+  if (diagnosticRoundStart !== round.start) {
+    diagnosticRoundStart = round.start;
+    diagnosticCheckpointsLogged.clear();
+  }
+
   const priceSide = distanceFromOpenBps > 0 ? 1 : distanceFromOpenBps < 0 ? -1 : 0;
   let proposedDirection = 'WAIT';
   if (
@@ -957,6 +978,47 @@ function calculate(now = Date.now()) {
       historyWeight: Number(historyWeight.toFixed(4)),
       at: new Date(frozenAt).toISOString(),
     }));
+  }
+
+  for (const checkpointMs of [10000, 15000, 20000]) {
+    if (
+      frozenDirection === 'WAIT' &&
+      elapsedMs >= checkpointMs &&
+      elapsedMs <= checkpointMs + Math.max(1000, EVAL_MS * 6) &&
+      !diagnosticCheckpointsLogged.has(checkpointMs)
+    ) {
+      diagnosticCheckpointsLogged.add(checkpointMs);
+      console.log(JSON.stringify({
+        event:'v6_wait_checkpoint',
+        strategyVersion:STRATEGY_VERSION,
+        round:round.start,
+        checkpointMs,
+        elapsedMs,
+        reason: nextCandidate !== 'WAIT' ? 'V6_CONFIRMING_CANDIDATE' : reason,
+        proposedDirection,
+        candidateDirection:nextCandidate,
+        candidateTicks,
+        requiredTicks,
+        requiredObserveMs,
+        currentScore:Number(currentScore.toFixed(6)),
+        score:Number(score.toFixed(6)),
+        regimeDirection,
+        regimeScore:Number(regimeScore.toFixed(6)),
+        regimeAgreement:Number(regimeAgreement.toFixed(4)),
+        alignment,
+        distanceFromOpenBps:Number(distanceFromOpenBps.toFixed(4)),
+        flow5Count:flow5.count,
+        ofi5Count:ofi5.count,
+        absorptionRisk,
+        predBookUsable,
+        predictionMarketId:predictionMarketId ?? null,
+        predictionMarketRound:predictionMarketRound ?? null,
+        predictionMarketUpMid:predBookUsable ? predUpMid : null,
+        predictionSupport:Number.isFinite(Number(predictionSupport)) ? Number(Number(predictionSupport).toFixed(6)) : null,
+        predictionConflict,
+        predBookAgeMs:Number.isFinite(predBookAgeMs) ? Math.round(predBookAgeMs) : null,
+      }));
+    }
   }
 
   const direction = frozenDirection;

@@ -39,7 +39,7 @@ export function createNoBaseSpecialistClient({
   function load(){try{fs.mkdirSync(dir,{recursive:true});const x=JSON.parse(fs.readFileSync(registryFile,'utf8'));if(x?.schemaVersion===1&&Array.isArray(x?.candidates))state=x;state.engineVersion=ENGINE_VERSION;deleteRetiredCandidates();log('no_base_specialist_registry_loaded',{candidates:state.candidates.length,lastAttemptRound:state.lastAttemptRound||0});return true;}catch(e){if(e?.code!=='ENOENT')log('no_base_specialist_load_failed',{error:e?.message||String(e)});return false;}}
   const decidedFor=(c,o)=>{const p=Number(o?.probability),t=Number(c?.confidenceThreshold??0.75);if(!Number.isFinite(p))return null;if(p>=t)return'UP';if(p<=1-t)return'DOWN';return null;};
   function summaryOf(c){
-    const observed=(c.observations||[]).filter(o=>(o.actual==='UP'||o.actual==='DOWN')&&Number.isFinite(Number(o.probability)));
+    const observed=(c.observations||[]).filter(o=>!o.excludedReason&&(o.actual==='UP'||o.actual==='DOWN')&&Number.isFinite(Number(o.probability)));
     const decided=observed.filter(o=>decidedFor(c,o));
     let hits=0,streak=0,maxStreak=0;
     for(const o of decided){const ok=decidedFor(c,o)===o.actual;if(ok){hits++;streak=0;}else{streak++;maxStreak=Math.max(maxStreak,streak);}}
@@ -103,7 +103,12 @@ export function createNoBaseSpecialistClient({
   }
   function settle(row){
     if(row?.actual!=='UP'&&row?.actual!=='DOWN')return;const round=Number(row.roundStartMs);let changed=false;
-    for(const c of state.candidates){const o=(c.observations||[]).find(x=>Number(x.roundStartMs)===round);if(!o||o.actual===row.actual)continue;o.actual=row.actual;o.settledAt=Number(row.settledAt)||Date.now();changed=true;
+    for(const c of state.candidates){const o=(c.observations||[]).find(x=>Number(x.roundStartMs)===round);if(!o)continue;
+      if(row?.prediction==='UP'||row?.prediction==='DOWN'){
+        if(o.excludedReason!=='BASE_DIRECTION_LATER_AVAILABLE'){o.excludedReason='BASE_DIRECTION_LATER_AVAILABLE';o.actual=row.actual;o.settledAt=Number(row.settledAt)||Date.now();changed=true;}
+        continue;
+      }
+      if(o.actual===row.actual)continue;o.actual=row.actual;o.settledAt=Number(row.settledAt)||Date.now();changed=true;
       const s=summaryOf(c);if((s.strictForwardSamples>0&&s.strictForwardSamples%5===0)||s.strictForwardSamples===forwardTarget)log('no_base_specialist_forward_progress',s);}
     if(changed){save();deleteRetiredCandidates();}
   }

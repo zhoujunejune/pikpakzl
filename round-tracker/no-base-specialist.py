@@ -7,7 +7,7 @@ import pandas as pd
 from flaml import AutoML
 from sklearn.metrics import accuracy_score, brier_score_loss
 
-ENGINE_VERSION = "NO_BASE_SPECIALIST_AUTOML_V1"
+ENGINE_VERSION = "NO_BASE_SPECIALIST_AUTOML_V2_EXACT20_WEIGHTED"
 PREDICTION_BOOK_MAX_AGE_MS = 5000
 INNER_VALID_ROWS = 30
 OUTER_HOLDOUT_ROWS = 30
@@ -122,6 +122,23 @@ def load_samples(history_path):
 def frame(samples):
     return pd.DataFrame([s["x"] for s in samples],columns=FEATURE_NAMES), np.asarray([s["y"] for s in samples],dtype=int)
 
+def source_aware_training_view(samples, target_exact_share=0.25, max_multiplier=12):
+    rows=list(samples)
+    exact=[s for s in rows if s.get("source")=="20S_EXACT"]
+    bootstrap=[s for s in rows if s.get("source")!="20S_EXACT"]
+    if not exact or not bootstrap:
+        return rows, {"exactMultiplier":1,"fitExact":len(exact),"fitBootstrap":len(bootstrap),
+                      "fitExactShare":float(len(exact)/max(1,len(rows)))}
+    needed=int(math.ceil((target_exact_share*len(bootstrap))/((1.0-target_exact_share)*len(exact))))
+    multiplier=max(1,min(int(max_multiplier),needed))
+    expanded=list(bootstrap)
+    for _ in range(multiplier):
+        expanded.extend(exact)
+    expanded.sort(key=lambda z:z["roundStartMs"])
+    return expanded, {"exactMultiplier":multiplier,"fitExact":len(exact)*multiplier,
+                      "fitBootstrap":len(bootstrap),
+                      "fitExactShare":float((len(exact)*multiplier)/max(1,len(expanded)))}
+
 def proba1(model,X):
     arr=np.asarray(model.predict_proba(X))
     if arr.ndim==1: return arr.astype(float)
@@ -175,7 +192,8 @@ def search_metric(X_val,y_val,estimator,labels,X_train,y_train,weight_val=None,w
     return loss, {"accuracy":acc,"coverage":m["coverage"],"confidence":c}
 
 def run_automl(train,valid,budget,seed):
-    Xtr,ytr=frame(train); Xv,yv=frame(valid)
+    fit_train,fit_mix=source_aware_training_view(train)
+    Xtr,ytr=frame(fit_train); Xv,yv=frame(valid)
     automl=AutoML()
     automl.fit(
         X_train=Xtr,y_train=ytr,X_val=Xv,y_val=yv,task="classification",
@@ -185,10 +203,11 @@ def run_automl(train,valid,budget,seed):
     p=proba1(automl,Xv)
     conf,m,safe=choose_confidence_gate(yv,p)
     score=(m["accuracy"] or 0)*0.72+m["coverage"]*0.22-(m["maxErrorStreak"]*0.006)+(0.03 if safe else 0)
-    return automl,conf,m,safe,float(score)
+    return automl,conf,m,safe,float(score),fit_mix
 
 def fit_final(samples,estimator_name,best_config,budget,seed):
-    X,y=frame(samples)
+    fit_samples,_=source_aware_training_view(samples)
+    X,y=frame(fit_samples)
     automl=AutoML()
     kwargs=dict(X_train=X,y_train=y,task="classification",metric=search_metric,
                 estimator_list=[estimator_name],time_budget=max(10,int(budget)),max_iter=1,
@@ -219,8 +238,9 @@ def train_command(args):
         train_end=valid_start-EMBARGO_ROWS
         if train_end<60: continue
         try:
-            automl,conf,inner,safe,score=run_automl(scope[:train_end],scope[valid_start:],per_budget,args.seed+window)
+            automl,conf,inner,safe,score,fit_mix=run_automl(scope[:train_end],scope[valid_start:],per_budget,args.seed+window)
             searched.append({"window":window,"automl":automl,"confidence":conf,"inner":inner,"innerSafe":safe,"selectionScore":score,
+                             "fitSourceWeighting":fit_mix,
                              "bestEstimator":str(automl.best_estimator),"bestConfig":dict(automl.best_config or {})})
         except Exception as exc:
             print(json.dumps({"event":"no_base_specialist_window_failed","window":window,"error":str(exc)}),file=sys.stderr,flush=True)
@@ -241,6 +261,7 @@ def train_command(args):
         "ok":True,"engineVersion":ENGINE_VERSION,"lastTrainRound":int(last_round),"strictSamples":len(samples),
         "sourceMix":mix,"windowSize":int(best["window"]),"confidenceThreshold":round(float(best["confidence"]),4),
         "bestEstimator":best["bestEstimator"],"bestConfig":best["bestConfig"],"innerValidation":best["inner"],
+        "fitSourceWeighting":best.get("fitSourceWeighting"),
         "outerHoldout":{**outer_m,"baselineAlwaysClassAccuracy":baseline,"samples":len(outer),
                         "startRound":outer[0]["roundStartMs"],"endRound":outer[-1]["roundStartMs"]},
         "searched":[{"window":x["window"],"bestEstimator":x["bestEstimator"],"confidenceThreshold":round(x["confidence"],4),

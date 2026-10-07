@@ -5321,6 +5321,57 @@ const signalHttpServer = http.createServer((req, res) => {
     return res.end(JSON.stringify({ ok: true, health: p.health }));
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/training-status') {
+    const production = productionSummary();
+    const records = Array.from(rounds.values())
+      .filter(r => Number(r.roundStartMs) >= PRODUCTION_SHADOW_START_MS)
+      .sort((a,b) => Number(b.roundStartMs) - Number(a.roundStartMs))
+      .map(productionRecordView);
+    const settled = records.filter(r => r.productionActual === 'UP' || r.productionActual === 'DOWN');
+    const decided = settled.filter(r => r.productionPrediction === 'UP' || r.productionPrediction === 'DOWN');
+    const recent = (n) => {
+      const xs = decided.slice(0, n);
+      const hits = xs.filter(r => r.productionResult === 'HIT').length;
+      return { samples:xs.length, hits, misses:xs.length-hits, accuracy:xs.length?Number((hits/xs.length).toFixed(4)):null };
+    };
+    const selective = decided.filter(r => String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2'));
+    const selectiveHits = selective.filter(r => r.productionResult === 'HIT').length;
+    const body = {
+      ok:true,
+      generatedAt:new Date().toISOString(),
+      scope:'READ_ONLY_STRICT_FORWARD_MONITOR',
+      production:{
+        ...production,
+        recent10:recent(10),
+        recent20:recent(20),
+        selectiveV2:{
+          samples:selective.length,
+          hits:selectiveHits,
+          misses:selective.length-selectiveHits,
+          accuracy:selective.length?Number((selectiveHits/selective.length).toFixed(4)):null,
+        },
+      },
+      models:{
+        noBaseSpecialist:noBaseSpecialist.stats(),
+        edgeRescueTier1:selectiveV2EdgeRescueSummary(),
+        edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
+        noBaseShadow:selectiveV2NoBaseShadowSummary(),
+        noBaseContest:selectiveV2NoBaseContestSummary(),
+        waitRescue:waitRescueShadowSummary(),
+        adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),
+        prelockAdaptive:preLockAdaptiveShadow.stats(Array.from(rounds.values())),
+        highPrecision:selectiveV2HighPrecisionShadowSummary(),
+        shadowV2:shadowV2.stats(),
+        shadowV3:shadowV3.stats(),
+        shadowV4:shadowV4.stats(),
+        shadowV5:shadowV5.stats(),
+        shadowV7:shadowV7.stats(),
+      },
+    };
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(body));
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/calibration-backtest') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(calibrationBacktestPayload()));

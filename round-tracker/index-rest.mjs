@@ -95,6 +95,7 @@ const WAIT_RESCUE_RETIRE_MIN_SAMPLES = 20;
 const WAIT_RESCUE_RETIRE_ACCURACY = 0.65;
 const WAIT_RESCUE_REVIEW_ACCURACY = 0.70;
 const WAIT_RESCUE_MIN_INCREMENTAL_COVERAGE = 0.03;
+const WAIT_RESCUE_OBSERVE_DELAYS_MS = [10000, 15000, 20000];
 const WAIT_RESCUE_CONFIGS = [
   { id:'SAFE_R75_T50_PM03', currentMin:0.75, trendMin:0.50, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
   { id:'SAFE_R75_T50_PM05', currentMin:0.75, trendMin:0.50, pmMargin:0.05, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
@@ -2862,6 +2863,75 @@ function waitRescueEvaluate(facts) {
   };
 }
 
+
+function waitRescueEvaluateSnapshot(row, facts, elapsedMs = null) {
+  if (!row || !facts || Number(row.roundStartMs) < WAIT_RESCUE_SHADOW_START_MS) return null;
+  const elapsed = Number.isFinite(Number(elapsedMs)) ? Number(elapsedMs) : Date.now() - Number(row.roundStartMs);
+  const existing = row.waitRescueShadow && row.waitRescueShadow.version === WAIT_RESCUE_SHADOW_VERSION
+    ? row.waitRescueShadow
+    : {
+        version:WAIT_RESCUE_SHADOW_VERSION,
+        evaluatedAt:null,
+        productionEffect:'NONE_SHADOW_ONLY',
+        candidates:{},
+        snapshots:[],
+        lastScheduledDelayMs:0,
+      };
+
+  const lastScheduled = Number(existing.lastScheduledDelayMs || 0);
+  const due = WAIT_RESCUE_OBSERVE_DELAYS_MS.filter(ms => ms > lastScheduled && elapsed >= ms);
+  if (!due.length) {
+    row.waitRescueShadow = existing;
+    return null;
+  }
+
+  // If polling resumes late, evaluate once at the latest due checkpoint instead
+  // of replaying multiple checkpoints with the same later facts.
+  const scheduledDelayMs = due[due.length - 1];
+  const evaluated = waitRescueEvaluate(facts);
+  const now = Date.now();
+  const candidates = {...(existing.candidates || {})};
+
+  for (const cfg of WAIT_RESCUE_CONFIGS) {
+    const id = cfg.id;
+    const prev = candidates[id];
+    const next = evaluated?.candidates?.[id];
+    if (prev?.decision === 'UP' || prev?.decision === 'DOWN') continue;
+    if (!next) continue;
+    candidates[id] = {
+      ...next,
+      observedDelayMs: Math.max(0, elapsed),
+      scheduledDelayMs,
+      lockedAt: next.decision === 'UP' || next.decision === 'DOWN' ? now : null,
+    };
+  }
+
+  const decisions = Object.fromEntries(
+    Object.entries(candidates).map(([id,v])=>[id,v?.decision || 'WAIT'])
+  );
+  existing.evaluatedAt = now;
+  existing.lastScheduledDelayMs = scheduledDelayMs;
+  existing.candidates = candidates;
+  existing.snapshots = Array.isArray(existing.snapshots) ? existing.snapshots : [];
+  existing.snapshots.push({
+    evaluatedAt:now,
+    observedDelayMs:Math.max(0,elapsed),
+    scheduledDelayMs,
+    decisions,
+  });
+  if (existing.snapshots.length > WAIT_RESCUE_OBSERVE_DELAYS_MS.length) {
+    existing.snapshots = existing.snapshots.slice(-WAIT_RESCUE_OBSERVE_DELAYS_MS.length);
+  }
+  row.waitRescueShadow = existing;
+
+  return {
+    scheduledDelayMs,
+    observedDelayMs:Math.max(0,elapsed),
+    decisions,
+    productionEffect:'NONE_SHADOW_ONLY',
+  };
+}
+
 function waitRescueBacktest() {
   const rows = Array.from(rounds.values())
     .filter(r =>
@@ -3283,20 +3353,6 @@ async function pollSignal() {
       row.shadowCandidateTrainedAt = shadowCandidate?.trainedAt ?? null;
       row.preLockAdaptiveShadow = preLockAdaptiveShadow.evaluate(row);
       if (
-        Number(row.roundStartMs) >= WAIT_RESCUE_SHADOW_START_MS &&
-        !row.waitRescueShadow
-      ) {
-        row.waitRescueShadow = waitRescueEvaluate(liveFacts);
-        log('wait_rescue_shadow_evaluated', {
-          round:row.roundStartMs,
-          version:WAIT_RESCUE_SHADOW_VERSION,
-          decisions:Object.fromEntries(
-            Object.entries(row.waitRescueShadow.candidates || {}).map(([id,v])=>[id,v?.decision || 'WAIT'])
-          ),
-          productionEffect:'NONE_SHADOW_ONLY',
-        });
-      }
-      if (
         Number(row.roundStartMs) >= SELECTIVE_V2_NO_BASE_SHADOW_START_MS &&
         !row.selectiveV2NoBaseShadow
       ) {
@@ -3323,6 +3379,20 @@ async function pollSignal() {
       observeShadowForwardRegistry(row, liveFacts);
       shadowV2.observe(row, liveFacts);
       saveHistory();
+    }
+    if (liveFacts && Number(row.roundStartMs) >= WAIT_RESCUE_SHADOW_START_MS) {
+      const rescueSnapshot = waitRescueEvaluateSnapshot(row, liveFacts, elapsedMs);
+      if (rescueSnapshot) {
+        log('wait_rescue_shadow_snapshot_evaluated', {
+          round:row.roundStartMs,
+          version:WAIT_RESCUE_SHADOW_VERSION,
+          scheduledDelayMs:rescueSnapshot.scheduledDelayMs,
+          observedDelayMs:rescueSnapshot.observedDelayMs,
+          decisions:rescueSnapshot.decisions,
+          productionEffect:'NONE_SHADOW_ONLY',
+        });
+        saveHistory();
+      }
     }
     if (row.shadowObservedAt && row.shadowFacts) {
       void shadowV3.observe(row, row.shadowFacts);

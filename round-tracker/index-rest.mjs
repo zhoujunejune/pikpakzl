@@ -113,8 +113,12 @@ const SELECTIVE_V2_EDGE_RESCUE_CONFIG = {
   maxDelayMs:20000,
   rejectAbsorption:true,
 };
-const SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES = 8;
-const SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES = 6;
+// Accuracy-first fuse: stop production rescue as soon as the first five
+// strict-forward eligible outcomes fail to hold 70%. Candidate evaluation
+// continues while fused, so the gate can recover automatically when the
+// rolling forward quality returns to >=70%.
+const SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES = 5;
+const SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES = 5;
 const SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY = 0.70;
 const SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK = 3;
 
@@ -2809,7 +2813,7 @@ function selectiveV2EdgeRescueSummary() {
     down,
     fuse:{
       globalFused,
-      globalReason:globalFused?'GLOBAL_RECENT_ACCURACY_BELOW_70':null,
+      globalReason:globalFused?'GLOBAL_RECENT_ACCURACY_BELOW_70_EARLY_FUSE':null,
       minGlobalSamples:SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES,
       minDirectionSamples:SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES,
       minAccuracy:SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY,

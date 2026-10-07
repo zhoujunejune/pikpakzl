@@ -104,6 +104,20 @@ const SELECTIVE_V2_HP_CONFIGS = [
   { id:'HP_S20_C60_D18', supportMin:0.20, currentMin:0.60, maxDelayMs:18000 },
 ];
 
+const SELECTIVE_V2_EDGE_RESCUE_VERSION = 'SELECTIVE_V2_EDGE_RESCUE_V1';
+const SELECTIVE_V2_EDGE_RESCUE_START_MS = Math.max(0, Number(process.env.SELECTIVE_V2_EDGE_RESCUE_START_MS || 1791368700000));
+const SELECTIVE_V2_EDGE_RESCUE_CONFIG = {
+  supportMin:0.08,
+  currentMin:0.60,
+  scoreMin:0.45,
+  maxDelayMs:20000,
+  rejectAbsorption:true,
+};
+const SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES = 8;
+const SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES = 6;
+const SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY = 0.70;
+const SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK = 3;
+
 const WAIT_RESCUE_SHADOW_VERSION = 'WAIT_RESCUE_SHADOW_V1';
 const WAIT_RESCUE_SHADOW_START_MS = Math.max(0, Number(process.env.WAIT_RESCUE_SHADOW_START_MS || 1791354300000));
 const WAIT_RESCUE_FORWARD_TARGET = Math.max(30, Number(process.env.WAIT_RESCUE_FORWARD_TARGET || 60));
@@ -2677,6 +2691,182 @@ function selectiveV2FilteredWaitRescueBacktest() {
 }
 
 
+function selectiveV2EdgeRescueCandidateDecision(direction, facts, delayMs, predictionScore) {
+  const reasons = [];
+  const dir = direction === 'UP' || direction === 'DOWN' ? direction : null;
+  const support = dir ? lockPredictionSupport(dir, facts) : null;
+  const currentAbs = Math.abs(Number(facts?.currentScore));
+  const scoreAbs = Math.abs(Number(predictionScore));
+  const delay = Number(delayMs);
+  const absorption = facts?.absorptionRisk === true;
+
+  if (!dir) reasons.push('NO_BASE_DIRECTION');
+  if (!Number.isFinite(support)) reasons.push('MISSING_PREDICTION_SUPPORT');
+  if (!Number.isFinite(currentAbs)) reasons.push('MISSING_CURRENT_SCORE');
+  if (!Number.isFinite(scoreAbs)) reasons.push('MISSING_BASE_SCORE');
+  if (!Number.isFinite(delay)) reasons.push('MISSING_LOCK_DELAY');
+  if (absorption) reasons.push('ABSORPTION_RISK');
+  if (Number.isFinite(support) && support < SELECTIVE_V2_EDGE_RESCUE_CONFIG.supportMin) reasons.push('SUPPORT_BELOW_EDGE_MIN');
+  if (Number.isFinite(currentAbs) && currentAbs < SELECTIVE_V2_EDGE_RESCUE_CONFIG.currentMin) reasons.push('CURRENT_BELOW_EDGE_MIN');
+  if (Number.isFinite(scoreAbs) && scoreAbs < SELECTIVE_V2_EDGE_RESCUE_CONFIG.scoreMin) reasons.push('SCORE_BELOW_EDGE_MIN');
+  if (Number.isFinite(delay) && delay > SELECTIVE_V2_EDGE_RESCUE_CONFIG.maxDelayMs) reasons.push('DELAY_ABOVE_EDGE_MAX');
+
+  const pass = reasons.length === 0;
+  return {
+    version:SELECTIVE_V2_EDGE_RESCUE_VERSION,
+    evaluatedAt:Date.now(),
+    productionEffect:'CONDITIONAL_EDGE_RESCUE',
+    decision:pass ? dir : 'WAIT',
+    pass,
+    reasons,
+    facts:{
+      predictionSupport:Number.isFinite(support)?Number(support.toFixed(4)):null,
+      currentScoreAbs:Number.isFinite(currentAbs)?Number(currentAbs.toFixed(4)):null,
+      baseScoreAbs:Number.isFinite(scoreAbs)?Number(scoreAbs.toFixed(4)):null,
+      lockDelayMs:Number.isFinite(delay)?delay:null,
+      absorptionRisk:absorption,
+    },
+    thresholds:{...SELECTIVE_V2_EDGE_RESCUE_CONFIG},
+  };
+}
+
+function selectiveV2EdgeRescueSummary() {
+  const rows = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) >= SELECTIVE_V2_EDGE_RESCUE_START_MS &&
+      (r.actual === 'UP' || r.actual === 'DOWN') &&
+      r?.selectiveV2EdgeRescue?.version === SELECTIVE_V2_EDGE_RESCUE_VERSION
+    )
+    .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
+
+  const eligible = rows.filter(r =>
+    r.selectiveV2EdgeRescue?.decision === 'UP' || r.selectiveV2EdgeRescue?.decision === 'DOWN'
+  );
+
+  const summarize = arr => {
+    const hits = arr.filter(r => r.selectiveV2EdgeRescue.decision === r.actual).length;
+    return {
+      samples:arr.length,
+      hits,
+      misses:arr.length-hits,
+      accuracy:arr.length?Number((hits/arr.length).toFixed(4)):null,
+    };
+  };
+
+  const recent10 = eligible.slice(-10);
+  const byDirection = dir => {
+    const all = eligible.filter(r => r.selectiveV2EdgeRescue.decision === dir);
+    const recent = all.slice(-6);
+    let missStreak = 0;
+    for (let i=all.length-1;i>=0;i-=1) {
+      if (all[i].selectiveV2EdgeRescue.decision === all[i].actual) break;
+      missStreak += 1;
+    }
+    const allStats = summarize(all);
+    const recentStats = summarize(recent);
+    const fused =
+      (recentStats.samples >= SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES &&
+       Number.isFinite(recentStats.accuracy) &&
+       recentStats.accuracy < SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY) ||
+      missStreak >= SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK;
+    return {
+      ...allStats,
+      recent6:recentStats,
+      missStreak,
+      fused,
+      fuseReason:fused
+        ? (missStreak >= SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK
+          ? 'DIRECTION_MISS_STREAK'
+          : 'DIRECTION_RECENT_ACCURACY_BELOW_70')
+        : null,
+    };
+  };
+
+  const recentStats = summarize(recent10);
+  const globalFused =
+    recentStats.samples >= SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES &&
+    Number.isFinite(recentStats.accuracy) &&
+    recentStats.accuracy < SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY;
+
+  const up = byDirection('UP');
+  const down = byDirection('DOWN');
+  const productionRows = rows.filter(r =>
+    r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY' &&
+    (r.productionResult === 'HIT' || r.productionResult === 'MISS')
+  );
+  const productionHits = productionRows.filter(r => r.productionResult === 'HIT').length;
+
+  return {
+    ok:true,
+    version:SELECTIVE_V2_EDGE_RESCUE_VERSION,
+    startMs:SELECTIVE_V2_EDGE_RESCUE_START_MS,
+    productionEffect:'CONDITIONAL_EDGE_RESCUE',
+    config:{...SELECTIVE_V2_EDGE_RESCUE_CONFIG},
+    evaluatedSettledRounds:rows.length,
+    eligibleStrictForward:summarize(eligible),
+    recent10:recentStats,
+    up,
+    down,
+    fuse:{
+      globalFused,
+      globalReason:globalFused?'GLOBAL_RECENT_ACCURACY_BELOW_70':null,
+      minGlobalSamples:SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES,
+      minDirectionSamples:SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES,
+      minAccuracy:SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY,
+      maxMissStreak:SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK,
+    },
+    production:{
+      samples:productionRows.length,
+      hits:productionHits,
+      misses:productionRows.length-productionHits,
+      accuracy:productionRows.length?Number((productionHits/productionRows.length).toFixed(4)):null,
+    },
+  };
+}
+
+function selectiveV2EdgeRescueFuseState(direction) {
+  const s = selectiveV2EdgeRescueSummary();
+  const dir = direction === 'UP' ? s.up : direction === 'DOWN' ? s.down : null;
+  if (s.fuse.globalFused) {
+    return {allowed:false,reason:s.fuse.globalReason,summary:s};
+  }
+  if (dir?.fused) {
+    return {allowed:false,reason:dir.fuseReason,summary:s};
+  }
+  return {allowed:true,reason:null,summary:s};
+}
+
+function evaluateSelectiveV2EdgeRescueRow(row, selectiveQuality) {
+  if (!row || Number(row.roundStartMs) < SELECTIVE_V2_EDGE_RESCUE_START_MS) return null;
+  if (row.selectiveV2EdgeRescue?.version === SELECTIVE_V2_EDGE_RESCUE_VERSION) {
+    return row.selectiveV2EdgeRescue;
+  }
+  const direction = row.prediction === 'UP' || row.prediction === 'DOWN' ? row.prediction : null;
+  if (!direction || selectiveQuality?.pass) return null;
+  const decision = selectiveV2EdgeRescueCandidateDecision(
+    direction,
+    row.predictionFacts,
+    row.predictionDelayMs,
+    row.predictionScore
+  );
+  const evaluated = {
+    ...decision,
+    baseSelectiveReasons:Array.isArray(selectiveQuality?.reasons) ? [...selectiveQuality.reasons] : [],
+  };
+  row.selectiveV2EdgeRescue = evaluated;
+  saveHistory();
+  log('selective_v2_edge_rescue_candidate_evaluated', {
+    round:row.roundStartMs,
+    baseDirection:direction,
+    decision:evaluated.decision,
+    reasons:evaluated.reasons,
+    baseSelectiveReasons:evaluated.baseSelectiveReasons,
+    facts:evaluated.facts,
+  });
+  return evaluated;
+}
+
+
 function selectiveV2InternalDirectionBacktest() {
   const rows = Array.from(rounds.values())
     .filter(r =>
@@ -3982,6 +4172,13 @@ async function settlePendingRounds() {
           if (milestone) log('selective_v2_no_base_contest_forward_progress', contest);
         }
 
+        if (
+          row?.selectiveV2EdgeRescue?.version === SELECTIVE_V2_EDGE_RESCUE_VERSION &&
+          (row.selectiveV2EdgeRescue.decision === 'UP' || row.selectiveV2EdgeRescue.decision === 'DOWN')
+        ) {
+          log('selective_v2_edge_rescue_forward_progress', selectiveV2EdgeRescueSummary());
+        }
+
         if (row.selectiveV2HighPrecisionShadow?.version === SELECTIVE_V2_HP_SHADOW_VERSION) {
           const decidedIds = Object.entries(row.selectiveV2HighPrecisionShadow.candidates || {})
             .filter(([,v]) => v?.decision === 'UP' || v?.decision === 'DOWN')
@@ -4155,6 +4352,7 @@ function productionSummary() {
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
     selectiveV2Rounds: decided.filter(r => String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2')).length,
+    edgeRescueRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     currentQualifiedModel: productionUsesSelectiveV2()
       ? LOCK_QUALITY_V2_VERSION
@@ -4568,8 +4766,55 @@ function productionSignalPayload(now = Date.now()) {
       return { ok: true, live };
     }
 
-    // Production Selective V2 is intentionally frozen.
-    // No-base candidates remain shadow-only even if they qualify for review.
+    // Preserve Selective V2 as the precision core. Only rescue a filtered
+    // base-direction signal when it falls inside the historically high-quality
+    // edge region and the independent strict-forward fuse is open.
+    const edgeRescue = baseDirection && q && !q.pass
+      ? evaluateSelectiveV2EdgeRescueRow(row, q)
+      : null;
+    const edgeFuse = edgeRescue?.decision === baseDirection
+      ? selectiveV2EdgeRescueFuseState(baseDirection)
+      : null;
+
+    if (edgeRescue?.decision === baseDirection && edgeFuse?.allowed) {
+      const confidence = Number.isFinite(Number(row.modelProbability))
+        ? Number(row.modelProbability)
+        : (Number.isFinite(Number(row.predictionConfidence)) ? Number(row.predictionConfidence) : null);
+      const score = Number.isFinite(Number(row.predictionScore)) ? Number(row.predictionScore) : null;
+      const live = {
+        round:row.roundStartMs,
+        status:'LOCKED',
+        signal:{direction:baseDirection,score,confidence,modelProbability:confidence},
+        input:{round:row.roundStartMs},
+        generatedAt:Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
+        source:'SELECTIVE_V2_EDGE_RESCUE_PRIMARY',
+        model:SELECTIVE_V2_EDGE_RESCUE_VERSION,
+        facts:row.predictionFacts ?? null,
+        productionPolicy:productionPolicyName(),
+        fallbackUsed:false,
+        selectiveQuality:q,
+        edgeRescue:{
+          candidate:edgeRescue,
+          fuse:{allowed:true,reason:null},
+        },
+        shadowForwardStatus:'EDGE_RESCUE_ACTIVE',
+        shadowForwardSamples:edgeFuse?.summary?.eligibleStrictForward?.samples ?? 0,
+      };
+      freezeProductionLock(row, live);
+      log('selective_v2_edge_rescue_production_lock', {
+        round:row.roundStartMs,
+        direction:baseDirection,
+        baseSelectiveReasons:q?.reasons || [],
+        edgeFacts:edgeRescue.facts,
+        strictForwardSamples:edgeFuse?.summary?.eligibleStrictForward?.samples ?? 0,
+        strictForwardAccuracy:edgeFuse?.summary?.eligibleStrictForward?.accuracy ?? null,
+      });
+      logProductionSignalState(live);
+      return {ok:true,live};
+    }
+
+    // No-base candidates remain shadow-only. Edge rescue never invents a
+    // direction when V3 has not produced one.
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
@@ -4588,6 +4833,13 @@ function productionSignalPayload(now = Date.now()) {
       fallbackUsed: false,
       waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|'),
       selectiveQuality: q,
+      edgeRescue: edgeRescue ? {
+        candidate:edgeRescue,
+        fuse:edgeFuse ? {
+          allowed:Boolean(edgeFuse.allowed),
+          reason:edgeFuse.reason ?? null,
+        } : null,
+      } : null,
       shadowForwardStatus: s.status,
       shadowForwardSamples: s.forwardSamples,
     };
@@ -4806,6 +5058,7 @@ log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
 log('selective_v2_filtered_wait_rescue_backtest_snapshot', selectiveV2FilteredWaitRescueBacktest());
+log('selective_v2_edge_rescue_status', selectiveV2EdgeRescueSummary());
 log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsensusBacktest());
 log('selective_v2_no_base_shadow_status', selectiveV2NoBaseShadowSummary());
 log('selective_v2_no_base_contest_status', selectiveV2NoBaseContestSummary());
@@ -4900,6 +5153,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/selective-v2-filtered-wait-rescue-backtest') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(selectiveV2FilteredWaitRescueBacktest()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/selective-v2-edge-rescue-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(selectiveV2EdgeRescueSummary()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/selective-v2-no-base-shadow-stats') {

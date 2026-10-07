@@ -43,11 +43,11 @@ const SHADOW_V3_DIR = String(process.env.SHADOW_V3_DIR || '/data/shadow-v3');
 const SHADOW_V3_TRAIN_EVERY_ROUNDS = Math.max(10, Number(process.env.SHADOW_V3_TRAIN_EVERY_ROUNDS || 20));
 const SHADOW_V3_TRAIN_TIME_BUDGET = Math.max(30, Number(process.env.SHADOW_V3_TRAIN_TIME_BUDGET || 75));
 const SHADOW_V4_DIR = String(process.env.SHADOW_V4_DIR || '/data/shadow-v4');
-const SHADOW_V4_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V4_TRAIN_EVERY_ROUNDS || 60));
+const SHADOW_V4_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V4_TRAIN_EVERY_ROUNDS || 120));
 const SHADOW_V5_DIR = String(process.env.SHADOW_V5_DIR || '/data/shadow-v5');
-const SHADOW_V5_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V5_TRAIN_EVERY_ROUNDS || 60));
+const SHADOW_V5_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V5_TRAIN_EVERY_ROUNDS || 120));
 const SHADOW_V7_DIR = String(process.env.SHADOW_V7_DIR || '/data/shadow-v7');
-const SHADOW_V7_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V7_TRAIN_EVERY_ROUNDS || 60));
+const SHADOW_V7_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V7_TRAIN_EVERY_ROUNDS || 120));
 const ADAPTIVE_GATE_SHADOW_FILE = String(process.env.ADAPTIVE_GATE_SHADOW_FILE || `${HISTORY_FILE}.adaptive-gate-shadow-v1.json`);
 const ADAPTIVE_GATE_FORWARD_TARGET = Math.max(30, Number(process.env.ADAPTIVE_GATE_FORWARD_TARGET || 60));
 const PRELOCK_ADAPTIVE_SHADOW_FILE = String(process.env.PRELOCK_ADAPTIVE_SHADOW_FILE || `${HISTORY_FILE}.prelock-adaptive-shadow-v1.json`);
@@ -72,6 +72,22 @@ const LOCK_QUALITY_V2_RECOVERY_ACCURACY = Math.max(LOCK_QUALITY_V2_DRIFT_MIN_ACC
 const SELECTIVE_V2_NO_BASE_SHADOW_VERSION = 'SELECTIVE_V2_NO_BASE_CONSENSUS_SHADOW_V1';
 const SELECTIVE_V2_NO_BASE_SHADOW_START_MS = Math.max(0, Number(process.env.SELECTIVE_V2_NO_BASE_SHADOW_START_MS || 1791297900000));
 const SELECTIVE_V2_NO_BASE_FORWARD_TARGET = Math.max(30, Number(process.env.SELECTIVE_V2_NO_BASE_FORWARD_TARGET || 60));
+const SELECTIVE_V2_NO_BASE_CONTEST_VERSION = 'SELECTIVE_V2_NO_BASE_CONTEST_V2';
+const SELECTIVE_V2_NO_BASE_CONTEST_TARGET = 60;
+const SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_MIN_SAMPLES = 20;
+const SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_ACCURACY = 0.65;
+const SELECTIVE_V2_NO_BASE_CONTEST_REVIEW_ACCURACY = 0.75;
+const SELECTIVE_V2_NO_BASE_CONTEST_CONFIGS = [
+  { id:'BALANCED_65_70_PM03', currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'PM05_65_70',          currentMin:0.65, trendMin:0.70, pmMargin:0.05, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'PM08_65_70',          currentMin:0.65, trendMin:0.70, pmMargin:0.08, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'CURRENT70_70_PM03',   currentMin:0.70, trendMin:0.70, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'TREND80_65_PM03',     currentMin:0.65, trendMin:0.80, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'MICRO_65_70_PM03',    currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:true,  requireMomentumAgree:false },
+  { id:'MOM30_65_70_PM03',    currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:true  },
+  { id:'BOTH_65_70_PM03',     currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:true,  requireMomentumAgree:true  },
+];
+
 
 const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
 const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
@@ -2390,6 +2406,198 @@ function selectiveV2InternalDirectionBacktest() {
 
 
 
+
+function selectiveV2NoBaseContestDecision(facts, config) {
+  const f = facts && typeof facts === 'object' ? facts : null;
+  const cfg = config || {};
+  const reasons = [];
+  if (!f) return {
+    contestVersion:SELECTIVE_V2_NO_BASE_CONTEST_VERSION,
+    candidateId:cfg.id || null,
+    decision:'WAIT',
+    reasons:['MISSING_FACTS'],
+    productionEffect:'NONE_SHADOW_ONLY',
+  };
+
+  const current = Number(f.currentScore);
+  const trend = Number(f.currentTrendScore);
+  const micro = Number(f.microScore);
+  const mom30 = Number(f.normalizedMomentum30s);
+  const upMid = Number(f.predictionMarketUpMid);
+
+  if (![current,trend,upMid].every(Number.isFinite)) reasons.push('MISSING_CORE_FEATURE');
+  if (f.absorptionRisk === true) reasons.push('ABSORPTION_RISK');
+
+  const sign = current > 0 ? 1 : current < 0 ? -1 : 0;
+  if (!sign) reasons.push('NO_CURRENT_DIRECTION');
+  if (Number.isFinite(current) && Math.abs(current) < Number(cfg.currentMin)) reasons.push('CURRENT_BELOW_MIN');
+  if (Number.isFinite(trend) && Math.abs(trend) < Number(cfg.trendMin)) reasons.push('TREND_BELOW_MIN');
+  if (sign && Number.isFinite(trend) && sign * trend <= 0) reasons.push('CURRENT_TREND_CONFLICT');
+
+  if (sign > 0 && Number.isFinite(upMid) && upMid < 0.5 + Number(cfg.pmMargin)) reasons.push('PREDICTION_MARKET_NOT_SUPPORT_UP');
+  if (sign < 0 && Number.isFinite(upMid) && upMid > 0.5 - Number(cfg.pmMargin)) reasons.push('PREDICTION_MARKET_NOT_SUPPORT_DOWN');
+
+  if (cfg.requireMicroAgree && (!Number.isFinite(micro) || sign * micro <= 0)) reasons.push('MICRO_NOT_AGREE');
+  if (cfg.requireMomentumAgree && (!Number.isFinite(mom30) || sign * mom30 <= 0)) reasons.push('MOMENTUM30_NOT_AGREE');
+
+  const regime = String(f.regimeDirection || '').toUpperCase();
+  const agreement = Number(f.regimeAgreement);
+  if (
+    sign &&
+    Number.isFinite(agreement) &&
+    agreement >= 0.67 &&
+    ((sign > 0 && regime === 'DOWN') || (sign < 0 && regime === 'UP'))
+  ) reasons.push('STRONG_REGIME_CONFLICT');
+
+  const pass = reasons.length === 0;
+  return {
+    contestVersion:SELECTIVE_V2_NO_BASE_CONTEST_VERSION,
+    candidateId:cfg.id,
+    evaluatedAt:Date.now(),
+    productionEffect:'NONE_SHADOW_ONLY',
+    decision:pass ? (sign > 0 ? 'UP' : 'DOWN') : 'WAIT',
+    reasons,
+    config:{...cfg},
+    facts:{
+      currentScore:Number.isFinite(current)?Number(current.toFixed(4)):null,
+      currentTrendScore:Number.isFinite(trend)?Number(trend.toFixed(4)):null,
+      microScore:Number.isFinite(micro)?Number(micro.toFixed(4)):null,
+      normalizedMomentum30s:Number.isFinite(mom30)?Number(mom30.toFixed(4)):null,
+      predictionMarketUpMid:Number.isFinite(upMid)?Number(upMid.toFixed(4)):null,
+      regimeDirection:regime||null,
+      regimeAgreement:Number.isFinite(agreement)?Number(agreement.toFixed(4)):null,
+    },
+  };
+}
+
+function selectiveV2NoBaseContestSummary() {
+  const rows = Array.from(rounds.values())
+    .filter(r =>
+      (r.actual === 'UP' || r.actual === 'DOWN') &&
+      r?.selectiveV2NoBaseContest?.version === SELECTIVE_V2_NO_BASE_CONTEST_VERSION
+    )
+    .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
+
+  const noBaseSettled = rows.filter(r => r.prediction !== 'UP' && r.prediction !== 'DOWN');
+  const candidates = SELECTIVE_V2_NO_BASE_CONTEST_CONFIGS.map(cfg => {
+    const decided = noBaseSettled.filter(r => {
+      const d = r?.selectiveV2NoBaseContest?.candidates?.[cfg.id]?.decision;
+      return d === 'UP' || d === 'DOWN';
+    });
+    const hits = decided.filter(r => r.selectiveV2NoBaseContest.candidates[cfg.id].decision === r.actual).length;
+    const samples = decided.length;
+    const accuracy = samples ? hits / samples : null;
+    const recent20 = decided.slice(-20);
+    const recent20Hits = recent20.filter(r => r.selectiveV2NoBaseContest.candidates[cfg.id].decision === r.actual).length;
+    const recent20Accuracy = recent20.length ? recent20Hits / recent20.length : null;
+    const byDir = dir => {
+      const a = decided.filter(r => r.selectiveV2NoBaseContest.candidates[cfg.id].decision === dir);
+      const h = a.filter(r => r.actual === dir).length;
+      return {samples:a.length,hits:h,misses:a.length-h,accuracy:a.length?Number((h/a.length).toFixed(4)):null};
+    };
+
+    let status='FORWARD_COLLECTING';
+    if (
+      samples >= SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_MIN_SAMPLES &&
+      Number.isFinite(accuracy) &&
+      accuracy < SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_ACCURACY
+    ) status='RETIRED_LOW_ACCURACY';
+    else if (
+      samples >= SELECTIVE_V2_NO_BASE_CONTEST_TARGET &&
+      Number.isFinite(accuracy) && accuracy >= SELECTIVE_V2_NO_BASE_CONTEST_REVIEW_ACCURACY &&
+      recent20.length >= 20 &&
+      Number.isFinite(recent20Accuracy) && recent20Accuracy >= SELECTIVE_V2_NO_BASE_CONTEST_REVIEW_ACCURACY
+    ) status='QUALIFIED_FOR_REVIEW';
+    else if (samples >= SELECTIVE_V2_NO_BASE_CONTEST_TARGET) status='FORWARD_COMPLETE';
+
+    return {
+      candidateId:cfg.id,
+      config:cfg,
+      status,
+      active:status !== 'RETIRED_LOW_ACCURACY',
+      productionEffect:'NONE_SHADOW_ONLY',
+      strictForwardSamples:samples,
+      targetSamples:SELECTIVE_V2_NO_BASE_CONTEST_TARGET,
+      remainingSamples:Math.max(0,SELECTIVE_V2_NO_BASE_CONTEST_TARGET-samples),
+      hits,
+      misses:samples-hits,
+      forwardAccuracy:Number.isFinite(accuracy)?Number(accuracy.toFixed(4)):null,
+      recent20Accuracy:Number.isFinite(recent20Accuracy)?Number(recent20Accuracy.toFixed(4)):null,
+      incrementalCoverage:noBaseSettled.length?Number((samples/noBaseSettled.length).toFixed(4)):null,
+      up:byDir('UP'),
+      down:byDir('DOWN'),
+    };
+  });
+
+  const qualified = candidates
+    .filter(x=>x.status==='QUALIFIED_FOR_REVIEW')
+    .sort((a,b)=>
+      Number(b.incrementalCoverage||0)-Number(a.incrementalCoverage||0) ||
+      Number(b.forwardAccuracy||0)-Number(a.forwardAccuracy||0) ||
+      Number(b.strictForwardSamples||0)-Number(a.strictForwardSamples||0)
+    );
+
+  const leaderboard = candidates
+    .filter(x=>x.status!=='RETIRED_LOW_ACCURACY')
+    .slice()
+    .sort((a,b)=>
+      Number(b.strictForwardSamples||0)-Number(a.strictForwardSamples||0) ||
+      Number(b.forwardAccuracy||0)-Number(a.forwardAccuracy||0) ||
+      Number(b.incrementalCoverage||0)-Number(a.incrementalCoverage||0)
+    );
+
+  return {
+    ok:true,
+    version:SELECTIVE_V2_NO_BASE_CONTEST_VERSION,
+    productionEffect:'NONE_SHADOW_ONLY',
+    productionFrozen:true,
+    targetSamples:SELECTIVE_V2_NO_BASE_CONTEST_TARGET,
+    retirementRule:{
+      minSamples:SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_MIN_SAMPLES,
+      accuracyBelow:SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_ACCURACY,
+    },
+    reviewRule:{
+      minSamples:SELECTIVE_V2_NO_BASE_CONTEST_TARGET,
+      overallAccuracyAtLeast:SELECTIVE_V2_NO_BASE_CONTEST_REVIEW_ACCURACY,
+      recent20AccuracyAtLeast:SELECTIVE_V2_NO_BASE_CONTEST_REVIEW_ACCURACY,
+      autoProduction:false,
+    },
+    observedSettledRounds:rows.length,
+    noBaseSettledRounds:noBaseSettled.length,
+    candidates,
+    leader:leaderboard[0] || null,
+    recommendedForReview:qualified[0] || null,
+    qualifiedCount:qualified.length,
+  };
+}
+
+function selectiveV2NoBaseContestEvaluate(facts) {
+  const current = selectiveV2NoBaseContestSummary();
+  const retired = new Set(current.candidates.filter(x=>x.status==='RETIRED_LOW_ACCURACY').map(x=>x.candidateId));
+  const candidates = {};
+  for (const cfg of SELECTIVE_V2_NO_BASE_CONTEST_CONFIGS) {
+    if (retired.has(cfg.id)) {
+      candidates[cfg.id] = {
+        contestVersion:SELECTIVE_V2_NO_BASE_CONTEST_VERSION,
+        candidateId:cfg.id,
+        decision:'WAIT',
+        reasons:['RETIRED_LOW_ACCURACY'],
+        config:{...cfg},
+        productionEffect:'NONE_SHADOW_ONLY',
+        retired:true,
+      };
+      continue;
+    }
+    candidates[cfg.id] = selectiveV2NoBaseContestDecision(facts,cfg);
+  }
+  return {
+    version:SELECTIVE_V2_NO_BASE_CONTEST_VERSION,
+    evaluatedAt:Date.now(),
+    productionEffect:'NONE_SHADOW_ONLY',
+    candidates,
+  };
+}
+
 function selectiveV2NoBaseConsensusDecision(facts) {
   const f = facts && typeof facts === 'object' ? facts : null;
   const reasons = [];
@@ -2479,13 +2687,13 @@ function selectiveV2NoBaseShadowSummary() {
     Number.isFinite(accuracy) && accuracy >= 0.75 &&
     recent20.length >= 20 &&
     Number.isFinite(recent20Accuracy) && recent20Accuracy >= 0.75
-  ) status='FORWARD_75_MET';
+  ) status='QUALIFIED_FOR_REVIEW';
   else if (samples >= SELECTIVE_V2_NO_BASE_FORWARD_TARGET) status='FORWARD_COMPLETE';
 
   return {
     ok:true,
     version:SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
-    productionEffect:status==='FORWARD_75_MET'?'ELIGIBLE_INTERNAL_PRODUCTION_BRANCH':'NONE_SHADOW_ONLY',
+    productionEffect:'NONE_SHADOW_ONLY',
     startMs:SELECTIVE_V2_NO_BASE_SHADOW_START_MS,
     targetSamples:SELECTIVE_V2_NO_BASE_FORWARD_TARGET,
     settledObserved: settled.length,
@@ -2701,6 +2909,7 @@ function ensureRound(roundStartMs) {
       adaptiveGateShadow: null,
       preLockAdaptiveShadow: null,
       selectiveV2NoBaseShadow: null,
+      selectiveV2NoBaseContest: null,
       predictedAt: null,
       predictionDelayMs: null,
       actual: null,
@@ -2775,6 +2984,17 @@ async function pollSignal() {
         !row.selectiveV2NoBaseShadow
       ) {
         row.selectiveV2NoBaseShadow = selectiveV2NoBaseConsensusDecision(liveFacts);
+        if (!row.selectiveV2NoBaseContest) {
+          row.selectiveV2NoBaseContest = selectiveV2NoBaseContestEvaluate(liveFacts);
+          log('selective_v2_no_base_contest_evaluated', {
+            round:row.roundStartMs,
+            version:SELECTIVE_V2_NO_BASE_CONTEST_VERSION,
+            decisions:Object.fromEntries(
+              Object.entries(row.selectiveV2NoBaseContest.candidates || {}).map(([id,v])=>[id,v?.decision || 'WAIT'])
+            ),
+            productionEffect:'NONE_SHADOW_ONLY',
+          });
+        }
         log('selective_v2_no_base_shadow_evaluated', {
           round: row.roundStartMs,
           modelVersion: SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
@@ -2990,6 +3210,21 @@ async function settlePendingRounds() {
           ) {
             log('selective_v2_no_base_shadow_forward_progress', nb);
           }
+        }
+        if (
+          row?.selectiveV2NoBaseContest?.version === SELECTIVE_V2_NO_BASE_CONTEST_VERSION &&
+          row.prediction !== 'UP' && row.prediction !== 'DOWN'
+        ) {
+          const contest = selectiveV2NoBaseContestSummary();
+          const addedIds = Object.entries(row.selectiveV2NoBaseContest.candidates || {})
+            .filter(([,v])=>v?.decision==='UP' || v?.decision==='DOWN')
+            .map(([id])=>id);
+          const milestone = contest.candidates.some(x =>
+            addedIds.includes(x.candidateId) &&
+            x.strictForwardSamples > 0 &&
+            (x.strictForwardSamples % 5 === 0 || x.strictForwardSamples === SELECTIVE_V2_NO_BASE_CONTEST_TARGET)
+          );
+          if (milestone) log('selective_v2_no_base_contest_forward_progress', contest);
         }
 
         lastSettlementOkAt = Date.now();
@@ -3557,46 +3792,8 @@ function productionSignalPayload(now = Date.now()) {
       return { ok: true, live };
     }
 
-    if (!baseDirection) {
-      const noBase = selectiveV2NoBaseShadowSummary();
-      const noBaseDecision = row.selectiveV2NoBaseShadow;
-      const elapsedMs = Math.max(0, Number(now) - Number(row.roundStartMs));
-      if (
-        noBase.status === 'FORWARD_75_MET' &&
-        elapsedMs >= LOCK_QUALITY_V2_MAX_DELAY_MS &&
-        (noBaseDecision?.decision === 'UP' || noBaseDecision?.decision === 'DOWN')
-      ) {
-        const direction = noBaseDecision.decision;
-        const live = {
-          round: row.roundStartMs,
-          status: 'LOCKED',
-          signal: {
-            direction,
-            score: Number.isFinite(Number(row.shadowFacts?.currentScore))
-              ? Number(row.shadowFacts.currentScore)
-              : null,
-            confidence: null,
-            modelProbability: null,
-          },
-          input: { round: row.roundStartMs },
-          generatedAt: Number(now),
-          source: 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY',
-          model: LOCK_QUALITY_V2_VERSION,
-          facts: row.shadowFacts ?? null,
-          productionPolicy: productionPolicyName(),
-          fallbackUsed: false,
-          selectiveQuality: {
-            ...noBaseDecision,
-            forwardQualification: noBase,
-          },
-          shadowForwardStatus: selectiveQualityV2Summary().status,
-          shadowForwardSamples: selectiveQualityV2Summary().forwardSamples,
-        };
-        freezeProductionLock(row, live);
-        logProductionSignalState(live);
-        return { ok:true, live };
-      }
-    }
+    // Production Selective V2 is intentionally frozen.
+    // No-base candidates remain shadow-only even if they qualify for review.
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
@@ -3834,6 +4031,7 @@ log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
 log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsensusBacktest());
 log('selective_v2_no_base_shadow_status', selectiveV2NoBaseShadowSummary());
+log('selective_v2_no_base_contest_status', selectiveV2NoBaseContestSummary());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
 // Freeze the production direction in the background even when no browser is open
@@ -3923,6 +4121,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/selective-v2-no-base-shadow-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(selectiveV2NoBaseShadowSummary()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/selective-v2-no-base-contest-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(selectiveV2NoBaseContestSummary()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/shadow-quality-v2-stats') {

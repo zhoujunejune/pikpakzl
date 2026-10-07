@@ -821,17 +821,15 @@ function calculate(now = Date.now()) {
   }
 
   const priceSide = distanceFromOpenBps > 0 ? 1 : distanceFromOpenBps < 0 ? -1 : 0;
+
+  // First identify the live/current directional candidate from price + current
+  // structure. The regime-blended score is applied below for aligned/range
+  // trades, but not as a precondition for countertrend reversal evaluation.
+  // Previously this precondition made the COUNTERTREND branch effectively
+  // unreachable whenever the slower regime dominated the blended score.
   let proposedDirection = 'WAIT';
-  if (
-    priceSide > 0 &&
-    currentScore >= TREND_THRESHOLD &&
-    score >= SCORE_THRESHOLD
-  ) proposedDirection = 'UP';
-  else if (
-    priceSide < 0 &&
-    currentScore <= -TREND_THRESHOLD &&
-    score <= -SCORE_THRESHOLD
-  ) proposedDirection = 'DOWN';
+  if (priceSide > 0 && currentScore >= TREND_THRESHOLD) proposedDirection = 'UP';
+  else if (priceSide < 0 && currentScore <= -TREND_THRESHOLD) proposedDirection = 'DOWN';
 
   const proposedSign = proposedDirection === 'UP' ? 1 : proposedDirection === 'DOWN' ? -1 : 0;
   const regimeSign = regimeDirection === 'UP' ? 1 : regimeDirection === 'DOWN' ? -1 : 0;
@@ -905,6 +903,14 @@ function calculate(now = Date.now()) {
     reason = 'INSUFFICIENT_REAL_DEPTH_UPDATES';
   } else if (proposedDirection === 'WAIT') {
     reason = 'V6_DIRECTION_THRESHOLDS_NOT_MET';
+  } else if (
+    alignment !== 'COUNTERTREND' &&
+    proposedSign * score < SCORE_THRESHOLD
+  ) {
+    // Preserve the original blended-score quality gate for aligned/range
+    // signals. Countertrend candidates are handled by the stricter reversal
+    // structure + longer observation + PM confirmation gates below.
+    reason = 'V6_BLENDED_SCORE_THRESHOLD_NOT_MET';
   } else if (elapsedMs < requiredObserveMs) {
     reason = alignment === 'COUNTERTREND'
       ? 'V6_COUNTERTREND_NEEDS_MORE_CONFIRMATION'
@@ -970,6 +976,7 @@ function calculate(now = Date.now()) {
       microScore: Number(microScore.toFixed(6)),
       currentTrendScore: Number(currentTrendScore.toFixed(6)),
       alignment,
+      countertrendScoreBypass: alignment === 'COUNTERTREND',
       reversalScore: Number(reversalScore.toFixed(6)),
       reversalStructureConfirmed,
       absorptionRisk,
@@ -1006,6 +1013,10 @@ function calculate(now = Date.now()) {
         regimeScore:Number(regimeScore.toFixed(6)),
         regimeAgreement:Number(regimeAgreement.toFixed(4)),
         alignment,
+        blendedScoreSupportsDirection: proposedSign !== 0 ? proposedSign * score >= SCORE_THRESHOLD : false,
+        countertrendScoreBypass: alignment === 'COUNTERTREND',
+        reversalStructureConfirmed,
+        reversalScore:Number(reversalScore.toFixed(6)),
         distanceFromOpenBps:Number(distanceFromOpenBps.toFixed(4)),
         flow5Count:flow5.count,
         ofi5Count:ofi5.count,

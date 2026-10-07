@@ -2101,7 +2101,7 @@ function selectiveV2RecentProductionQuality(excludeRound = null) {
 
 function selectiveV2RecentDirectionQuality(direction, excludeRound = null, recentN = 10) {
   const dir = direction === 'UP' || direction === 'DOWN' ? direction : null;
-  if (!dir) return { direction:null, samples:0, hits:0, misses:0, accuracy:null };
+  if (!dir) return { direction:null, samples:0, hits:0, misses:0, accuracy:null, missStreak:0 };
   const settled = Array.from(rounds.values())
     .filter(r =>
       Number(r.roundStartMs) !== Number(excludeRound) &&
@@ -2112,17 +2112,43 @@ function selectiveV2RecentDirectionQuality(direction, excludeRound = null, recen
     .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
   const recent = settled.slice(-Math.max(1, Number(recentN) || 10));
   const hits = recent.filter(r => r.productionResult === 'HIT').length;
+  let missStreak = 0;
+  for (let i = settled.length - 1; i >= 0; i -= 1) {
+    if (settled[i].productionResult !== 'MISS') break;
+    missStreak += 1;
+  }
   return {
     direction: dir,
     samples: recent.length,
     hits,
     misses: recent.length - hits,
     accuracy: recent.length ? hits / recent.length : null,
+    missStreak,
   };
 }
 
 function selectiveV2AdaptiveThresholds(excludeRound = null) {
   const recent = selectiveV2RecentProductionQuality(excludeRound);
+  const allSettled = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) !== Number(excludeRound) &&
+      String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2') &&
+      (r.productionResult === 'HIT' || r.productionResult === 'MISS')
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+  const summarizeTail = n => {
+    const tail = allSettled.slice(-n);
+    const hits = tail.filter(r => r.productionResult === 'HIT').length;
+    return {
+      samples: tail.length,
+      hits,
+      misses: tail.length - hits,
+      accuracy: tail.length ? hits / tail.length : null,
+    };
+  };
+  const recent10 = summarizeTail(10);
+  const recent5 = summarizeTail(5);
+
   let mode = 'NORMAL';
   let supportMin = LOCK_QUALITY_V2_SUPPORT_MIN;
   let currentMin = LOCK_QUALITY_V2_CURRENT_MIN;
@@ -2136,12 +2162,9 @@ function selectiveV2AdaptiveThresholds(excludeRound = null) {
       maxDelayMs = Math.min(maxDelayMs, 16000);
     } else if (recent.accuracy < LOCK_QUALITY_V2_DRIFT_MIN_ACCURACY) {
       mode = 'DRIFT_SUPPORT_FOCUS';
-      // Live settled replay (2026-10-06): the previous triple-tightening
-      // support>=0.12 + current>=0.70 + delay<18s yielded 6/9 = 66.7%.
-      // Keeping support>=0.12 while retaining the normal current-score and
-      // delay bounds yielded 14/19 = 73.68% with materially better coverage.
-      // Support is currently the useful discriminator; over-tightening the
-      // other two gates was rejecting good directions without improving edge.
+      // Settled replay shows predictionSupport is the useful discriminator.
+      // Keep current-score and delay broadly unchanged so a weak direction
+      // does not unnecessarily suppress the healthy side.
       supportMin = Math.max(supportMin, 0.12);
     } else if (recent.accuracy < LOCK_QUALITY_V2_RECOVERY_ACCURACY) {
       mode = 'RECOVERY_CAUTION';
@@ -2154,6 +2177,8 @@ function selectiveV2AdaptiveThresholds(excludeRound = null) {
   return {
     mode,
     recent,
+    recent10,
+    recent5,
     supportMin,
     currentMin,
     maxDelayMs,
@@ -2167,18 +2192,34 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
   const absorption = facts?.absorptionRisk === true;
   const adaptive = selectiveV2AdaptiveThresholds(excludeRound);
   const directionQuality = selectiveV2RecentDirectionQuality(direction, excludeRound, 10);
-  // Direction-local drift guard: do not punish the healthy side when only one
-  // direction deteriorates. Historical settled replay showed support is the
-  // strongest discriminator for the weak DOWN side.
+  const directionRecent5 = selectiveV2RecentDirectionQuality(direction, excludeRound, 5);
+  // Direction-local fast drift guard. The healthy side remains untouched when
+  // only UP or DOWN deteriorates. Live replay shows predictionSupport is the
+  // strongest discriminator, so escalation primarily tightens support.
   let effectiveSupportMin = adaptive.supportMin;
   let directionalMode = 'NONE';
+
   if (
     directionQuality.samples >= 10 &&
     Number.isFinite(directionQuality.accuracy) &&
-    directionQuality.accuracy < 0.60
+    directionQuality.accuracy < 0.65
   ) {
     effectiveSupportMin = Math.max(effectiveSupportMin, 0.14);
-    directionalMode = 'DIRECTION_SUPPORT_FOCUS';
+    directionalMode = 'DIRECTION_CAUTION';
+  }
+
+  if (
+    directionRecent5.samples >= 5 &&
+    Number.isFinite(directionRecent5.accuracy) &&
+    directionRecent5.accuracy <= 0.40
+  ) {
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.16);
+    directionalMode = 'DIRECTION_FAST_DRIFT';
+  }
+
+  if (Number(directionQuality.missStreak || 0) >= 3) {
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.18);
+    directionalMode = 'DIRECTION_MISS_STREAK_GUARD';
   }
 
   const reasons = [];
@@ -2217,6 +2258,13 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
       hits: directionQuality.hits,
       misses: directionQuality.misses,
       accuracy: Number.isFinite(directionQuality.accuracy) ? Number(directionQuality.accuracy.toFixed(4)) : null,
+      missStreak: Number(directionQuality.missStreak || 0),
+      recent5: {
+        samples: directionRecent5.samples,
+        hits: directionRecent5.hits,
+        misses: directionRecent5.misses,
+        accuracy: Number.isFinite(directionRecent5.accuracy) ? Number(directionRecent5.accuracy.toFixed(4)) : null,
+      },
     },
     thresholds: {
       predictionSupportMin: effectiveSupportMin,

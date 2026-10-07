@@ -18,3 +18,19 @@ jobs:
           curl -fsS --max-time 20 'https://trade-control-panel-production.up.railway.app/api/training-status'
           echo
           echo "===TRAINING_STATUS_END==="
+          curl -fsS --max-time 20 'https://trade-control-panel-production.up.railway.app/api/round-stats' -o /tmp/round-stats.json
+          echo "===RECENT20_DECISIONS_BEGIN==="
+          jq -c '[.records[] | select((.productionActual=="UP" or .productionActual=="DOWN") and (.productionPrediction=="UP" or .productionPrediction=="DOWN"))][0:20] | .[] | {roundStartMs,productionSource,productionPrediction,productionActual,productionResult,productionConfidence,productionDelayMs}' /tmp/round-stats.json
+          echo "===RECENT20_DECISIONS_END==="
+          echo "===RECENT20_BREAKDOWN_BEGIN==="
+          jq -c '
+            [.records[] | select((.productionActual=="UP" or .productionActual=="DOWN") and (.productionPrediction=="UP" or .productionPrediction=="DOWN"))][0:20]
+            | {
+                total:length,
+                hits:map(select(.productionResult=="HIT"))|length,
+                misses:map(select(.productionResult=="MISS"))|length,
+                up:{n:map(select(.productionPrediction=="UP"))|length,hits:map(select(.productionPrediction=="UP" and .productionResult=="HIT"))|length},
+                down:{n:map(select(.productionPrediction=="DOWN"))|length,hits:map(select(.productionPrediction=="DOWN" and .productionResult=="HIT"))|length},
+                bySource:(group_by(.productionSource)|map({source:.[0].productionSource,n:length,hits:map(select(.productionResult=="HIT"))|length,misses:map(select(.productionResult=="MISS"))|length}))
+              }' /tmp/round-stats.json
+          echo "===RECENT20_BREAKDOWN_END==="

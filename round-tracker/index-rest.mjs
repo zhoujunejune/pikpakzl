@@ -2228,10 +2228,16 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
   const adaptive = selectiveV2AdaptiveThresholds(excludeRound);
   const directionQuality = selectiveV2RecentDirectionQuality(direction, excludeRound, 10);
   const directionRecent5 = selectiveV2RecentDirectionQuality(direction, excludeRound, 5);
-  // Direction-local fast drift guard. The healthy side remains untouched when
-  // only UP or DOWN deteriorates. Live replay shows predictionSupport is the
-  // strongest discriminator, so escalation primarily tightens support.
+  const directionRecent4 = selectiveV2RecentDirectionQuality(direction, excludeRound, 4);
+
+  // Direction-local adaptive guard. UP and DOWN are evaluated independently.
+  // A weak side tightens itself automatically; the healthy side is untouched.
+  // Thresholds also relax automatically once the recent directional window
+  // recovers, because this state is recalculated from settled strict-forward
+  // production decisions on every evaluation.
   let effectiveSupportMin = adaptive.supportMin;
+  let effectiveCurrentMin = adaptive.currentMin;
+  let effectiveMaxDelayMs = adaptive.maxDelayMs;
   let directionalMode = 'NONE';
 
   if (
@@ -2243,17 +2249,43 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
     directionalMode = 'DIRECTION_CAUTION';
   }
 
+  // Fast response: do not wait for 10 same-direction decisions when the latest
+  // 4 have already degraded to coin-flip quality or worse.
+  if (
+    directionRecent4.samples >= 4 &&
+    Number.isFinite(directionRecent4.accuracy) &&
+    directionRecent4.accuracy <= 0.50
+  ) {
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.15);
+    effectiveCurrentMin = Math.max(effectiveCurrentMin, 0.65);
+    effectiveMaxDelayMs = Math.min(effectiveMaxDelayMs, 20000);
+    directionalMode = 'DIRECTION_FAST_GUARD';
+  }
+
   if (
     directionRecent5.samples >= 5 &&
     Number.isFinite(directionRecent5.accuracy) &&
     directionRecent5.accuracy <= 0.40
   ) {
-    effectiveSupportMin = Math.max(effectiveSupportMin, 0.16);
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.18);
+    effectiveCurrentMin = Math.max(effectiveCurrentMin, 0.70);
+    effectiveMaxDelayMs = Math.min(effectiveMaxDelayMs, 18000);
     directionalMode = 'DIRECTION_FAST_DRIFT';
   }
 
+  // Consecutive errors get an immediate local response even before the rolling
+  // accuracy window fully deteriorates.
+  if (Number(directionQuality.missStreak || 0) >= 2) {
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.16);
+    effectiveCurrentMin = Math.max(effectiveCurrentMin, 0.67);
+    effectiveMaxDelayMs = Math.min(effectiveMaxDelayMs, 19000);
+    directionalMode = 'DIRECTION_MISS_STREAK_CAUTION';
+  }
+
   if (Number(directionQuality.missStreak || 0) >= 3) {
-    effectiveSupportMin = Math.max(effectiveSupportMin, 0.18);
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.20);
+    effectiveCurrentMin = Math.max(effectiveCurrentMin, 0.72);
+    effectiveMaxDelayMs = Math.min(effectiveMaxDelayMs, 16000);
     directionalMode = 'DIRECTION_MISS_STREAK_GUARD';
   }
 
@@ -2264,8 +2296,8 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
   if (!Number.isFinite(currentAbs)) { eligible = false; reasons.push('MISSING_CURRENT_SCORE'); }
   if (!Number.isFinite(delay)) { eligible = false; reasons.push('MISSING_LOCK_DELAY'); }
   if (Number.isFinite(support) && support < effectiveSupportMin) reasons.push('PREDICTION_SUPPORT_BELOW_ADAPTIVE_MIN');
-  if (Number.isFinite(currentAbs) && currentAbs < adaptive.currentMin) reasons.push('CURRENT_SCORE_BELOW_ADAPTIVE_MIN');
-  if (Number.isFinite(delay) && delay >= adaptive.maxDelayMs) reasons.push('LOCK_DELAY_ABOVE_ADAPTIVE_MAX');
+  if (Number.isFinite(currentAbs) && currentAbs < effectiveCurrentMin) reasons.push('CURRENT_SCORE_BELOW_ADAPTIVE_MIN');
+  if (Number.isFinite(delay) && delay >= effectiveMaxDelayMs) reasons.push('LOCK_DELAY_ABOVE_ADAPTIVE_MAX');
   if (absorption) reasons.push('ABSORPTION_RISK');
 
   const pass = eligible && reasons.length === 0;
@@ -2300,11 +2332,17 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
         misses: directionRecent5.misses,
         accuracy: Number.isFinite(directionRecent5.accuracy) ? Number(directionRecent5.accuracy.toFixed(4)) : null,
       },
+      recent4: {
+        samples: directionRecent4.samples,
+        hits: directionRecent4.hits,
+        misses: directionRecent4.misses,
+        accuracy: Number.isFinite(directionRecent4.accuracy) ? Number(directionRecent4.accuracy.toFixed(4)) : null,
+      },
     },
     thresholds: {
       predictionSupportMin: effectiveSupportMin,
-      currentScoreMin: adaptive.currentMin,
-      maxDelayMs: adaptive.maxDelayMs,
+      currentScoreMin: effectiveCurrentMin,
+      maxDelayMs: effectiveMaxDelayMs,
       rejectAbsorption: true,
     },
   };

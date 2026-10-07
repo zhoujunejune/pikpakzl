@@ -2867,6 +2867,9 @@ function waitRescueEvaluate(facts) {
 function waitRescueEvaluateSnapshot(row, facts, elapsedMs = null) {
   if (!row || !facts || Number(row.roundStartMs) < WAIT_RESCUE_SHADOW_START_MS) return null;
   const elapsed = Number.isFinite(Number(elapsedMs)) ? Number(elapsedMs) : Date.now() - Number(row.roundStartMs);
+  // Never evaluate a rescue after the live decision window; this preserves
+  // strict-forward comparability and prevents restart-time lookahead.
+  if (elapsed < 0 || elapsed > 22000) return null;
   const existing = row.waitRescueShadow && row.waitRescueShadow.version === WAIT_RESCUE_SHADOW_VERSION
     ? row.waitRescueShadow
     : {

@@ -8,6 +8,7 @@ import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
 import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
+import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -128,6 +129,22 @@ const SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES = 5;
 const SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES = 5;
 const SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY = 0.70;
 const SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK = 3;
+
+// Forward-only expansion lanes. They only observe rounds that Tier-1 Edge Rescue
+// still rejects, so their strict-forward results measure genuinely incremental
+// coverage rather than duplicating the current rescue layer.
+const SELECTIVE_V2_EDGE_EXPANSION_VERSION = 'SELECTIVE_V2_EDGE_EXPANSION_SHADOW_V1';
+const SELECTIVE_V2_EDGE_EXPANSION_START_MS = Math.max(
+  0,
+  Number(process.env.SELECTIVE_V2_EDGE_EXPANSION_START_MS || 1791385200000)
+);
+const SELECTIVE_V2_EDGE_EXPANSION_CONFIGS = [
+  { id:'T2_SUPPORT_06', relaxationRank:1, supportMin:0.06, currentMin:0.60, scoreMin:0.45, maxDelayMs:20000, rejectAbsorption:true },
+  { id:'T2_CURRENT_055', relaxationRank:2, supportMin:0.08, currentMin:0.55, scoreMin:0.45, maxDelayMs:20000, rejectAbsorption:true },
+  { id:'T2_SCORE_040', relaxationRank:3, supportMin:0.08, currentMin:0.60, scoreMin:0.40, maxDelayMs:20000, rejectAbsorption:true },
+  { id:'T2_DELAY_22', relaxationRank:4, supportMin:0.08, currentMin:0.60, scoreMin:0.45, maxDelayMs:22000, rejectAbsorption:true },
+  { id:'T3_COMBINED', relaxationRank:5, supportMin:0.06, currentMin:0.55, scoreMin:0.40, maxDelayMs:22000, rejectAbsorption:true },
+];
 
 const WAIT_RESCUE_SHADOW_VERSION = 'WAIT_RESCUE_SHADOW_V1';
 const WAIT_RESCUE_SHADOW_START_MS = Math.max(0, Number(process.env.WAIT_RESCUE_SHADOW_START_MS || 1791354300000));
@@ -444,6 +461,27 @@ const preLockAdaptiveShadow = createPreLockAdaptiveShadow({
   targetAccuracy: 0.72,
   minHoldoutPasses: 12,
   log,
+});
+
+const edgeRescueExpansion = createEdgeRescueExpansion({
+  version: SELECTIVE_V2_EDGE_EXPANSION_VERSION,
+  startMs: SELECTIVE_V2_EDGE_EXPANSION_START_MS,
+  configs: SELECTIVE_V2_EDGE_EXPANSION_CONFIGS,
+  lockPredictionSupport,
+  minSamples: 20,
+  targetSamples: 60,
+  targetAccuracy: 0.75,
+  recentWindow: 10,
+  recentAccuracy: 0.70,
+  directionMinSamples: 5,
+  directionRecentWindow: 6,
+  directionAccuracy: 0.70,
+  maxMissStreak: 2,
+  minIncrementalCoverage: 0.02,
+  retireMinSamples: 20,
+  retireAccuracy: 0.65,
+  log,
+  onPersist: saveHistory,
 });
 
 function saveHistory() {
@@ -4017,6 +4055,13 @@ async function pollSignal() {
       if (Number(row.roundStartMs) >= LOCK_QUALITY_V2_START_MS) {
         row.lockQualitySelectiveV2 = evaluateSelectiveQualityV2(direction, row.predictionFacts, row.predictionDelayMs, row.roundStartMs);
         row.adaptiveGateShadow = adaptiveGateShadow.evaluate(row);
+
+        if (!row.lockQualitySelectiveV2?.pass) {
+          const coreEdgeRescue = evaluateSelectiveV2EdgeRescueRow(row, row.lockQualitySelectiveV2);
+          if (coreEdgeRescue?.decision !== direction) {
+            edgeRescueExpansion.evaluate(row, row.lockQualitySelectiveV2, coreEdgeRescue);
+          }
+        }
       }
       if (
         Number(row.roundStartMs) >= SELECTIVE_V2_HP_SHADOW_START_MS &&
@@ -4227,6 +4272,31 @@ async function settlePendingRounds() {
           log('selective_v2_edge_rescue_forward_progress', selectiveV2EdgeRescueSummary());
         }
 
+        if (row?.selectiveV2EdgeExpansionShadow?.version === SELECTIVE_V2_EDGE_EXPANSION_VERSION) {
+          const decidedIds = Object.entries(row.selectiveV2EdgeExpansionShadow.candidates || {})
+            .filter(([,v]) => v?.decision === 'UP' || v?.decision === 'DOWN')
+            .map(([id]) => id);
+          if (decidedIds.length) {
+            const expansion = edgeRescueExpansion.summary(rounds.values());
+            const milestone = expansion.candidates.some(x =>
+              decidedIds.includes(x.candidateId) &&
+              x.strictForwardSamples > 0 &&
+              (
+                x.strictForwardSamples === 1 ||
+                x.strictForwardSamples % 5 === 0 ||
+                x.strictForwardSamples === 20 ||
+                x.strictForwardSamples === 60 ||
+                x.status === 'AUTO_QUALIFIED' ||
+                x.status === 'AUTO_DEMOTED_DRIFT' ||
+                x.status === 'RETIRED_LOW_ACCURACY'
+              )
+            );
+            if (milestone) {
+              log('selective_v2_edge_expansion_forward_progress', expansion);
+            }
+          }
+        }
+
         if (row.selectiveV2HighPrecisionShadow?.version === SELECTIVE_V2_HP_SHADOW_VERSION) {
           const decidedIds = Object.entries(row.selectiveV2HighPrecisionShadow.candidates || {})
             .filter(([,v]) => v?.decision === 'UP' || v?.decision === 'DOWN')
@@ -4402,6 +4472,7 @@ function productionSummary() {
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
     selectiveV2Rounds: decided.filter(r => String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2')).length,
     edgeRescueRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY').length,
+    edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     currentQualifiedModel: productionUsesSelectiveV2()
       ? LOCK_QUALITY_V2_VERSION
@@ -4824,6 +4895,15 @@ function productionSignalPayload(now = Date.now()) {
     const edgeFuse = edgeRescue?.decision === baseDirection
       ? selectiveV2EdgeRescueFuseState(baseDirection)
       : null;
+    const edgeExpansionEvaluation =
+      baseDirection &&
+      q &&
+      !q.pass &&
+      edgeRescue?.decision !== baseDirection
+        ? (row.selectiveV2EdgeExpansionShadow?.version === SELECTIVE_V2_EDGE_EXPANSION_VERSION
+          ? row.selectiveV2EdgeExpansionShadow
+          : edgeRescueExpansion.evaluate(row, q, edgeRescue))
+        : null;
 
     if (edgeRescue?.decision === baseDirection && edgeFuse?.allowed) {
       const confidence = Number.isFinite(Number(row.modelProbability))
@@ -4862,7 +4942,72 @@ function productionSignalPayload(now = Date.now()) {
       return {ok:true,live};
     }
 
-    // No-base candidates remain shadow-only. Edge rescue never invents a
+    // Tier-2/3 expansion only activates after independent strict-forward proof.
+    // It inherits the Tier-1 fuse so a degraded rescue regime cannot be widened.
+    const expansionCoreFuse = edgeExpansionEvaluation
+      ? selectiveV2EdgeRescueFuseState(baseDirection)
+      : null;
+    const expansionSelection =
+      edgeExpansionEvaluation && expansionCoreFuse?.allowed
+        ? edgeRescueExpansion.selectProductionCandidate(
+            rounds.values(),
+            edgeExpansionEvaluation,
+            baseDirection
+          )
+        : null;
+
+    if (expansionSelection?.allowed && expansionSelection?.candidate) {
+      const candidate = expansionSelection.candidate;
+      const confidence = Number.isFinite(Number(row.modelProbability))
+        ? Number(row.modelProbability)
+        : (Number.isFinite(Number(row.predictionConfidence)) ? Number(row.predictionConfidence) : null);
+      const score = Number.isFinite(Number(row.predictionScore)) ? Number(row.predictionScore) : null;
+      const live = {
+        round:row.roundStartMs,
+        status:'LOCKED',
+        signal:{direction:baseDirection,score,confidence,modelProbability:confidence},
+        input:{round:row.roundStartMs},
+        generatedAt:Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
+        source:'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY',
+        model:SELECTIVE_V2_EDGE_EXPANSION_VERSION + ':' + candidate.candidateId,
+        facts:row.predictionFacts ?? null,
+        productionPolicy:productionPolicyName(),
+        fallbackUsed:false,
+        selectiveQuality:q,
+        edgeRescue:{
+          candidate:edgeRescue,
+          fuse:expansionCoreFuse ? {
+            allowed:Boolean(expansionCoreFuse.allowed),
+            reason:expansionCoreFuse.reason ?? null,
+          } : null,
+        },
+        edgeExpansion:{
+          candidateId:candidate.candidateId,
+          strictForwardSamples:candidate.strictForwardSamples,
+          strictForwardAccuracy:candidate.forwardAccuracy,
+          recent10Accuracy:candidate.recent10Accuracy,
+          incrementalCoverage:candidate.incrementalCoverage,
+          allowedDirections:candidate.allowedDirections,
+        },
+        shadowForwardStatus:'EDGE_EXPANSION_ACTIVE',
+        shadowForwardSamples:candidate.strictForwardSamples,
+      };
+      freezeProductionLock(row, live);
+      log('selective_v2_edge_expansion_production_lock', {
+        round:row.roundStartMs,
+        direction:baseDirection,
+        candidateId:candidate.candidateId,
+        strictForwardSamples:candidate.strictForwardSamples,
+        strictForwardAccuracy:candidate.forwardAccuracy,
+        recent10Accuracy:candidate.recent10Accuracy,
+        incrementalCoverage:candidate.incrementalCoverage,
+        allowedDirections:candidate.allowedDirections,
+      });
+      logProductionSignalState(live);
+      return {ok:true,live};
+    }
+
+    // No-base candidates remain shadow-only. Rescue layers never invent a
     // direction when V3 has not produced one.
 
     const reasons = !baseDirection
@@ -4887,6 +5032,18 @@ function productionSignalPayload(now = Date.now()) {
         fuse:edgeFuse ? {
           allowed:Boolean(edgeFuse.allowed),
           reason:edgeFuse.reason ?? null,
+        } : null,
+      } : null,
+      edgeExpansion: edgeExpansionEvaluation ? {
+        current: edgeExpansionEvaluation,
+        coreFuse: expansionCoreFuse ? {
+          allowed:Boolean(expansionCoreFuse.allowed),
+          reason:expansionCoreFuse.reason ?? null,
+        } : null,
+        selection: expansionSelection ? {
+          allowed:Boolean(expansionSelection.allowed),
+          reason:expansionSelection.reason ?? null,
+          candidateId: expansionSelection.candidate?.candidateId ?? null,
         } : null,
       } : null,
       shadowForwardStatus: s.status,
@@ -5111,6 +5268,7 @@ log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
 log('selective_v2_filtered_wait_rescue_backtest_snapshot', selectiveV2FilteredWaitRescueBacktest());
 log('selective_v2_edge_rescue_status', selectiveV2EdgeRescueSummary());
+log('selective_v2_edge_expansion_status', edgeRescueExpansion.summary(rounds.values()));
 log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsensusBacktest());
 log('selective_v2_no_base_shadow_status', selectiveV2NoBaseShadowSummary());
 log('no_base_specialist_status', noBaseSpecialist.stats());
@@ -5216,6 +5374,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/selective-v2-edge-rescue-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(selectiveV2EdgeRescueSummary()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/selective-v2-edge-expansion-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(edgeRescueExpansion.summary(rounds.values())));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/selective-v2-no-base-shadow-stats') {

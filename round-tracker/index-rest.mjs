@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
+import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
@@ -42,6 +43,12 @@ const SHADOW_V2_FILE = String(process.env.SHADOW_V2_FILE || `${HISTORY_FILE}.sha
 const SHADOW_V3_DIR = String(process.env.SHADOW_V3_DIR || '/data/shadow-v3');
 const SHADOW_V3_TRAIN_EVERY_ROUNDS = Math.max(10, Number(process.env.SHADOW_V3_TRAIN_EVERY_ROUNDS || 20));
 const SHADOW_V3_TRAIN_TIME_BUDGET = Math.max(30, Number(process.env.SHADOW_V3_TRAIN_TIME_BUDGET || 75));
+const NO_BASE_SPECIALIST_DIR = String(process.env.NO_BASE_SPECIALIST_DIR || '/data/no-base-specialist');
+const NO_BASE_SPECIALIST_MIN_SAMPLES = Math.max(80, Number(process.env.NO_BASE_SPECIALIST_MIN_SAMPLES || 120));
+const NO_BASE_SPECIALIST_FORWARD_TARGET = Math.max(30, Number(process.env.NO_BASE_SPECIALIST_FORWARD_TARGET || 60));
+const NO_BASE_SPECIALIST_TRAIN_EVERY_ROUNDS = Math.max(10, Number(process.env.NO_BASE_SPECIALIST_TRAIN_EVERY_ROUNDS || 20));
+const NO_BASE_SPECIALIST_TRAIN_TIME_BUDGET = Math.max(30, Number(process.env.NO_BASE_SPECIALIST_TRAIN_TIME_BUDGET || 60));
+const NO_BASE_SPECIALIST_OBSERVE_MS = Math.min(22000, Math.max(18000, Number(process.env.NO_BASE_SPECIALIST_OBSERVE_MS || 20000)));
 const SHADOW_V4_DIR = String(process.env.SHADOW_V4_DIR || '/data/shadow-v4');
 const SHADOW_V4_TRAIN_EVERY_ROUNDS = Math.max(20, Number(process.env.SHADOW_V4_TRAIN_EVERY_ROUNDS || 120));
 const SHADOW_V5_DIR = String(process.env.SHADOW_V5_DIR || '/data/shadow-v5');
@@ -372,6 +379,17 @@ const shadowV3 = createShadowV3Client({
   protectedModelVersion: SHADOW_PRODUCTION_MODEL_VERSION.startsWith('shadow-v3-automl-')
     ? SHADOW_PRODUCTION_MODEL_VERSION
     : null,
+  log,
+});
+
+const noBaseSpecialist = createNoBaseSpecialistClient({
+  historyFile: HISTORY_FILE,
+  dir: NO_BASE_SPECIALIST_DIR,
+  minSamples: NO_BASE_SPECIALIST_MIN_SAMPLES,
+  forwardTarget: NO_BASE_SPECIALIST_FORWARD_TARGET,
+  maxCandidates: 6,
+  trainEveryRounds: NO_BASE_SPECIALIST_TRAIN_EVERY_ROUNDS,
+  trainTimeBudget: NO_BASE_SPECIALIST_TRAIN_TIME_BUDGET,
   log,
 });
 
@@ -1192,6 +1210,7 @@ function applyAuthoritativeSettledHistoryOverrides() {
     }
     shadowV2.settle(row);
     shadowV3.settle(row);
+    noBaseSpecialist.settle(row);
     archiveSettledRow(row, 'settled_history_final_outcome_correction');
     log('authoritative_settled_history_override_applied', {
       round:Number(roundKey),
@@ -3921,6 +3940,30 @@ async function pollSignal() {
         saveHistory();
       }
     }
+    if (
+      liveFacts &&
+      !row.noBaseSpecialistObservedAt &&
+      elapsedMs >= NO_BASE_SPECIALIST_OBSERVE_MS &&
+      elapsedMs <= 22000 &&
+      live?.status !== 'LOCKED' &&
+      row.prediction !== 'UP' &&
+      row.prediction !== 'DOWN'
+    ) {
+      row.noBaseSpecialistObservedAt = Date.now();
+      row.noBaseSpecialistFacts = liveFacts;
+      row.noBaseSpecialistRawStatusAtObservation = live?.status || 'WAIT';
+      row.noBaseSpecialistRawReasonAtObservation = live?.reason || live?.waitReason || null;
+      saveHistory();
+      log('no_base_specialist_snapshot_collected', {
+        round: row.roundStartMs,
+        observedDelayMs: row.noBaseSpecialistObservedAt - row.roundStartMs,
+        rawStatus: row.noBaseSpecialistRawStatusAtObservation,
+        rawReason: row.noBaseSpecialistRawReasonAtObservation,
+        productionEffect: 'NONE_SHADOW_ONLY',
+      });
+      void noBaseSpecialist.observe(row, liveFacts, row.noBaseSpecialistObservedAt);
+    }
+
     if (row.shadowObservedAt && row.shadowFacts) {
       void shadowV3.observe(row, row.shadowFacts);
       void shadowV4.observe(row, row.shadowFacts);
@@ -4131,6 +4174,7 @@ async function settlePendingRounds() {
         settleShadowForwardRegistry(row);
         shadowV2.settle(row);
         shadowV3.settle(row);
+        noBaseSpecialist.settle(row);
         void shadowV4.settle(row);
         shadowV5.settle(row);
         void shadowV7.settle(row);
@@ -4219,6 +4263,7 @@ async function settlePendingRounds() {
         maybeTrainShadowModel();
         shadowV2.maybeTrain(shadowTrainingRows());
         void shadowV3.maybeTrain(row.roundStartMs);
+        void noBaseSpecialist.maybeTrain(row.roundStartMs);
         void shadowV4.maybeTrain(row.roundStartMs);
         void shadowV5.maybeTrain(row.roundStartMs);
         void shadowV7.maybeTrain(row.roundStartMs);
@@ -5036,12 +5081,14 @@ adaptiveGateShadow.load();
 preLockAdaptiveShadow.load();
 shadowV2.load();
 shadowV3.load();
+noBaseSpecialist.load();
 shadowV4.load();
 shadowV5.load();
 shadowV7.load();
 deleteRetiredShadowForwardCandidates();
 shadowV2.deleteRetiredCandidates();
 shadowV3.deleteRetiredCandidates();
+noBaseSpecialist.deleteRetiredCandidates();
 shadowV4.deleteRetiredCandidates();
 shadowV5.deleteRetiredCandidates();
 shadowV7.deleteRetiredCandidates();
@@ -5053,6 +5100,7 @@ preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));
 maybeTrainShadowModel();
 shadowV2.maybeTrain(shadowTrainingRows());
 void shadowV3.maybeTrain();
+void noBaseSpecialist.maybeTrain();
 void shadowV4.maybeTrain();
 void shadowV5.maybeTrain();
 void shadowV7.maybeTrain();
@@ -5065,6 +5113,7 @@ log('selective_v2_filtered_wait_rescue_backtest_snapshot', selectiveV2FilteredWa
 log('selective_v2_edge_rescue_status', selectiveV2EdgeRescueSummary());
 log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsensusBacktest());
 log('selective_v2_no_base_shadow_status', selectiveV2NoBaseShadowSummary());
+log('no_base_specialist_status', noBaseSpecialist.stats());
 log('selective_v2_no_base_contest_status', selectiveV2NoBaseContestSummary());
 log('wait_rescue_backtest_snapshot', waitRescueBacktest());
 log('wait_rescue_shadow_status', waitRescueShadowSummary());
@@ -5132,6 +5181,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-v3-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadowV3.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(noBaseSpecialist.stats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/shadow-v4-stats') {
@@ -5289,6 +5343,9 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV2: shadowV2.stats(),
     shadowV3Dir: SHADOW_V3_DIR,
     shadowV3: shadowV3.stats(),
+    noBaseSpecialistDir: NO_BASE_SPECIALIST_DIR,
+    noBaseSpecialistObserveMs: NO_BASE_SPECIALIST_OBSERVE_MS,
+    noBaseSpecialist: noBaseSpecialist.stats(),
     shadowV3ProductionCandidate: productionUsesShadowV3() ? pinnedShadowV3Candidate() : null,
     shadowV4Dir: SHADOW_V4_DIR,
     shadowV4: shadowV4.stats(),

@@ -35,6 +35,12 @@ const PREDICTION_API_KEY = String(process.env.BINANCE_PREDICTION_API_KEY || '');
 const PREDICTION_API_SECRET = String(process.env.BINANCE_PREDICTION_API_SECRET || '');
 const PREDICTION_REFRESH_MS = Math.max(1000, Number(process.env.PREDICTION_MARKET_REFRESH_MS || 3000));
 const PREDICTION_BOOK_STALE_MS = Math.max(1000, Number(process.env.PREDICTION_BOOK_STALE_MS || 5000));
+const LATE_CONSENSUS_START_MS = Math.max(16000, Number(process.env.V6_LATE_CONSENSUS_START_MS || 18000));
+const LATE_CONSENSUS_CURRENT_MIN = Math.max(TREND_THRESHOLD, Number(process.env.V6_LATE_CONSENSUS_CURRENT_MIN || 0.68));
+const LATE_CONSENSUS_TREND_MIN = Math.max(0.65, Number(process.env.V6_LATE_CONSENSUS_TREND_MIN || 0.75));
+const LATE_CONSENSUS_PM_SUPPORT_MIN = Math.max(PREDICTION_SUPPORT_MIN, Number(process.env.V6_LATE_CONSENSUS_PM_SUPPORT_MIN || 0.10));
+const LATE_CONSENSUS_SCORE_MAX = Math.min(MAX_ABS_SCORE, Number(process.env.V6_LATE_CONSENSUS_SCORE_MAX || 0.68));
+const LATE_CONSENSUS_FLOW15_MIN = Math.max(0.05, Number(process.env.V6_LATE_CONSENSUS_FLOW15_MIN || 0.08));
 
 const STREAMS = [
   `${SYMBOL_LOWER}@aggTrade`,
@@ -884,6 +890,37 @@ function calculate(now = Date.now()) {
   if (absorptionRisk) requiredTicks += 1;
   requiredObserveMs = Math.min(requiredObserveMs, Math.max(OBSERVE_MIN_MS, DECISION_WINDOW_MS - 1000));
 
+  const lateConsensusSign = priceSide > 0 && currentScore >= LATE_CONSENSUS_CURRENT_MIN
+    ? 1
+    : priceSide < 0 && currentScore <= -LATE_CONSENSUS_CURRENT_MIN
+      ? -1
+      : 0;
+  const lateConsensusDirection = lateConsensusSign > 0 ? 'UP' : lateConsensusSign < 0 ? 'DOWN' : 'WAIT';
+  const latePmSupport = lateConsensusSign > 0
+    ? (predBookUsable ? predUpMid - 0.5 : null)
+    : lateConsensusSign < 0
+      ? (predBookUsable ? 0.5 - predUpMid : null)
+      : null;
+  const lateRegimeConflict = lateConsensusSign !== 0 &&
+    regimeSign !== 0 &&
+    lateConsensusSign !== regimeSign &&
+    regimeAgreement >= 0.67;
+  const lateConsensusEligible =
+    elapsedMs >= LATE_CONSENSUS_START_MS &&
+    elapsedMs <= DECISION_WINDOW_MS &&
+    lateConsensusSign !== 0 &&
+    predBookUsable &&
+    Number(latePmSupport) >= LATE_CONSENSUS_PM_SUPPORT_MIN &&
+    Math.abs(currentTrendScore) >= LATE_CONSENSUS_TREND_MIN &&
+    lateConsensusSign * currentTrendScore > 0 &&
+    lateConsensusSign * n30 >= 0.20 &&
+    lateConsensusSign * n15 >= 0.10 &&
+    lateConsensusSign * flow15.pressure >= LATE_CONSENSUS_FLOW15_MIN &&
+    Math.abs(score) < LATE_CONSENSUS_SCORE_MAX &&
+    !predictionConflict &&
+    !absorptionRisk &&
+    (!lateRegimeConflict || reversalStructureConfirmed);
+
   let nextCandidate = 'WAIT';
   let reason = 'V6_NEUTRAL';
 
@@ -938,6 +975,17 @@ function calculate(now = Date.now()) {
         : 'V6_RANGE_BREAK_CONFIRMED';
   }
 
+  // Late-window rescue for an otherwise no-base round. This does not relax the
+  // normal V6 thresholds globally: it only acts near the end of the decision
+  // window and requires stronger current trend, PM support, momentum/flow
+  // agreement, no absorption, and a non-overextended blended score.
+  if (nextCandidate === 'WAIT' && lateConsensusEligible) {
+    nextCandidate = lateConsensusDirection;
+    reason = 'V6_LATE_HIGH_QUALITY_CONSENSUS';
+    requiredObserveMs = Math.max(requiredObserveMs, LATE_CONSENSUS_START_MS);
+    requiredTicks = 1;
+  }
+
   if (nextCandidate === candidateDirection) candidateTicks += 1;
   else {
     candidateDirection = nextCandidate;
@@ -977,6 +1025,8 @@ function calculate(now = Date.now()) {
       currentTrendScore: Number(currentTrendScore.toFixed(6)),
       alignment,
       countertrendScoreBypass: alignment === 'COUNTERTREND',
+      lateConsensusRescue: reason === 'V6_LATE_HIGH_QUALITY_CONSENSUS',
+      lateConsensusSupport: Number.isFinite(Number(latePmSupport)) ? Number(Number(latePmSupport).toFixed(6)) : null,
       reversalScore: Number(reversalScore.toFixed(6)),
       reversalStructureConfirmed,
       absorptionRisk,
@@ -1015,6 +1065,9 @@ function calculate(now = Date.now()) {
         alignment,
         blendedScoreSupportsDirection: proposedSign !== 0 ? proposedSign * score >= SCORE_THRESHOLD : false,
         countertrendScoreBypass: alignment === 'COUNTERTREND',
+        lateConsensusEligible,
+        lateConsensusDirection,
+        lateConsensusSupport:Number.isFinite(Number(latePmSupport)) ? Number(Number(latePmSupport).toFixed(6)) : null,
         reversalStructureConfirmed,
         reversalScore:Number(reversalScore.toFixed(6)),
         distanceFromOpenBps:Number(distanceFromOpenBps.toFixed(4)),
@@ -1086,6 +1139,10 @@ function calculate(now = Date.now()) {
       predictionMarketDepthImbalance5: predictionBook.imbalance5,
       predictionMarketConflict: predictionConflict,
       predictionMarketSupport: Number.isFinite(Number(predictionSupport)) ? Number(Number(predictionSupport).toFixed(6)) : null,
+      lateConsensusRescue: reason === 'V6_LATE_HIGH_QUALITY_CONSENSUS',
+      lateConsensusEligible,
+      lateConsensusDirection,
+      lateConsensusSupport: Number.isFinite(Number(latePmSupport)) ? Number(Number(latePmSupport).toFixed(6)) : null,
       qualityGate: {
         currentScoreMin: TREND_THRESHOLD,
         predictionSupportMin: PREDICTION_SUPPORT_MIN,

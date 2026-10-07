@@ -94,18 +94,16 @@ const WAIT_RESCUE_FORWARD_TARGET = Math.max(30, Number(process.env.WAIT_RESCUE_F
 const WAIT_RESCUE_RETIRE_MIN_SAMPLES = 20;
 const WAIT_RESCUE_RETIRE_ACCURACY = 0.65;
 const WAIT_RESCUE_REVIEW_ACCURACY = 0.70;
-const WAIT_RESCUE_MIN_INCREMENTAL_COVERAGE = 0.08;
+const WAIT_RESCUE_MIN_INCREMENTAL_COVERAGE = 0.03;
 const WAIT_RESCUE_CONFIGS = [
-  { id:'R60_T60_PM10_S12_D05', currentMin:0.60, trendMin:0.60, pmMargin:0.10, scoreMin:0.12, distanceMinBps:0.5, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'R60_T60_PM12_S08',     currentMin:0.60, trendMin:0.60, pmMargin:0.12, scoreMin:0.08, distanceMinBps:0.0, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'R60_T65_PM08_S10',     currentMin:0.60, trendMin:0.65, pmMargin:0.08, scoreMin:0.10, distanceMinBps:0.5, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'R65_T55_PM08_S10',     currentMin:0.65, trendMin:0.55, pmMargin:0.08, scoreMin:0.10, distanceMinBps:0.5, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'R55_T60_PM10_MICRO',   currentMin:0.55, trendMin:0.60, pmMargin:0.10, scoreMin:0.12, distanceMinBps:0.5, requireMicroAgree:true,  requireMomentumAgree:false },
-  { id:'R55_T60_PM10_MOM',     currentMin:0.55, trendMin:0.60, pmMargin:0.10, scoreMin:0.12, distanceMinBps:0.5, requireMicroAgree:false, requireMomentumAgree:true  },
-  { id:'R55_T55_PM08_BOTH',    currentMin:0.55, trendMin:0.55, pmMargin:0.08, scoreMin:0.12, distanceMinBps:0.5, requireMicroAgree:true,  requireMomentumAgree:true  },
-  { id:'R55_T55_PM12_S18_D10', currentMin:0.55, trendMin:0.55, pmMargin:0.12, scoreMin:0.18, distanceMinBps:1.0, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'R60_T50_PM10_S15_D10', currentMin:0.60, trendMin:0.50, pmMargin:0.10, scoreMin:0.15, distanceMinBps:1.0, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'R70_T50_PM05_S08',     currentMin:0.70, trendMin:0.50, pmMargin:0.05, scoreMin:0.08, distanceMinBps:0.0, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'SAFE_R75_T50_PM03', currentMin:0.75, trendMin:0.50, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'SAFE_R75_T50_PM05', currentMin:0.75, trendMin:0.50, pmMargin:0.05, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'SAFE_R75_T60_PM03', currentMin:0.75, trendMin:0.60, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'SAFE_R75_T60_PM05', currentMin:0.75, trendMin:0.60, pmMargin:0.05, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'SAFE_R75_T50_PM03_MICRO', currentMin:0.75, trendMin:0.50, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:true,  requireMomentumAgree:false },
+  { id:'SAFE_R75_T50_PM03_MOM',   currentMin:0.75, trendMin:0.50, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:true  },
+  { id:'EXP_R60_T60_PM12', currentMin:0.60, trendMin:0.60, pmMargin:0.12, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
+  { id:'EXP_R60_T70_PM10', currentMin:0.60, trendMin:0.70, pmMargin:0.10, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
 ];
 
 
@@ -2687,7 +2685,7 @@ function waitRescueCandidateDecision(facts, config) {
   const mom30 = Number(f.normalizedMomentum30s);
   const upMid = Number(f.predictionMarketUpMid);
 
-  if (![current,trend,score,distance,upMid].every(Number.isFinite)) reasons.push('MISSING_CORE_FEATURE');
+  if (![current,trend,upMid].every(Number.isFinite)) reasons.push('MISSING_CORE_FEATURE');
   if (f.absorptionRisk === true) reasons.push('ABSORPTION_RISK');
 
   const sign = current > 0 ? 1 : current < 0 ? -1 : 0;
@@ -2695,8 +2693,8 @@ function waitRescueCandidateDecision(facts, config) {
   if (Number.isFinite(current) && Math.abs(current) < Number(cfg.currentMin)) reasons.push('CURRENT_BELOW_MIN');
   if (Number.isFinite(trend) && Math.abs(trend) < Number(cfg.trendMin)) reasons.push('TREND_BELOW_MIN');
   if (sign && Number.isFinite(trend) && sign * trend <= 0) reasons.push('CURRENT_TREND_CONFLICT');
-  if (sign && Number.isFinite(score) && sign * score < Number(cfg.scoreMin || 0)) reasons.push('SCORE_NOT_SUPPORT_DIRECTION');
-  if (sign && Number.isFinite(distance) && sign * distance < Number(cfg.distanceMinBps || 0)) reasons.push('PRICE_DISTANCE_NOT_SUPPORT_DIRECTION');
+  if (cfg.scoreMin != null && (!Number.isFinite(score) || sign * score < Number(cfg.scoreMin))) reasons.push('SCORE_NOT_SUPPORT_DIRECTION');
+  if (cfg.distanceMinBps != null && (!Number.isFinite(distance) || sign * distance < Number(cfg.distanceMinBps))) reasons.push('PRICE_DISTANCE_NOT_SUPPORT_DIRECTION');
 
   if (sign > 0 && Number.isFinite(upMid) && upMid < 0.5 + Number(cfg.pmMargin)) reasons.push('PREDICTION_MARKET_NOT_SUPPORT_UP');
   if (sign < 0 && Number.isFinite(upMid) && upMid > 0.5 - Number(cfg.pmMargin)) reasons.push('PREDICTION_MARKET_NOT_SUPPORT_DOWN');

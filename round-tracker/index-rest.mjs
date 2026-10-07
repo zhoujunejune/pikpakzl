@@ -88,6 +88,22 @@ const SELECTIVE_V2_NO_BASE_CONTEST_CONFIGS = [
   { id:'BOTH_65_70_PM03',     currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:true,  requireMomentumAgree:true  },
 ];
 
+const SELECTIVE_V2_HP_SHADOW_VERSION = 'SELECTIVE_V2_HIGH_PRECISION_SHADOW_V1';
+const SELECTIVE_V2_HP_SHADOW_START_MS = Math.max(0, Number(process.env.SELECTIVE_V2_HP_SHADOW_START_MS || 1791362700000));
+const SELECTIVE_V2_HP_FORWARD_TARGET = Math.max(30, Number(process.env.SELECTIVE_V2_HP_FORWARD_TARGET || 60));
+const SELECTIVE_V2_HP_REVIEW_ACCURACY = 0.75;
+const SELECTIVE_V2_HP_PROMOTE_ACCURACY = 0.80;
+const SELECTIVE_V2_HP_CONFIGS = [
+  // Recent settled replay favored prediction-support as the strongest discriminator.
+  // These candidates are fixed before forward collection starts; no historical row
+  // is allowed to become a strict-forward sample retroactively.
+  { id:'HP_S18_C60_D18', supportMin:0.18, currentMin:0.60, maxDelayMs:18000 },
+  { id:'HP_S15_C70_D18', supportMin:0.15, currentMin:0.70, maxDelayMs:18000 },
+  { id:'HP_S15_C60_D15', supportMin:0.15, currentMin:0.60, maxDelayMs:15000 },
+  { id:'HP_S18_C65_D18', supportMin:0.18, currentMin:0.65, maxDelayMs:18000 },
+  { id:'HP_S20_C60_D18', supportMin:0.20, currentMin:0.60, maxDelayMs:18000 },
+];
+
 const WAIT_RESCUE_SHADOW_VERSION = 'WAIT_RESCUE_SHADOW_V1';
 const WAIT_RESCUE_SHADOW_START_MS = Math.max(0, Number(process.env.WAIT_RESCUE_SHADOW_START_MS || 1791354300000));
 const WAIT_RESCUE_FORWARD_TARGET = Math.max(30, Number(process.env.WAIT_RESCUE_FORWARD_TARGET || 60));
@@ -2348,6 +2364,159 @@ function selectiveQualityV2Summary() {
 }
 
 
+
+function selectiveV2HighPrecisionCandidateDecision(direction, facts, delayMs, cfg) {
+  const reasons = [];
+  const support = lockPredictionSupport(direction, facts);
+  const currentAbs = Math.abs(Number(facts?.currentScore));
+  const delay = Number(delayMs);
+  const absorption = facts?.absorptionRisk === true;
+
+  if (direction !== 'UP' && direction !== 'DOWN') reasons.push('NO_BASE_DIRECTION');
+  if (!Number.isFinite(support)) reasons.push('MISSING_PREDICTION_SUPPORT');
+  if (!Number.isFinite(currentAbs)) reasons.push('MISSING_CURRENT_SCORE');
+  if (!Number.isFinite(delay)) reasons.push('MISSING_LOCK_DELAY');
+  if (Number.isFinite(support) && support < cfg.supportMin) reasons.push('PREDICTION_SUPPORT_BELOW_HP_MIN');
+  if (Number.isFinite(currentAbs) && currentAbs < cfg.currentMin) reasons.push('CURRENT_SCORE_BELOW_HP_MIN');
+  if (Number.isFinite(delay) && delay >= cfg.maxDelayMs) reasons.push('LOCK_DELAY_ABOVE_HP_MAX');
+  if (absorption) reasons.push('ABSORPTION_RISK');
+
+  const pass = reasons.length === 0;
+  return {
+    candidateId: cfg.id,
+    decision: pass ? direction : 'WAIT',
+    pass,
+    reasons,
+    predictionSupport: Number.isFinite(support) ? Number(support.toFixed(4)) : null,
+    currentScoreAbs: Number.isFinite(currentAbs) ? Number(currentAbs.toFixed(4)) : null,
+    lockDelayMs: Number.isFinite(delay) ? delay : null,
+    thresholds: {
+      predictionSupportMin: cfg.supportMin,
+      currentScoreMin: cfg.currentMin,
+      maxDelayMs: cfg.maxDelayMs,
+      rejectAbsorption: true,
+    },
+  };
+}
+
+function evaluateSelectiveV2HighPrecisionShadow(direction, facts, delayMs) {
+  return {
+    version: SELECTIVE_V2_HP_SHADOW_VERSION,
+    evaluatedAt: Date.now(),
+    productionEffect: 'NONE_SHADOW_ONLY',
+    baseDirection: direction === 'UP' || direction === 'DOWN' ? direction : null,
+    candidates: Object.fromEntries(
+      SELECTIVE_V2_HP_CONFIGS.map(cfg => [
+        cfg.id,
+        selectiveV2HighPrecisionCandidateDecision(direction, facts, delayMs, cfg),
+      ])
+    ),
+  };
+}
+
+function selectiveV2HighPrecisionShadowSummary() {
+  const rows = Array.from(rounds.values())
+    .filter(r =>
+      Number(r.roundStartMs) >= SELECTIVE_V2_HP_SHADOW_START_MS &&
+      (r.actual === 'UP' || r.actual === 'DOWN')
+    )
+    .sort((a,b) => Number(a.roundStartMs) - Number(b.roundStartMs));
+
+  const candidates = SELECTIVE_V2_HP_CONFIGS.map(cfg => {
+    const observed = rows.filter(r =>
+      r.selectiveV2HighPrecisionShadow?.version === SELECTIVE_V2_HP_SHADOW_VERSION
+    );
+    const decided = observed
+      .map(r => ({
+        row: r,
+        decision: r.selectiveV2HighPrecisionShadow?.candidates?.[cfg.id]?.decision || 'WAIT',
+      }))
+      .filter(x => x.decision === 'UP' || x.decision === 'DOWN');
+
+    const hits = decided.filter(x => x.decision === x.row.actual).length;
+    const misses = decided.length - hits;
+    const recent20 = decided.slice(-20);
+    const recentHits = recent20.filter(x => x.decision === x.row.actual).length;
+
+    let maxConsecutiveErrors = 0;
+    let missStreak = 0;
+    for (const x of decided) {
+      if (x.decision === x.row.actual) {
+        missStreak = 0;
+      } else {
+        missStreak += 1;
+        maxConsecutiveErrors = Math.max(maxConsecutiveErrors, missStreak);
+      }
+    }
+
+    const accuracy = decided.length ? hits / decided.length : null;
+    const recent20Accuracy = recent20.length ? recentHits / recent20.length : null;
+    let status = 'FORWARD_COLLECTING';
+    if (decided.length >= 20 && Number.isFinite(accuracy) && accuracy < 0.65) {
+      status = 'RETIRED_LOW_ACCURACY';
+    } else if (
+      decided.length >= SELECTIVE_V2_HP_FORWARD_TARGET &&
+      Number.isFinite(accuracy) &&
+      accuracy >= SELECTIVE_V2_HP_PROMOTE_ACCURACY &&
+      recent20.length >= 20 &&
+      recent20Accuracy >= SELECTIVE_V2_HP_REVIEW_ACCURACY
+    ) {
+      status = 'RECOMMENDED_80_FOR_REVIEW';
+    } else if (
+      decided.length >= SELECTIVE_V2_HP_FORWARD_TARGET &&
+      Number.isFinite(accuracy) &&
+      accuracy >= SELECTIVE_V2_HP_REVIEW_ACCURACY &&
+      recent20.length >= 20 &&
+      recent20Accuracy >= SELECTIVE_V2_HP_REVIEW_ACCURACY
+    ) {
+      status = 'QUALIFIED_75_FOR_REVIEW';
+    } else if (
+      decided.length >= 20 &&
+      Number.isFinite(accuracy) &&
+      accuracy >= SELECTIVE_V2_HP_PROMOTE_ACCURACY
+    ) {
+      status = 'EARLY_80_MET_NEEDS_MORE_SAMPLES';
+    }
+
+    return {
+      candidateId: cfg.id,
+      config: cfg,
+      status,
+      productionEffect: 'NONE_SHADOW_ONLY',
+      strictForwardSamples: decided.length,
+      targetSamples: SELECTIVE_V2_HP_FORWARD_TARGET,
+      remainingSamples: Math.max(0, SELECTIVE_V2_HP_FORWARD_TARGET - decided.length),
+      hits,
+      misses,
+      forwardAccuracy: decided.length ? Number(accuracy.toFixed(4)) : null,
+      recent20Accuracy: recent20.length ? Number(recent20Accuracy.toFixed(4)) : null,
+      maxConsecutiveErrors,
+      coverage: rows.length ? Number((decided.length / rows.length).toFixed(4)) : null,
+    };
+  }).sort((a,b) =>
+    Number(b.forwardAccuracy || 0) - Number(a.forwardAccuracy || 0) ||
+    Number(b.strictForwardSamples || 0) - Number(a.strictForwardSamples || 0)
+  );
+
+  const reviewable = candidates.filter(x =>
+    (x.status === 'RECOMMENDED_80_FOR_REVIEW' || x.status === 'QUALIFIED_75_FOR_REVIEW')
+  );
+  return {
+    ok: true,
+    version: SELECTIVE_V2_HP_SHADOW_VERSION,
+    startMs: SELECTIVE_V2_HP_SHADOW_START_MS,
+    productionEffect: 'NONE_SHADOW_ONLY',
+    productionFrozen: true,
+    targetSamples: SELECTIVE_V2_HP_FORWARD_TARGET,
+    reviewAccuracy: SELECTIVE_V2_HP_REVIEW_ACCURACY,
+    preferredAccuracy: SELECTIVE_V2_HP_PROMOTE_ACCURACY,
+    settledRoundsSinceStart: rows.length,
+    candidates,
+    leader: candidates[0] || null,
+    recommendedForReview: reviewable[0] || null,
+  };
+}
+
 function selectiveV2InternalDirectionBacktest() {
   const rows = Array.from(rounds.values())
     .filter(r =>
@@ -3286,6 +3455,7 @@ function ensureRound(roundStartMs) {
       preLockAdaptiveShadow: null,
       selectiveV2NoBaseShadow: null,
       selectiveV2NoBaseContest: null,
+      selectiveV2HighPrecisionShadow: null,
       predictedAt: null,
       predictionDelayMs: null,
       actual: null,
@@ -3450,6 +3620,26 @@ async function pollSignal() {
       if (Number(row.roundStartMs) >= LOCK_QUALITY_V2_START_MS) {
         row.lockQualitySelectiveV2 = evaluateSelectiveQualityV2(direction, row.predictionFacts, row.predictionDelayMs, row.roundStartMs);
         row.adaptiveGateShadow = adaptiveGateShadow.evaluate(row);
+      }
+      if (
+        Number(row.roundStartMs) >= SELECTIVE_V2_HP_SHADOW_START_MS &&
+        !row.selectiveV2HighPrecisionShadow
+      ) {
+        row.selectiveV2HighPrecisionShadow = evaluateSelectiveV2HighPrecisionShadow(
+          direction,
+          row.predictionFacts,
+          row.predictionDelayMs
+        );
+        log('selective_v2_high_precision_shadow_evaluated', {
+          round: row.roundStartMs,
+          version: SELECTIVE_V2_HP_SHADOW_VERSION,
+          baseDirection: direction,
+          decisions: Object.fromEntries(
+            Object.entries(row.selectiveV2HighPrecisionShadow.candidates || {})
+              .map(([id,v]) => [id, v?.decision || 'WAIT'])
+          ),
+          productionEffect: 'NONE_SHADOW_ONLY',
+        });
       }
       row.source = live.model || row.source;
       saveHistory();
@@ -3630,6 +3820,27 @@ async function settlePendingRounds() {
             (x.strictForwardSamples % 5 === 0 || x.strictForwardSamples === SELECTIVE_V2_NO_BASE_CONTEST_TARGET)
           );
           if (milestone) log('selective_v2_no_base_contest_forward_progress', contest);
+        }
+
+        if (row.selectiveV2HighPrecisionShadow?.version === SELECTIVE_V2_HP_SHADOW_VERSION) {
+          const decidedIds = Object.entries(row.selectiveV2HighPrecisionShadow.candidates || {})
+            .filter(([,v]) => v?.decision === 'UP' || v?.decision === 'DOWN')
+            .map(([id]) => id);
+          if (decidedIds.length) {
+            const hp = selectiveV2HighPrecisionShadowSummary();
+            const milestone = hp.candidates.some(x =>
+              decidedIds.includes(x.candidateId) &&
+              x.strictForwardSamples > 0 &&
+              (
+                x.strictForwardSamples === 1 ||
+                x.strictForwardSamples % 5 === 0 ||
+                x.strictForwardSamples === SELECTIVE_V2_HP_FORWARD_TARGET
+              )
+            );
+            if (milestone) {
+              log('selective_v2_high_precision_shadow_forward_progress', hp);
+            }
+          }
         }
 
         lastSettlementOkAt = Date.now();
@@ -4550,6 +4761,11 @@ const signalHttpServer = http.createServer((req, res) => {
     return res.end(JSON.stringify(selectiveQualityV2Summary()));
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/selective-v2-high-precision-shadow-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(selectiveV2HighPrecisionShadowSummary()));
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/adaptive-gate-shadow-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(adaptiveGateShadow.stats(Array.from(rounds.values()))));
@@ -4689,6 +4905,7 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     lockQualityShadowVersion: LOCK_QUALITY_SHADOW_VERSION,
     lockQualityShadowStartMs: LOCK_QUALITY_SHADOW_START_MS,
     lockQualitySelectiveV2: selectiveQualityV2Summary(),
+    selectiveV2HighPrecisionShadow: selectiveV2HighPrecisionShadowSummary(),
     lockQualityProductionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
   });
 });

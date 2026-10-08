@@ -16,6 +16,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "===OFFICIAL_V2_STATUS_BEGIN==="
+          curl -fsS --retry 2 --retry-delay 2 --max-time 25 \
+            'https://trade-control-panel-production.up.railway.app/api/training-status' \
+            -o /tmp/official-v2-training-status.json
+          jq -e '
+            .ok == true and
+            (.generatedAt | type == "string") and
+            (.production | type == "object") and
+            (.models.edgeRescueTier1 | type == "object") and
+            (.models.edgeRescueExpansion | type == "object") and
+            (.models.noBaseSpecialist | type == "object")
+          ' /tmp/official-v2-training-status.json >/dev/null
+          jq -c '{
+            generatedAt,scope,
+            production:{recent10:.production.recent10,recent20:.production.recent20,selectiveV2:.production.selectiveV2},
+            models:{
+              edgeRescueTier1:.models.edgeRescueTier1,
+              edgeRescueExpansion:.models.edgeRescueExpansion,
+              noBaseSpecialist:.models.noBaseSpecialist,
+              baseDirectionRescueV2:.models.baseDirectionRescueV2
+            },
+            note:"Official server-reported metrics; UP tightening replay elsewhere in this log is retrospective only."
+          }' /tmp/official-v2-training-status.json
+          echo "===OFFICIAL_V2_STATUS_END==="
           echo "===TRAINING_STATUS_BEGIN==="
           curl -fsS --max-time 20 'https://trade-control-panel-production.up.railway.app/api/training-status'
           echo

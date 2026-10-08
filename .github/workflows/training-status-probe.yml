@@ -91,3 +91,12 @@ jobs:
               rows:$u
             }' /tmp/round-stats.json
           echo "===UP_TIGHTEN_REPLAY_END==="
+
+          echo "===UP_SHADOW_CANDIDATES_BEGIN==="
+          jq -c '
+            [.records[] | select(.productionSource=="LOCK_QUALITY_SELECTIVE_V2_PRIMARY" and .productionPrediction=="UP" and (.productionResult=="HIT" or .productionResult=="MISS"))] as $u |
+            def metric($xs): {n:($xs|length),hits:($xs|map(select(.productionResult=="HIT"))|length),misses:($xs|map(select(.productionResult=="MISS"))|length),accuracy:(if ($xs|length)>0 then (($xs|map(select(.productionResult=="HIT"))|length)/($xs|length)) else null end)};
+            def pass($s;$c;$d): [.[] | select((.lockQualitySelectiveV2.predictionSupport // -1)>=$s and (.lockQualitySelectiveV2.currentScoreAbs // -1)>=$c and (.productionDelayMs // 999999)<$d)];
+            {baseline:metric($u),candidateA:metric($u|pass(0.15;0.65;20000)),candidateB:metric($u|pass(0.16;0.67;19000)),note:"Retrospective audit only; not strict-forward evidence or promotion authorization"}
+          ' /tmp/round-stats.json
+          echo "===UP_SHADOW_CANDIDATES_END==="

@@ -678,6 +678,24 @@ async function getOfficialPredictionResolution(round, marketTopicId = null) {
     direction:extracted?.direction || null,
     evidence:extracted?.evidence ? extracted.evidence + ':STRICT_ROUND_ALIGNED_TOPIC' : null,
     marketTopicId:topic?.marketTopicId ?? null,
+    // Read-only provenance: exact Binance topic detail used to derive the result.
+    // Excludes credentials; the detail payload is public market metadata.
+    auditEvidence: {
+      sourceEndpoint:'/sapi/v1/w3w/wallet/prediction/market/detail',
+      // Digest of the exact parsed detail payload; not a substitute for independently refetching it.
+      detailPayloadSha256:crypto.createHash('sha256').update(JSON.stringify(topic)).digest('hex'),
+      evidenceSchemaVersion:1,
+      marketTopicId:topic?.marketTopicId ?? null,
+      marketIds:Array.isArray(topic?.markets)
+        ? topic.markets.map(m => m?.marketId ?? m?.id).filter(x => x != null)
+        : [],
+      topicStartDate:topic?.startDate ?? null,
+      topicEndDate:topic?.endDate ?? null,
+      variantStartPrice:topic?.variantData?.startPrice ?? topic?.variant_data?.start_price ?? null,
+      variantEndPrice:topic?.variantData?.endPrice ?? topic?.variant_data?.end_price ?? null,
+      resolutionField:extracted?.evidence ?? null,
+      observedAt:new Date().toISOString(),
+    },
     rejectedTopicId,
     startDate:topic?.startDate ?? null,
     endDate:topic?.endDate ?? null,

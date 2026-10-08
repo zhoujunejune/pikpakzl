@@ -4,12 +4,12 @@ export function createEdgeRescueExpansion(options = {}) {
     startMs = 0,
     configs = [],
     lockPredictionSupport = () => null,
-    minSamples = 20,
+    minSamples = 60,
     targetSamples = 60,
     targetAccuracy = 0.75,
-    recentWindow = 10,
-    recentAccuracy = 0.70,
-    directionMinSamples = 5,
+    recentWindow = 20,
+    recentAccuracy = 0.75,
+    directionMinSamples = 10,
     directionRecentWindow = 6,
     directionAccuracy = 0.70,
     maxMissStreak = 2,
@@ -172,7 +172,7 @@ export function createEdgeRescueExpansion(options = {}) {
       allStats.samples >= directionMinSamples &&
       Number.isFinite(allStats.accuracy) &&
       allStats.accuracy >= directionAccuracy &&
-      recentStats.samples >= Math.min(directionMinSamples, directionRecentWindow) &&
+      recentStats.samples >= directionRecentWindow &&
       Number.isFinite(recentStats.accuracy) &&
       recentStats.accuracy >= directionAccuracy &&
       missStreak <= maxMissStreak;
@@ -246,7 +246,11 @@ export function createEdgeRescueExpansion(options = {}) {
         overall.samples >= minSamples &&
         Number.isFinite(overall.accuracy) &&
         overall.accuracy >= targetAccuracy &&
-        recent.samples >= Math.min(recentWindow, minSamples) &&
+        recent.samples >= recentWindow &&
+        summarizeArray(decided.slice(-10)).accuracy >= 0.70 &&
+        up.all.samples >= directionMinSamples &&
+        down.all.samples >= directionMinSamples &&
+        up.allowed && down.allowed &&
         Number.isFinite(recent.accuracy) &&
         recent.accuracy >= recentAccuracy &&
         maxConsecutiveErrors <= maxMissStreak &&

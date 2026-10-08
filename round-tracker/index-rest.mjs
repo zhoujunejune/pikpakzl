@@ -4247,6 +4247,8 @@ async function settlePendingRounds() {
         }
 
         row.predictionMarketTopicId = official?.marketTopicId ?? row.predictionMarketTopicId;
+        // Preserve read-only source provenance for independent per-round reconciliation.
+        row.officialSettlementAudit = official?.auditEvidence || null;
         const evidence = `OFFICIAL_${direction}:${official?.evidence || 'RESOLVED'}`;
         const legacyBefore = row.legacyOfficialDirectionBeforeRevalidation;
         applyOfficialSettlement(row, direction, evidence, Date.now());
@@ -4417,6 +4419,7 @@ async function settlePendingRounds() {
           source: row.actualSource,
           resolutionEvidence: row.resolutionEvidence,
           officialDirection: direction,
+          officialSettlementAudit: row.officialSettlementAudit ?? null,
           productionPrediction: row.productionPrediction ?? null,
           productionActual: row.productionActual ?? null,
           productionResult: row.productionResult ?? null,

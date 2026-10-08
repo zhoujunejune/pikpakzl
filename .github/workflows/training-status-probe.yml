@@ -29,6 +29,39 @@ jobs:
             (.models.edgeRescueExpansion | type == "object") and
             (.models.noBaseSpecialist | type == "object")
           ' /tmp/official-v2-training-status.json >/dev/null
+          # Reject stale/future snapshots and inconsistent official aggregate counts.
+          now_s=$(date -u +%s)
+          generated_at=$(jq -er '.generatedAt' /tmp/official-v2-training-status.json)
+          generated_s=$(date -u -d "$generated_at" +%s)
+          age_s=$((now_s - generated_s))
+          if (( age_s < -120 || age_s > 900 )); then
+            echo "::error::Training snapshot stale or future-dated: age=${age_s}s"
+            exit 1
+          fi
+          jq -e '
+            def validCounts:
+              (.samples | type == "number") and (.hits | type == "number") and
+              (.misses | type == "number") and
+              (.samples >= 0 and .hits >= 0 and .misses >= 0) and
+              (.samples == (.hits + .misses)) and
+              (if .samples > 0 then
+                (.accuracy | type == "number") and
+                ((.accuracy - (.hits / .samples)) | fabs < 0.0002)
+              else (.accuracy == null or .accuracy == 0) end);
+            (.production.recent10 | validCounts) and
+            (.production.recent20 | validCounts) and
+            (.production.selectiveV2 | validCounts) and
+            (.models.edgeRescueTier1.eligibleStrictForward | validCounts) and
+            (.models.edgeRescueTier1.production | validCounts) and
+            (.models.edgeRescueExpansion.candidates | type == "array") and
+            all(.models.edgeRescueExpansion.candidates[];
+              (.strictForwardSamples | type == "number") and
+              (.hits | type == "number") and
+              (.misses | type == "number") and
+              (.strictForwardSamples == .hits + .misses) and
+              (.strictForwardSamples >= 0))
+          ' /tmp/official-v2-training-status.json >/dev/null
+          echo "Official aggregate count and freshness checks passed (age=${age_s}s)"
           jq -c '{
             generatedAt,scope,
             production:{recent10:.production.recent10,recent20:.production.recent20,selectiveV2:.production.selectiveV2},

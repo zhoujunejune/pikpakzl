@@ -248,8 +248,8 @@ export function createEdgeRescueExpansion(options = {}) {
         overall.accuracy >= targetAccuracy &&
         recent.samples >= recentWindow &&
         summarizeArray(decided.slice(-10)).accuracy >= 0.70 &&
-        up.all.samples >= directionMinSamples &&
-        down.all.samples >= directionMinSamples &&
+        up.samples >= directionMinSamples &&
+        down.samples >= directionMinSamples &&
         up.allowed && down.allowed &&
         Number.isFinite(recent.accuracy) &&
         recent.accuracy >= recentAccuracy &&
@@ -291,8 +291,8 @@ export function createEdgeRescueExpansion(options = {}) {
         hits: overall.hits,
         misses: overall.misses,
         forwardAccuracy: overall.accuracy,
-        recent10Accuracy: recent.accuracy,
-        recent10Samples: recent.samples,
+        recent10Accuracy: summarizeArray(decided.slice(-10)).accuracy,
+        recent10Samples: Math.min(10, decided.length),
         maxConsecutiveErrors,
         incrementalCoverage,
         poolCoverage,

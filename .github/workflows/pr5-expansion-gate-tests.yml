@@ -1,0 +1,30 @@
+name: PR5 Expansion Gate Tests
+
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/edge-rescue-expansion*.mjs'
+      - 'round-tracker/index-rest.mjs'
+      - '.github/workflows/pr5-expansion-gate-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  expansion-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check module syntax
+        run: |
+          node --check round-tracker/edge-rescue-expansion-proof.mjs
+          node --check round-tracker/edge-rescue-expansion.mjs
+          node --check round-tracker/index-rest.mjs
+      - name: Run audited expansion tests
+        run: |
+          node --test round-tracker/edge-rescue-expansion-proof.test.mjs round-tracker/edge-rescue-expansion.integration.test.mjs

@@ -18,6 +18,9 @@ jobs:
           curl -fsS --max-time 20 'https://trade-control-panel-production.up.railway.app/api/training-status'
           echo
           echo "===TRAINING_STATUS_END==="
+          echo "===BASE_DIRECTION_RESCUE_V2_BEGIN==="
+          curl -fsS --max-time 20 'https://trade-control-panel-production.up.railway.app/api/training-status' | jq -c '.models.baseDirectionRescueV2'
+          echo "===BASE_DIRECTION_RESCUE_V2_END==="
           curl -fsS --max-time 20 'https://trade-control-panel-production.up.railway.app/api/round-stats' -o /tmp/round-stats.json
           echo "===RECENT20_DECISIONS_BEGIN==="
           jq -c '[.records[] | select((.productionActual=="UP" or .productionActual=="DOWN") and (.productionPrediction=="UP" or .productionPrediction=="DOWN"))][0:20] | .[] | {roundStartMs,productionSource,productionPrediction,productionActual,productionResult,productionConfidence,productionDelayMs}' /tmp/round-stats.json

@@ -220,7 +220,7 @@ jobs:
           # This confirms propagation only; it is NOT independent exchange verification.
           echo "===V3_PROVENANCE_CANARY_BEGIN==="
           observed_resolved=0
-          while IFS=$'\t' read -r target_round topic_id archived_sha; do
+          while IFS=$'\t' read -r target_round topic_id archived_sha archived_direction; do
             if [[ -z "$target_round" || -z "$topic_id" || "$topic_id" == "null" ]]; then
               continue
             fi
@@ -255,6 +255,11 @@ jobs:
               echo "::error::V3 settlement topic mismatch for round $target_round: V2=$topic_id V3=$received_topic."
               exit 1
             fi
+            received_direction=$(jq -r '.direction' /tmp/v3-provenance-canary.json)
+            if [[ "$received_direction" != "$archived_direction" ]]; then
+              echo "::error::Frozen V2 vs independently re-fetched V3 direction mismatch at round $target_round: V2=$archived_direction V3=$received_direction."
+              exit 1
+            fi
             current_sha=$(jq -r '.auditEvidence.detailPayloadSha256' /tmp/v3-provenance-canary.json)
             if [[ "$current_sha" != "$archived_sha" ]]; then
               echo "::warning::V3 market payload differs from archived V2 hash for round $target_round; review immutable settlement source."
@@ -271,7 +276,7 @@ jobs:
               .officialSettlementAudit.marketTopicId != null and
               (.roundStartMs|type=="number"))] |
             sort_by(.roundStartMs) | reverse | .[0:4][] |
-            [.roundStartMs,.officialSettlementAudit.marketTopicId,.officialSettlementAudit.detailPayloadSha256] | @tsv
+            [.roundStartMs,.officialSettlementAudit.marketTopicId,.officialSettlementAudit.detailPayloadSha256,.productionActual] | @tsv
           ' /tmp/round-stats.json)
           if (( observed_resolved == 0 )); then
             echo "::warning::No post-upgrade resolved topic observed in the cross-service canary; cannot claim live provenance verification."

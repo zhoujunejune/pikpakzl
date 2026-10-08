@@ -1,5 +1,8 @@
 name: Training Status Probe
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/training-status-probe.yml'
   push:
     paths:
       - '.github/workflows/training-status-probe.yml'

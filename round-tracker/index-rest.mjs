@@ -2337,6 +2337,21 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
     directionalMode = 'DIRECTION_CAUTION';
   }
 
+  // Persistent direction-local protection. A weak direction should not relax
+  // after a single lucky hit while its settled directional window is still
+  // below the 65% safety line. This only blocks marginal signals; it never
+  // creates a direction and does not affect the healthy opposite side.
+  if (
+    directionQuality.samples >= 6 &&
+    Number.isFinite(directionQuality.accuracy) &&
+    directionQuality.accuracy < 0.65
+  ) {
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.15);
+    effectiveCurrentMin = Math.max(effectiveCurrentMin, 0.65);
+    effectiveMaxDelayMs = Math.min(effectiveMaxDelayMs, 20000);
+    directionalMode = 'DIRECTION_PERSISTENT_CAUTION';
+  }
+
   // Fast response: do not wait for 10 same-direction decisions when the latest
   // 4 have already degraded to coin-flip quality or worse.
   if (

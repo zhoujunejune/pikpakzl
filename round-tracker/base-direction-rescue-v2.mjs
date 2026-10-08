@@ -134,7 +134,8 @@ export function createBaseDirectionRescueV2({
     for(const r of rowsArray().sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs))){
       const round=Number(r.roundStartMs); if(!Number.isFinite(round)||round>=beforeRound) continue;
       if(r.actual!=='UP'&&r.actual!=='DOWN') continue;
-      if(r.prediction==='UP'||r.prediction==='DOWN') continue;
+      // Eligibility is defined by the real 18-22s snapshot. A direction
+      // frozen later in the round must not retroactively erase this sample.
       let facts=null, delay=null, source=null;
       if(r?.baseDirectionRescueV2?.features){
         facts=r.baseDirectionRescueV2.features; delay=finite(r.baseDirectionRescueV2.observedDelayMs); source='V2_EXACT20'; v2Exact20++;
@@ -174,7 +175,7 @@ export function createBaseDirectionRescueV2({
   function candidateSummary(id){
     const observed=rowsArray().filter(r=>
       Number(r.roundStartMs)>=startMs&&(r.actual==='UP'||r.actual==='DOWN')&&
-      r.prediction!=='UP'&&r.prediction!=='DOWN'&&r?.baseDirectionRescueV2?.version===VERSION
+      r?.baseDirectionRescueV2?.version===VERSION
     ).sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
     const decided=observed.filter(r=>{
       const d=r?.baseDirectionRescueV2?.candidates?.[id]?.decision;
@@ -216,7 +217,7 @@ export function createBaseDirectionRescueV2({
   function summary(){
     const observed=rowsArray().filter(r=>
       Number(r.roundStartMs)>=startMs&&(r.actual==='UP'||r.actual==='DOWN')&&
-      r.prediction!=='UP'&&r.prediction!=='DOWN'&&r?.baseDirectionRescueV2?.version===VERSION
+      r?.baseDirectionRescueV2?.version===VERSION
     ).sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
     const candidates=CANDIDATES.map(c=>candidateSummary(c.id));
     const active=candidates.filter(c=>c.active).sort((a,b)=>

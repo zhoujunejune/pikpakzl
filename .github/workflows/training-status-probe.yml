@@ -176,7 +176,7 @@ jobs:
               }
             }' /tmp/round-stats.json
           echo "===RECENT_DIRECTION_AUDIT_END==="
-# Read-only alerts; do not modify production gates or issue trading signals.
+          # Read-only alerts; do not modify production gates or issue trading signals.
           echo "===DIRECTION_DRIFT_WATCH_BEGIN==="
           direction_drift=$(jq -c '
             [.records[] | select((.productionPrediction=="UP" or .productionPrediction=="DOWN") and (.productionResult=="HIT" or .productionResult=="MISS"))][0:20] as $recent |
@@ -184,7 +184,7 @@ jobs:
               [$recent[] | select(.productionPrediction==$direction)] as $rows |
               {direction:$direction,samples:($rows|length),hits:($rows|map(select(.productionResult=="HIT"))|length),
                accuracy:(if ($rows|length)>0 then (($rows|map(select(.productionResult=="HIT"))|length)/($rows|length)) else null end),
-               driftAlert:(($rows|length)>=8 and (($rows|map(select(.productionResult=="HIT"))|length)/($rows|length))<0.65)}
+               driftAlert:(if ($rows|length)>=8 then ((($rows|map(select(.productionResult=="HIT"))|length)/($rows|length))<0.65) else false end)}
             )' /tmp/round-stats.json)
           echo "$direction_drift"
           if echo "$direction_drift" | jq -e 'any(.[]; .driftAlert == true)' >/dev/null; then
@@ -216,7 +216,7 @@ jobs:
             {baseline:metric($u),candidateA:metric($u|pass(0.15;0.65;20000)),candidateB:metric($u|pass(0.16;0.67;19000)),note:"Retrospective audit only; not strict-forward evidence or promotion authorization"}
           ' /tmp/round-stats.json
           echo "===UP_SHADOW_CANDIDATES_END==="
-# Cross-service canary: V2 persists the auditEvidence emitted by V3.
+          # Cross-service canary: V2 persists the auditEvidence emitted by V3.
           # V3's official response is NOT independent proof of Binance settlement.
           echo "===V3_PROVENANCE_CANARY_BEGIN==="
           observed_resolved=0

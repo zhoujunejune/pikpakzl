@@ -3,6 +3,9 @@ const DEFAULT_START_MS = 1791431100000;
 const CANDIDATES = [
   { id:'CONSENSUS_3_OF_3', mode:'CONSENSUS_3_OF_3' },
   { id:'CONSENSUS_2_OF_3_ML70', mode:'CONSENSUS_2_OF_3_ML70' },
+  // Independent shadow experiment: expand only when two non-conflicting
+  // evidence groups AND strong live price/trend scores agree.
+  { id:'CONSENSUS_2_OF_3_STRONG', mode:'CONSENSUS_2_OF_3_STRONG' },
 ];
 
 function finite(v){ const n=Number(v); return Number.isFinite(n)?n:null; }
@@ -214,6 +217,43 @@ export function createBaseDirectionRescueV2({
     };
   }
 
+  // Retrospective shadow estimate, NOT a live fill rate or independently
+  // verified future success probability. Counts only settled, genuinely
+  // recorded 18-22s snapshots; never upgrades the production direction.
+  function shadowCompositeFor(candidateId){
+    const settled=rowsArray().filter(r=>
+      Number(r.roundStartMs)>=startMs&&(r.actual==='UP'||r.actual==='DOWN')
+    );
+    const production=settled.filter(r=>
+      r.productionPrediction==='UP'||r.productionPrediction==='DOWN'
+    );
+    const candidateExtras=settled.filter(r=>{
+      if(r.productionPrediction==='UP'||r.productionPrediction==='DOWN')return false;
+      if(r?.baseDirectionRescueV2?.version!==VERSION)return false;
+      const delay=finite(r.baseDirectionRescueV2.observedDelayMs);
+      if(delay==null||delay<18000||delay>22000)return false;
+      const d=r.baseDirectionRescueV2.candidates?.[candidateId]?.decision;
+      return d==='UP'||d==='DOWN';
+    });
+    const productionHits=production.filter(r=>r.productionPrediction===r.actual).length;
+    const extraHits=candidateExtras.filter(r=>
+      r.baseDirectionRescueV2.candidates[candidateId].decision===r.actual
+    ).length;
+    const rate=(n,d)=>d?Number((n/d).toFixed(4)):null;
+    return {
+      scope:'RETROSPECTIVE_SETTLED_SHADOW_NOT_LIVE',
+      settledRounds:settled.length,
+      productionDecisions:production.length,productionHits,
+      productionAccuracy:rate(productionHits,production.length),
+      baselineCoverage:rate(production.length,settled.length),
+      extraDecisions:candidateExtras.length,extraHits,
+      extraAccuracy:rate(extraHits,candidateExtras.length),
+      potentialCoverage:rate(production.length+candidateExtras.length,settled.length),
+      potentialCombinedAccuracy:rate(productionHits+extraHits,production.length+candidateExtras.length),
+      incrementalCoverage:rate(candidateExtras.length,settled.length),
+    };
+  }
+
   function summary(){
     const observed=rowsArray().filter(r=>
       Number(r.roundStartMs)>=startMs&&(r.actual==='UP'||r.actual==='DOWN')&&
@@ -228,6 +268,7 @@ export function createBaseDirectionRescueV2({
       exact20WindowMs:[18000,22000],observedSettledNoBaseRounds:observed.length,
       gates:{retireMinSamples,retireAccuracy,targetSamples,reviewAccuracy,recentMinAccuracy,directionMinAccuracy,maxConsecutiveErrors:2},
       candidates,leader:active[0]||null,
+      shadowComposite:Object.fromEntries(CANDIDATES.map(c=>[c.id,shadowCompositeFor(c.id)])),
       qualifiedForReview:candidates.filter(c=>c.status==='QUALIFIED_FOR_REVIEW_SHADOW_ONLY'),
     };
   }
@@ -248,6 +289,17 @@ export function createBaseDirectionRescueV2({
       else if(cfg.mode==='CONSENSUS_3_OF_3'){
         if(m.nonNull===3&&Math.max(m.up,m.down)===3) direction=m.direction;
         else reasons.push('NEEDS_UNANIMOUS_3_OF_3');
+      }else if(cfg.mode==='CONSENSUS_2_OF_3_STRONG'){
+        const strong=m.nonNull>=2&&Math.max(m.up,m.down)>=2&&(m.up===0||m.down===0);
+        const sign=m.direction==='UP'?1:m.direction==='DOWN'?-1:0;
+        const current=finite(facts?.currentScore);
+        const trend=finite(facts?.currentTrendScore);
+        const live=finite(facts?.liveScore);
+        if(!strong) reasons.push('NEEDS_2_OF_3_WITHOUT_CONFLICT');
+        else if(current==null||trend==null||live==null||
+          sign*current<0.68||sign*trend<0.60||sign*live<0.12
+        ) reasons.push('STRONG_DIRECTION_QUALITY_NOT_MET');
+        else direction=m.direction;
       }else{
         if(m.nonNull<2||Math.max(m.up,m.down)<2) reasons.push('NEEDS_2_OF_3_CONSENSUS');
         else if(m.up>0&&m.down>0) reasons.push('VOTE_CONFLICT');

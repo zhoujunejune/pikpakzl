@@ -176,6 +176,21 @@ jobs:
               }
             }' /tmp/round-stats.json
           echo "===RECENT_DIRECTION_AUDIT_END==="
+          # Read-only alerts; do not modify production gates or issue trading signals.
+          echo "===DIRECTION_DRIFT_WATCH_BEGIN==="
+          direction_drift=$(jq -c '
+            [.records[] | select((.productionPrediction=="UP" or .productionPrediction=="DOWN") and (.productionResult=="HIT" or .productionResult=="MISS"))][0:20] as $recent |
+            ["UP","DOWN"] | map(. as $direction |
+              [$recent[] | select(.productionPrediction==$direction)] as $rows |
+              {direction:$direction,samples:($rows|length),hits:($rows|map(select(.productionResult=="HIT"))|length),
+               accuracy:(if ($rows|length)>0 then (($rows|map(select(.productionResult=="HIT"))|length)/($rows|length)) else null end),
+               driftAlert:(if ($rows|length)>=8 then ((($rows|map(select(.productionResult=="HIT"))|length)/($rows|length))<0.65) else false end)}
+            )' /tmp/round-stats.json)
+          echo "$direction_drift"
+          if echo "$direction_drift" | jq -e 'any(.[]; .driftAlert == true)' >/dev/null; then
+            echo "::warning::Recent directional accuracy under 65% with at least 8 samples; manual review only, trading gates unchanged."
+          fi
+          echo "===DIRECTION_DRIFT_WATCH_END==="
           echo "===UP_TIGHTEN_REPLAY_BEGIN==="
           jq -c '
             [.records[]
@@ -201,3 +216,64 @@ jobs:
             {baseline:metric($u),candidateA:metric($u|pass(0.15;0.65;20000)),candidateB:metric($u|pass(0.16;0.67;19000)),note:"Retrospective audit only; not strict-forward evidence or promotion authorization"}
           ' /tmp/round-stats.json
           echo "===UP_SHADOW_CANDIDATES_END==="
+          # Cross-service canary: query frozen V2 round/topic IDs from settled history.
+          # This confirms propagation only; it is NOT independent exchange verification.
+          echo "===V3_PROVENANCE_CANARY_BEGIN==="
+          observed_resolved=0
+          while IFS=$'\t' read -r target_round topic_id archived_sha; do
+            if [[ -z "$target_round" || -z "$topic_id" || "$topic_id" == "null" ]]; then
+              continue
+            fi
+            if ! curl -fsS --retry 0 --max-time 7 --get \
+              --data-urlencode "round=$target_round" \
+              --data-urlencode "marketTopicId=$topic_id" \
+              'https://signal-diagnostic-v3-production.up.railway.app/api/prediction-resolution' \
+              -o /tmp/v3-provenance-canary.json; then
+              echo "::warning::V3 resolution probe failed for round $target_round"
+              continue
+            fi
+            if ! jq -e '.ok == true and .resolved == true' /tmp/v3-provenance-canary.json >/dev/null; then
+              continue
+            fi
+            observed_resolved=1
+            if ! jq -e '
+              . as $r |
+              (($r.direction=="UP") or ($r.direction=="DOWN")) and
+              ($r.marketTopicId != null) and
+              ($r.auditEvidence | type=="object") and
+              ($r.auditEvidence.evidenceSchemaVersion==1) and
+              ($r.auditEvidence.sourceEndpoint=="/sapi/v1/w3w/wallet/prediction/market/detail") and
+              ($r.auditEvidence.marketTopicId==$r.marketTopicId) and
+              ($r.auditEvidence.detailPayloadSha256 | type=="string" and test("^[0-9a-f]{64}$")) and
+              ($r.auditEvidence.observedAt | type=="string")
+            ' /tmp/v3-provenance-canary.json >/dev/null; then
+              echo "::error::Resolved V3 round $target_round lacks valid official settlement provenance."
+              exit 1
+            fi
+            received_topic=$(jq -r '.auditEvidence.marketTopicId' /tmp/v3-provenance-canary.json)
+            if [[ "$received_topic" != "$topic_id" ]]; then
+              echo "::error::V3 settlement topic mismatch for round $target_round: V2=$topic_id V3=$received_topic."
+              exit 1
+            fi
+            current_sha=$(jq -r '.auditEvidence.detailPayloadSha256' /tmp/v3-provenance-canary.json)
+            if [[ "$current_sha" != "$archived_sha" ]]; then
+              echo "::warning::V3 market payload differs from archived V2 hash for round $target_round; review immutable settlement source."
+            fi
+            jq -c '{round:'"$target_round"',direction,marketTopicId,
+              auditEvidence:{evidenceSchemaVersion:.auditEvidence.evidenceSchemaVersion,
+              detailPayloadSha256:.auditEvidence.detailPayloadSha256,observedAt:.auditEvidence.observedAt},
+              independentVerified:false}' /tmp/v3-provenance-canary.json
+            break
+          done < <(jq -r '
+            [.records[] |
+              select((.productionActual=="UP" or .productionActual=="DOWN") and
+              .officialSettlementAudit != null and
+              .officialSettlementAudit.marketTopicId != null and
+              (.roundStartMs|type=="number"))] |
+            sort_by(.roundStartMs) | reverse | .[0:4][] |
+            [.roundStartMs,.officialSettlementAudit.marketTopicId,.officialSettlementAudit.detailPayloadSha256] | @tsv
+          ' /tmp/round-stats.json)
+          if (( observed_resolved == 0 )); then
+            echo "::warning::No post-upgrade resolved topic observed in the cross-service canary; cannot claim live provenance verification."
+          fi
+          echo "===V3_PROVENANCE_CANARY_END==="

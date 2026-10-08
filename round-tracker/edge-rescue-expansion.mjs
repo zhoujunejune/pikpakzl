@@ -1,15 +1,16 @@
+import { isOfficialStrictSettlement, isFrozenFinalBaselineWait, productionBaselineSummary, prospectiveCombinedSummary, wilsonLowerBound } from './edge-rescue-expansion-proof.mjs';
 export function createEdgeRescueExpansion(options = {}) {
   const {
     version = 'SELECTIVE_V2_EDGE_EXPANSION_SHADOW_V1',
     startMs = 0,
     configs = [],
     lockPredictionSupport = () => null,
-    minSamples = 20,
+    minSamples = 60,
     targetSamples = 60,
     targetAccuracy = 0.75,
-    recentWindow = 10,
-    recentAccuracy = 0.70,
-    directionMinSamples = 5,
+    recentWindow = 20,
+    recentAccuracy = 0.75,
+    directionMinSamples = 10,
     directionRecentWindow = 6,
     directionAccuracy = 0.70,
     maxMissStreak = 2,
@@ -20,7 +21,8 @@ export function createEdgeRescueExpansion(options = {}) {
     onPersist = () => {},
   } = options;
 
-  const finite = x => Number.isFinite(Number(x));
+  // Missing values must not be coerced into numeric zero.
+  const finite = x => x !== null && x !== undefined && x !== '' && Number.isFinite(Number(x));
 
   function normalizedRows(rowsInput) {
     if (!rowsInput) return [];
@@ -37,9 +39,9 @@ export function createEdgeRescueExpansion(options = {}) {
     const reasons = [];
     const dir = direction === 'UP' || direction === 'DOWN' ? direction : null;
     const support = dir ? lockPredictionSupport(dir, facts) : null;
-    const currentAbs = Math.abs(Number(facts?.currentScore));
-    const scoreAbs = Math.abs(Number(predictionScore));
-    const delay = Number(delayMs);
+    const currentAbs = finite(facts?.currentScore) ? Math.abs(Number(facts.currentScore)) : NaN;
+    const scoreAbs = finite(predictionScore) ? Math.abs(Number(predictionScore)) : NaN;
+    const delay = finite(delayMs) ? Number(delayMs) : NaN;
     const absorption = facts?.absorptionRisk === true;
 
     if (!dir) reasons.push('NO_BASE_DIRECTION');
@@ -172,10 +174,11 @@ export function createEdgeRescueExpansion(options = {}) {
       allStats.samples >= directionMinSamples &&
       Number.isFinite(allStats.accuracy) &&
       allStats.accuracy >= directionAccuracy &&
-      recentStats.samples >= Math.min(directionMinSamples, directionRecentWindow) &&
+      recentStats.samples >= directionRecentWindow &&
       Number.isFinite(recentStats.accuracy) &&
       recentStats.accuracy >= directionAccuracy &&
-      missStreak <= maxMissStreak;
+      missStreak <= maxMissStreak &&
+      maxConsecutiveErrors <= maxMissStreak;
     return {
       ...allStats,
       recent: recentStats,
@@ -190,7 +193,7 @@ export function createEdgeRescueExpansion(options = {}) {
             ? 'DIRECTION_ACCURACY_BELOW_70'
             : Number.isFinite(recentStats.accuracy) && recentStats.accuracy < directionAccuracy
               ? 'DIRECTION_RECENT_ACCURACY_BELOW_70'
-              : missStreak > maxMissStreak
+              : missStreak > maxMissStreak || maxConsecutiveErrors > maxMissStreak
                 ? 'DIRECTION_MISS_STREAK'
                 : 'DIRECTION_GATE_NOT_READY',
     };
@@ -201,10 +204,10 @@ export function createEdgeRescueExpansion(options = {}) {
       .filter(r => Number(r?.roundStartMs) >= Number(startMs))
       .sort((a, b) => Number(a.roundStartMs) - Number(b.roundStartMs));
 
-    const settledSinceStart = rows.filter(r => r.actual === 'UP' || r.actual === 'DOWN');
-    const observed = settledSinceStart.filter(
-      r => r.selectiveV2EdgeExpansionShadow?.version === version
-    );
+    // Fail closed: count only certified official outcomes and frozen baseline WAIT.
+    const settledSinceStart = rows.filter(isOfficialStrictSettlement);
+    const observed = settledSinceStart.filter(r => isFrozenFinalBaselineWait(r, version));
+    const baseline = productionBaselineSummary(settledSinceStart);
 
     const candidates = configs.map(cfg => {
       const decided = observed
@@ -217,6 +220,8 @@ export function createEdgeRescueExpansion(options = {}) {
 
       const overall = summarizeArray(decided);
       const recent = summarizeArray(decided.slice(-recentWindow));
+      const confidenceLower95 = wilsonLowerBound(overall.hits, overall.samples);
+      const combined = prospectiveCombinedSummary(baseline, decided);
 
       let running = 0;
       let maxConsecutiveErrors = 0;
@@ -246,7 +251,14 @@ export function createEdgeRescueExpansion(options = {}) {
         overall.samples >= minSamples &&
         Number.isFinite(overall.accuracy) &&
         overall.accuracy >= targetAccuracy &&
-        recent.samples >= Math.min(recentWindow, minSamples) &&
+        confidenceLower95 !== null && confidenceLower95 >= 0.70 &&
+        baseline.samples >= 20 &&
+        combined.meetsAbsoluteFloor && combined.notWorseThanBaseline &&
+        recent.samples >= recentWindow &&
+        summarizeArray(decided.slice(-10)).accuracy >= 0.70 &&
+        up.samples >= directionMinSamples &&
+        down.samples >= directionMinSamples &&
+        up.allowed && down.allowed &&
         Number.isFinite(recent.accuracy) &&
         recent.accuracy >= recentAccuracy &&
         maxConsecutiveErrors <= maxMissStreak &&
@@ -287,8 +299,13 @@ export function createEdgeRescueExpansion(options = {}) {
         hits: overall.hits,
         misses: overall.misses,
         forwardAccuracy: overall.accuracy,
-        recent10Accuracy: recent.accuracy,
-        recent10Samples: recent.samples,
+        confidenceLower95,
+        prospectiveCombined: combined,
+        baselineSamples: baseline.samples,
+        recent20Accuracy: recent.accuracy,
+        recent20Samples: recent.samples,
+        recent10Accuracy: summarizeArray(decided.slice(-10)).accuracy,
+        recent10Samples: Math.min(10, decided.length),
         maxConsecutiveErrors,
         incrementalCoverage,
         poolCoverage,
@@ -312,6 +329,8 @@ export function createEdgeRescueExpansion(options = {}) {
       autoPromotionEnabled: true,
       settledRoundsSinceStart: settledSinceStart.length,
       observedTier1RejectedSettledRounds: observed.length,
+      baselineProduction: baseline,
+      proofPolicy: 'OFFICIAL_ROUND_ALIGNED_FROZEN_BASELINE_WAIT_COMBINED_V1',
       gates: {
         minSamples,
         targetSamples,

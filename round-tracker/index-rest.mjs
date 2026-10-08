@@ -481,12 +481,12 @@ const edgeRescueExpansion = createEdgeRescueExpansion({
   startMs: SELECTIVE_V2_EDGE_EXPANSION_START_MS,
   configs: SELECTIVE_V2_EDGE_EXPANSION_CONFIGS,
   lockPredictionSupport,
-  minSamples: 20,
+  minSamples: 60,
   targetSamples: 60,
   targetAccuracy: 0.75,
-  recentWindow: 10,
-  recentAccuracy: 0.70,
-  directionMinSamples: 5,
+  recentWindow: 20,
+  recentAccuracy: 0.75,
+  directionMinSamples: 10,
   directionRecentWindow: 6,
   directionAccuracy: 0.70,
   maxMissStreak: 2,
@@ -4984,6 +4984,18 @@ function productionSignalPayload(now = Date.now()) {
       });
       logProductionSignalState(live);
       return {ok:true,live};
+    }
+
+    // Record that the existing Selective V2 + Tier-1 path would have returned WAIT.
+    // Do not infer baseline WAIT from a historical missing production lock.
+    const baselineWaitNow = Date.now();
+    if (edgeExpansionEvaluation && !row.expansionBaselineWaitAt &&
+        Number.isFinite(Number(row.predictedAt)) &&
+        Number(row.predictedAt) >= Number(row.roundStartMs) &&
+        baselineWaitNow >= Number(edgeExpansionEvaluation.evaluatedAt) &&
+        baselineWaitNow < Number(row.roundEndMs)) {
+      row.expansionBaselineWaitAt = baselineWaitNow;
+      saveHistory();
     }
 
     // Tier-2/3 expansion only activates after independent strict-forward proof.

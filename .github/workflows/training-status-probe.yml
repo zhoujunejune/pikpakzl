@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/training-status-probe.yml'
+      - 'scripts/audit_strict_forward.py'
+      - 'scripts/test_audit_strict_forward.py'
   push:
     paths:
       - '.github/workflows/training-status-probe.yml'
@@ -18,6 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - uses: actions/checkout@v4
+      - name: Test independent settlement reconciler
+        run: python3 -m unittest discover -s scripts -p 'test_audit_strict_forward.py' -v
       - name: Fetch training status
         shell: bash
         run: |

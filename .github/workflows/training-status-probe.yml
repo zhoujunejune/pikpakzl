@@ -73,3 +73,19 @@ jobs:
               }
             }' /tmp/round-stats.json
           echo "===RECENT_DIRECTION_AUDIT_END==="
+          echo "===UP_TIGHTEN_REPLAY_BEGIN==="
+          jq -c '
+            [.records[]
+              | select(.productionSource=="LOCK_QUALITY_SELECTIVE_V2_PRIMARY" and .productionPrediction=="UP" and (.productionResult=="HIT" or .productionResult=="MISS"))
+              | {r:.productionResult,s:(.lockQualitySelectiveV2.predictionSupport // null),c:(.lockQualitySelectiveV2.currentScoreAbs // null),d:(.productionDelayMs // .lockQualitySelectiveV2.lockDelayMs // null)}
+            ] as $u |
+            def stat($xs): {n:($xs|length),hits:($xs|map(select(.r=="HIT"))|length),accuracy:(if ($xs|length)>0 then (($xs|map(select(.r=="HIT"))|length)/($xs|length)) else null end)};
+            {
+              base:stat($u),
+              s15_c65_d20:stat([$u[]|select(.s!=null and .c!=null and .d!=null and .s>=0.15 and .c>=0.65 and .d<20000)]),
+              s16_c67_d19:stat([$u[]|select(.s!=null and .c!=null and .d!=null and .s>=0.16 and .c>=0.67 and .d<19000)]),
+              s18_c70_d18:stat([$u[]|select(.s!=null and .c!=null and .d!=null and .s>=0.18 and .c>=0.70 and .d<18000)]),
+              s18_c65_d18:stat([$u[]|select(.s!=null and .c!=null and .d!=null and .s>=0.18 and .c>=0.65 and .d<18000)]),
+              rows:$u
+            }' /tmp/round-stats.json
+          echo "===UP_TIGHTEN_REPLAY_END==="

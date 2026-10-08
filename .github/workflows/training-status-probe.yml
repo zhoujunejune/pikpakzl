@@ -37,3 +37,39 @@ jobs:
                 bySource:(group_by(.productionSource)|map({source:.[0].productionSource,n:length,hits:map(select(.productionResult=="HIT"))|length,misses:map(select(.productionResult=="MISS"))|length}))
               }' /tmp/round-stats.json
           echo "===RECENT20_BREAKDOWN_END==="
+          echo "===RECENT_DIRECTION_AUDIT_BEGIN==="
+          jq -c '
+            def decided: [.records[] | select((.productionActual=="UP" or .productionActual=="DOWN") and (.productionPrediction=="UP" or .productionPrediction=="DOWN"))];
+            def stat(xs):
+              {n:(xs|length),hits:(xs|map(select(.productionResult=="HIT"))|length),misses:(xs|map(select(.productionResult=="MISS"))|length),
+               accuracy:(if (xs|length)>0 then ((xs|map(select(.productionResult=="HIT"))|length)/(xs|length)) else null end)};
+            decided as $d |
+            {
+              all:{
+                up:stat([$d[]|select(.productionPrediction=="UP")]),
+                down:stat([$d[]|select(.productionPrediction=="DOWN")])
+              },
+              recent10:{
+                up:stat([($d[0:10])[]|select(.productionPrediction=="UP")]),
+                down:stat([($d[0:10])[]|select(.productionPrediction=="DOWN")])
+              },
+              recent20:{
+                up:stat([($d[0:20])[]|select(.productionPrediction=="UP")]),
+                down:stat([($d[0:20])[]|select(.productionPrediction=="DOWN")])
+              },
+              recent50:{
+                up:stat([($d[0:50])[]|select(.productionPrediction=="UP")]),
+                down:stat([($d[0:50])[]|select(.productionPrediction=="DOWN")])
+              },
+              bySource:{
+                selectiveV2:{
+                  up:stat([$d[]|select((.productionSource|tostring|startswith("LOCK_QUALITY_SELECTIVE_V2")) and .productionPrediction=="UP")]),
+                  down:stat([$d[]|select((.productionSource|tostring|startswith("LOCK_QUALITY_SELECTIVE_V2")) and .productionPrediction=="DOWN")])
+                },
+                edgeRescue:{
+                  up:stat([$d[]|select(.productionSource=="SELECTIVE_V2_EDGE_RESCUE_PRIMARY" and .productionPrediction=="UP")]),
+                  down:stat([$d[]|select(.productionSource=="SELECTIVE_V2_EDGE_RESCUE_PRIMARY" and .productionPrediction=="DOWN")])
+                }
+              }
+            }' /tmp/round-stats.json
+          echo "===RECENT_DIRECTION_AUDIT_END==="

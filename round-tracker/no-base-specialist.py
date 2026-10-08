@@ -219,6 +219,20 @@ def fit_final(samples,estimator_name,best_config,budget,seed):
 
 def train_command(args):
     samples,mix=load_samples(args.history)
+    # The live specialist predicts at ~20 seconds. Once enough exact-20s rows
+    # exist, do not fit or validate on legacy ~15s snapshots: they are a
+    # different feature distribution and caused misleading inner-validation
+    # scores that repeatedly failed the chronological outer holdout.
+    exact20_samples=[s for s in samples if s.get("source")=="20S_EXACT"]
+    raw_count=len(samples)
+    exact20_required=max(120,args.min_samples)
+    if len(exact20_samples)>=exact20_required:
+        samples=exact20_samples
+        training_mode="EXACT20_ONLY"
+    else:
+        training_mode="MIXED_WARMUP"
+    mix={**mix,"trainingMode":training_mode,"rawCount":raw_count,
+         "selectedSamples":len(samples),"exact20Required":exact20_required}
     if len(samples)<args.min_samples:
         emit({"ok":True,"status":"INSUFFICIENT_SAMPLES","samples":len(samples),"sourceMix":mix,"engineVersion":ENGINE_VERSION})
         return

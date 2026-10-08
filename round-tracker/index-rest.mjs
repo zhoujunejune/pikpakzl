@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
+import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
@@ -407,6 +408,18 @@ const noBaseSpecialist = createNoBaseSpecialistClient({
   maxCandidates: 6,
   trainEveryRounds: NO_BASE_SPECIALIST_TRAIN_EVERY_ROUNDS,
   trainTimeBudget: NO_BASE_SPECIALIST_TRAIN_TIME_BUDGET,
+  log,
+});
+
+const baseDirectionRescueV2 = createBaseDirectionRescueV2({
+  rounds,
+  startMs:1791431100000,
+  targetSamples:60,
+  retireMinSamples:20,
+  retireAccuracy:0.65,
+  reviewAccuracy:0.75,
+  recentMinAccuracy:0.70,
+  directionMinAccuracy:0.70,
   log,
 });
 
@@ -3866,6 +3879,7 @@ function ensureRound(roundStartMs) {
       preLockAdaptiveShadow: null,
       selectiveV2NoBaseShadow: null,
       selectiveV2NoBaseContest: null,
+      baseDirectionRescueV2: null,
       selectiveV2HighPrecisionShadow: null,
       predictedAt: null,
       predictionDelayMs: null,
@@ -3978,6 +3992,21 @@ async function pollSignal() {
         saveHistory();
       }
     }
+    if (
+      liveFacts &&
+      !row.baseDirectionRescueV2 &&
+      elapsedMs >= 18000 &&
+      elapsedMs <= 22000 &&
+      live?.status !== 'LOCKED' &&
+      row.prediction !== 'UP' &&
+      row.prediction !== 'DOWN'
+    ) {
+      row.baseDirectionRescueV2 = baseDirectionRescueV2.evaluate(row, liveFacts, Date.now());
+      if (row.baseDirectionRescueV2) {
+        saveHistory();
+      }
+    }
+
     if (
       liveFacts &&
       !row.noBaseSpecialistObservedAt &&
@@ -5272,6 +5301,7 @@ log('selective_v2_edge_expansion_status', edgeRescueExpansion.summary(rounds.val
 log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsensusBacktest());
 log('selective_v2_no_base_shadow_status', selectiveV2NoBaseShadowSummary());
 log('no_base_specialist_status', noBaseSpecialist.stats());
+log('base_direction_rescue_v2_status', baseDirectionRescueV2.stats());
 log('selective_v2_no_base_contest_status', selectiveV2NoBaseContestSummary());
 log('wait_rescue_backtest_snapshot', waitRescueBacktest());
 log('wait_rescue_shadow_status', waitRescueShadowSummary());
@@ -5353,6 +5383,7 @@ const signalHttpServer = http.createServer((req, res) => {
       },
       models:{
         noBaseSpecialist:noBaseSpecialist.stats(),
+        baseDirectionRescueV2:baseDirectionRescueV2.stats(),
         edgeRescueTier1:selectiveV2EdgeRescueSummary(),
         edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
@@ -5395,6 +5426,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(noBaseSpecialist.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/base-direction-rescue-v2-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(baseDirectionRescueV2.stats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/shadow-v4-stats') {

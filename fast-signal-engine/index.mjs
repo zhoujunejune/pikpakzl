@@ -682,6 +682,9 @@ async function getOfficialPredictionResolution(round, marketTopicId = null) {
     // Excludes credentials; the detail payload is public market metadata.
     auditEvidence: {
       sourceEndpoint:'/sapi/v1/w3w/wallet/prediction/market/detail',
+      // Digest of the exact parsed detail payload; not a substitute for independently refetching it.
+      detailPayloadSha256:crypto.createHash('sha256').update(JSON.stringify(topic)).digest('hex'),
+      evidenceSchemaVersion:1,
       marketTopicId:topic?.marketTopicId ?? null,
       marketIds:Array.isArray(topic?.markets)
         ? topic.markets.map(m => m?.marketId ?? m?.id).filter(x => x != null)

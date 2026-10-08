@@ -4986,6 +4986,18 @@ function productionSignalPayload(now = Date.now()) {
       return {ok:true,live};
     }
 
+    // Record that the existing Selective V2 + Tier-1 path would have returned WAIT.
+    // Do not infer baseline WAIT from a historical missing production lock.
+    const baselineWaitNow = Date.now();
+    if (edgeExpansionEvaluation && !row.expansionBaselineWaitAt &&
+        Number.isFinite(Number(row.predictedAt)) &&
+        Number(row.predictedAt) >= Number(row.roundStartMs) &&
+        baselineWaitNow >= Number(edgeExpansionEvaluation.evaluatedAt) &&
+        baselineWaitNow < Number(row.roundEndMs)) {
+      row.expansionBaselineWaitAt = baselineWaitNow;
+      saveHistory();
+    }
+
     // Tier-2/3 expansion only activates after independent strict-forward proof.
     // It inherits the Tier-1 fuse so a degraded rescue regime cannot be widened.
     const expansionCoreFuse = edgeExpansionEvaluation

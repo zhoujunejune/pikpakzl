@@ -47,6 +47,8 @@ def audit(locks, settlements):
                 issues.append("INVALID_OFFICIAL_DIRECTION")
             if not settlement["source_reference"].strip():
                 issues.append("MISSING_OFFICIAL_PROVENANCE")
+            if settlement.get("independent_verified", "").strip().lower() not in ("true", "1", "yes"):
+                issues.append("INDEPENDENT_OFFICIAL_EVIDENCE_NOT_VERIFIED")
             try:
                 if timestamp(row["locked_at"]) >= timestamp(settlement["settled_at"]):
                     issues.append("LOCK_NOT_BEFORE_SETTLEMENT")

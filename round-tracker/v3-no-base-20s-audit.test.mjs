@@ -71,3 +71,4 @@ test('new independent confirmation candidates stay shadow-only and require agree
  const stale=freezeNoBase20s(row(),{...facts,depthAgeMs:5001},round+20500);
  assert.equal(stale.candidates.PM_FLOW15_CURRENT_03.decision,'WAIT');
 });
+\nimport './independent-direction-shadow.test.mjs';\n

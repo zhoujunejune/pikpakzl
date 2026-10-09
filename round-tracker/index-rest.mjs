@@ -2394,6 +2394,22 @@ function evaluateSelectiveQualityV2(direction, facts, delayMs, excludeRound = nu
     directionalMode = 'DIRECTION_MISS_STREAK_GUARD';
   }
 
+  // Accuracy-first protection for Selective V2's UP direction only.
+  // Decisions are evaluated from previously settled, round-excluded production outcomes.
+  // The DOWN gate, Edge Rescue candidate rules, and lock-time limits stay unchanged.
+  if (
+    direction === 'UP' &&
+    directionQuality.samples >= 6 &&
+    Number.isFinite(directionQuality.accuracy) &&
+    directionQuality.accuracy < 0.75
+  ) {
+    effectiveSupportMin = Math.max(effectiveSupportMin, 0.18);
+    effectiveCurrentMin = Math.max(effectiveCurrentMin, 0.72);
+    directionalMode = directionalMode === 'NONE'
+      ? 'UP_75PCT_QUALITY_GUARD'
+      : `${directionalMode}+UP_75PCT_QUALITY_GUARD`;
+  }
+
   const reasons = [];
   let eligible = true;
 

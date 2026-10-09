@@ -59,3 +59,15 @@ test('shadow has explicit rejection reasons instead of silent WAIT',()=>{
  assert.equal(r.candidates.CURRENT_04_TREND_055_PM05.decision,'WAIT');
  assert.ok(r.candidates.CURRENT_04_TREND_055_PM05.reasons.includes('PM_NEUTRAL'));
 });
+
+test('new independent confirmation candidates stay shadow-only and require agreement',()=>{
+ const f=freezeNoBase20s(row(),facts,round+20500);
+ assert.equal(f.candidates.PM_FLOW15_CURRENT_03.decision,'UP');
+ assert.equal(f.candidates.PM_TREND_045_CURRENT_03.decision,'UP');
+ assert.equal(f.productionEffect,'NONE_SHADOW_ONLY');
+ const conflict=freezeNoBase20s(row(),{...facts,currentScore:-0.4},round+20500);
+ assert.equal(conflict.candidates.PM_FLOW15_CURRENT_03.decision,'WAIT');
+ assert.equal(conflict.candidates.PM_TREND_045_CURRENT_03.decision,'WAIT');
+ const stale=freezeNoBase20s(row(),{...facts,depthAgeMs:5001},round+20500);
+ assert.equal(stale.candidates.PM_FLOW15_CURRENT_03.decision,'WAIT');
+});

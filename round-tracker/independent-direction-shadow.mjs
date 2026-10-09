@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 
-export const INDEPENDENT_DIRECTION_VERSION = 'INDEPENDENT_DIRECTION_V1';
+export const INDEPENDENT_DIRECTION_VERSION = 'INDEPENDENT_DIRECTION_FULL_COVERAGE_V2';
 export const INDEPENDENT_TARGET = Object.freeze({
-  accuracy: 0.75, coverage: 0.50, minForwardRounds: 200, minDecisions: 100,
-  recentDecisions: 40, trainingSamples: 320,
+  accuracy: 0.75, coverage: 1.00, minForwardRounds: 200, minDecisions: 200,
+  recentDecisions: 100, longWindow: 200, trainingSamples: 320,
 });
 
 const REQUIRES = ['regimeScore','currentScore','microScore','currentTrendScore'];
@@ -61,11 +61,13 @@ function modelProbability(weights,x) {
   for(let j=0;j<x.length;j++) z+=weights[j+1]*x[j];
   return sigmoid(clip(z,-25,25));
 }
-export function chooseIndependentDirection(probability,margin) {
-  if (!Number.isFinite(probability)||!Number.isFinite(margin)||margin<0||margin>0.49) return 'WAIT';
-  if (probability>=0.5+margin) return 'UP';
-  if (probability<=0.5-margin) return 'DOWN';
-  return 'WAIT';
+// Direction is a *total* binary decision for every valid market snapshot.
+// No score/margin/quality-based abstention is permitted in this candidate.
+// Missing or invalid features are separately diagnosed as DATA_GAP and count
+// against full coverage; never fabricate an official forward prediction.
+export function chooseIndependentDirection(probability) {
+  if (!Number.isFinite(probability) || probability < 0 || probability > 1) return null;
+  return probability >= 0.5 ? 'UP' : 'DOWN';
 }
 function summarizeOutcomes(decisions) {
   const hits=decisions.filter(x=>x.decision===x.actual).length;
@@ -88,13 +90,16 @@ function fitLogistic(training,l2,halfLife) {
   }
   return w;
 }
-function rankValidation(validation,weights,margin) {
-  const decided=validation.map(r=>({decision:chooseIndependentDirection(modelProbability(weights,r.x),margin),actual:r.actual}))
-    .filter(x=>x.decision!=='WAIT');
+function rankValidation(validation,weights) {
+  const outcomes=validation.map(r=>({
+    decision:chooseIndependentDirection(modelProbability(weights,r.x)),
+    actual:r.actual,
+  }));
+  const decided=outcomes.filter(x=>x.decision==='UP'||x.decision==='DOWN');
   return {...summarizeOutcomes(decided),
     rounds:validation.length,
     coverage:Number((decided.length/validation.length).toFixed(4)),
-    margin};
+  };
 }
 export function trainIndependentModel(rows,now,opts={}) {
   const minSamples=opts.minSamples??INDEPENDENT_TARGET.trainingSamples;
@@ -112,22 +117,19 @@ export function trainIndependentModel(rows,now,opts={}) {
   for(const l2 of [0.015,0.06,0.18]){
     for(const halfLife of [100,250]){
       const weights=fitLogistic(train,l2,halfLife);
-      for(const margin of [0,0.02,0.04,0.06,0.08,0.10,0.14]){
-        const metrics=rankValidation(validation,weights,margin);
-        if(metrics.coverage>=INDEPENDENT_TARGET.coverage)trials.push({
-          weights,l2,halfLife,metrics,
-          pass:metrics.accuracy!==null && metrics.accuracy>=INDEPENDENT_TARGET.accuracy,
-        });
-      }
+      const metrics=rankValidation(validation,weights);
+      if(metrics.coverage===1)trials.push({
+        weights,l2,halfLife,metrics,
+        pass:metrics.accuracy!==null && metrics.accuracy>=INDEPENDENT_TARGET.accuracy,
+      });
     }
   }
-  if(!trials.length) return {ok:false,reason:'NO_VALIDATION_COVERAGE_50'};
+  if(!trials.length) return {ok:false,reason:'VALIDATION_DATA_GAP_BLOCKED_FULL_COVERAGE'};
   // Validation picks a fixed policy; future results are exclusively measured
   // against frozen, newly arriving official resolutions.
   trials.sort((a,b)=>Number(b.pass)-Number(a.pass) ||
     (b.metrics.accuracy??-1)-(a.metrics.accuracy??-1) ||
     b.metrics.coverage-a.metrics.coverage ||
-    a.metrics.margin-b.metrics.margin ||
     a.l2-b.l2);
   const best=trials[0],trainedAt=Math.floor(now);
   return {ok:true, model:{
@@ -140,7 +142,7 @@ export function trainIndependentModel(rows,now,opts={}) {
     validationSamples:validation.length,
     trainingDataEndsBefore:Math.floor(now/300000)*300000,
     startRoundMs:(Math.floor(now/300000)+1)*300000,
-    weights:best.weights,margin:best.metrics.margin,
+    weights:best.weights,
     l2:best.l2,halfLife:best.halfLife,
     validation:{...best.metrics,qualified:best.pass},
     target:INDEPENDENT_TARGET,
@@ -155,12 +157,13 @@ export function freezeIndependentModel(row,model){
   if(Number(row.shadowObservedAt)<=Number(model.trainedAt))return null;
   const probability=modelProbability(model.weights,independentFeatures(row.shadowFacts));
   if(!Number.isFinite(probability))return null;
-  const decision=chooseIndependentDirection(probability,model.margin);
+  const decision=chooseIndependentDirection(probability);
+  if (decision !== 'UP' && decision !== 'DOWN') return null;
   return {modelVersion:model.version,trainedAt:model.trainedAt,
     roundStartMs:row.roundStartMs,observedAt:row.shadowObservedAt,
     predictionSource:'INDEPENDENT_MARKET_FEATURES',
     direction:decision,probability:Number(probability.toFixed(6)),
-    margin:model.margin,productionEffect:'NONE_SHADOW_ONLY',
+    productionEffect:'NONE_SHADOW_ONLY',
     // This field contains the frozen feature values, never the official label.
     featureVector:independentFeatures(row.shadowFacts)};
 }
@@ -204,12 +207,28 @@ export function independentForwardStats(rows,model) {
     hits:noBaseSummary.hits,misses:noBaseSummary.misses,accuracy:noBaseSummary.accuracy,
     coverage:noBaseSettled.length?Number((noBaseDecided.length/noBaseSettled.length).toFixed(4)):null};
   const recent=summarizeOutcomes(decided.slice(-target.recentDecisions));
+  const recent40=summarizeOutcomes(decided.slice(-40));
+  const rolling200=summarizeOutcomes(decided.slice(-target.longWindow));
+  const up=dir('UP'),down=dir('DOWN');
+  const dataGapRounds=settled.filter(r=>{
+    const x=r.independentDirectionShadow;
+    return !(x?.modelVersion===model.version &&
+      Number(x?.trainedAt)===Number(model.trainedAt) &&
+      Number(x?.observedAt)>Number(model.trainedAt) &&
+      Number(x?.observedAt)>=Number(r.roundStartMs)+10000 &&
+      Number(x?.observedAt)<=Number(r.roundStartMs)+22000 &&
+      Number(x?.observedAt)===Number(r.shadowObservedAt) &&
+      (x?.direction==='UP'||x?.direction==='DOWN'));
+  }).map(r=>Number(r.roundStartMs));
   let status='STRICT_FORWARD_COLLECTING';
   if(settled.length>=target.minForwardRounds){
-    if(sums.accuracy>=target.accuracy && coverage>=target.coverage &&
+    if(sums.accuracy>=target.accuracy && coverage===1 &&
       recent.samples>=target.recentDecisions && recent.accuracy>=target.accuracy &&
-      dir('UP').samples>=15 && dir('DOWN').samples>=15)
-      status='QUALIFIED_75_50_FOR_INDEPENDENT_REVIEW';
+      recent40.samples===40 && recent40.accuracy>=target.accuracy &&
+      rolling200.samples>=target.longWindow && rolling200.accuracy>=target.accuracy &&
+      up.samples>=15 && down.samples>=15 &&
+      up.accuracy>=target.accuracy && down.accuracy>=target.accuracy)
+      status='QUALIFIED_75_100_LONG_TERM_REVIEW';
     else status='FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED';
   }
   return {version:INDEPENDENT_DIRECTION_VERSION,modelVersion:model.version,
@@ -217,7 +236,9 @@ export function independentForwardStats(rows,model) {
     independentOfBaseDirection:true,target,forwardRounds:settled.length,
     decidedRounds:decided.length,hits:sums.hits,misses:sums.misses,
     accuracy:sums.accuracy,coverage,
-    waits:settled.length-decided.length,recent40:recent,up:dir('UP'),down:dir('DOWN'),noBase,
+    noDirectionRounds:settled.length-decided.length,
+    dataGapCount:dataGapRounds.length,dataGapRecentRoundIds:dataGapRounds.slice(-10),
+    recent100:recent,recent40,rolling200,up,down,noBase,
     validation:model.validation,trainedAt:model.trainedAt,startRoundMs:model.startRoundMs};
 }
 export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSamples=320}={}){
@@ -281,7 +302,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
         startRoundMs:state.model.startRoundMs,
         trainingSamples:state.model.trainingSamples,
         validationSamples:state.model.validationSamples,
-        margin:state.model.margin,validation:state.model.validation,
+        validation:state.model.validation,
       }:null,
       priorModels:state.priorModels};
   }

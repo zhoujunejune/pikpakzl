@@ -5,6 +5,8 @@ on:
       - '.github/workflows/training-status-probe.yml'
       - 'scripts/audit_strict_forward.py'
       - 'scripts/test_audit_strict_forward.py'
+      - 'scripts/independent_binance_settlement.py'
+      - '.github/workflows/independent-binance-settlement.yml'
       - 'round-tracker/index-rest.mjs'
       - 'fast-signal-engine/index.mjs'
   push:
@@ -29,6 +31,8 @@ jobs:
           node --check fast-signal-engine/index.mjs
       - name: Test independent settlement reconciler
         run: python3 -m unittest discover -s scripts -p 'test_audit_strict_forward.py' -v
+      - name: Validate independent audit script syntax (no secrets)
+        run: python3 -m py_compile scripts/independent_binance_settlement.py
       - name: Fetch training status
         shell: bash
         run: |

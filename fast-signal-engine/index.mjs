@@ -961,6 +961,16 @@ function calculate(now = Date.now()) {
     predBookUsable && Number(predictionSupport) >= 0.10 &&
     Math.abs(score) < MAX_ABS_SCORE && !predictionConflict && !absorptionRisk;
   const trade15ShadowDirection = trade15ShadowEligible ? proposedDirection : 'WAIT';
+  // Forward-only observation: this candidate never alters production gates or orders.
+  const trendBandShadowEligible = !tradeStreamStalled &&
+    elapsedMs >= OBSERVE_MIN_MS && elapsedMs <= DECISION_WINDOW_MS &&
+    priceSide !== 0 && priceSide * currentScore >= 0.4 &&
+    priceSide * currentScore < TREND_THRESHOLD &&
+    dataAgeMs <= STALE_MS && depthAgeMs <= STALE_MS &&
+    flow15.count >= MIN_TRADES && ofi5.count >= MIN_OFI_EVENTS &&
+    !absorptionRisk && predBookUsable && !predictionConflict;
+  const trendBandShadowDirection = trendBandShadowEligible
+    ? (priceSide > 0 ? 'UP' : 'DOWN') : 'WAIT';
 
   let nextCandidate = 'WAIT';
   let reason = 'V6_NEUTRAL';
@@ -1127,6 +1137,8 @@ function calculate(now = Date.now()) {
         tradeStreamStalled,
         trade15ShadowDirection,
         trade15ShadowEligible,
+        trendBandShadowDirection,
+        trendBandShadowEligible,
         ofi5Count:ofi5.count,
         absorptionRisk,
         predBookUsable,
@@ -1173,6 +1185,7 @@ function calculate(now = Date.now()) {
       tradeStreamStalled,
       lastAggTradeAgeMs: Number.isFinite(tradeAgeMs) ? Math.round(tradeAgeMs) : null,
       v3Trade15RescueShadow: { direction: trade15ShadowDirection, eligible: trade15ShadowEligible, productionEffect: 'NONE_SHADOW_ONLY' },
+      v3TrendBandShadow: { direction: trendBandShadowDirection, eligible: trendBandShadowEligible, observedAt: now, round: round.start, score: Number(currentScore.toFixed(6)), threshold: TREND_THRESHOLD, productionEffect: 'NONE_SHADOW_ONLY' },
       tradePressure5s: Number(flow5.pressure.toFixed(6)),
       tradePressure15s: Number(flow15.pressure.toFixed(6)),
       tradePressure60s: Number(flow60.pressure.toFixed(6)),

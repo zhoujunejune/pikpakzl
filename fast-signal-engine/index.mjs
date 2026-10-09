@@ -13,6 +13,9 @@ const MIN_OFI_EVENTS = Math.max(3, Number(process.env.SIGNAL_MIN_OFI_EVENTS || 8
 const SCORE_THRESHOLD = Math.min(0.95, Math.max(0.05, Number(process.env.SIGNAL_SCORE_THRESHOLD || 0.22)));
 const CONFIRM_TICKS = Math.max(2, Number(process.env.SIGNAL_CONFIRM_TICKS || 3));
 const STALE_MS = Math.max(500, Number(process.env.SIGNAL_STALE_MS || 1500));
+// A healthy depth stream does not prove that the aggTrade stream is alive.
+const TRADE_STALL_MS = Math.max(10000, Number(process.env.SIGNAL_TRADE_STALL_MS || 12000));
+const TRADE_WATCHDOG_COOLDOWN_MS = Math.max(30000, TRADE_STALL_MS * 2);
 const OBSERVE_MIN_MS = Math.max(5000, Number(process.env.SIGNAL_OBSERVE_MIN_MS || 10000));
 const DECISION_WINDOW_MS = Math.max(OBSERVE_MIN_MS + 5000, Number(process.env.SIGNAL_DECISION_WINDOW_MS || 22000));
 const MIN_CONTEXT_MS = Math.max(30000, Number(process.env.SIGNAL_MIN_CONTEXT_MS || 60000));
@@ -63,6 +66,9 @@ let lastTradeExchangeLagMs = null;
 let connectedAt = null;
 let lastMarketTs = 0;
 let lastTradeMarketTs = 0;
+let lastTradeReceivedAt = 0;
+let lastTradeWatchdogAt = 0;
+let tradeStallReconnects = 0;
 let lastDepthMarketTs = 0;
 let bootstrapCompletedAt = null;
 let lastPriceSampleTs = 0;
@@ -708,6 +714,9 @@ function calculate(now = Date.now()) {
 
   const dataAgeMs = lastWsMessageAt ? now - lastWsMessageAt : Infinity;
   const depthAgeMs = lastDepthAt ? now - lastDepthAt : Infinity;
+  const tradeAgeMs = lastTradeReceivedAt ? now - lastTradeReceivedAt : Infinity;
+  const tradeStreamStalled = Boolean(ws?.readyState === WebSocket.OPEN && connectedAt &&
+    now - Math.max(lastTradeReceivedAt, connectedAt) > TRADE_STALL_MS);
   const hasBook = [bestBid, bestAsk, bestBidQty, bestAskQty].every(Number.isFinite);
   const hasPrice = Number.isFinite(lastPrice);
   const historyAgeMs = prices.length ? Math.max(0, marketNow - prices[0].marketTs) : 0;
@@ -939,6 +948,20 @@ function calculate(now = Date.now()) {
     !absorptionRisk &&
     (!lateRegimeConflict || reversalStructureConfirmed);
 
+  // Observe a 15-second trade-flow alternative without widening production gates.
+  // It is only a frozen-input shadow candidate; V2 must independently prove
+  // >=70% strict-forward accuracy before any future production promotion.
+  const trade15ShadowEligible = !tradeStreamStalled &&
+    elapsedMs >= OBSERVE_MIN_MS && elapsedMs <= DECISION_WINDOW_MS &&
+    flow5.count >= 5 && flow5.count < MIN_TRADES &&
+    flow15.count >= MIN_TRADES && ofi5.count >= MIN_OFI_EVENTS &&
+    proposedDirection !== 'WAIT' && alignment === 'ALIGNED' &&
+    proposedSign * flow15.pressure >= 0.08 &&
+    proposedSign * score >= SCORE_THRESHOLD &&
+    predBookUsable && Number(predictionSupport) >= 0.10 &&
+    Math.abs(score) < MAX_ABS_SCORE && !predictionConflict && !absorptionRisk;
+  const trade15ShadowDirection = trade15ShadowEligible ? proposedDirection : 'WAIT';
+
   let nextCandidate = 'WAIT';
   let reason = 'V6_NEUTRAL';
 
@@ -946,6 +969,8 @@ function calculate(now = Date.now()) {
     reason = 'STALE_BINANCE_STREAM';
   } else if (depthAgeMs > STALE_MS) {
     reason = 'STALE_BINANCE_DEPTH';
+  } else if (tradeStreamStalled) {
+    reason = 'STALE_BINANCE_AGGTRADE_STREAM';
   } else if (!hasBook || !hasPrice) {
     reason = 'WAITING_FOR_REAL_MARKET_DATA';
   } else if (historyAgeMs < MIN_CONTEXT_MS) {
@@ -1090,6 +1115,11 @@ function calculate(now = Date.now()) {
         reversalScore:Number(reversalScore.toFixed(6)),
         distanceFromOpenBps:Number(distanceFromOpenBps.toFixed(4)),
         flow5Count:flow5.count,
+        flow15Count:flow15.count,
+        lastTradeAgeMs:Number.isFinite(tradeAgeMs) ? Math.round(tradeAgeMs) : null,
+        tradeStreamStalled,
+        trade15ShadowDirection,
+        trade15ShadowEligible,
         ofi5Count:ofi5.count,
         absorptionRisk,
         predBookUsable,
@@ -1132,6 +1162,10 @@ function calculate(now = Date.now()) {
       askQty: bestAskQty,
       spreadBps: Number.isFinite(spreadBps) ? Number(spreadBps.toFixed(4)) : null,
       tradeCount5s: flow5.count,
+      tradeCount15s: flow15.count,
+      tradeStreamStalled,
+      lastAggTradeAgeMs: Number.isFinite(tradeAgeMs) ? Math.round(tradeAgeMs) : null,
+      v3Trade15RescueShadow: { direction: trade15ShadowDirection, eligible: trade15ShadowEligible, productionEffect: 'NONE_SHADOW_ONLY' },
       tradePressure5s: Number(flow5.pressure.toFixed(6)),
       tradePressure15s: Number(flow15.pressure.toFixed(6)),
       tradePressure60s: Number(flow60.pressure.toFixed(6)),
@@ -1228,6 +1262,7 @@ function handleMessage(raw) {
     const exchangeTs = Number(d.T || d.E || now);
     lastTradeExchangeLagMs = Number.isFinite(exchangeTs) ? Math.max(0, now - exchangeTs) : null;
     lastTradeMarketTs = Number.isFinite(exchangeTs) ? exchangeTs : now;
+    lastTradeReceivedAt = now;
     lastMarketTs = Math.max(lastMarketTs, lastTradeMarketTs);
     lastPrice = price;
     trades.push({
@@ -1394,22 +1429,24 @@ function connect() {
 
   resetTransportState();
   console.log(JSON.stringify({ event: 'binance_ws_connecting', url: WS_URL, at: new Date().toISOString() }));
-  ws = new WebSocket(WS_URL, { perMessageDeflate: false, handshakeTimeout: 10000 });
+  const socket = new WebSocket(WS_URL, { perMessageDeflate: false, handshakeTimeout: 10000 });
+  ws = socket;
 
-  ws.on('open', () => {
+  socket.on('open', () => {
     connectedAt = Date.now();
     reconnects = 0;
     console.log(JSON.stringify({ event: 'binance_ws_connected', streams: STREAMS, ofiMode: 'REAL_DEPTH20_100MS_TOP_OF_BOOK', at: new Date().toISOString() }));
   });
 
-  ws.on('message', handleMessage);
-  ws.on('ping', data => {
-    try { ws.pong(data); } catch {}
+  socket.on('message', handleMessage);
+  socket.on('ping', data => {
+    try { socket.pong(data); } catch {}
   });
-  ws.on('error', err => {
+  socket.on('error', err => {
     console.error(JSON.stringify({ event: 'binance_ws_error', error: err?.message || String(err), at: new Date().toISOString() }));
   });
-  ws.on('close', (code, reason) => {
+  socket.on('close', (code, reason) => {
+    if (ws !== socket) return; // A retired socket must not discard a newer connection.
     console.error(JSON.stringify({ event: 'binance_ws_closed', code, reason: reason?.toString?.() || '', at: new Date().toISOString() }));
     ws = null;
     reconnects += 1;
@@ -1419,7 +1456,32 @@ function connect() {
   });
 }
 
+function watchAggTradeStream() {
+  const socket = ws;
+  if (!socket || socket.readyState !== WebSocket.OPEN || !connectedAt) return;
+  const now = Date.now();
+  // Only recover a silent aggTrade feed while depth updates prove that the
+  // upstream connection is otherwise alive. Genuine low volume stays WAIT.
+  if (!lastDepthAt || now - lastDepthAt > STALE_MS) return;
+  const ageMs = now - Math.max(lastTradeReceivedAt, connectedAt);
+  if (ageMs <= TRADE_STALL_MS ||
+      (lastTradeWatchdogAt && now - lastTradeWatchdogAt < TRADE_WATCHDOG_COOLDOWN_MS)) return;
+  lastTradeWatchdogAt = now;
+  tradeStallReconnects += 1;
+  console.error(JSON.stringify({
+    event:'binance_aggtrade_stream_stall_reconnect',
+    tradeAgeMs:Math.round(ageMs),
+    lastDepthAgeMs:Math.round(now - lastDepthAt),
+    tradeStallReconnects,
+    at:new Date(now).toISOString(),
+  }));
+  // The close handler schedules the reconnect. Do not call connect() directly:
+  // doing so can let the retired socket's close callback clear the new socket.
+  socket.terminate();
+}
+
 setInterval(() => calculate(Date.now()), EVAL_MS).unref();
+setInterval(watchAggTradeStream, 2000).unref();
 setInterval(refreshPredictionMarket, PREDICTION_REFRESH_MS).unref();
 await bootstrapMarketHistory();
 connect();
@@ -1464,6 +1526,9 @@ function payload() {
       lastMessageAgeMs: lastWsMessageAt ? now - lastWsMessageAt : null,
       lastDepthAgeMs: lastDepthAt ? now - lastDepthAt : null,
       lastExchangeEventLagMs: lastTradeExchangeLagMs,
+      lastAggTradeAgeMs: lastTradeReceivedAt ? now - lastTradeReceivedAt : null,
+      tradeStallMs: TRADE_STALL_MS,
+      tradeStallReconnects,
       lastMarketTs: lastMarketTs || null,
       marketClockAgeMs: lastMarketTs ? Math.max(0, now - lastMarketTs) : null,
       bootstrapCompletedAt,
@@ -1477,6 +1542,8 @@ function payload() {
       storageMs: STORAGE_MS,
       evaluationMs: EVAL_MS,
       minTrades: MIN_TRADES,
+      tradeStallMs: TRADE_STALL_MS,
+      trade15RescueMode: 'SHADOW_ONLY_STRICT_FORWARD_REQUIRED',
       minOfiEvents: MIN_OFI_EVENTS,
       scoreThreshold: SCORE_THRESHOLD,
       confirmTicks: CONFIRM_TICKS,
@@ -1587,6 +1654,8 @@ http.createServer(async (req, res) => {
     streams: STREAMS,
     windowMs: WINDOW_MS,
     evaluationMs: EVAL_MS,
+    tradeStallMs: TRADE_STALL_MS,
+    trade15RescueMode: 'SHADOW_ONLY',
     confirmTicks: CONFIRM_TICKS,
     scoreThreshold: SCORE_THRESHOLD,
     trendThreshold: TREND_THRESHOLD,

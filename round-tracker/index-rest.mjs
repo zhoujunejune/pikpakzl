@@ -88,16 +88,7 @@ const SELECTIVE_V2_NO_BASE_CONTEST_TARGET = 60;
 const SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_MIN_SAMPLES = 20;
 const SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_ACCURACY = 0.65;
 const SELECTIVE_V2_NO_BASE_CONTEST_REVIEW_ACCURACY = 0.75;
-const SELECTIVE_V2_NO_BASE_CONTEST_CONFIGS = [
-  { id:'BALANCED_65_70_PM03', currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'PM05_65_70',          currentMin:0.65, trendMin:0.70, pmMargin:0.05, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'PM08_65_70',          currentMin:0.65, trendMin:0.70, pmMargin:0.08, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'CURRENT70_70_PM03',   currentMin:0.70, trendMin:0.70, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'TREND80_65_PM03',     currentMin:0.65, trendMin:0.80, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'MICRO_65_70_PM03',    currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:true,  requireMomentumAgree:false },
-  { id:'MOM30_65_70_PM03',    currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:false, requireMomentumAgree:true  },
-  { id:'BOTH_65_70_PM03',     currentMin:0.65, trendMin:0.70, pmMargin:0.03, requireMicroAgree:true,  requireMomentumAgree:true  },
-];
+const SELECTIVE_V2_NO_BASE_CONTEST_CONFIGS = []; // All 8 were RETIRED_LOW_ACCURACY.
 
 const SELECTIVE_V2_HP_SHADOW_VERSION = 'SELECTIVE_V2_HIGH_PRECISION_SHADOW_V1';
 const SELECTIVE_V2_HP_SHADOW_START_MS = Math.max(0, Number(process.env.SELECTIVE_V2_HP_SHADOW_START_MS || 1791362700000));
@@ -157,16 +148,7 @@ const WAIT_RESCUE_RETIRE_ACCURACY = 0.65;
 const WAIT_RESCUE_REVIEW_ACCURACY = 0.70;
 const WAIT_RESCUE_MIN_INCREMENTAL_COVERAGE = 0.03;
 const WAIT_RESCUE_OBSERVE_DELAYS_MS = [10000, 15000, 20000];
-const WAIT_RESCUE_CONFIGS = [
-  { id:'SAFE_R75_T50_PM03', currentMin:0.75, trendMin:0.50, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'SAFE_R75_T50_PM05', currentMin:0.75, trendMin:0.50, pmMargin:0.05, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'SAFE_R75_T60_PM03', currentMin:0.75, trendMin:0.60, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'SAFE_R75_T60_PM05', currentMin:0.75, trendMin:0.60, pmMargin:0.05, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'SAFE_R75_T50_PM03_MICRO', currentMin:0.75, trendMin:0.50, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:true,  requireMomentumAgree:false },
-  { id:'SAFE_R75_T50_PM03_MOM',   currentMin:0.75, trendMin:0.50, pmMargin:0.03, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:true  },
-  { id:'EXP_R60_T60_PM12', currentMin:0.60, trendMin:0.60, pmMargin:0.12, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
-  { id:'EXP_R60_T70_PM10', currentMin:0.60, trendMin:0.70, pmMargin:0.10, scoreMin:null, distanceMinBps:null, requireMicroAgree:false, requireMomentumAgree:false },
-];
+const WAIT_RESCUE_CONFIGS = []; // All 8 were RETIRED_LOW_ACCURACY.
 
 
 const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
@@ -1204,7 +1186,7 @@ function invalidateLegacyWinnerFlagSettlements() {
     }
   }
 
-  const shadowV2LabelsReset = shadowV2.invalidateRounds(allPending);
+  const shadowV2LabelsReset = 0; // Retired Shadow V2 no longer tracks labels.
   const shadowV3LabelsReset = shadowV3.invalidateRounds(allPending);
   legacyOfficialRevalidation = {
     active:true,
@@ -1261,9 +1243,7 @@ function applyAuthoritativeSettledHistoryOverrides() {
         registryCorrected += 1;
       }
     }
-    shadowV2.settle(row);
     shadowV3.settle(row);
-    noBaseSpecialist.settle(row);
     archiveSettledRow(row, 'settled_history_final_outcome_correction');
     log('authoritative_settled_history_override_applied', {
       round:Number(roundKey),
@@ -4000,48 +3980,13 @@ async function pollSignal() {
       row.shadowCandidateProbability = Number.isFinite(candidateP) ? Number(candidateP.toFixed(6)) : null;
       row.shadowCandidateTrainedAt = shadowCandidate?.trainedAt ?? null;
       row.preLockAdaptiveShadow = preLockAdaptiveShadow.evaluate(row);
-      if (
-        Number(row.roundStartMs) >= SELECTIVE_V2_NO_BASE_SHADOW_START_MS &&
-        !row.selectiveV2NoBaseShadow
-      ) {
-        row.selectiveV2NoBaseShadow = selectiveV2NoBaseConsensusDecision(liveFacts);
-        if (!row.selectiveV2NoBaseContest) {
-          row.selectiveV2NoBaseContest = selectiveV2NoBaseContestEvaluate(liveFacts);
-          log('selective_v2_no_base_contest_evaluated', {
-            round:row.roundStartMs,
-            version:SELECTIVE_V2_NO_BASE_CONTEST_VERSION,
-            decisions:Object.fromEntries(
-              Object.entries(row.selectiveV2NoBaseContest.candidates || {}).map(([id,v])=>[id,v?.decision || 'WAIT'])
-            ),
-            productionEffect:'NONE_SHADOW_ONLY',
-          });
-        }
-        log('selective_v2_no_base_shadow_evaluated', {
-          round: row.roundStartMs,
-          modelVersion: SELECTIVE_V2_NO_BASE_SHADOW_VERSION,
-          decision: row.selectiveV2NoBaseShadow?.decision ?? 'WAIT',
-          reasons: row.selectiveV2NoBaseShadow?.reasons ?? [],
-          productionEffect:'NONE_SHADOW_ONLY',
-        });
-      }
+      // Retired No-Base Consensus shadow: no new candidates or per-round evaluations.
+
       observeShadowForwardRegistry(row, liveFacts);
-      shadowV2.observe(row, liveFacts);
       saveHistory();
     }
-    if (liveFacts && Number(row.roundStartMs) >= WAIT_RESCUE_SHADOW_START_MS) {
-      const rescueSnapshot = waitRescueEvaluateSnapshot(row, liveFacts, elapsedMs);
-      if (rescueSnapshot) {
-        log('wait_rescue_shadow_snapshot_evaluated', {
-          round:row.roundStartMs,
-          version:WAIT_RESCUE_SHADOW_VERSION,
-          scheduledDelayMs:rescueSnapshot.scheduledDelayMs,
-          observedDelayMs:rescueSnapshot.observedDelayMs,
-          decisions:rescueSnapshot.decisions,
-          productionEffect:'NONE_SHADOW_ONLY',
-        });
-        saveHistory();
-      }
-    }
+    // Retired WAIT_RESCUE_SHADOW_V1: no snapshots or evaluations.
+
     if (
       liveFacts &&
       !row.v3NoBase20sShadow &&
@@ -4081,35 +4026,10 @@ async function pollSignal() {
       }
     }
 
-    if (
-      liveFacts &&
-      !row.noBaseSpecialistObservedAt &&
-      elapsedMs >= NO_BASE_SPECIALIST_OBSERVE_MS &&
-      elapsedMs <= 22000 &&
-      live?.status !== 'LOCKED' &&
-      row.prediction !== 'UP' &&
-      row.prediction !== 'DOWN'
-    ) {
-      row.noBaseSpecialistObservedAt = Date.now();
-      row.noBaseSpecialistFacts = liveFacts;
-      row.noBaseSpecialistRawStatusAtObservation = live?.status || 'WAIT';
-      row.noBaseSpecialistRawReasonAtObservation = live?.reason || live?.waitReason || null;
-      saveHistory();
-      log('no_base_specialist_snapshot_collected', {
-        round: row.roundStartMs,
-        observedDelayMs: row.noBaseSpecialistObservedAt - row.roundStartMs,
-        rawStatus: row.noBaseSpecialistRawStatusAtObservation,
-        rawReason: row.noBaseSpecialistRawReasonAtObservation,
-        productionEffect: 'NONE_SHADOW_ONLY',
-      });
-      void noBaseSpecialist.observe(row, liveFacts, row.noBaseSpecialistObservedAt);
-    }
+    // Retired No-Base Specialist: stop collecting redundant observations.
 
     if (row.shadowObservedAt && row.shadowFacts) {
       void shadowV3.observe(row, row.shadowFacts);
-      void shadowV4.observe(row, row.shadowFacts);
-      void shadowV5.observe(row);
-      void shadowV7.observe(row, row.shadowFacts);
       if (productionUsesShadowV3()) {
         void shadowV3.predictProduction(SHADOW_PRODUCTION_MODEL_VERSION, row, row.shadowFacts)
           .then(result => {
@@ -4322,12 +4242,7 @@ async function settlePendingRounds() {
           });
         }
         settleShadowForwardRegistry(row);
-        shadowV2.settle(row);
         shadowV3.settle(row);
-        noBaseSpecialist.settle(row);
-        void shadowV4.settle(row);
-        shadowV5.settle(row);
-        void shadowV7.settle(row);
         adaptiveGateShadow.onSettled(row, Array.from(rounds.values()));
         preLockAdaptiveShadow.onSettled(row, Array.from(rounds.values()));
         if (row?.selectiveV2NoBaseShadow?.modelVersion === SELECTIVE_V2_NO_BASE_SHADOW_VERSION) {
@@ -4450,12 +4365,7 @@ async function settlePendingRounds() {
 
         maybeFinalizeLegacyOfficialRevalidation();
         maybeTrainShadowModel();
-        shadowV2.maybeTrain(shadowTrainingRows());
         void shadowV3.maybeTrain(row.roundStartMs);
-        void noBaseSpecialist.maybeTrain(row.roundStartMs);
-        void shadowV4.maybeTrain(row.roundStartMs);
-        void shadowV5.maybeTrain(row.roundStartMs);
-        void shadowV7.maybeTrain(row.roundStartMs);
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
         if (
@@ -5361,38 +5271,54 @@ function payload() {
   };
 }
 
+// Remove only retired, dedicated model artifacts; preserve round history,
+ // official settlement evidence, active V3, Selective V2 and Edge Rescue files.
+function removeRetiredModelArtifacts() {
+  const allowed = new Set(['/data/no-base-specialist', '/data/shadow-v4', '/data/shadow-v5', '/data/shadow-v7']);
+  for (const dir of [NO_BASE_SPECIALIST_DIR, SHADOW_V4_DIR, SHADOW_V5_DIR, SHADOW_V7_DIR]) {
+    if (!allowed.has(dir)) {
+      log('retired_model_prune_skipped', { reason: 'UNSAFE_OR_CUSTOM_PATH' });
+      continue;
+    }
+    try {
+      const existed = fs.existsSync(dir);
+      if (existed) fs.rmSync(dir, { recursive: true, force: true });
+      log('retired_model_pruned', { modelDir: dir, existed });
+    } catch (e) {
+      log('retired_model_prune_failed', { modelDir: dir, error: e?.message || String(e) });
+    }
+  }
+  const file = SHADOW_V2_FILE;
+  if (file === `${HISTORY_FILE}.shadow-v2.json` &&
+      (file.startsWith('/data/') || file.startsWith('/tmp/'))) {
+    try {
+      const existed = fs.existsSync(file);
+      if (existed) fs.rmSync(file, { force: true });
+      log('retired_model_pruned', { modelFile: file, existed });
+    } catch (e) {
+      log('retired_model_prune_failed', { modelFile: file, error: e?.message || String(e) });
+    }
+  }
+}
+
 loadHistory();
 loadArchiveIndex();
+removeRetiredModelArtifacts();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
 adaptiveGateShadow.load();
 preLockAdaptiveShadow.load();
-shadowV2.load();
 shadowV3.load();
-noBaseSpecialist.load();
-shadowV4.load();
-shadowV5.load();
-shadowV7.load();
 deleteRetiredShadowForwardCandidates();
-shadowV2.deleteRetiredCandidates();
 shadowV3.deleteRetiredCandidates();
-noBaseSpecialist.deleteRetiredCandidates();
-shadowV4.deleteRetiredCandidates();
-shadowV5.deleteRetiredCandidates();
-shadowV7.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
 adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
 preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));
 maybeTrainShadowModel();
-shadowV2.maybeTrain(shadowTrainingRows());
 void shadowV3.maybeTrain();
-void noBaseSpecialist.maybeTrain();
-void shadowV4.maybeTrain();
-void shadowV5.maybeTrain();
-void shadowV7.maybeTrain();
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
 log('calibration_backtest_snapshot', calibrationBacktestPayload());

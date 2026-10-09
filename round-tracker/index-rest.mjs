@@ -4,6 +4,7 @@ import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
+import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
@@ -381,6 +382,13 @@ const shadowV3 = createShadowV3Client({
   protectedModelVersion: SHADOW_PRODUCTION_MODEL_VERSION.startsWith('shadow-v3-automl-')
     ? SHADOW_PRODUCTION_MODEL_VERSION
     : null,
+  log,
+});
+
+// Independent candidate: never consumes row.prediction, Selective V2, or Edge Rescue.
+const independentDirectionShadow = createIndependentDirectionShadow({
+  file: HISTORY_FILE + '.independent-direction-v1.json',
+  minTrainingSamples: 320,
   log,
 });
 
@@ -3982,6 +3990,9 @@ async function pollSignal() {
       // Retired No-Base Consensus shadow: no new candidates or per-round evaluations.
 
       observeShadowForwardRegistry(row, liveFacts);
+      // Explicitly observe even if V3 and Selective V2 have NO_BASE_DIRECTION.
+      // The independent model never reads their final direction.
+      independentDirectionShadow.observe(row);
       saveHistory();
     }
     // Retired WAIT_RESCUE_SHADOW_V1: no snapshots or evaluations.
@@ -4361,6 +4372,14 @@ async function settlePendingRounds() {
 
         maybeFinalizeLegacyOfficialRevalidation();
         maybeTrainShadowModel();
+        const independentBefore = independentDirectionShadow.stats(rounds.values());
+        if (row.independentDirectionShadow && independentBefore.decidedRounds > 0 &&
+            independentBefore.decidedRounds % 10 === 0) {
+          log('independent_direction_forward_progress', independentBefore);
+        }
+        // Failed candidates automatically retrain only after their own
+        // strictly forward evaluation covers at least 200 settled rounds.
+        independentDirectionShadow.trainIfNeeded(rounds.values());
         void shadowV3.maybeTrain(row.roundStartMs);
         updateShadowForwardMetrics();
         const candidateForwardProgress = candidateForwardSummary();
@@ -5315,6 +5334,7 @@ function removeRetiredModelArtifacts() {
 }
 
 loadHistory();
+independentDirectionShadow.load();
 loadArchiveIndex();
 removeRetiredModelArtifacts();
 backfillArchiveFromActiveHistory();
@@ -5327,6 +5347,8 @@ applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
+independentDirectionShadow.trainIfNeeded(rounds.values());
+log('independent_direction_shadow_status', independentDirectionShadow.stats(rounds.values()));
 void shadowV3.maybeTrain();
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
@@ -5423,6 +5445,7 @@ const signalHttpServer = http.createServer((req, res) => {
       models:{
         noBaseSpecialist:noBaseSpecialist.stats(),
         baseDirectionRescueV2:baseDirectionRescueV2.stats(),
+        independentDirection:independentDirectionShadow.stats(rounds.values()),
         edgeRescueTier1:selectiveV2EdgeRescueSummary(),
         edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
@@ -5472,6 +5495,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/v3-trend-band-forward-stats') {
     res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
     return res.end(JSON.stringify(summarizeV3TrendBand(rounds)));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/independent-direction-stats') {
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(independentDirectionShadow.stats(rounds.values())));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/base-direction-rescue-v2-stats') {
@@ -5639,6 +5667,7 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV2: shadowV2.stats(),
     shadowV3Dir: SHADOW_V3_DIR,
     shadowV3: shadowV3.stats(),
+    independentDirection: independentDirectionShadow.stats(rounds.values()),
     noBaseSpecialistDir: NO_BASE_SPECIALIST_DIR,
     noBaseSpecialistObserveMs: NO_BASE_SPECIALIST_OBSERVE_MS,
     noBaseSpecialist: noBaseSpecialist.stats(),

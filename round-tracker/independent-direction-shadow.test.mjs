@@ -63,7 +63,7 @@ test('future/retroactive model predictions never inflate forward accuracy or cov
   const model={version:'test-model',startRoundMs:base+300000,trainedAt:base};
   const settled=Array.from({length:200},(_,i)=>row(i+1,i%2===0?'UP':'DOWN'));
   settled.forEach((r,i)=>{
-    if(i%2===0){
+    if(i%4<2){
       r.independentDirectionShadow={modelVersion:'test-model',direction:r.actual,trainedAt:base,
         observedAt:r.roundStartMs+12000};
     }

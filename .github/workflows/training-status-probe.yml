@@ -10,8 +10,13 @@ on:
       - 'round-tracker/index-rest.mjs'
       - 'fast-signal-engine/index.mjs'
   push:
+    branches:
+      - 'main'
+      - 'audit/independent-binance-official-20261009'
     paths:
       - '.github/workflows/training-status-probe.yml'
+      - 'scripts/independent_binance_settlement.py'
+      - '.github/workflows/independent-binance-settlement.yml'
   workflow_dispatch:
   schedule:
     - cron: '17 * * * *'

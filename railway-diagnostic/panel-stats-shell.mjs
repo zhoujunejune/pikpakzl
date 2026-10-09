@@ -213,9 +213,46 @@ async function proxyStats(res) {
   return res.end(JSON.stringify({ ok:false, error:statsRefreshLastError || 'ROUND_STATS_CACHE_NOT_READY' }));
 }
 
+
+// Read-only connectivity probe; disabled unless explicitly enabled on Railway.
+// Does not access account balances, place orders, or expose credentials.
+async function binanceOfficialReadOnlyProbe(req, res) {
+  if (process.env.BINANCE_OFFICIAL_PROBE_ENABLED !== 'true') {
+    res.writeHead(404, {'content-type':'application/json','cache-control':'no-store'});
+    return res.end(JSON.stringify({ok:false,error:'PROBE_DISABLED'}));
+  }
+  const key = process.env.BINANCE_PREDICTION_API_KEY;
+  const secret = process.env.BINANCE_PREDICTION_API_SECRET;
+  if (!key || !secret) {
+    res.writeHead(503, {'content-type':'application/json','cache-control':'no-store'});
+    return res.end(JSON.stringify({ok:false,error:'CREDENTIALS_NOT_CONFIGURED'}));
+  }
+  const crypto = await import('node:crypto');
+  const params = new URLSearchParams({marketTopicId:'6374907',timestamp:String(Date.now()),recvWindow:'5000'});
+  const signature = crypto.createHmac('sha256',secret).update(params.toString()).digest('hex');
+  try {
+    const response = await fetch('https://api.binance.com/sapi/v1/w3w/wallet/prediction/market/detail?' + params + '&signature=' + signature, {
+      headers:{'X-MBX-APIKEY':key}, signal:AbortSignal.timeout(8000), cache:'no-store'
+    });
+    const body = await response.text();
+    let parsed; try { parsed = JSON.parse(body); } catch {}
+    // Never expose Binance response bodies, signatures, headers or secret values.
+    const result = {ok:response.ok,httpStatus:response.status,
+      binanceCode:typeof parsed?.code==='number'?parsed.code:null,
+      officialTopicReturned:typeof parsed?.data?.marketTopicId!=='undefined',
+      checkedAt:new Date().toISOString()};
+    res.writeHead(response.ok?200:502,{'content-type':'application/json','cache-control':'no-store'});
+    return res.end(JSON.stringify(result));
+  } catch (err) {
+    res.writeHead(502,{'content-type':'application/json','cache-control':'no-store'});
+    return res.end(JSON.stringify({ok:false,error:err?.name==='TimeoutError'?'TIMEOUT':'NETWORK_ERROR'}));
+  }
+}
+
 startInner();
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/round-stats') return proxyStats(res);
   if (req.method === 'GET' && url.pathname === '/api/training-status') return proxyTrainingStatus(res);
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);

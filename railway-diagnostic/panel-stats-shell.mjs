@@ -260,7 +260,7 @@ async function binanceOfficialReadOnlyProbe(req, res) {
     // Never expose Binance response bodies, signatures, headers or secret values.
     const result = {ok:response.ok,httpStatus:response.status,
       binanceCode:typeof parsed?.code==='number'?parsed.code:null,
-      officialTopicReturned:typeof parsed?.data?.marketTopicId!=='undefined',
+      officialTopicReturned:parsed?.marketTopicId != null || parsed?.data?.marketTopicId != null,
       responseTopKeys:parsed && typeof parsed==='object'?Object.keys(parsed).slice(0,16):[],
       responseDataKeys:parsed?.data && typeof parsed.data==='object'?Object.keys(parsed.data).slice(0,20):[],
       responseDataType:Array.isArray(parsed?.data)?'array':typeof parsed?.data,

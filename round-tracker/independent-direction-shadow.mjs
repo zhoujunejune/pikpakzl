@@ -146,7 +146,7 @@ export function trainIndependentModel(rows,now,opts={}) {
   // chooses which frozen model will face *future* official outcomes.
   for(const window of [320,600,900]){
     const recentTrain=train.slice(-window);
-    if(recentTrain.length<240)continue;
+    if(recentTrain.length<Math.min(240,Math.max(100,Math.floor(minSamples*0.4))))continue;
     for(const l2 of [0.025,0.12]){
       for(const halfLife of [60,180]){
         const weights=fitLogistic(recentTrain,l2,halfLife);

@@ -48,18 +48,23 @@ def main():
     snapshot=get_json(STATS)
     records=snapshot.get("records") or []
     if not isinstance(records,list): raise ValueError("round-stats records not an array")
-    out=[]; seen=set()
+    out=[]; seen=set(); skipped_wait=0
     for row in records[:40]:
         round_id=ms(row.get("roundStartMs"))
+        prediction=row.get("productionPrediction")
+        # WAIT is an abstention, not a failed or unverifiable prediction.
+        # Retain its count for coverage without attempting signed API requests.
+        if prediction not in ("UP", "DOWN"):
+            skipped_wait+=1
+            continue
         evidence=row.get("officialSettlementAudit") or {}
         topic_id=evidence.get("marketTopicId")
-        prediction=row.get("productionPrediction")
-        locked_at=ms(row.get("productionGeneratedAt") or row.get("productionLockedAt") or row.get("lockedAt"))
+        # Require the persisted production lock; generatedAt is not proof of lock.
+        locked_at=ms(row.get("productionLockedAt"))
         item={"round_id":round_id,"marketTopicId":topic_id,"prediction":prediction,"result":"UNVERIFIED","issues":[]}
         if round_id is None or round_id in seen: item["issues"].append("INVALID_OR_DUPLICATE_ROUND")
         seen.add(round_id)
         if not topic_id: item["issues"].append("NO_AUDIT_TOPIC_ID")
-        if prediction not in ("UP","DOWN"): item["issues"].append("NO_FROZEN_PRODUCTION_DIRECTION")
         if locked_at is None: item["issues"].append("NO_PROVEN_FROZEN_LOCK_TIMESTAMP")
         if topic_id:
             try:
@@ -82,10 +87,12 @@ def main():
         time.sleep(.15)
     counts={k:sum(x["result"]==k for x in out) for k in ("HIT","MISS","UNVERIFIED")}
     report={"source":"INDEPENDENT_SIGNED_BINANCE_API","generatedAt":dt.datetime.now(dt.timezone.utc).isoformat(),
+            "windowRounds":min(len(records),40),"productionFinalWait":skipped_wait,"productionDecided":len(out),
+            "productionCoveragePct":round(100*len(out)/min(len(records),40),2) if records else None,
             "counts":counts,"records":out,"note":"No independent result is inferred from production HIT/MISS. No trading permissions used."}
     os.makedirs("audit-output",exist_ok=True)
     with open("audit-output/independent-settlement.json","w") as f: json.dump(report,f,indent=2,ensure_ascii=False)
-    print(json.dumps({"counts":counts,"issues":{i:sum(i in x["issues"] for x in out) for x in out for i in x["issues"]}},ensure_ascii=False))
+    print(json.dumps({"windowRounds":min(len(records),40),"productionFinalWait":skipped_wait,"productionDecided":len(out),"counts":counts,"issues":{i:sum(i in x["issues"] for x in out) for x in out for i in x["issues"]}},ensure_ascii=False))
     return 0 if counts["HIT"]+counts["MISS"]>0 else 3
 
 if __name__=="__main__":

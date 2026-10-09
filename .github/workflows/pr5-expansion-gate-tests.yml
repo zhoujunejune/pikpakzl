@@ -5,6 +5,7 @@ on:
     paths:
       - 'round-tracker/edge-rescue-expansion*.mjs'
       - 'round-tracker/index-rest.mjs'
+      - 'round-tracker/edge-first-production-gate*.mjs'
       - '.github/workflows/pr5-expansion-gate-tests.yml'
   workflow_dispatch:
 
@@ -25,6 +26,8 @@ jobs:
           node --check round-tracker/edge-rescue-expansion-proof.mjs
           node --check round-tracker/edge-rescue-expansion.mjs
           node --check round-tracker/index-rest.mjs
+          node --check round-tracker/edge-first-production-gate.mjs
+          node --check round-tracker/edge-first-production-gate.test.mjs
       - name: Run audited expansion tests
         run: |
-          node --test round-tracker/edge-rescue-expansion-proof.test.mjs round-tracker/edge-rescue-expansion.integration.test.mjs
+          node --test round-tracker/edge-rescue-expansion-proof.test.mjs round-tracker/edge-rescue-expansion.integration.test.mjs round-tracker/edge-first-production-gate.test.mjs

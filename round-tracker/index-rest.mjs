@@ -387,7 +387,7 @@ const shadowV3 = createShadowV3Client({
 
 // Independent candidate: never consumes row.prediction, Selective V2, or Edge Rescue.
 const independentDirectionShadow = createIndependentDirectionShadow({
-  file: HISTORY_FILE + '.independent-direction-v2.json',
+  file: HISTORY_FILE + '.independent-direction-v3.json',
   minTrainingSamples: 320,
   log,
 });

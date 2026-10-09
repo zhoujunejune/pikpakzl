@@ -236,7 +236,20 @@ async function binanceOfficialReadOnlyProbe(req, res) {
     return res.end(JSON.stringify({ok:false,error:'CREDENTIALS_NOT_CONFIGURED'}));
   }
   const crypto = await import('node:crypto');
-  const params = new URLSearchParams({marketTopicId:'6374907',timestamp:String(Date.now()),recvWindow:'5000'});
+  let topicId = null;
+  try {
+    const statsResponse = await fetch('http://127.0.0.1:' + PORT + '/api/round-stats', {signal:AbortSignal.timeout(6000)});
+    const stats = await statsResponse.json();
+    const row = (Array.isArray(stats.records) ? stats.records : []).find(
+      x => (x.officialSettlementAudit?.marketTopicId || x.predictionMarketTopicId) &&
+           (x.productionPrediction === 'UP' || x.productionPrediction === 'DOWN'));
+    topicId = row?.officialSettlementAudit?.marketTopicId || row?.predictionMarketTopicId || null;
+  } catch {}
+  if (!topicId) {
+    res.writeHead(503, {'content-type':'application/json','cache-control':'no-store'});
+    return res.end(JSON.stringify({ok:false,error:'NO_PERSISTED_PRODUCTION_TOPIC_ID'}));
+  }
+  const params = new URLSearchParams({marketTopicId:String(topicId),timestamp:String(Date.now()),recvWindow:'5000'});
   const signature = crypto.createHmac('sha256',secret).update(params.toString()).digest('hex');
   try {
     const response = await fetch('https://api.binance.com/sapi/v1/w3w/wallet/prediction/market/detail?' + params + '&signature=' + signature, {
@@ -248,6 +261,9 @@ async function binanceOfficialReadOnlyProbe(req, res) {
     const result = {ok:response.ok,httpStatus:response.status,
       binanceCode:typeof parsed?.code==='number'?parsed.code:null,
       officialTopicReturned:typeof parsed?.data?.marketTopicId!=='undefined',
+      responseTopKeys:parsed && typeof parsed==='object'?Object.keys(parsed).slice(0,16):[],
+      responseDataKeys:parsed?.data && typeof parsed.data==='object'?Object.keys(parsed.data).slice(0,20):[],
+      responseDataType:Array.isArray(parsed?.data)?'array':typeof parsed?.data,
       checkedAt:new Date().toISOString()};
     res.writeHead(response.ok?200:502,{'content-type':'application/json','cache-control':'no-store'});
     return res.end(JSON.stringify(result));
@@ -285,7 +301,9 @@ http.createServer((req, res) => {
         const result = await response.json();
         log('binance_official_singapore_probe', {httpStatus:result.httpStatus ?? null,
           binanceCode:result.binanceCode ?? null, officialTopicReturned:result.officialTopicReturned ?? false,
-          ok:result.ok === true, error:result.error ?? null});
+          ok:result.ok === true, error:result.error ?? null,
+          responseTopKeys:result.responseTopKeys ?? [],responseDataKeys:result.responseDataKeys ?? [],
+          responseDataType:result.responseDataType ?? null});
       } catch (err) { log('binance_official_singapore_probe', {ok:false,error:err?.name || 'REQUEST_FAILED'}); }
     }, 3000).unref();
   }

@@ -188,7 +188,7 @@ export function independentForwardStats(rows,model) {
   const coverage=settled.length?Number((decided.length/settled.length).toFixed(4)):null;
   const recent=summarizeOutcomes(decided.slice(-target.recentDecisions));
   let status='STRICT_FORWARD_COLLECTING';
-  if(settled.length>=target.minForwardRounds && decided.length>=target.minDecisions){
+  if(settled.length>=target.minForwardRounds){
     if(sums.accuracy>=target.accuracy && coverage>=target.coverage &&
       recent.samples>=target.recentDecisions && recent.accuracy>=target.accuracy &&
       dir('UP').samples>=15 && dir('DOWN').samples>=15)

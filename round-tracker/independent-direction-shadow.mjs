@@ -480,8 +480,10 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
     }
     const priorAccuracy=Number(state.model?.validation?.accuracy);
     const challengerAccuracy=Number(trial.model.validation?.accuracy);
-    const improve=!state.model || drift ||
-      (Number.isFinite(challengerAccuracy) &&
+    // Drift triggers training, never an unconditional promotion. A challenger
+    // must beat the incumbent on the chronological holdout before switching.
+    const improve=!state.model ||
+      (Number.isFinite(challengerAccuracy) && Number.isFinite(priorAccuracy) &&
       challengerAccuracy>=priorAccuracy+ADAPTIVE_POLICY.minChallengerGain);
     const reason=!state.model?'INITIAL_MODEL':drift?'FORWARD_DRIFT':
       improve?'HOLDOUT_IMPROVEMENT':'NO_VALIDATION_IMPROVEMENT';
@@ -503,6 +505,9 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       },...state.priorModels].slice(0,10);
       state.modelSwitches++;
     }
+    // Keep the incumbent for the remainder of this round. New models are
+    // staged for the next round; observe() selects the scheduled version.
+    state.activePreviousModel=state.model;
     state.model=trial.model;
     state.modelLineage.push({
       version:trial.model.version,
@@ -527,7 +532,10 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
   }
   function observe(row) {
     if(!state.model||row?.independentDirectionShadow) return false;
-    const result=freezeIndependentModel(row,state.model);
+    const scheduled=state.modelLineage.filter(m=>Number(m.startRoundMs)<=Number(row.roundStartMs)).at(-1);
+    const active=scheduled?.version===state.model.version ? state.model :
+      state.activePreviousModel?.version===scheduled?.version ? state.activePreviousModel : null;
+    const result=freezeIndependentModel(row,active);
     if(!result)return false;
     row.independentDirectionShadow=result;
     log('independent_direction_forward_frozen',{round:row.roundStartMs,

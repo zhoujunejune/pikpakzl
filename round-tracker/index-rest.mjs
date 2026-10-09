@@ -3979,7 +3979,6 @@ async function pollSignal() {
       const candidateP = candidatePredict(liveFacts);
       row.shadowCandidateProbability = Number.isFinite(candidateP) ? Number(candidateP.toFixed(6)) : null;
       row.shadowCandidateTrainedAt = shadowCandidate?.trainedAt ?? null;
-      row.preLockAdaptiveShadow = preLockAdaptiveShadow.evaluate(row);
       // Retired No-Base Consensus shadow: no new candidates or per-round evaluations.
 
       observeShadowForwardRegistry(row, liveFacts);
@@ -4077,7 +4076,6 @@ async function pollSignal() {
       row.lockQualityShadow = evaluateLockQuality(direction, row.predictionFacts, row.predictionDelayMs);
       if (Number(row.roundStartMs) >= LOCK_QUALITY_V2_START_MS) {
         row.lockQualitySelectiveV2 = evaluateSelectiveQualityV2(direction, row.predictionFacts, row.predictionDelayMs, row.roundStartMs);
-        row.adaptiveGateShadow = adaptiveGateShadow.evaluate(row);
 
         if (!row.lockQualitySelectiveV2?.pass) {
           const coreEdgeRescue = evaluateSelectiveV2EdgeRescueRow(row, row.lockQualitySelectiveV2);
@@ -4243,8 +4241,6 @@ async function settlePendingRounds() {
         }
         settleShadowForwardRegistry(row);
         shadowV3.settle(row);
-        adaptiveGateShadow.onSettled(row, Array.from(rounds.values()));
-        preLockAdaptiveShadow.onSettled(row, Array.from(rounds.values()));
         if (row?.selectiveV2NoBaseShadow?.modelVersion === SELECTIVE_V2_NO_BASE_SHADOW_VERSION) {
           const nb = selectiveV2NoBaseShadowSummary();
           if (
@@ -5288,6 +5284,23 @@ function removeRetiredModelArtifacts() {
       log('retired_model_prune_failed', { modelDir: dir, error: e?.message || String(e) });
     }
   }
+  // These two concluded forward monitoring without any incremental production coverage.
+  for (const [label, file, suffix] of [
+    ['adaptive-gate', ADAPTIVE_GATE_SHADOW_FILE, '.adaptive-gate-shadow-v1.json'],
+    ['prelock-adaptive', PRELOCK_ADAPTIVE_SHADOW_FILE, '.prelock-adaptive-shadow-v1.json'],
+  ]) {
+    if (file !== `${HISTORY_FILE}${suffix}` || !file.startsWith('/data/')) {
+      log('retired_model_prune_skipped', { model: label, reason: 'UNSAFE_OR_CUSTOM_PATH' });
+      continue;
+    }
+    try {
+      const existed = fs.existsSync(file);
+      if (existed) fs.rmSync(file, { force: true });
+      log('retired_model_pruned', { model: label, modelFile: file, existed });
+    } catch (e) {
+      log('retired_model_prune_failed', { model: label, error: e?.message || String(e) });
+    }
+  }
   const file = SHADOW_V2_FILE;
   if (file === `${HISTORY_FILE}.shadow-v2.json` &&
       (file.startsWith('/data/') || file.startsWith('/tmp/'))) {
@@ -5307,16 +5320,12 @@ removeRetiredModelArtifacts();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
-adaptiveGateShadow.load();
-preLockAdaptiveShadow.load();
 shadowV3.load();
 deleteRetiredShadowForwardCandidates();
 shadowV3.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
-adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
-preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));
 maybeTrainShadowModel();
 void shadowV3.maybeTrain();
 applyPinnedProductionShadow();

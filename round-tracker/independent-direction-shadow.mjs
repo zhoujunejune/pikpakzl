@@ -19,7 +19,7 @@ const FEATURE_KEYS = [
 
 export const ADAPTIVE_POLICY = Object.freeze({
   retrainEverySettledRounds:24, driftMinSamples:20, driftAccuracy:0.65,
-  minChallengerGain:0.015, maxHistoryVersions:128,
+  minChallengerGain:0.015,
 });
 
 const finite = x => x === null || x === undefined || x === '' ? null :
@@ -304,7 +304,7 @@ export function independentForwardStats(rows,model) {
 // Long-term live evaluation spans automatic model changes; never reset the
 // denominator when a model is retrained. A single immutable frozen prediction
 // per official round is auditable against the model scheduled at that moment.
-export function independentAdaptiveProgramStats(rows,modelLineage) {
+export function independentAdaptiveProgramStats(rows,modelLineage,archivedOfficialLedger=[]) {
   const target=INDEPENDENT_TARGET;
   const lineage=Array.from(modelLineage||[]).filter(m=>
     m?.version && Number.isFinite(Number(m.trainedAt)) &&
@@ -315,7 +315,17 @@ export function independentAdaptiveProgramStats(rows,modelLineage) {
     accuracy:null,coverage:null,status:'STRICT_FORWARD_COLLECTING',
     target,modelTransitions:Math.max(0,lineage.length-1)};
   if(!lineage.length)return {...empty,status:'WAITING_FOR_TRAINING'};
-  const rounds=Array.from(rows).filter(r=>official(r) &&
+  // The live ring buffer may evict old rows: an immutable official-only
+  // compact ledger preserves *lifetime* strict-forward denominators.
+  const all=new Map();
+  for(const r of archivedOfficialLedger){
+    if(official(r)) all.set(Number(r.roundStartMs),r);
+  }
+  for(const r of rows){
+    if(official(r) && !all.has(Number(r.roundStartMs)))
+      all.set(Number(r.roundStartMs),r);
+  }
+  const rounds=Array.from(all.values()).filter(r=>
     Number(r.roundStartMs)>=Number(lineage[0].startRoundMs))
     .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
   const snapshots=rounds.map(r=>{
@@ -381,8 +391,9 @@ export function independentAdaptiveProgramStats(rows,modelLineage) {
 }
 
 export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSamples=320}={}){
-  let state={schemaVersion:2,version:INDEPENDENT_DIRECTION_VERSION,model:null,
-    priorModels:[],modelLineage:[],lastAttemptSettledRoundMs:0,
+  let state={schemaVersion:3,version:INDEPENDENT_DIRECTION_VERSION,model:null,
+    priorModels:[],modelLineage:[],officialForwardLedger:[],
+    lastAttemptSettledRoundMs:0,
     lastAdaptationReason:null,adaptationAttempts:0,modelSwitches:0,lastInsufficientAt:0};
   function save(){
     if(!file)return;
@@ -395,11 +406,47 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
   function load(){
     if(!file)return;
     try{const saved=JSON.parse(fs.readFileSync(file,'utf8'));
-      if(saved?.version===INDEPENDENT_DIRECTION_VERSION && saved?.schemaVersion===2 &&
+      if(saved?.version===INDEPENDENT_DIRECTION_VERSION && saved?.schemaVersion===3 &&
         Array.isArray(saved.model?.weights) && saved.model.weights.length===FEATURE_KEYS.length+1 &&
-        Array.isArray(saved.modelLineage))
+        Array.isArray(saved.modelLineage) &&
+        Array.isArray(saved.officialForwardLedger))
         state=saved;
     }catch(e){if(e.code!=='ENOENT')log('independent_direction_load_error',{error:e.message});}
+  }
+  function settle(row){
+    if(!official(row)||!state.modelLineage.length||
+      Number(row.roundStartMs)<Number(state.modelLineage[0].startRoundMs))return false;
+    const frozen=row.independentDirectionShadow;
+    const minimal={
+      roundStartMs:Number(row.roundStartMs),
+      roundEndMs:Number(row.roundEndMs),
+      actual:row.actual,actualSource:row.actualSource,settledAt:Number(row.settledAt),
+      shadowObservedAt:row.shadowObservedAt??null,
+      independentDirectionShadow:frozen?{
+        modelVersion:frozen.modelVersion,trainedAt:frozen.trainedAt,
+        roundStartMs:frozen.roundStartMs,observedAt:frozen.observedAt,
+        direction:frozen.direction,marketRegime:frozen.marketRegime,
+      }:null,
+    };
+    const existing=state.officialForwardLedger.findIndex(r=>r.roundStartMs===minimal.roundStartMs);
+    if(existing!==-1){
+      const old=state.officialForwardLedger[existing];
+      if(old.actual===minimal.actual)return false;
+      state.officialForwardLedger[existing]={...old,actual:minimal.actual,
+        actualSource:minimal.actualSource,settledAt:minimal.settledAt};
+      log('independent_direction_official_correction',{round:minimal.roundStartMs,
+        previous:old.actual,official:minimal.actual});
+    }else{
+      state.officialForwardLedger.push(minimal);
+    }
+    save();
+    return true;
+  }
+  function reconcileHistory(rounds){
+    let n=0;
+    for(const row of rounds)if(settle(row))n++;
+    if(n)log('independent_direction_ledger_reconciled',{addedOrCorrected:n});
+    return n;
   }
   function trainIfNeeded(rounds,now=Date.now()){
     const rows=Array.from(rounds);
@@ -409,7 +456,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
     const last=officialSettled.at(-1)?.roundStartMs||0;
     if(!last)return false;
-    const report=independentAdaptiveProgramStats(rows,state.modelLineage);
+    const report=independentAdaptiveProgramStats(rows,state.modelLineage,state.officialForwardLedger);
     const lastAttempt=Number(state.lastAttemptSettledRoundMs)||0;
     const additionalRounds=lastAttempt?Math.floor((last-lastAttempt)/300000):9999;
     const drift=Boolean(state.model && report.recentDrift);
@@ -457,7 +504,8 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       trainedAt:trial.model.trainedAt,
       startRoundMs:trial.model.startRoundMs,
     });
-    state.modelLineage=state.modelLineage.slice(-ADAPTIVE_POLICY.maxHistoryVersions);
+    // Never prune model lineage: otherwise historical losses could vanish from
+    // the lifetime ledger after enough automatic retraining events.
     save();
     log('independent_direction_model_trained',{
       modelVersion:state.model.version,reason,
@@ -485,11 +533,12 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
   }
   function stats(rounds) {
     const all=Array.from(rounds);
-    return {...independentAdaptiveProgramStats(all,state.modelLineage),
+    return {...independentAdaptiveProgramStats(all,state.modelLineage,state.officialForwardLedger),
       currentModelForward:independentForwardStats(all,state.model),
       activeLearning:{enabled:true,policy:ADAPTIVE_POLICY,
         adaptationAttempts:state.adaptationAttempts,
         modelSwitches:state.modelSwitches,
+        officialLedgerRows:state.officialForwardLedger.length,
         lastAttemptSettledRoundMs:state.lastAttemptSettledRoundMs,
         lastReason:state.lastAdaptationReason},
       model:state.model?{
@@ -504,5 +553,5 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       }:null,
       priorModels:state.priorModels};
   }
-  return {load,trainIfNeeded,observe,stats};
+  return {load,trainIfNeeded,observe,settle,reconcileHistory,stats};
 }

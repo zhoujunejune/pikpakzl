@@ -301,9 +301,89 @@ export function independentForwardStats(rows,model) {
     recent100:recent,recent40,rolling200,up,down,noBase,
     validation:model.validation,trainedAt:model.trainedAt,startRoundMs:model.startRoundMs};
 }
+// Long-term live evaluation spans automatic model changes; never reset the
+// denominator when a model is retrained. A single immutable frozen prediction
+// per official round is auditable against the model scheduled at that moment.
+export function independentAdaptiveProgramStats(rows,modelLineage) {
+  const target=INDEPENDENT_TARGET;
+  const lineage=Array.from(modelLineage||[]).filter(m=>
+    m?.version && Number.isFinite(Number(m.trainedAt)) &&
+    Number.isFinite(Number(m.startRoundMs))
+  ).sort((a,b)=>Number(a.startRoundMs)-Number(b.startRoundMs));
+  const empty={version:INDEPENDENT_DIRECTION_VERSION,
+    productionEffect:'NONE_SHADOW_ONLY',forwardRounds:0,decidedRounds:0,
+    accuracy:null,coverage:null,status:'STRICT_FORWARD_COLLECTING',
+    target,modelTransitions:Math.max(0,lineage.length-1)};
+  if(!lineage.length)return {...empty,status:'WAITING_FOR_TRAINING'};
+  const rounds=Array.from(rows).filter(r=>official(r) &&
+    Number(r.roundStartMs)>=Number(lineage[0].startRoundMs))
+    .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
+  const snapshots=rounds.map(r=>{
+    let scheduled=null;
+    for(const m of lineage){
+      if(Number(m.startRoundMs)<=Number(r.roundStartMs))scheduled=m;
+      else break;
+    }
+    const f=r.independentDirectionShadow;
+    const observed=Number(f?.observedAt),start=Number(r.roundStartMs);
+    const valid=scheduled && f?.modelVersion===scheduled.version &&
+      Number(f?.trainedAt)===Number(scheduled.trainedAt) &&
+      Number(f?.roundStartMs)===start &&
+      observed>Number(scheduled.trainedAt) &&
+      observed>=start+10000 && observed<=start+22000 &&
+      Number(r.shadowObservedAt)===observed &&
+      (f?.direction==='UP'||f?.direction==='DOWN');
+    return {round:start,actual:r.actual,
+      direction:valid?f.direction:null,
+      regime:valid?(f.marketRegime||'UNKNOWN'):null,
+      reason:valid?null:!f?'NO_FROZEN_DIRECTION':'FROZEN_VERSION_OR_TIME_INVALID',
+    };
+  });
+  const predictions=snapshots.filter(x=>x.direction);
+  const outcome=predictions.map(x=>({decision:x.direction,actual:x.actual}));
+  const summary=summarizeOutcomes(outcome);
+  const rolling=n=>summarizeOutcomes(outcome.slice(-n));
+  const byDir=d=>summarizeOutcomes(outcome.filter(x=>x.decision===d));
+  const byRegime=d=>summarizeOutcomes(predictions
+    .filter(x=>x.regime===d).map(x=>({decision:x.direction,actual:x.actual})));
+  const coverage=rounds.length?Number((predictions.length/rounds.length).toFixed(4)):null;
+  const recent40=rolling(40),recent100=rolling(100),recent200=rolling(200);
+  const up=byDir('UP'),down=byDir('DOWN');
+  const trend=byRegime('TREND'),range=byRegime('RANGE');
+  const dataGaps=snapshots.filter(x=>!x.direction);
+  const regimeQualified=trend.samples>=20&&range.samples>=20 &&
+    trend.accuracy>target.accuracy&&range.accuracy>target.accuracy;
+  const qualified=rounds.length>=target.minForwardRounds &&
+    predictions.length===rounds.length &&
+    summary.accuracy>target.accuracy &&
+    recent40.samples===40&&recent40.accuracy>target.accuracy &&
+    recent100.samples===100&&recent100.accuracy>target.accuracy &&
+    recent200.samples===200&&recent200.accuracy>target.accuracy &&
+    up.samples>=15&&down.samples>=15 &&
+    up.accuracy>target.accuracy&&down.accuracy>target.accuracy &&
+    regimeQualified;
+  const recentDrift=recent40.samples>=ADAPTIVE_POLICY.driftMinSamples &&
+    recent40.accuracy<ADAPTIVE_POLICY.driftAccuracy;
+  return {...empty,
+    status:qualified?'QUALIFIED_75_100_LONG_TERM_REVIEW':
+      rounds.length>=target.minForwardRounds?'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED':'STRICT_FORWARD_COLLECTING',
+    promotionEligibleForReview:qualified,productionAutoPromotion:false,
+    forwardRounds:rounds.length,decidedRounds:predictions.length,
+    hits:summary.hits,misses:summary.misses,accuracy:summary.accuracy,
+    coverage,noDirectionRounds:dataGaps.length,
+    dataGapRecentRoundIds:dataGaps.slice(-10).map(x=>x.round),
+    recent40,recent100,rolling200:recent200,
+    up,down,trend,range,regimeQualified,recentDrift,
+    modelTransitions:Math.max(0,lineage.length-1),
+    forwardStartRoundMs:lineage[0].startRoundMs,
+    frozenOutcomeScope:'ALL_V3_ADAPTIVE_MODELS_PRE_SETTLEMENT',
+  };
+}
+
 export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSamples=320}={}){
-  let state={schemaVersion:1,version:INDEPENDENT_DIRECTION_VERSION,model:null,
-    priorModels:[],lastInsufficientAt:0};
+  let state={schemaVersion:2,version:INDEPENDENT_DIRECTION_VERSION,model:null,
+    priorModels:[],modelLineage:[],lastAttemptSettledRoundMs:0,
+    lastAdaptationReason:null,adaptationAttempts:0,modelSwitches:0,lastInsufficientAt:0};
   function save(){
     if(!file)return;
     try{fs.mkdirSync(file.slice(0,file.lastIndexOf('/'))||'.',{recursive:true});
@@ -315,31 +395,79 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
   function load(){
     if(!file)return;
     try{const saved=JSON.parse(fs.readFileSync(file,'utf8'));
-      if(saved?.version===INDEPENDENT_DIRECTION_VERSION && saved?.schemaVersion===1 &&
-        Array.isArray(saved.model?.weights) && saved.model.weights.length===FEATURE_KEYS.length+1)
+      if(saved?.version===INDEPENDENT_DIRECTION_VERSION && saved?.schemaVersion===2 &&
+        Array.isArray(saved.model?.weights) && saved.model.weights.length===FEATURE_KEYS.length+1 &&
+        Array.isArray(saved.modelLineage))
         state=saved;
     }catch(e){if(e.code!=='ENOENT')log('independent_direction_load_error',{error:e.message});}
   }
   function trainIfNeeded(rounds,now=Date.now()){
-    const stats=independentForwardStats(rounds,state.model);
-    if(state.model && stats.status!=='FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED')return false;
-    const trial=trainIndependentModel(rounds,now,{minSamples:minTrainingSamples});
+    const rows=Array.from(rounds);
+    const officialSettled=rows.filter(r=>official(r) &&
+      Number(r.settledAt)<now &&
+      Number(r.roundStartMs)<Math.floor(now/300000)*300000)
+      .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
+    const last=officialSettled.at(-1)?.roundStartMs||0;
+    if(!last)return false;
+    const report=independentAdaptiveProgramStats(rows,state.modelLineage);
+    const lastAttempt=Number(state.lastAttemptSettledRoundMs)||0;
+    const additionalRounds=lastAttempt?Math.floor((last-lastAttempt)/300000):9999;
+    const drift=Boolean(state.model && report.recentDrift);
+    if(state.model && additionalRounds<(drift?8:ADAPTIVE_POLICY.retrainEverySettledRounds))return false;
+    state.lastAttemptSettledRoundMs=last;
+    state.adaptationAttempts++;
+    const trial=trainIndependentModel(rows,now,{minSamples:minTrainingSamples});
     if(!trial.ok){
       if(now-state.lastInsufficientAt>3600000){
         state.lastInsufficientAt=now;log('independent_direction_train_not_ready',trial);
       }
-      return false;
+      save();return false;
     }
-    if(state.model && trial.model.trainingEndRound<=state.model.trainingEndRound)return false;
+    if(state.model&&trial.model.trainingEndRound<=state.model.trainingEndRound){
+      save();return false;
+    }
+    const priorAccuracy=Number(state.model?.validation?.accuracy);
+    const challengerAccuracy=Number(trial.model.validation?.accuracy);
+    const improve=!state.model || drift ||
+      (Number.isFinite(challengerAccuracy) &&
+      challengerAccuracy>=priorAccuracy+ADAPTIVE_POLICY.minChallengerGain);
+    const reason=!state.model?'INITIAL_MODEL':drift?'FORWARD_DRIFT':
+      improve?'HOLDOUT_IMPROVEMENT':'NO_VALIDATION_IMPROVEMENT';
+    state.lastAdaptationReason=reason;
+    log('independent_direction_adaptation_review',{
+      at:now,reason,drift,additionalRounds,
+      priorModel:state.model?.version||null,
+      priorHoldoutAccuracy:state.model?.validation?.accuracy??null,
+      challengerHoldoutAccuracy:trial.model.validation.accuracy,
+      challengerWindow:trial.model.selectedTrainingWindow,
+      challengerRegimeBlend:trial.model.regimeBlend,
+      switchAllowed:improve,productionEffect:'NONE_SHADOW_ONLY'
+    });
+    if(!improve){save();return false;}
     if(state.model){
-      state.priorModels=[{modelVersion:state.model.version,finalStats:stats},...state.priorModels].slice(0,5);
+      state.priorModels=[{
+        modelVersion:state.model.version,
+        finalStats:independentForwardStats(rows,state.model),
+      },...state.priorModels].slice(0,10);
+      state.modelSwitches++;
     }
-    state.model=trial.model;save();
+    state.model=trial.model;
+    state.modelLineage.push({
+      version:trial.model.version,
+      trainedAt:trial.model.trainedAt,
+      startRoundMs:trial.model.startRoundMs,
+    });
+    state.modelLineage=state.modelLineage.slice(-ADAPTIVE_POLICY.maxHistoryVersions);
+    save();
     log('independent_direction_model_trained',{
-      modelVersion:state.model.version,
+      modelVersion:state.model.version,reason,
       trainingSamples:state.model.trainingSamples,
       validation:state.model.validation,
       startRoundMs:state.model.startRoundMs,
+      selectedTrainingWindow:state.model.selectedTrainingWindow,
+      halfLife:state.model.halfLife,l2:state.model.l2,
+      regimeBlend:state.model.regimeBlend,
+      forwardProgram:report,
       independentOfBaseDirection:true,productionEffect:'NONE_SHADOW_ONLY',
     });
     return true;
@@ -356,12 +484,22 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
     return true;
   }
   function stats(rounds) {
-    return {...independentForwardStats(rounds,state.model),
+    const all=Array.from(rounds);
+    return {...independentAdaptiveProgramStats(all,state.modelLineage),
+      currentModelForward:independentForwardStats(all,state.model),
+      activeLearning:{enabled:true,policy:ADAPTIVE_POLICY,
+        adaptationAttempts:state.adaptationAttempts,
+        modelSwitches:state.modelSwitches,
+        lastAttemptSettledRoundMs:state.lastAttemptSettledRoundMs,
+        lastReason:state.lastAdaptationReason},
       model:state.model?{
         version:state.model.version,trainedAt:state.model.trainedAt,
         startRoundMs:state.model.startRoundMs,
         trainingSamples:state.model.trainingSamples,
         validationSamples:state.model.validationSamples,
+        selectedTrainingWindow:state.model.selectedTrainingWindow,
+        regimeBlend:state.model.regimeBlend,
+        l2:state.model.l2,halfLife:state.model.halfLife,
         validation:state.model.validation,
       }:null,
       priorModels:state.priorModels};

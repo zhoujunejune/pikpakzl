@@ -149,6 +149,18 @@ test('adaptive program preserves exact denominator and frozen decisions across r
     };
   });
   const good=independentAdaptiveProgramStats(rs,versions);
+  const ledger=rs.map(r=>({
+    roundStartMs:r.roundStartMs,roundEndMs:r.roundEndMs,actual:r.actual,
+    actualSource:r.actualSource,settledAt:r.settledAt,
+    shadowObservedAt:r.shadowObservedAt,
+    independentDirectionShadow:r.independentDirectionShadow,
+  }));
+  // The live ring buffer can empty on a restart. Historical results remain.
+  const afterEviction=independentAdaptiveProgramStats([],versions,ledger);
+  assert.equal(afterEviction.forwardRounds,240);
+  assert.equal(afterEviction.coverage,1);
+  assert.equal(afterEviction.status,'QUALIFIED_75_100_LONG_TERM_REVIEW');
+  assert.equal(independentAdaptiveProgramStats(rs.slice(-20),versions,ledger).forwardRounds,240);
   assert.equal(good.forwardRounds,240);
   assert.equal(good.decidedRounds,240);
   assert.equal(good.coverage,1);

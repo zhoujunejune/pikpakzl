@@ -138,6 +138,8 @@ let lastSignal = {
 };
 
 let diagnosticRoundStart = null;
+let trendBandFrozenRoundStart = null;
+let trendBandFrozenFact = null;
 const diagnosticCheckpointsLogged = new Set();
 
 function prune(now) {
@@ -851,6 +853,8 @@ function calculate(now = Date.now()) {
   if (diagnosticRoundStart !== round.start) {
     diagnosticRoundStart = round.start;
     diagnosticCheckpointsLogged.clear();
+    trendBandFrozenRoundStart = round.start;
+    trendBandFrozenFact = null;
   }
 
   const priceSide = distanceFromOpenBps > 0 ? 1 : distanceFromOpenBps < 0 ? -1 : 0;
@@ -971,6 +975,18 @@ function calculate(now = Date.now()) {
     !absorptionRisk && predBookUsable && !predictionConflict;
   const trendBandShadowDirection = trendBandShadowEligible
     ? (priceSide > 0 ? 'UP' : 'DOWN') : 'WAIT';
+  // Exactly one immutable, pre-settlement observation per round.
+  if (trendBandFrozenRoundStart === round.start && !trendBandFrozenFact && trendBandShadowEligible) {
+    trendBandFrozenFact = Object.freeze({
+      round: round.start,
+      direction: trendBandShadowDirection,
+      observedAt: now,
+      score: Number(currentScore.toFixed(6)),
+      threshold: TREND_THRESHOLD,
+      productionEffect: 'NONE_SHADOW_ONLY',
+    });
+    console.log(JSON.stringify({ event: 'v3_trend_band_shadow_frozen', strategyVersion: STRATEGY_VERSION, ...trendBandFrozenFact }));
+  }
 
   let nextCandidate = 'WAIT';
   let reason = 'V6_NEUTRAL';
@@ -1185,7 +1201,7 @@ function calculate(now = Date.now()) {
       tradeStreamStalled,
       lastAggTradeAgeMs: Number.isFinite(tradeAgeMs) ? Math.round(tradeAgeMs) : null,
       v3Trade15RescueShadow: { direction: trade15ShadowDirection, eligible: trade15ShadowEligible, productionEffect: 'NONE_SHADOW_ONLY' },
-      v3TrendBandShadow: { direction: trendBandShadowDirection, eligible: trendBandShadowEligible, observedAt: now, round: round.start, score: Number(currentScore.toFixed(6)), threshold: TREND_THRESHOLD, productionEffect: 'NONE_SHADOW_ONLY' },
+      v3TrendBandShadow: trendBandFrozenFact ? { ...trendBandFrozenFact, eligible: true, frozen: true } : { direction: 'WAIT', eligible: false, frozen: false, productionEffect: 'NONE_SHADOW_ONLY' },
       tradePressure5s: Number(flow5.pressure.toFixed(6)),
       tradePressure15s: Number(flow15.pressure.toFixed(6)),
       tradePressure60s: Number(flow60.pressure.toFixed(6)),

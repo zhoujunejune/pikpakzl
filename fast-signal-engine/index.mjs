@@ -977,12 +977,14 @@ function calculate(now = Date.now()) {
     reason = 'WARMING_CONTINUOUS_CONTEXT';
   } else if (elapsedMs > DECISION_WINDOW_MS) {
     reason = 'V6_DECISION_WINDOW_EXPIRED';
+  } else if (proposedDirection === 'WAIT') {
+    // A missing directional edge is the primary blocker even if 5s trade
+    // activity is sparse; do not misdiagnose it as a feed outage.
+    reason = 'V6_DIRECTION_THRESHOLDS_NOT_MET';
   } else if (flow5.count < MIN_TRADES) {
     reason = 'INSUFFICIENT_REAL_TRADES';
   } else if (ofi5.count < MIN_OFI_EVENTS) {
     reason = 'INSUFFICIENT_REAL_DEPTH_UPDATES';
-  } else if (proposedDirection === 'WAIT') {
-    reason = 'V6_DIRECTION_THRESHOLDS_NOT_MET';
   } else if (
     alignment !== 'COUNTERTREND' &&
     proposedSign * score < SCORE_THRESHOLD

@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 
 BASE = os.environ.get("BINANCE_PREDICTION_API_BASE", "https://api.binance.com").rstrip("/")
 DETAIL = "/sapi/v1/w3w/wallet/prediction/market/detail"
@@ -58,7 +59,9 @@ def main():
             skipped_wait+=1
             continue
         evidence=row.get("officialSettlementAudit") or {}
-        topic_id=evidence.get("marketTopicId")
+        # Topic identity is recorded independently of settlement evidence.
+        # Missing auditEvidence must not hide a persisted predictionMarketTopicId.
+        topic_id=evidence.get("marketTopicId") or row.get("predictionMarketTopicId")
         # Require the persisted production lock; generatedAt is not proof of lock.
         locked_at=ms(row.get("productionLockedAt"))
         item={"round_id":round_id,"marketTopicId":topic_id,"prediction":prediction,"result":"UNVERIFIED","issues":[]}
@@ -72,14 +75,20 @@ def main():
                 # Never accept a cached production outcome as independent evidence.
                 topic=response.get("data",response) if isinstance(response,dict) else {}
                 if not isinstance(topic,dict): topic={}
-                topic={**topic,"marketTopicId":topic_id}
+                # Never inject the requested topic ID into a response as if Binance returned it.
+                returned_id=topic.get("marketTopicId") or topic.get("topicId")
+                if returned_id is not None and str(returned_id)!=str(topic_id):
+                    item["issues"].append("OFFICIAL_TOPIC_ID_MISMATCH")
                 start,end=ms(topic.get("startDate")),ms(topic.get("endDate"))
                 direction=direction_from_detail(topic)
                 item.update(official_direction=direction,official_observed_at=dt.datetime.now(dt.timezone.utc).isoformat(),
                             independent_detail_sha256=hashlib.sha256(json.dumps(topic,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest())
                 if start != round_id or end != round_id+300000: item["issues"].append("OFFICIAL_ROUND_TIME_MISMATCH")
                 if direction is None: item["issues"].append("OFFICIAL_NOT_RESOLVED")
-                if locked_at is not None and end is not None and locked_at>=end: item["issues"].append("LOCK_NOT_BEFORE_ROUND_END")
+                if locked_at is not None and round_id is not None and not (round_id <= locked_at < round_id+300000): item["issues"].append("LOCK_OUTSIDE_PREDICTION_ROUND")
+            except urllib.error.HTTPError as exc:
+                # Report HTTP status only; never log credentials, signatures, or signed URLs.
+                item["issues"].append("INDEPENDENT_API_HTTP_"+str(exc.code))
             except Exception as exc:
                 item["issues"].append("INDEPENDENT_API_ERROR:"+type(exc).__name__)
         if not item["issues"]: item["result"]="HIT" if prediction==item["official_direction"] else "MISS"

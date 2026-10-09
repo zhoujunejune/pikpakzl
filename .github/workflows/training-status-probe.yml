@@ -5,6 +5,7 @@ on:
       - '.github/workflows/training-status-probe.yml'
       - 'scripts/audit_strict_forward.py'
       - 'scripts/test_audit_strict_forward.py'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
       - 'round-tracker/index-rest.mjs'
       - 'fast-signal-engine/index.mjs'
   push:

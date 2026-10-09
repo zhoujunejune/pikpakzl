@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   independentFeatures,chooseIndependentDirection,validLiveObservation,
   trainIndependentModel,freezeIndependentModel,independentForwardStats,
-  INDEPENDENT_TARGET,ADAPTIVE_POLICY,
+  INDEPENDENT_TARGET,ADAPTIVE_POLICY,INDEPENDENT_DIRECTION_NAME,
   independentMarketRegime,independentAdaptiveProgramStats,
   createIndependentDirectionShadow,
 } from './independent-direction-shadow.mjs';
@@ -211,4 +211,28 @@ test('settled rounds trigger periodic challenger review without changing live pr
   assert.equal(status.activeLearning.adaptationAttempts,2);
   assert.ok(log.some(x=>x.name==='independent_direction_adaptation_review'));
   assert.ok(status.model);
+});
+
+test('model rename is public only; immutable trained versions and ledger stay audit-compatible',()=>{
+  assert.equal(INDEPENDENT_DIRECTION_NAME,'zl_new_vip75');
+  const engine=createIndependentDirectionShadow({minTrainingSamples:120});
+  const history=Array.from({length:170},(_,i)=>row(i,i%2?'UP':'DOWN'));
+  const now=base+195*300000;
+  assert.equal(engine.trainIfNeeded(history,now),true);
+  const status=engine.stats(history);
+  assert.equal(status.name,'zl_new_vip75');
+  assert.equal(status.modelName,'zl_new_vip75');
+  assert.equal(status.model.name,'zl_new_vip75');
+  assert.ok(status.model.version.startsWith('INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_'));
+  const legacyModel={version:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791552153388',
+    trainedAt:base,startRoundMs:base+300000};
+  const future=row(1,'UP');
+  future.independentDirectionShadow={
+    modelVersion:legacyModel.version,trainedAt:base,roundStartMs:future.roundStartMs,
+    observedAt:future.shadowObservedAt,direction:'UP',marketRegime:'TREND'
+  };
+  const audited=independentAdaptiveProgramStats([future],[legacyModel]);
+  assert.equal(audited.name,'zl_new_vip75');
+  assert.equal(audited.decidedRounds,1);
+  assert.equal(audited.coverage,1);
 });

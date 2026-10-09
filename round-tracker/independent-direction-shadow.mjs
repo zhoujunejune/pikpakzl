@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 
 export const INDEPENDENT_DIRECTION_VERSION = 'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3';
+// Public model name. Keep immutable trained version IDs and persisted v3 storage
+// unchanged so a rename cannot erase strict-forward predictions or retrain.
+export const INDEPENDENT_DIRECTION_NAME = 'zl_new_vip75';
 export const INDEPENDENT_TARGET = Object.freeze({
   accuracy: 0.75, coverage: 1.00, minForwardRounds: 200, minDecisions: 200,
   recentDecisions: 100, longWindow: 200, trainingSamples: 320,
@@ -188,6 +191,7 @@ export function trainIndependentModel(rows,now,opts={}) {
     a.window-b.window || a.l2-b.l2);
   const best=trials[0],trainedAt=Math.floor(now);
   return {ok:true, model:{
+    name:INDEPENDENT_DIRECTION_NAME,
     version:INDEPENDENT_DIRECTION_VERSION+'_'+trainedAt,
     trainedAt,
     trainingEndRound:sample[train.length-1].round,
@@ -217,7 +221,7 @@ export function freezeIndependentModel(row,model){
   if(!Number.isFinite(probability))return null;
   const decision=chooseIndependentDirection(probability);
   if (decision !== 'UP' && decision !== 'DOWN') return null;
-  return {modelVersion:model.version,trainedAt:model.trainedAt,
+  return {modelName:INDEPENDENT_DIRECTION_NAME,modelVersion:model.version,trainedAt:model.trainedAt,
     roundStartMs:row.roundStartMs,observedAt:row.shadowObservedAt,
     predictionSource:'INDEPENDENT_MARKET_FEATURES',
     direction:decision,probability:Number(probability.toFixed(6)),
@@ -229,7 +233,7 @@ export function freezeIndependentModel(row,model){
 }
 export function independentForwardStats(rows,model) {
   const target=INDEPENDENT_TARGET;
-  if(!model)return {status:'WAITING_FOR_TRAINING',target,modelVersion:null,
+  if(!model)return {name:INDEPENDENT_DIRECTION_NAME,status:'WAITING_FOR_TRAINING',target,modelVersion:null,
     forwardRounds:0,decidedRounds:0,hits:0,misses:0,accuracy:null,coverage:null};
   const settled=Array.from(rows).filter(r=>official(r) &&
     Number(r.roundStartMs)>=Number(model.startRoundMs)
@@ -291,7 +295,7 @@ export function independentForwardStats(rows,model) {
       status='QUALIFIED_75_100_LONG_TERM_REVIEW';
     else status='FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED';
   }
-  return {version:INDEPENDENT_DIRECTION_VERSION,modelVersion:model.version,
+  return {name:INDEPENDENT_DIRECTION_NAME,version:INDEPENDENT_DIRECTION_VERSION,modelVersion:model.version,
     status,productionEffect:'NONE_SHADOW_ONLY',
     independentOfBaseDirection:true,target,forwardRounds:settled.length,
     decidedRounds:decided.length,hits:sums.hits,misses:sums.misses,
@@ -310,7 +314,8 @@ export function independentAdaptiveProgramStats(rows,modelLineage,archivedOffici
     m?.version && Number.isFinite(Number(m.trainedAt)) &&
     Number.isFinite(Number(m.startRoundMs))
   ).sort((a,b)=>Number(a.startRoundMs)-Number(b.startRoundMs));
-  const empty={version:INDEPENDENT_DIRECTION_VERSION,
+  const empty={name:INDEPENDENT_DIRECTION_NAME,modelName:INDEPENDENT_DIRECTION_NAME,
+    version:INDEPENDENT_DIRECTION_VERSION,
     productionEffect:'NONE_SHADOW_ONLY',forwardRounds:0,decidedRounds:0,
     accuracy:null,coverage:null,status:'STRICT_FORWARD_COLLECTING',
     target,modelTransitions:Math.max(0,lineage.length-1)};
@@ -482,7 +487,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       improve?'HOLDOUT_IMPROVEMENT':'NO_VALIDATION_IMPROVEMENT';
     state.lastAdaptationReason=reason;
     log('independent_direction_adaptation_review',{
-      at:now,reason,drift,additionalRounds,
+      modelName:INDEPENDENT_DIRECTION_NAME,at:now,reason,drift,additionalRounds,
       priorModel:state.model?.version||null,
       priorHoldoutAccuracy:state.model?.validation?.accuracy??null,
       challengerHoldoutAccuracy:trial.model.validation.accuracy,
@@ -508,7 +513,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
     // the lifetime ledger after enough automatic retraining events.
     save();
     log('independent_direction_model_trained',{
-      modelVersion:state.model.version,reason,
+      modelName:INDEPENDENT_DIRECTION_NAME,modelVersion:state.model.version,reason,
       trainingSamples:state.model.trainingSamples,
       validation:state.model.validation,
       startRoundMs:state.model.startRoundMs,
@@ -526,7 +531,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
     if(!result)return false;
     row.independentDirectionShadow=result;
     log('independent_direction_forward_frozen',{round:row.roundStartMs,
-      modelVersion:result.modelVersion,direction:result.direction,
+      modelName:INDEPENDENT_DIRECTION_NAME,modelVersion:result.modelVersion,direction:result.direction,
       probability:result.probability,observedAt:result.observedAt,
       productionEffect:'NONE_SHADOW_ONLY'});
     return true;
@@ -534,6 +539,8 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
   function stats(rounds) {
     const all=Array.from(rounds);
     return {...independentAdaptiveProgramStats(all,state.modelLineage,state.officialForwardLedger),
+      name:INDEPENDENT_DIRECTION_NAME,
+      modelName:INDEPENDENT_DIRECTION_NAME,
       currentModelForward:independentForwardStats(all,state.model),
       activeLearning:{enabled:true,policy:ADAPTIVE_POLICY,
         adaptationAttempts:state.adaptationAttempts,
@@ -542,6 +549,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
         lastAttemptSettledRoundMs:state.lastAttemptSettledRoundMs,
         lastReason:state.lastAdaptationReason},
       model:state.model?{
+        name:INDEPENDENT_DIRECTION_NAME,
         version:state.model.version,trainedAt:state.model.trainedAt,
         startRoundMs:state.model.startRoundMs,
         trainingSamples:state.model.trainingSamples,

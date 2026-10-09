@@ -1,0 +1,29 @@
+name: Independent Binance Settlement Audit
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: independent-binance-settlement-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Independent official API verification
+        env:
+          BINANCE_PREDICTION_API_KEY: ${{ secrets.BINANCE_PREDICTION_API_KEY }}
+          BINANCE_PREDICTION_API_SECRET: ${{ secrets.BINANCE_PREDICTION_API_SECRET }}
+        run: python3 scripts/independent_binance_settlement.py
+      - name: Preserve non-secret audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: independent-binance-settlement
+          path: audit-output/independent-settlement.json
+          if-no-files-found: warn
+          retention-days: 14

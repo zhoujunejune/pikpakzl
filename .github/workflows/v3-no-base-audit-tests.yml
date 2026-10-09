@@ -1,0 +1,29 @@
+name: V3 No-Base Forward Audit
+
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/v3-no-base-20s-audit*.mjs'
+      - 'round-tracker/index-rest.mjs'
+      - '.github/workflows/v3-no-base-audit-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-base-forward-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check module syntax
+        run: |
+          node --check round-tracker/v3-no-base-20s-audit.mjs
+          node --check round-tracker/index-rest.mjs
+          node --check round-tracker/v3-no-base-20s-audit.test.mjs
+      - name: Run 20-second strict-forward regression tests
+        run: node --test round-tracker/v3-no-base-20s-audit.test.mjs

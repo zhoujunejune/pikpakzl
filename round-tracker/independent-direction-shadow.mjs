@@ -84,7 +84,7 @@ function fitLogistic(training,l2,halfLife) {
     }
     const lr=0.12/Math.sqrt(1+epoch/150);
     w[0]-=lr*g[0]/sum;
-    for(let j=1;j<w.length;j++)w[j]-=lr*(g[j+1]/sum+l2*w[j]);
+    for(let j=1;j<w.length;j++)w[j]-=lr*(g[j]/sum+l2*w[j]);
   }
   return w;
 }

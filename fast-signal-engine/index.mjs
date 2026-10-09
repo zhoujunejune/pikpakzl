@@ -1125,6 +1125,19 @@ function calculate(now = Date.now()) {
         reason: nextCandidate !== 'WAIT' ? 'V6_CONFIRMING_CANDIDATE' : reason,
         proposedDirection,
         noBasePriceSide:priceSide > 0 ? 'UP' : priceSide < 0 ? 'DOWN' : 'FLAT',
+        // Observe component disagreement without modifying the live direction gates.
+        microScore:Number(microScore.toFixed(6)),
+        currentTrendScore:Number(currentTrendScore.toFixed(6)),
+        microContribution:Number((0.40 * microScore).toFixed(6)),
+        trendContribution:Number((0.60 * currentTrendScore).toFixed(6)),
+        componentConflict:microScore * currentTrendScore < 0,
+        componentConflictMagnitude:microScore * currentTrendScore < 0
+          ? Number(Math.min(Math.abs(0.40 * microScore),Math.abs(0.60 * currentTrendScore)).toFixed(6))
+          : 0,
+        historyWeight:Number(historyWeight.toFixed(6)),
+        currentWeight:Number(currentWeight.toFixed(6)),
+        historyContribution:Number((historyWeight * regimeScore).toFixed(6)),
+        currentContribution:Number((currentWeight * currentScore).toFixed(6)),
         noBaseCurrentScore:Number(currentScore.toFixed(6)),
         noBaseTrendThreshold:TREND_THRESHOLD,
         noBaseDirectionalScoreGap:Number((priceSide === 0 ? TREND_THRESHOLD : TREND_THRESHOLD - priceSide * currentScore).toFixed(6)),

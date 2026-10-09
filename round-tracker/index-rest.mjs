@@ -5,6 +5,7 @@ import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
+import { VERSION as LOCK_TIMING_FORWARD_VERSION, freezeLockTimingSnapshot, summarizeLockTimingForward } from './lock-timing-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
@@ -3898,6 +3899,7 @@ function ensureRound(roundStartMs) {
       selectiveV2NoBaseContest: null,
       v3NoBase20sShadow: null,
       v3TrendBandForward: null,
+      lockTimingForward: null,
       baseDirectionRescueV2: null,
       selectiveV2HighPrecisionShadow: null,
       predictedAt: null,
@@ -4011,6 +4013,21 @@ async function pollSignal() {
       observeShadowForwardRegistry(row, liveFacts);
       shadowV2.observe(row, liveFacts);
       saveHistory();
+    }
+    // First observed 12-15s snapshots only; independent of live locking and order routing.
+    const timingTrial = freezeLockTimingSnapshot(row, live, Date.now());
+    if (timingTrial) {
+      row.lockTimingForward ??= {};
+      row.lockTimingForward[timingTrial.window] = timingTrial.snapshot;
+      saveHistory();
+      log('lock_timing_shadow_frozen', {
+        round: row.roundStartMs, version: LOCK_TIMING_FORWARD_VERSION,
+        window: timingTrial.window, delayMs: timingTrial.snapshot.delayMs,
+        decision: timingTrial.snapshot.decision,
+        reasons: timingTrial.snapshot.reasons,
+        sourceStatus: timingTrial.snapshot.sourceStatus,
+        productionEffect: 'NONE_SHADOW_ONLY',
+      });
     }
     if (liveFacts && Number(row.roundStartMs) >= WAIT_RESCUE_SHADOW_START_MS) {
       const rescueSnapshot = waitRescueEvaluateSnapshot(row, liveFacts, elapsedMs);
@@ -4414,6 +4431,13 @@ async function settlePendingRounds() {
           }
         }
 
+        if (row.lockTimingForward?.t12 || row.lockTimingForward?.t15) {
+          const timingSummary = summarizeLockTimingForward(rounds);
+          const n = timingSummary.priority12Then15.samples;
+          if (n === 1 || (n > 0 && n % 5 === 0)) {
+            log('lock_timing_strict_forward_progress', timingSummary);
+          }
+        }
         if (row.v3TrendBandForward?.version === V3_TREND_BAND_FORWARD_VERSION) {
           const forward = summarizeV3TrendBand(rounds);
           if (forward.eligible.samples===1 || forward.eligible.samples%5===0 ||
@@ -5478,6 +5502,7 @@ const signalHttpServer = http.createServer((req, res) => {
         noBaseContest:selectiveV2NoBaseContestSummary(),
         v3NoBase20sRescue:v3NoBase20sShadowSummary(rounds),
         v3TrendBandForward:summarizeV3TrendBand(rounds),
+        lockTimingForward:summarizeLockTimingForward(rounds),
         waitRescue:waitRescueShadowSummary(),
         adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),
         prelockAdaptive:preLockAdaptiveShadow.stats(Array.from(rounds.values())),
@@ -5601,6 +5626,14 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/prelock-adaptive-shadow-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(preLockAdaptiveShadow.stats(Array.from(rounds.values()))));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/lock-timing-forward-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({
+      ...summarizeLockTimingForward(rounds),
+      comparison20sRescue:v3NoBase20sShadowSummary(rounds),
+    }));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {

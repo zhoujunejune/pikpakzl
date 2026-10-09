@@ -5,6 +5,7 @@ on:
     paths:
       - 'round-tracker/v3-no-base-20s-audit*.mjs'
       - 'round-tracker/v3-trend-band-forward*.mjs'
+      - 'round-tracker/lock-timing-forward*.mjs'
       - 'round-tracker/index-rest.mjs'
       - '.github/workflows/v3-no-base-audit-tests.yml'
   workflow_dispatch:
@@ -24,9 +25,11 @@ jobs:
       - name: Check module syntax
         run: |
           node --check round-tracker/v3-no-base-20s-audit.mjs
+          node --check round-tracker/lock-timing-forward.mjs
+          node --check round-tracker/lock-timing-forward.test.mjs
           node --check round-tracker/v3-trend-band-forward.mjs
           node --check round-tracker/v3-trend-band-forward.test.mjs
           node --check round-tracker/index-rest.mjs
           node --check round-tracker/v3-no-base-20s-audit.test.mjs
       - name: Run 20-second strict-forward regression tests
-        run: node --test round-tracker/v3-no-base-20s-audit.test.mjs round-tracker/v3-trend-band-forward.test.mjs
+        run: node --test round-tracker/v3-no-base-20s-audit.test.mjs round-tracker/v3-trend-band-forward.test.mjs round-tracker/lock-timing-forward.test.mjs

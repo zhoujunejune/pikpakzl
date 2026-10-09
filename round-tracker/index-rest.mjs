@@ -4949,34 +4949,12 @@ function productionSignalPayload(now = Date.now()) {
       return { ok: true, live };
     }
 
-    // Exact-20s rescue is eligible only from a pre-existing frozen observation.
-    // Never infer a rescue signal from settlement data or a later snapshot.
-    const rescueSnapshot = row.baseDirectionRescueV2;
-    const rescueCandidate = rescueSnapshot?.candidates?.CONSENSUS_3_OF_3;
-    const rescueAt = Number(rescueSnapshot?.observedAt);
-    const rescueDelay = Number(rescueSnapshot?.observedDelayMs);
-    const rescueEligible =
-      row.prediction !== 'UP' && row.prediction !== 'DOWN' &&
-      rescueSnapshot?.version === 'BASE_DIRECTION_RESCUE_V2_EXACT20' &&
-      rescueCandidate?.decision !== 'WAIT' &&
-      (rescueCandidate?.decision === 'UP' || rescueCandidate?.decision === 'DOWN') &&
-      Number.isFinite(rescueAt) && Number.isFinite(rescueDelay) &&
-      rescueDelay >= 18000 && rescueDelay <= 22000 &&
-      rescueAt === Number(row.roundStartMs) + rescueDelay &&
-      rescueAt <= Date.now() &&
-      rescueSnapshot.features && typeof rescueSnapshot.features === 'object';
-    const rescueDirection = rescueEligible ? rescueCandidate.decision : null;
-    const usingRescue = Boolean(rescueDirection);
     const baseDirection = row.prediction === 'UP' || row.prediction === 'DOWN'
-      ? row.prediction : rescueDirection;
-    const baseFacts = usingRescue ? rescueSnapshot.features : row.predictionFacts;
-    const baseDelay = usingRescue ? rescueDelay : row.predictionDelayMs;
-    const baseGeneratedAt = usingRescue ? rescueAt : row.predictedAt;
+      ? row.prediction
+      : null;
     const q = baseDirection
-      ? (usingRescue
-          ? evaluateSelectiveQualityV2(baseDirection, baseFacts, baseDelay, row.roundStartMs)
-          : (row.lockQualitySelectiveV2 ||
-              evaluateSelectiveQualityV2(baseDirection, baseFacts, baseDelay, row.roundStartMs)))
+      ? (row.lockQualitySelectiveV2 ||
+          evaluateSelectiveQualityV2(baseDirection, row.predictionFacts, row.predictionDelayMs, row.roundStartMs))
       : null;
     const direction = q?.pass && (q?.decision === 'UP' || q?.decision === 'DOWN')
       ? q.decision
@@ -4997,10 +4975,10 @@ function productionSignalPayload(now = Date.now()) {
           modelProbability: confidence,
         },
         input: { round: row.roundStartMs },
-        generatedAt: Number.isFinite(Number(baseGeneratedAt)) ? Number(baseGeneratedAt) : Date.now(),
-        source: usingRescue ? 'BASE_DIRECTION_RESCUE_V2_SELECTIVE_PRIMARY' : 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY',
+        generatedAt: Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
+        source: 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY',
         model: LOCK_QUALITY_V2_VERSION,
-        facts: baseFacts ?? null,
+        facts: row.predictionFacts ?? null,
         productionPolicy: productionPolicyName(),
         fallbackUsed: false,
         selectiveQuality: q,
@@ -5016,13 +4994,13 @@ function productionSignalPayload(now = Date.now()) {
     // base-direction signal when it falls inside the historically high-quality
     // edge region and the independent strict-forward fuse is open.
     const edgeRescue = baseDirection && q && !q.pass
-      ? evaluateSelectiveV2EdgeRescueRow(usingRescue ? {...row,prediction:baseDirection,predictionFacts:baseFacts,predictionDelayMs:baseDelay,predictionScore:null,selectiveV2EdgeRescue:null} : row, q)
+      ? evaluateSelectiveV2EdgeRescueRow(row, q)
       : null;
     const edgeFuse = edgeRescue?.decision === baseDirection
       ? selectiveV2EdgeRescueFuseState(baseDirection)
       : null;
     const edgeExpansionEvaluation =
-      !usingRescue && baseDirection &&
+      baseDirection &&
       q &&
       !q.pass &&
       edgeRescue?.decision !== baseDirection
@@ -5041,10 +5019,10 @@ function productionSignalPayload(now = Date.now()) {
         status:'LOCKED',
         signal:{direction:baseDirection,score,confidence,modelProbability:confidence},
         input:{round:row.roundStartMs},
-        generatedAt:Number.isFinite(Number(baseGeneratedAt)) ? Number(baseGeneratedAt) : Date.now(),
-        source:usingRescue ? 'BASE_DIRECTION_RESCUE_V2_EDGE_PRIMARY' : 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY',
+        generatedAt:Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
+        source:'SELECTIVE_V2_EDGE_RESCUE_PRIMARY',
         model:SELECTIVE_V2_EDGE_RESCUE_VERSION,
-        facts:baseFacts ?? null,
+        facts:row.predictionFacts ?? null,
         productionPolicy:productionPolicyName(),
         fallbackUsed:false,
         selectiveQuality:q,
@@ -5105,10 +5083,10 @@ function productionSignalPayload(now = Date.now()) {
         status:'LOCKED',
         signal:{direction:baseDirection,score,confidence,modelProbability:confidence},
         input:{round:row.roundStartMs},
-        generatedAt:Number.isFinite(Number(baseGeneratedAt)) ? Number(baseGeneratedAt) : Date.now(),
+        generatedAt:Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
         source:'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY',
         model:SELECTIVE_V2_EDGE_EXPANSION_VERSION + ':' + candidate.candidateId,
-        facts:baseFacts ?? null,
+        facts:row.predictionFacts ?? null,
         productionPolicy:productionPolicyName(),
         fallbackUsed:false,
         selectiveQuality:q,

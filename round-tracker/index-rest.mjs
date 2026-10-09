@@ -4252,6 +4252,7 @@ async function settlePendingRounds() {
         }
         settleShadowForwardRegistry(row);
         shadowV3.settle(row);
+        independentDirectionShadow.settle(row);
         if (row?.selectiveV2NoBaseShadow?.modelVersion === SELECTIVE_V2_NO_BASE_SHADOW_VERSION) {
           const nb = selectiveV2NoBaseShadowSummary();
           if (
@@ -5347,6 +5348,7 @@ applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 loadShadowCandidateArtifact();
 maybeTrainShadowModel();
+independentDirectionShadow.reconcileHistory(rounds.values());
 independentDirectionShadow.trainIfNeeded(rounds.values());
 log('independent_direction_shadow_status', independentDirectionShadow.stats(rounds.values()));
 void shadowV3.maybeTrain();

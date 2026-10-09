@@ -81,6 +81,16 @@ const LOCK_QUALITY_V2_RECOVERY_ACCURACY = Math.max(LOCK_QUALITY_V2_DRIFT_MIN_ACC
 const SELECTIVE_V2_NO_BASE_SHADOW_VERSION = 'SELECTIVE_V2_NO_BASE_CONSENSUS_SHADOW_V1';
 const SELECTIVE_V2_NO_BASE_SHADOW_START_MS = Math.max(0, Number(process.env.SELECTIVE_V2_NO_BASE_SHADOW_START_MS || 1791297900000));
 const SELECTIVE_V2_NO_BASE_FORWARD_TARGET = Math.max(30, Number(process.env.SELECTIVE_V2_NO_BASE_FORWARD_TARGET || 60));
+// Fixed prospective trial. Never retrofit older rounds or promote these signals
+// into production without independently settled strict-forward evidence.
+const V3_NO_BASE_20S_VERSION = 'V3_NO_BASE_20S_RESCUE_SHADOW_V1';
+const V3_NO_BASE_20S_START_MS = Date.parse('2026-10-09T05:18:00.000Z');
+const V3_NO_BASE_20S_FORWARD_TARGET = 60;
+const V3_NO_BASE_20S_CONFIGS = [
+  {id:'PM_LEAN_03',mode:'pm'},
+  {id:'BLENDED_04_PM_AGREE',mode:'blended'},
+  {id:'CURRENT_03_PM_AGREE',mode:'current'},
+];
 const SELECTIVE_V2_NO_BASE_CONTEST_VERSION = 'SELECTIVE_V2_NO_BASE_CONTEST_V2';
 const SELECTIVE_V2_NO_BASE_CONTEST_TARGET = 60;
 const SELECTIVE_V2_NO_BASE_CONTEST_RETIRE_MIN_SAMPLES = 20;
@@ -3082,6 +3092,115 @@ function selectiveV2InternalDirectionBacktest() {
 
 
 
+function evaluateV3NoBase20sShadow(row, facts, now = Date.now()) {
+  const start = Number(row?.roundStartMs);
+  const delay = now - start;
+  // Only freeze fresh, current-round observations before 5-minute settlement.
+  if (!Number.isFinite(start) || start < V3_NO_BASE_20S_START_MS ||
+      delay < 20000 || delay > 22000 || now >= start + 300000 ||
+      row?.predictedAt || !facts || typeof facts !== 'object') return null;
+  const bookAgeMs = Number(facts.predictionMarketBookAgeMs);
+  const upMid = facts.predictionMarketUpMid == null ? NaN : Number(facts.predictionMarketUpMid);
+  const current = facts.currentScore == null ? NaN : Number(facts.currentScore);
+  const score = facts.liveScore == null ? NaN : Number(facts.liveScore);
+  const flow15 = Number(facts.tradeCount15s);
+  const depthAgeMs = Number(facts.depthAgeMs);
+  const streamLag = Number(facts.lastAggTradeAgeMs);
+  const bookGood = Boolean(facts.predictionMarketMappingReliable) &&
+    facts.predictionMarketRoundAligned === true &&
+    Number.isFinite(bookAgeMs) && bookAgeMs <= 5000 &&
+    Number.isFinite(upMid) && upMid >= 0 && upMid <= 1;
+  const fresh = bookGood && facts.tradeStreamStalled !== true &&
+    Number.isFinite(depthAgeMs) && depthAgeMs <= 1500 &&
+    Number.isFinite(streamLag) && streamLag <= 12000 &&
+    Number.isFinite(flow15) && flow15 >= 8 &&
+    facts.absorptionRisk !== true;
+  const pmSign = upMid >= 0.53 ? 1 : upMid <= 0.47 ? -1 : 0;
+  const direction = sign => sign > 0 ? 'UP' : sign < 0 ? 'DOWN' : 'WAIT';
+  const candidates = {};
+  for (const cfg of V3_NO_BASE_20S_CONFIGS) {
+    let sign = 0;
+    if (fresh && pmSign) {
+      if (cfg.mode === 'pm' && (!Number.isFinite(score) || pmSign * score >= -0.25)) sign = pmSign;
+      if (cfg.mode === 'blended' && Number.isFinite(score) && Math.abs(score) >= 0.40 &&
+          pmSign * score > 0) sign = pmSign;
+      if (cfg.mode === 'current' && Number.isFinite(current) && Math.abs(current) >= 0.30 &&
+          pmSign * current > 0) sign = pmSign;
+    }
+    candidates[cfg.id] = {decision:direction(sign),qualified:sign !== 0};
+  }
+  return {
+    version:V3_NO_BASE_20S_VERSION,
+    observedAt:now,
+    round:start,
+    observedDelayMs:delay,
+    inputFrozenBeforeSettlement:true,
+    productionEffect:'NONE_SHADOW_ONLY',
+    facts:{upMid:Number.isFinite(upMid)?upMid:null,
+      currentScore:Number.isFinite(current)?current:null,
+      blendedScore:Number.isFinite(score)?score:null,
+      flow15:Number.isFinite(flow15)?flow15:null,
+      predictionBookAgeMs:Number.isFinite(bookAgeMs)?bookAgeMs:null,
+      sourceMarketTopicId:facts.predictionMarketTopicId ?? null,
+      bookMappingReliable:Boolean(facts.predictionMarketMappingReliable),
+      bookRoundAligned:facts.predictionMarketRoundAligned === true,
+      dataFresh:fresh},
+    candidates,
+  };
+}
+
+function v3NoBase20sShadowSummary() {
+  const settled = Array.from(rounds.values()).filter(r =>
+    Number(r.roundStartMs) >= V3_NO_BASE_20S_START_MS &&
+    (r.actual === 'UP' || r.actual === 'DOWN') &&
+    r?.v3NoBase20sShadow?.version === V3_NO_BASE_20S_VERSION &&
+    r.v3NoBase20sShadow.inputFrozenBeforeSettlement === true &&
+    Number(r.v3NoBase20sShadow.observedAt) >= Number(r.roundStartMs) &&
+    Number(r.v3NoBase20sShadow.observedAt) < Number(r.roundEndMs) &&
+    r.prediction !== 'UP' && r.prediction !== 'DOWN'
+  ).sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
+  const candidates = V3_NO_BASE_20S_CONFIGS.map(cfg => {
+    const sample = settled.filter(r => {
+      const d = r.v3NoBase20sShadow.candidates?.[cfg.id]?.decision;
+      return d === 'UP' || d === 'DOWN';
+    });
+    const hits = sample.filter(r => r.v3NoBase20sShadow.candidates[cfg.id].decision === r.actual).length;
+    const count = sample.length, recent20 = sample.slice(-20), recent10 = sample.slice(-10);
+    const result = xs => {
+      const h = xs.filter(r=>r.v3NoBase20sShadow.candidates[cfg.id].decision === r.actual).length;
+      return {samples:xs.length,hits:h,misses:xs.length-h,accuracy:xs.length?Number((h/xs.length).toFixed(4)):null};
+    };
+    const byDirection = d => result(sample.filter(r=>r.v3NoBase20sShadow.candidates[cfg.id].decision === d));
+    const recent = result(recent20);
+    const acc = count ? hits/count : null;
+    const status = count < V3_NO_BASE_20S_FORWARD_TARGET ? 'COLLECTING' :
+      acc >= 0.75 && recent.samples >= 20 && recent.accuracy >= 0.75 ?
+      'ELIGIBLE_FOR_INDEPENDENT_REVIEW' : 'FORWARD_COMPLETE_NOT_QUALIFIED';
+    return {
+      candidateId:cfg.id,
+      status,
+      strictForwardSamples:count,
+      targetSamples:V3_NO_BASE_20S_FORWARD_TARGET,
+      hits,misses:count-hits,
+      forwardAccuracy:count?Number(acc.toFixed(4)):null,
+      recent10:result(recent10),
+      recent20:recent,
+      incrementalCoverage:settled.length?Number((count/settled.length).toFixed(4)):null,
+      up:byDirection('UP'),down:byDirection('DOWN'),
+      productionEffect:'NONE_SHADOW_ONLY',
+    };
+  });
+  return {
+    version:V3_NO_BASE_20S_VERSION,
+    prospectiveStartMs:V3_NO_BASE_20S_START_MS,
+    scope:'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_ONLY',
+    observedNoBaseSettledRounds:settled.length,
+    productionEffect:'NONE_SHADOW_ONLY',
+    autoProduction:false,
+    candidates,
+  };
+}
+
 function selectiveV2NoBaseContestDecision(facts, config) {
   const f = facts && typeof facts === 'object' ? facts : null;
   const cfg = config || {};
@@ -3894,6 +4013,7 @@ function ensureRound(roundStartMs) {
       preLockAdaptiveShadow: null,
       selectiveV2NoBaseShadow: null,
       selectiveV2NoBaseContest: null,
+      v3NoBase20sShadow: null,
       baseDirectionRescueV2: null,
       selectiveV2HighPrecisionShadow: null,
       predictedAt: null,
@@ -4005,6 +4125,27 @@ async function pollSignal() {
           productionEffect:'NONE_SHADOW_ONLY',
         });
         saveHistory();
+      }
+    }
+    if (
+      liveFacts &&
+      !row.v3NoBase20sShadow &&
+      Number(row.roundStartMs) >= V3_NO_BASE_20S_START_MS &&
+      live?.status !== 'LOCKED' &&
+      row.prediction !== 'UP' && row.prediction !== 'DOWN'
+    ) {
+      const frozen = evaluateV3NoBase20sShadow(row, liveFacts);
+      if (frozen) {
+        row.v3NoBase20sShadow = frozen;
+        saveHistory();
+        log('v3_no_base_20s_shadow_frozen', {
+          round:row.roundStartMs,
+          at:frozen.observedAt,
+          observedDelayMs:frozen.observedDelayMs,
+          directions:Object.fromEntries(Object.entries(frozen.candidates).map(([id,v])=>[id,v.decision])),
+          sourceMarketTopicId:frozen.facts.sourceMarketTopicId,
+          productionEffect:'NONE_SHADOW_ONLY',
+        });
       }
     }
     if (
@@ -4294,6 +4435,13 @@ async function settlePendingRounds() {
             (x.strictForwardSamples % 5 === 0 || x.strictForwardSamples === WAIT_RESCUE_FORWARD_TARGET)
           );
           if (milestone) log('wait_rescue_shadow_forward_progress', rescue);
+        }
+        if (row?.v3NoBase20sShadow?.version === V3_NO_BASE_20S_VERSION &&
+            row.prediction !== 'UP' && row.prediction !== 'DOWN') {
+          const trial = v3NoBase20sShadowSummary();
+          const qualifiedNow = trial.candidates.filter(c => c.strictForwardSamples > 0 &&
+            (c.strictForwardSamples % 5 === 0 || c.strictForwardSamples === V3_NO_BASE_20S_FORWARD_TARGET));
+          if (qualifiedNow.length) log('v3_no_base_20s_strict_forward_progress', trial);
         }
         if (
           row?.selectiveV2NoBaseContest?.version === SELECTIVE_V2_NO_BASE_CONTEST_VERSION &&
@@ -5418,6 +5566,7 @@ const signalHttpServer = http.createServer((req, res) => {
         edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
         noBaseContest:selectiveV2NoBaseContestSummary(),
+        v3NoBase20sRescue:v3NoBase20sShadowSummary(),
         waitRescue:waitRescueShadowSummary(),
         adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),
         prelockAdaptive:preLockAdaptiveShadow.stats(Array.from(rounds.values())),

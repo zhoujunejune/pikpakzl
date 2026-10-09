@@ -221,6 +221,14 @@ async function binanceOfficialReadOnlyProbe(req, res) {
     res.writeHead(404, {'content-type':'application/json','cache-control':'no-store'});
     return res.end(JSON.stringify({ok:false,error:'PROBE_DISABLED'}));
   }
+  const probeToken = process.env.BINANCE_OFFICIAL_PROBE_TOKEN;
+  const providedToken = req.headers['x-audit-probe-token'];
+  if (!probeToken || typeof providedToken !== 'string' ||
+      providedToken.length !== probeToken.length ||
+      !(await import('node:crypto')).timingSafeEqual(Buffer.from(providedToken), Buffer.from(probeToken))) {
+    res.writeHead(403, {'content-type':'application/json','cache-control':'no-store'});
+    return res.end(JSON.stringify({ok:false,error:'FORBIDDEN'}));
+  }
   const key = process.env.BINANCE_PREDICTION_API_KEY;
   const secret = process.env.BINANCE_PREDICTION_API_SECRET;
   if (!key || !secret) {

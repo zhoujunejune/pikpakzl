@@ -12,7 +12,6 @@ import { createShadowV7Client } from './shadow-v7-client.mjs';
 import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
-import { evaluateCoreSupplementGate } from './edge-first-production-gate.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -117,12 +116,12 @@ const SELECTIVE_V2_EDGE_RESCUE_CONFIG = {
   rejectAbsorption:true,
 };
 // Accuracy-first fuse: stop production rescue as soon as the first five
-// strict-forward eligible outcomes fail to hold 75%. Candidate evaluation
+// strict-forward eligible outcomes fail to hold 70%. Candidate evaluation
 // continues while fused, so the gate can recover automatically when the
-// rolling forward quality returns to >=75%.
+// rolling forward quality returns to >=70%.
 const SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES = 5;
 const SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES = 5;
-const SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY = 0.75;
+const SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY = 0.70;
 const SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK = 3;
 
 // Forward-only expansion lanes. They only observe rounds that Tier-1 Edge Rescue
@@ -1448,7 +1447,7 @@ function qualifiedShadowV6Candidate() {
 
 function productionPolicyName() {
   if (productionUsesSelectiveV2()) {
-    return 'IMMUTABLE_FIRST_LOCK_EDGE_RESCUE_FIRST_CORE_75_GATE';
+    return 'IMMUTABLE_FIRST_LOCK_SELECTIVE_V2';
   }
   if (productionUsesShadowV3()) {
     return pinnedShadowV3Candidate()
@@ -2482,7 +2481,7 @@ function selectiveQualityV2Summary() {
   return {
     ok:true,
     modelVersion: LOCK_QUALITY_V2_VERSION,
-    productionEffect: productionUsesSelectiveV2() ? 'CONDITIONAL_75PCT_CORE_SUPPLEMENT' : 'NONE_SHADOW_ONLY',
+    productionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
     startMs:LOCK_QUALITY_V2_START_MS,
     forwardRounds:evaluated.length,
     forwardSamples:decided.length,
@@ -2865,7 +2864,7 @@ function selectiveV2EdgeRescueSummary() {
       fuseReason:fused
         ? (missStreak >= SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK
           ? 'DIRECTION_MISS_STREAK'
-          : 'DIRECTION_RECENT_ACCURACY_BELOW_75')
+          : 'DIRECTION_RECENT_ACCURACY_BELOW_70')
         : null,
     };
   };
@@ -2897,7 +2896,7 @@ function selectiveV2EdgeRescueSummary() {
     down,
     fuse:{
       globalFused,
-      globalReason:globalFused?'GLOBAL_RECENT_ACCURACY_BELOW_75_EARLY_FUSE':null,
+      globalReason:globalFused?'GLOBAL_RECENT_ACCURACY_BELOW_70_EARLY_FUSE':null,
       minGlobalSamples:SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES,
       minDirectionSamples:SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES,
       minAccuracy:SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY,
@@ -4502,12 +4501,12 @@ function productionSummary() {
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     currentQualifiedModel: productionUsesSelectiveV2()
-      ? SELECTIVE_V2_EDGE_RESCUE_VERSION
+      ? LOCK_QUALITY_V2_VERSION
       : productionUsesShadowV3()
         ? (pinnedShadowV3Candidate()?.modelVersion ?? null)
         : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
     currentQualificationStatus: productionUsesSelectiveV2()
-      ? 'EDGE_FIRST_75PCT_CORE_SUPPLEMENT_CONDITIONAL'
+      ? 'USER_PINNED_SELECTIVE_COLLECTING'
       : (productionShadowApproved() ? 'QUALIFIED' : 'NO_QUALIFIED_MODEL'),
     minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
     minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
@@ -4883,11 +4882,37 @@ function productionSignalPayload(now = Date.now()) {
       ? q.decision
       : null;
 
-    const coreSupplementGate = direction
-      ? evaluateCoreSupplementGate(rounds.values(), direction, row.roundStartMs)
-      : null;
+    if (direction) {
+      const confidence = Number.isFinite(Number(row.modelProbability))
+        ? Number(row.modelProbability)
+        : (Number.isFinite(Number(row.predictionConfidence)) ? Number(row.predictionConfidence) : null);
+      const score = Number.isFinite(Number(row.predictionScore)) ? Number(row.predictionScore) : null;
+      const live = {
+        round: row.roundStartMs,
+        status: 'LOCKED',
+        signal: {
+          direction,
+          score,
+          confidence,
+          modelProbability: confidence,
+        },
+        input: { round: row.roundStartMs },
+        generatedAt: Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
+        source: 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY',
+        model: LOCK_QUALITY_V2_VERSION,
+        facts: row.predictionFacts ?? null,
+        productionPolicy: productionPolicyName(),
+        fallbackUsed: false,
+        selectiveQuality: q,
+        shadowForwardStatus: selectiveQualityV2Summary().status,
+        shadowForwardSamples: selectiveQualityV2Summary().forwardSamples,
+      };
+      freezeProductionLock(row, live);
+      logProductionSignalState(live);
+      return { ok: true, live };
+    }
 
-    // Edge Rescue is the precision-first release path. Only rescue a filtered
+    // Preserve Selective V2 as the precision core. Only rescue a filtered
     // base-direction signal when it falls inside the historically high-quality
     // edge region and the independent strict-forward fuse is open.
     const edgeRescue = baseDirection && q && !q.pass
@@ -4942,41 +4967,6 @@ function productionSignalPayload(now = Date.now()) {
       logProductionSignalState(live);
       return {ok:true,live};
     }
-
-    // Selective V2 is a secondary source only after its own previously frozen,
-    // officially settled signals pass the 75% rolling, recent, and direction gates.
-    // No look-ahead: this round is excluded by evaluateCoreSupplementGate.
-    if (direction && coreSupplementGate?.allowed) {
-      const confidence = Number.isFinite(Number(row.modelProbability))
-        ? Number(row.modelProbability)
-        : (Number.isFinite(Number(row.predictionConfidence)) ? Number(row.predictionConfidence) : null);
-      const score = Number.isFinite(Number(row.predictionScore)) ? Number(row.predictionScore) : null;
-      const live = {
-        round: row.roundStartMs,
-        status: 'LOCKED',
-        signal: {
-          direction,
-          score,
-          confidence,
-          modelProbability: confidence,
-        },
-        input: { round: row.roundStartMs },
-        generatedAt: Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
-        source: 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY',
-        model: LOCK_QUALITY_V2_VERSION,
-        facts: row.predictionFacts ?? null,
-        productionPolicy: productionPolicyName(),
-        fallbackUsed: false,
-        selectiveQuality: q,
-        coreSupplementGate,
-        shadowForwardStatus: selectiveQualityV2Summary().status,
-        shadowForwardSamples: selectiveQualityV2Summary().forwardSamples,
-      };
-      freezeProductionLock(row, live);
-      logProductionSignalState(live);
-      return { ok: true, live };
-    }
-
 
     // Record that the existing Selective V2 + Tier-1 path would have returned WAIT.
     // Do not infer baseline WAIT from a historical missing production lock.
@@ -5060,9 +5050,7 @@ function productionSignalPayload(now = Date.now()) {
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
-      : (direction && !coreSupplementGate?.allowed
-        ? ['CORE_SUPPLEMENT_NOT_QUALIFIED', ...(coreSupplementGate?.reasons || [])]
-        : (Array.isArray(q?.reasons) && q.reasons.length ? q.reasons : ['EDGE_AND_SELECTIVE_WAIT']));
+      : (Array.isArray(q?.reasons) && q.reasons.length ? q.reasons : ['SELECTIVE_FILTER_WAIT']);
     const s = selectiveQualityV2Summary();
     const live = {
       round: row.roundStartMs,
@@ -5077,7 +5065,6 @@ function productionSignalPayload(now = Date.now()) {
       fallbackUsed: false,
       waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|'),
       selectiveQuality: q,
-      coreSupplementGate,
       edgeRescue: edgeRescue ? {
         candidate:edgeRescue,
         fuse:edgeFuse ? {
@@ -5437,10 +5424,6 @@ const signalHttpServer = http.createServer((req, res) => {
         noBaseSpecialist:noBaseSpecialist.stats(),
         baseDirectionRescueV2:baseDirectionRescueV2.stats(),
         edgeRescueTier1:selectiveV2EdgeRescueSummary(),
-        coreSupplementGate:{
-          up:evaluateCoreSupplementGate(rounds.values(), 'UP', Math.floor(Date.now()/300000)*300000),
-          down:evaluateCoreSupplementGate(rounds.values(), 'DOWN', Math.floor(Date.now()/300000)*300000),
-        },
         edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
         noBaseContest:selectiveV2NoBaseContestSummary(),
@@ -5704,6 +5687,6 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     lockQualityShadowStartMs: LOCK_QUALITY_SHADOW_START_MS,
     lockQualitySelectiveV2: selectiveQualityV2Summary(),
     selectiveV2HighPrecisionShadow: selectiveV2HighPrecisionShadowSummary(),
-    lockQualityProductionEffect: productionUsesSelectiveV2() ? 'CONDITIONAL_75PCT_CORE_SUPPLEMENT' : 'NONE_SHADOW_ONLY',
+    lockQualityProductionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
   });
 });

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   independentFeatures,chooseIndependentDirection,validLiveObservation,
   trainIndependentModel,freezeIndependentModel,independentForwardStats,
-  INDEPENDENT_TARGET,
+  INDEPENDENT_TARGET,ADAPTIVE_POLICY,
+  independentMarketRegime,independentAdaptiveProgramStats,
+  createIndependentDirectionShadow,
 } from './independent-direction-shadow.mjs';
 
 const base=1791504000000;
@@ -122,4 +124,91 @@ test('100% full direction with just 75% aggregate must also satisfy rolling and 
   assert.equal(bad.coverage,1);
   assert.ok(bad.recent40.accuracy<0.75);
   assert.equal(bad.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
+});
+
+test('live regime is derived from only market facts, never official outcomes',()=>{
+  assert.equal(independentMarketRegime(facts(1)),'TREND');
+  assert.equal(independentMarketRegime(facts(-1)),'TREND');
+  assert.equal(independentMarketRegime(facts(0.1)),'RANGE');
+  assert.equal(independentMarketRegime(null),'UNKNOWN');
+  assert.equal(ADAPTIVE_POLICY.retrainEverySettledRounds,24);
+});
+test('adaptive program preserves exact denominator and frozen decisions across retrained versions',()=>{
+  const second=base+121*300000;
+  const versions=[
+    {version:'a',trainedAt:base,startRoundMs:base+300000},
+    {version:'b',trainedAt:second-300000,startRoundMs:second},
+  ];
+  const rs=Array.from({length:240},(_,i)=>row(i+1,i%2?'UP':'DOWN'));
+  rs.forEach((r,i)=>{
+    const m=i<120?versions[0]:versions[1];
+    r.independentDirectionShadow={
+      modelVersion:m.version,trainedAt:m.trainedAt,
+      roundStartMs:r.roundStartMs,observedAt:r.shadowObservedAt,
+      direction:r.actual,marketRegime:i%4<2?'TREND':'RANGE'
+    };
+  });
+  const good=independentAdaptiveProgramStats(rs,versions);
+  const ledger=rs.map(r=>({
+    roundStartMs:r.roundStartMs,roundEndMs:r.roundEndMs,actual:r.actual,
+    actualSource:r.actualSource,settledAt:r.settledAt,
+    shadowObservedAt:r.shadowObservedAt,
+    independentDirectionShadow:r.independentDirectionShadow,
+  }));
+  // The live ring buffer can empty on a restart. Historical results remain.
+  const afterEviction=independentAdaptiveProgramStats([],versions,ledger);
+  assert.equal(afterEviction.forwardRounds,240);
+  assert.equal(afterEviction.coverage,1);
+  assert.equal(afterEviction.status,'QUALIFIED_75_100_LONG_TERM_REVIEW');
+  assert.equal(independentAdaptiveProgramStats(rs.slice(-20),versions,ledger).forwardRounds,240);
+  assert.equal(good.forwardRounds,240);
+  assert.equal(good.decidedRounds,240);
+  assert.equal(good.coverage,1);
+  assert.equal(good.accuracy,1);
+  assert.equal(good.modelTransitions,1);
+  assert.equal(good.status,'QUALIFIED_75_100_LONG_TERM_REVIEW');
+  assert.equal(good.up.samples,120);
+  assert.equal(good.down.samples,120);
+  assert.equal(good.trend.samples,120);
+  assert.equal(good.range.samples,120);
+  rs[0].independentDirectionShadow.modelVersion='fabricated-after-settlement';
+  const gap=independentAdaptiveProgramStats(rs,versions);
+  assert.equal(gap.decidedRounds,239);
+  assert.equal(gap.noDirectionRounds,1);
+  assert.ok(gap.coverage<1);
+  assert.equal(gap.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
+  // Confirm the version reset did not silently hide the first version loss.
+  rs[0].independentDirectionShadow.modelVersion='a';
+  rs.slice(-30).forEach(r=>{
+    r.independentDirectionShadow.direction=r.actual==='UP'?'DOWN':'UP';
+  });
+  const drift=independentAdaptiveProgramStats(rs,versions);
+  assert.equal(drift.coverage,1);
+  assert.equal(drift.accuracy,0.875);
+  assert.equal(drift.recent40.accuracy,0.25);
+  assert.equal(drift.recentDrift,true);
+  assert.equal(drift.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
+});
+test('settled rounds trigger periodic challenger review without changing live production',()=>{
+  const log=[];
+  const engine=createIndependentDirectionShadow({
+    minTrainingSamples:120,
+    log:(name,info)=>log.push({name,info}),
+  });
+  const history=Array.from({length:170},(_,i)=>row(i,i%2?'UP':'DOWN'));
+  const now=base+195*300000;
+  assert.equal(engine.trainIfNeeded(history,now),true);
+  let status=engine.stats(history);
+  assert.equal(status.activeLearning.enabled,true);
+  assert.equal(status.activeLearning.adaptationAttempts,1);
+  assert.equal(status.model.validation.coverage,1);
+  assert.equal(status.model.selectedTrainingWindow>0,true);
+  assert.equal(engine.trainIfNeeded(history,now+300000),false);
+  assert.equal(engine.stats(history).activeLearning.adaptationAttempts,1);
+  for(let i=170;i<194;i++)history.push(row(i,i%2?'UP':'DOWN'));
+  engine.trainIfNeeded(history,base+225*300000);
+  status=engine.stats(history);
+  assert.equal(status.activeLearning.adaptationAttempts,2);
+  assert.ok(log.some(x=>x.name==='independent_direction_adaptation_review'));
+  assert.ok(status.model);
 });

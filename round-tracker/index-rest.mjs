@@ -4340,7 +4340,7 @@ async function settlePendingRounds() {
         }
         if (row?.v3NoBase20sShadow?.version === V3_NO_BASE_20S_VERSION &&
             row.prediction !== 'UP' && row.prediction !== 'DOWN') {
-          const trial = v3NoBase20sShadowSummary();
+          const trial = v3NoBase20sShadowSummary(rounds);
           const qualifiedNow = trial.candidates.filter(c => c.strictForwardSamples > 0 &&
             (c.strictForwardSamples % 5 === 0 || c.strictForwardSamples === V3_NO_BASE_20S_FORWARD_TARGET));
           if (qualifiedNow.length) log('v3_no_base_20s_strict_forward_progress', trial);
@@ -5476,7 +5476,7 @@ const signalHttpServer = http.createServer((req, res) => {
         edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
         noBaseContest:selectiveV2NoBaseContestSummary(),
-        v3NoBase20sRescue:v3NoBase20sShadowSummary(),
+        v3NoBase20sRescue:v3NoBase20sShadowSummary(rounds),
         v3TrendBandForward:summarizeV3TrendBand(rounds),
         waitRescue:waitRescueShadowSummary(),
         adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),

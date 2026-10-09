@@ -4,6 +4,7 @@ import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
+import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
@@ -3896,6 +3897,7 @@ function ensureRound(roundStartMs) {
       selectiveV2NoBaseShadow: null,
       selectiveV2NoBaseContest: null,
       v3NoBase20sShadow: null,
+      v3TrendBandForward: null,
       baseDirectionRescueV2: null,
       selectiveV2HighPrecisionShadow: null,
       predictedAt: null,
@@ -3957,6 +3959,21 @@ async function pollSignal() {
     const row = ensureRound(Number(live.round));
     const liveFacts = live?.facts && typeof live.facts === 'object' ? live.facts : null;
     const elapsedMs = Date.now() - row.roundStartMs;
+    // Persist V3's immutable first eligible 0.4-0.6 trend-band observation.
+    // Observe now, never recreate from outcomes or adjust order signals.
+    if (liveFacts && !row.v3TrendBandForward) {
+      const frozen = freezeV3TrendBand(row, liveFacts, Date.now());
+      if (frozen) {
+        row.v3TrendBandForward = frozen;
+        saveHistory();
+        log('v3_trend_band_forward_frozen', {
+          round:row.roundStartMs,version:V3_TREND_BAND_FORWARD_VERSION,
+          direction:frozen.direction,sourceObservedAt:frozen.sourceObservedAt,
+          recordedAt:frozen.recordedAt,score:frozen.score,
+          productionEffect:'NONE_SHADOW_ONLY'
+        });
+      }
+    }
     if (!row.shadowObservedAt && liveFacts && elapsedMs >= SHADOW_OBSERVE_MS) {
       row.shadowObservedAt = Date.now();
       row.shadowFacts = liveFacts;
@@ -4397,6 +4414,13 @@ async function settlePendingRounds() {
           }
         }
 
+        if (row.v3TrendBandForward?.version === V3_TREND_BAND_FORWARD_VERSION) {
+          const forward = summarizeV3TrendBand(rounds);
+          if (forward.eligible.samples===1 || forward.eligible.samples%5===0 ||
+              forward.eligible.samples===60) {
+            log('v3_trend_band_forward_progress',forward);
+          }
+        }
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
         saveHistory();
@@ -5365,6 +5389,7 @@ log('selective_v2_no_base_consensus_backtest_snapshot', selectiveV2NoBaseConsens
 log('selective_v2_no_base_shadow_status', selectiveV2NoBaseShadowSummary());
 log('no_base_specialist_status', noBaseSpecialist.stats());
 log('base_direction_rescue_v2_status', baseDirectionRescueV2.stats());
+log('v3_trend_band_forward_status', summarizeV3TrendBand(rounds));
 log('selective_v2_no_base_contest_status', selectiveV2NoBaseContestSummary());
 log('wait_rescue_backtest_snapshot', waitRescueBacktest());
 log('wait_rescue_shadow_status', waitRescueShadowSummary());
@@ -5452,6 +5477,7 @@ const signalHttpServer = http.createServer((req, res) => {
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
         noBaseContest:selectiveV2NoBaseContestSummary(),
         v3NoBase20sRescue:v3NoBase20sShadowSummary(),
+        v3TrendBandForward:summarizeV3TrendBand(rounds),
         waitRescue:waitRescueShadowSummary(),
         adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),
         prelockAdaptive:preLockAdaptiveShadow.stats(Array.from(rounds.values())),
@@ -5490,6 +5516,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(noBaseSpecialist.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v3-trend-band-forward-stats') {
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(summarizeV3TrendBand(rounds)));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/base-direction-rescue-v2-stats') {

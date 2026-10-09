@@ -102,14 +102,21 @@ export function summarizeNoBase20s(rounds){
     const total=stats(decisions,cfg.id),recent20=stats(decisions.slice(-20),cfg.id);
     const up=stats(decisions.filter(r=>r.v3NoBase20sShadow.candidates[cfg.id].decision==='UP'),cfg.id);
     const down=stats(decisions.filter(r=>r.v3NoBase20sShadow.candidates[cfg.id].decision==='DOWN'),cfg.id);
+    const recent10=stats(decisions.slice(-10),cfg.id);
+    const upRecent6=stats(decisions.filter(r=>r.v3NoBase20sShadow.candidates[cfg.id].decision==='UP').slice(-6),cfg.id);
+    const downRecent6=stats(decisions.filter(r=>r.v3NoBase20sShadow.candidates[cfg.id].decision==='DOWN').slice(-6),cfg.id);
+    let streak=0,maxConsecutiveMisses=0;
+    for(const r of decisions){if(r.v3NoBase20sShadow.candidates[cfg.id].decision!==r.actual){streak++;maxConsecutiveMisses=Math.max(maxConsecutiveMisses,streak);}else streak=0;}
     const qualified=total.samples>=V3_NO_BASE_20S_FORWARD_TARGET&&total.accuracy>=0.75&&
-      recent20.samples>=20&&recent20.accuracy>=0.70&&up.samples>=5&&down.samples>=5&&
-      up.accuracy>=0.70&&down.accuracy>=0.70;
+      recent20.samples>=20&&recent20.accuracy>=0.75&&recent10.samples>=10&&recent10.accuracy>=0.70&&
+      up.samples>=10&&down.samples>=10&&up.accuracy>=0.70&&down.accuracy>=0.70&&
+      upRecent6.samples>=6&&downRecent6.samples>=6&&upRecent6.accuracy>=0.70&&downRecent6.accuracy>=0.70&&
+      maxConsecutiveMisses<=2;
     return {candidateId:cfg.id,status:qualified?'ELIGIBLE_FOR_INDEPENDENT_REVIEW':
       total.samples<V3_NO_BASE_20S_FORWARD_TARGET?'COLLECTING':'FORWARD_COMPLETE_NOT_QUALIFIED',
       strictForwardSamples:total.samples,targetSamples:V3_NO_BASE_20S_FORWARD_TARGET,
       hits:total.hits,misses:total.misses,forwardAccuracy:total.accuracy,
-      recent20,up,down,incrementalCoverage:settled.length?
+      recent10,recent20,up,down,upRecent6,downRecent6,maxConsecutiveMisses,incrementalCoverage:settled.length?
         Number((total.samples/settled.length).toFixed(4)):null,
       productionEffect:'NONE_SHADOW_ONLY'};
   });

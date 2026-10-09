@@ -22,7 +22,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: Validate settlement provenance code syntax
@@ -33,6 +33,20 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_audit_strict_forward.py' -v
       - name: Validate independent audit script syntax (no secrets)
         run: python3 -m py_compile scripts/independent_binance_settlement.py
+      - name: Test independent signed Binance audit on trusted branch push only
+        if: github.event_name == 'push' && github.ref == 'refs/heads/audit/independent-binance-official-20261009'
+        env:
+          BINANCE_PREDICTION_API_KEY: ${{ secrets.BINANCE_PREDICTION_API_KEY }}
+          BINANCE_PREDICTION_API_SECRET: ${{ secrets.BINANCE_PREDICTION_API_SECRET }}
+        run: python3 scripts/independent_binance_settlement.py
+      - name: Upload independent audit report
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/audit/independent-binance-official-20261009'
+        uses: actions/upload-artifact@v4
+        with:
+          name: independent-audit-branch-test
+          path: audit-output/independent-settlement.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Fetch training status
         shell: bash
         run: |

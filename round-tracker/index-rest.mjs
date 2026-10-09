@@ -2482,7 +2482,7 @@ function selectiveQualityV2Summary() {
   return {
     ok:true,
     modelVersion: LOCK_QUALITY_V2_VERSION,
-    productionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
+    productionEffect: productionUsesSelectiveV2() ? 'CONDITIONAL_75PCT_CORE_SUPPLEMENT' : 'NONE_SHADOW_ONLY',
     startMs:LOCK_QUALITY_V2_START_MS,
     forwardRounds:evaluated.length,
     forwardSamples:decided.length,
@@ -4502,12 +4502,12 @@ function productionSummary() {
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     currentQualifiedModel: productionUsesSelectiveV2()
-      ? LOCK_QUALITY_V2_VERSION
+      ? SELECTIVE_V2_EDGE_RESCUE_VERSION
       : productionUsesShadowV3()
         ? (pinnedShadowV3Candidate()?.modelVersion ?? null)
         : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
     currentQualificationStatus: productionUsesSelectiveV2()
-      ? 'USER_PINNED_SELECTIVE_COLLECTING'
+      ? 'EDGE_FIRST_75PCT_CORE_SUPPLEMENT_CONDITIONAL'
       : (productionShadowApproved() ? 'QUALIFIED' : 'NO_QUALIFIED_MODEL'),
     minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
     minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
@@ -5704,6 +5704,6 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     lockQualityShadowStartMs: LOCK_QUALITY_SHADOW_START_MS,
     lockQualitySelectiveV2: selectiveQualityV2Summary(),
     selectiveV2HighPrecisionShadow: selectiveV2HighPrecisionShadowSummary(),
-    lockQualityProductionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
+    lockQualityProductionEffect: productionUsesSelectiveV2() ? 'CONDITIONAL_75PCT_CORE_SUPPLEMENT' : 'NONE_SHADOW_ONLY',
   });
 });

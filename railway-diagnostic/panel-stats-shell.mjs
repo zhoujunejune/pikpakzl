@@ -275,6 +275,20 @@ http.createServer((req, res) => {
     fallbackTimeoutMs:STATS_PROXY_FALLBACK_TIMEOUT_MS,
     statsCacheMode:'SINGLE_FLIGHT_BACKGROUND_REFRESH',
   });
+  if (process.env.BINANCE_OFFICIAL_PROBE_ENABLED === 'true') {
+    setTimeout(async () => {
+      try {
+        const response = await fetch('http://127.0.0.1:' + PORT + '/api/internal/binance-official-probe', {
+          headers:{'x-audit-probe-token':process.env.BINANCE_OFFICIAL_PROBE_TOKEN || ''},
+          signal:AbortSignal.timeout(12000)
+        });
+        const result = await response.json();
+        log('binance_official_singapore_probe', {httpStatus:result.httpStatus ?? null,
+          binanceCode:result.binanceCode ?? null, officialTopicReturned:result.officialTopicReturned ?? false,
+          ok:result.ok === true, error:result.error ?? null});
+      } catch (err) { log('binance_official_singapore_probe', {ok:false,error:err?.name || 'REQUEST_FAILED'}); }
+    }, 3000).unref();
+  }
   setTimeout(refreshStatsCache, 300).unref();
   setInterval(refreshStatsCache, 1000).unref();
 });

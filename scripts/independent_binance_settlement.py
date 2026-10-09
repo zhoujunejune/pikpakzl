@@ -78,7 +78,7 @@ def main():
                 topic=response.get("data",response) if isinstance(response,dict) else {}
                 if not isinstance(topic,dict): topic={}
                 # Never inject the requested topic ID into a response as if Binance returned it.
-                returned_id=topic.get("marketTopicId") or topic.get("topicId")
+                returned_id=(response.get("marketTopicId") or response.get("topicId") or topic.get("marketTopicId") or topic.get("topicId"))
                 if returned_id is None:
                     item["issues"].append("OFFICIAL_TOPIC_ID_NOT_RETURNED")
                 elif str(returned_id)!=str(topic_id):

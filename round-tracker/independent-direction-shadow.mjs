@@ -171,9 +171,17 @@ export function independentForwardStats(rows,model) {
   const settled=Array.from(rows).filter(r=>official(r) &&
     Number(r.roundStartMs)>=Number(model.startRoundMs)
   ).sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
-  const decided=settled.map(r=>({actual:r.actual,
-    decision:r.independentDirectionShadow?.modelVersion===model.version ?
-      r.independentDirectionShadow.direction:'WAIT'}))
+  const decided=settled.map(r=>{
+    const frozen=r.independentDirectionShadow;
+    const observed=Number(frozen?.observedAt);
+    const start=Number(r.roundStartMs);
+    const valid=frozen?.modelVersion===model.version &&
+      Number(frozen?.trainedAt)===Number(model.trainedAt) &&
+      observed>Number(model.trainedAt) &&
+      observed>=start+10000 && observed<=start+22000 &&
+      Number(r.shadowObservedAt)===observed;
+    return {actual:r.actual,decision:valid?frozen.direction:'WAIT'};
+  })
     .filter(x=>x.decision==='UP'||x.decision==='DOWN');
   const sums=summarizeOutcomes(decided);
   const dir=direction=>summarizeOutcomes(decided.filter(x=>x.decision===direction));

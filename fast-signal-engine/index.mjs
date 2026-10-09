@@ -1,3 +1,11 @@
+function predBookUsableForBand(side, meta, book, now) {
+  const age = book?.receivedAt ? Math.max(0, now - book.receivedAt) : Infinity;
+  const mid = Number(book?.upMid);
+  return meta?.mappingReliable === true &&
+    age <= PREDICTION_BOOK_STALE_MS &&
+    Number.isFinite(mid) &&
+    side * (mid - 0.5) >= 0.05;
+}
 import http from 'node:http';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
@@ -867,6 +875,20 @@ function calculate(now = Date.now()) {
   let proposedDirection = 'WAIT';
   if (priceSide > 0 && currentScore >= TREND_THRESHOLD) proposedDirection = 'UP';
   else if (priceSide < 0 && currentScore <= -TREND_THRESHOLD) proposedDirection = 'DOWN';
+  // Confirmed sub-threshold direction: require aligned trend, market book,
+  // price movement and healthy flow. Never emit a raw low-score guess.
+  const confirmedBandSign = priceSide !== 0 &&
+    priceSide * currentScore >= 0.40 &&
+    priceSide * currentTrendScore >= 0.55 &&
+    priceSide * distanceFromOpenBps >= 0.5 &&
+    flow15.count >= MIN_TRADES &&
+    !tradeStreamStalled && !absorptionRisk &&
+    dataAgeMs <= STALE_MS && depthAgeMs <= STALE_MS &&
+    predBookUsableForBand(priceSide, predictionMarketMeta, predictionBook, now)
+    ? priceSide : 0;
+  if (proposedDirection === 'WAIT' && confirmedBandSign !== 0) {
+    proposedDirection = confirmedBandSign > 0 ? 'UP' : 'DOWN';
+  }
 
   const proposedSign = proposedDirection === 'UP' ? 1 : proposedDirection === 'DOWN' ? -1 : 0;
   const regimeSign = regimeDirection === 'UP' ? 1 : regimeDirection === 'DOWN' ? -1 : 0;

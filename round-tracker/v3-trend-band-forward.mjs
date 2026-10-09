@@ -45,18 +45,23 @@ export function summarizeV3TrendBand(rounds){
  // Count additional decisions only where production actually emitted no signal.
  const extra=eligible.filter(r=>r.productionPrediction!=='UP'&&r.productionPrediction!=='DOWN');
  const all=metric(eligible),r20=metric(recent20),u=metric(up),d=metric(down);
+ const r10=metric(eligible.slice(-10));
+ const u6=metric(up.slice(-6)),d6=metric(down.slice(-6));
+ let streak=0,maxConsecutiveMisses=0;
+ for(const r of eligible){if(r.v3TrendBandForward.direction!==r.actual){streak++;maxConsecutiveMisses=Math.max(maxConsecutiveMisses,streak);}else streak=0;}
  const qualified=all.samples>=60&&all.accuracy>=0.75&&r20.samples>=20&&
-   r20.accuracy>=0.70&&u.samples>=5&&d.samples>=5&&
-   u.accuracy>=0.70&&d.accuracy>=0.70;
+   r20.accuracy>=0.75&&r10.samples>=10&&r10.accuracy>=0.70&&u.samples>=10&&d.samples>=10&&
+   u.accuracy>=0.70&&d.accuracy>=0.70&&u6.samples>=6&&d6.samples>=6&&
+   u6.accuracy>=0.70&&d6.accuracy>=0.70&&maxConsecutiveMisses<=2;
  return {version:VERSION,scope:'OFFICIAL_SETTLED_STRICT_FORWARD_FIRST_ELIGIBLE',
    prospectiveStartMs:FORWARD_START_MS,observedOfficialSettledRounds:settled.length,
-   eligible:all,recent20:r20,up:u,down:d,
+   eligible:all,recent10:r10,recent20:r20,up:u,down:d,upRecent6:u6,downRecent6:d6,maxConsecutiveMisses,
    incrementalOverProduction:metric(extra),
    eligibleCoverage:pct(eligible.length,settled.length),
    incrementalCoverage:pct(extra.length,settled.length),
    status:qualified?'ELIGIBLE_FOR_INDEPENDENT_REVIEW':
      all.samples<60?'COLLECTING':'FORWARD_COMPLETE_NOT_QUALIFIED',
-   required:{samples:60,overallAccuracy:0.75,recent20Accuracy:0.70,
-     eachDirectionAccuracy:0.70,eachDirectionSamples:5},
+   required:{samples:60,overallAccuracy:0.75,recent20Accuracy:0.75,recent10Accuracy:0.70,
+     eachDirectionAccuracy:0.70,eachDirectionSamples:10,eachDirectionRecent6Accuracy:0.70,maxConsecutiveMisses:2},
    productionEffect:'NONE_SHADOW_ONLY',autoProduction:false};
 }

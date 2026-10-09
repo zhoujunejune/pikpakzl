@@ -186,6 +186,23 @@ export function independentForwardStats(rows,model) {
   const sums=summarizeOutcomes(decided);
   const dir=direction=>summarizeOutcomes(decided.filter(x=>x.decision===direction));
   const coverage=settled.length?Number((decided.length/settled.length).toFixed(4)):null;
+  // Track incremental directions in true V3 WAIT rounds separately: this is
+  // observational only and cannot influence a frozen independent decision.
+  const noBaseSettled=settled.filter(r=>r.prediction!=='UP'&&r.prediction!=='DOWN');
+  const noBaseDecided=noBaseSettled.map(r=>({actual:r.actual,
+    direction:r.independentDirectionShadow?.modelVersion===model.version &&
+      Number(r.independentDirectionShadow?.trainedAt)===Number(model.trainedAt) &&
+      Number(r.independentDirectionShadow?.observedAt)===Number(r.shadowObservedAt) &&
+      Number(r.shadowObservedAt)>=Number(r.roundStartMs)+10000 &&
+      Number(r.shadowObservedAt)<=Number(r.roundStartMs)+22000 &&
+      Number(r.shadowObservedAt)>Number(model.trainedAt) ?
+        r.independentDirectionShadow.direction:'WAIT'}))
+    .filter(x=>x.direction==='UP'||x.direction==='DOWN')
+    .map(x=>({decision:x.direction,actual:x.actual}));
+  const noBaseSummary=summarizeOutcomes(noBaseDecided);
+  const noBase={settledRounds:noBaseSettled.length,decidedRounds:noBaseDecided.length,
+    hits:noBaseSummary.hits,misses:noBaseSummary.misses,accuracy:noBaseSummary.accuracy,
+    coverage:noBaseSettled.length?Number((noBaseDecided.length/noBaseSettled.length).toFixed(4)):null};
   const recent=summarizeOutcomes(decided.slice(-target.recentDecisions));
   let status='STRICT_FORWARD_COLLECTING';
   if(settled.length>=target.minForwardRounds){
@@ -200,7 +217,7 @@ export function independentForwardStats(rows,model) {
     independentOfBaseDirection:true,target,forwardRounds:settled.length,
     decidedRounds:decided.length,hits:sums.hits,misses:sums.misses,
     accuracy:sums.accuracy,coverage,
-    waits:settled.length-decided.length,recent40:recent,up:dir('UP'),down:dir('DOWN'),
+    waits:settled.length-decided.length,recent40:recent,up:dir('UP'),down:dir('DOWN'),noBase,
     validation:model.validation,trainedAt:model.trainedAt,startRoundMs:model.startRoundMs};
 }
 export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSamples=320}={}){

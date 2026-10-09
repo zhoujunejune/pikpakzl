@@ -6,6 +6,9 @@ export const V3_NO_BASE_20S_CONFIGS = Object.freeze([
   {id:'PM_LEAN_03',mode:'pm'},
   {id:'BLENDED_04_PM_AGREE',mode:'blended'},
   {id:'CURRENT_03_PM_AGREE',mode:'current'},
+  // New ex-ante independent confirmations, not relaxed production thresholds.
+  {id:'PM_FLOW15_CURRENT_03',mode:'flow',currentMin:0.30,pmMin:0.03},
+  {id:'PM_TREND_045_CURRENT_03',mode:'trend',currentMin:0.30,trendMin:0.45,pmMin:0.03},
   // Ex-ante 20s under-threshold directional trials: confirmation is mandatory.
   // Existing V3 0.60 production threshold remains completely unchanged.
   {id:'CURRENT_04_TREND_055_PM05',mode:'trend',currentMin:0.40,trendMin:0.55,pmMin:0.05},
@@ -58,6 +61,14 @@ export function freezeNoBase20s(row,facts,now=Date.now()){
       }else if(cfg.mode==='current'){
         if(current!==null&&pmSign*current>=0.30)sign=pmSign;
         else reasons.push('CURRENT_BELOW_03_OR_CONFLICT');
+      }else if(cfg.mode==='flow'){
+        if(current===null||pmSign*current<cfg.currentMin)reasons.push('CURRENT_BELOW_MIN_OR_CONFLICT');
+        if(distance===null||pmSign*distance<0.5)reasons.push('ROUND_PRICE_NOT_ALIGNED');
+        if(upMid===null||pmSign*(upMid-0.5)<cfg.pmMin)reasons.push('PM_SUPPORT_BELOW_MIN');
+        const regime=String(facts.regimeDirection||'');
+        if((regime==='UP'||regime==='DOWN')&&regime!==dir(pmSign)&&
+          (finite(facts.regimeAgreement)??0)>=0.67)reasons.push('STRONG_REGIME_CONFLICT');
+        if(reasons.length===0)sign=pmSign;
       }else if(cfg.mode==='trend'){
         if(current===null||pmSign*current<cfg.currentMin)reasons.push('CURRENT_BELOW_MIN_OR_CONFLICT');
         if(trend===null||pmSign*trend<cfg.trendMin)reasons.push('TREND_BELOW_MIN_OR_CONFLICT');

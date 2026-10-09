@@ -4,6 +4,7 @@ import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
+import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
@@ -410,6 +411,14 @@ const noBaseSpecialist = createNoBaseSpecialistClient({
   maxCandidates: 6,
   trainEveryRounds: NO_BASE_SPECIALIST_TRAIN_EVERY_ROUNDS,
   trainTimeBudget: NO_BASE_SPECIALIST_TRAIN_TIME_BUDGET,
+  log,
+});
+
+// Shadow-only independent adaptive market predictor. Never reads V3 base
+// direction and never changes immutable production Selective V2/Edge locks.
+const independentDirectionShadow = createIndependentDirectionShadow({
+  file:HISTORY_FILE+'.independent-direction-v3.json',
+  minTrainingSamples:320,
   log,
 });
 
@@ -4010,6 +4019,7 @@ async function pollSignal() {
       }
       observeShadowForwardRegistry(row, liveFacts);
       shadowV2.observe(row, liveFacts);
+      independentDirectionShadow.observe(row);
       saveHistory();
     }
     if (liveFacts && Number(row.roundStartMs) >= WAIT_RESCUE_SHADOW_START_MS) {
@@ -4308,6 +4318,7 @@ async function settlePendingRounds() {
         settleShadowForwardRegistry(row);
         shadowV2.settle(row);
         shadowV3.settle(row);
+        independentDirectionShadow.settle(row);
         noBaseSpecialist.settle(row);
         void shadowV4.settle(row);
         shadowV5.settle(row);
@@ -4435,6 +4446,10 @@ async function settlePendingRounds() {
         maybeFinalizeLegacyOfficialRevalidation();
         maybeTrainShadowModel();
         shadowV2.maybeTrain(shadowTrainingRows());
+        const forward=independentDirectionShadow.stats(rounds.values());
+        if(row.independentDirectionShadow && forward.decidedRounds>0 &&
+          forward.decidedRounds%10===0) log('independent_direction_forward_progress',forward);
+        independentDirectionShadow.trainIfNeeded(rounds.values());
         void shadowV3.maybeTrain(row.roundStartMs);
         void noBaseSpecialist.maybeTrain(row.roundStartMs);
         void shadowV4.maybeTrain(row.roundStartMs);
@@ -5346,6 +5361,7 @@ function payload() {
 }
 
 loadHistory();
+independentDirectionShadow.load();
 loadArchiveIndex();
 backfillArchiveFromActiveHistory();
 loadShadowModelArtifact();
@@ -5379,6 +5395,9 @@ void shadowV5.maybeTrain();
 void shadowV7.maybeTrain();
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
+independentDirectionShadow.reconcileHistory(rounds.values());
+independentDirectionShadow.trainIfNeeded(rounds.values());
+log('independent_direction_shadow_status',independentDirectionShadow.stats(rounds.values()));
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
@@ -5472,6 +5491,7 @@ const signalHttpServer = http.createServer((req, res) => {
       models:{
         noBaseSpecialist:noBaseSpecialist.stats(),
         baseDirectionRescueV2:baseDirectionRescueV2.stats(),
+        independentDirection:independentDirectionShadow.stats(rounds.values()),
         edgeRescueTier1:selectiveV2EdgeRescueSummary(),
         edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
@@ -5521,6 +5541,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/v3-trend-band-forward-stats') {
     res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
     return res.end(JSON.stringify(summarizeV3TrendBand(rounds)));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/independent-direction-stats') {
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(independentDirectionShadow.stats(rounds.values())));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/base-direction-rescue-v2-stats') {
@@ -5688,6 +5713,7 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV2: shadowV2.stats(),
     shadowV3Dir: SHADOW_V3_DIR,
     shadowV3: shadowV3.stats(),
+    independentDirection: independentDirectionShadow.stats(rounds.values()),
     noBaseSpecialistDir: NO_BASE_SPECIALIST_DIR,
     noBaseSpecialistObserveMs: NO_BASE_SPECIALIST_OBSERVE_MS,
     noBaseSpecialist: noBaseSpecialist.stats(),

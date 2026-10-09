@@ -93,6 +93,8 @@ def main():
             except urllib.error.HTTPError as exc:
                 # Report HTTP status only; never log credentials, signatures, or signed URLs.
                 item["issues"].append("INDEPENDENT_API_HTTP_"+str(exc.code))
+                if exc.code == 451:
+                    item["issues"].append("BINANCE_REGION_OR_LEGAL_RESTRICTION")
             except Exception as exc:
                 item["issues"].append("INDEPENDENT_API_ERROR:"+type(exc).__name__)
         if not item["issues"]: item["result"]="HIT" if prediction==item["official_direction"] else "MISS"
@@ -106,7 +108,9 @@ def main():
     os.makedirs("audit-output",exist_ok=True)
     with open("audit-output/independent-settlement.json","w") as f: json.dump(report,f,indent=2,ensure_ascii=False)
     print(json.dumps({"windowRounds":min(len(records),40),"productionFinalWait":skipped_wait,"productionDecided":len(out),"counts":counts,"issues":{i:sum(i in x["issues"] for x in out) for x in out for i in x["issues"]}},ensure_ascii=False))
-    return 0 if counts["HIT"]+counts["MISS"]>0 else 3
+    # An access restriction is an infrastructure blocker, never a model MISS.
+    # Preserve a nonzero status and all original audit evidence for manual review.
+    return 0 if counts["HIT"]+counts["MISS"]>0 and counts["UNVERIFIED"]==0 else 3
 
 if __name__=="__main__":
     try: sys.exit(main())

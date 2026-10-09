@@ -889,6 +889,22 @@ function calculate(now = Date.now()) {
   if (proposedDirection === 'WAIT' && confirmedBandSign !== 0) {
     proposedDirection = confirmedBandSign > 0 ? 'UP' : 'DOWN';
   }
+  // V3-only regime confluence: recover a base direction when live momentum
+  // is moderate but the independent historical regime and PM agree.
+  // All existing post-direction quality/confirmation gates still apply.
+  const regimeConfluenceSign = priceSide !== 0 &&
+    priceSide * currentScore >= 0.25 &&
+    priceSide * regimeScore >= 0.70 &&
+    priceSide * score >= 0.55 &&
+    priceSide * distanceFromOpenBps >= 0.5 &&
+    flow15.count >= MIN_TRADES &&
+    !tradeStreamStalled && !absorptionRisk &&
+    dataAgeMs <= STALE_MS && depthAgeMs <= STALE_MS &&
+    predBookUsableForBand(priceSide, predictionMarketMeta, predictionBook, now)
+    ? priceSide : 0;
+  if (proposedDirection === 'WAIT' && regimeConfluenceSign !== 0) {
+    proposedDirection = regimeConfluenceSign > 0 ? 'UP' : 'DOWN';
+  }
 
   const proposedSign = proposedDirection === 'UP' ? 1 : proposedDirection === 'DOWN' ? -1 : 0;
   const regimeSign = regimeDirection === 'UP' ? 1 : regimeDirection === 'DOWN' ? -1 : 0;

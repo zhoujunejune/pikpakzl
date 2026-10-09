@@ -29,7 +29,10 @@ test('features use market facts, not an upstream UP/DOWN prediction',()=>{
   assert.equal(independentFeatures(facts({})),null);
   assert.equal(chooseIndependentDirection(0.80,0.05),'UP');
   assert.equal(chooseIndependentDirection(0.30,0.05),'DOWN');
-  assert.equal(chooseIndependentDirection(0.51,0.05),'WAIT');
+  assert.equal(chooseIndependentDirection(0.51),'UP');
+  assert.equal(chooseIndependentDirection(0.5),'UP');
+  assert.equal(chooseIndependentDirection(0.499999),'DOWN');
+  assert.equal(chooseIndependentDirection(NaN),null);
 });
 test('strict snapshot rejects after-window observations and missing scores',()=>{
   const r=row(3);
@@ -56,27 +59,28 @@ test('training uses only official settled snapshots before training and predicts
   const frozen=freezeIndependentModel(current,trained.model);
   assert.ok(frozen);
   assert.equal(frozen.predictionSource,'INDEPENDENT_MARKET_FEATURES');
-  assert.ok(['UP','DOWN','WAIT'].includes(frozen.direction));
+  assert.ok(['UP','DOWN'].includes(frozen.direction));
+  assert.equal(frozen.margin,undefined);
   assert.equal(freezeIndependentModel(row(170,'UP',false),trained.model),null);
 });
 test('future/retroactive model predictions never inflate forward accuracy or coverage',()=>{
   const model={version:'test-model',startRoundMs:base+300000,trainedAt:base};
   const settled=Array.from({length:200},(_,i)=>row(i+1,i%2===0?'UP':'DOWN'));
-  settled.forEach((r,i)=>{
-    if(i%4<2){
-      r.independentDirectionShadow={modelVersion:'test-model',direction:r.actual,trainedAt:base,
-        observedAt:r.roundStartMs+12000};
-    }
+  settled.forEach(r=>{
+    r.independentDirectionShadow={modelVersion:'test-model',direction:r.actual,trainedAt:base,
+      observedAt:r.roundStartMs+12000};
   });
   const s=independentForwardStats(settled,model);
   assert.equal(s.forwardRounds,200);
-  assert.equal(s.decidedRounds,100);
+  assert.equal(s.decidedRounds,200);
   assert.equal(s.accuracy,1);
   assert.equal(s.coverage,INDEPENDENT_TARGET.coverage);
-  assert.equal(s.status,'QUALIFIED_75_50_FOR_INDEPENDENT_REVIEW');
+  assert.equal(s.status,'QUALIFIED_75_100_LONG_TERM_REVIEW');
   settled[0].independentDirectionShadow.modelVersion='old-model';
   const s2=independentForwardStats(settled,model);
-  assert.equal(s2.decidedRounds,99);
+  assert.equal(s2.decidedRounds,199);
+  assert.equal(s2.coverage,0.995);
+  assert.equal(s2.dataGapCount,1);
   assert.equal(s2.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
 });
 test('low hit rate cannot qualify at or above 50% forward coverage',()=>{
@@ -91,4 +95,31 @@ test('low hit rate cannot qualify at or above 50% forward coverage',()=>{
   assert.equal(s.coverage,1);
   assert.equal(s.accuracy,0.7);
   assert.equal(s.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
+});
+
+test('100% full direction with just 75% aggregate must also satisfy rolling and direction health',()=>{
+  const model={version:'test-model',startRoundMs:base+300000,trainedAt:base};
+  const settled=Array.from({length:200},(_,i)=>row(i+1,i%2===0?'UP':'DOWN'));
+  settled.forEach((r,i)=>{
+    r.independentDirectionShadow={
+      modelVersion:'test-model',trainedAt:base,
+      direction:i>=50?r.actual:(r.actual==='UP'?'DOWN':'UP'),
+      observedAt:r.roundStartMs+12000
+    };
+  });
+  const s=independentForwardStats(settled,model);
+  assert.equal(s.accuracy,0.75);
+  assert.equal(s.coverage,1);
+  assert.equal(s.recent100.accuracy,1);
+  assert.equal(s.recent40.accuracy,1);
+  assert.equal(s.rolling200.accuracy,0.75);
+  assert.equal(s.status,'QUALIFIED_75_100_LONG_TERM_REVIEW');
+  settled.slice(-40).forEach(r=>{
+    r.independentDirectionShadow.direction=
+      r.actual==='UP'?'DOWN':'UP';
+  });
+  const bad=independentForwardStats(settled,model);
+  assert.equal(bad.coverage,1);
+  assert.ok(bad.recent40.accuracy<0.75);
+  assert.equal(bad.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
 });

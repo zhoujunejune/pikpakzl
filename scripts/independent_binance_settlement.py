@@ -47,6 +47,7 @@ def main():
     if not key or not secret:
         print("ERROR: GitHub Actions read-only audit secrets missing",file=sys.stderr);return 2
     snapshot=get_json(STATS)
+    if snapshot.get("ok") is not True: raise ValueError("round-stats snapshot not OK")
     records=snapshot.get("records") or []
     if not isinstance(records,list): raise ValueError("round-stats records not an array")
     out=[]; seen=set(); skipped_wait=0
@@ -62,6 +63,7 @@ def main():
         # Topic identity is recorded independently of settlement evidence.
         # Missing auditEvidence must not hide a persisted predictionMarketTopicId.
         topic_id=evidence.get("marketTopicId") or row.get("predictionMarketTopicId")
+        if topic_id is not None: topic_id=str(topic_id)
         # Require the persisted production lock; generatedAt is not proof of lock.
         locked_at=ms(row.get("productionLockedAt"))
         item={"round_id":round_id,"marketTopicId":topic_id,"prediction":prediction,"result":"UNVERIFIED","issues":[]}
@@ -77,7 +79,9 @@ def main():
                 if not isinstance(topic,dict): topic={}
                 # Never inject the requested topic ID into a response as if Binance returned it.
                 returned_id=topic.get("marketTopicId") or topic.get("topicId")
-                if returned_id is not None and str(returned_id)!=str(topic_id):
+                if returned_id is None:
+                    item["issues"].append("OFFICIAL_TOPIC_ID_NOT_RETURNED")
+                elif str(returned_id)!=str(topic_id):
                     item["issues"].append("OFFICIAL_TOPIC_ID_MISMATCH")
                 start,end=ms(topic.get("startDate")),ms(topic.get("endDate"))
                 direction=direction_from_detail(topic)

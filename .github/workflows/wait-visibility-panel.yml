@@ -1,0 +1,26 @@
+name: WAIT visibility panel checks
+on:
+  push:
+    branches:
+      - feat/live-wait-vs-preview-panel-20261010
+    paths:
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'railway-diagnostic/wait-visibility-panel.test.mjs'
+      - '.github/workflows/wait-visibility-panel.yml'
+  pull_request:
+    paths:
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'railway-diagnostic/wait-visibility-panel.test.mjs'
+      - '.github/workflows/wait-visibility-panel.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check railway-diagnostic/panel-stats-shell.mjs
+      - run: node --test railway-diagnostic/wait-visibility-panel.test.mjs

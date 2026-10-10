@@ -1180,6 +1180,16 @@ function calculate(now = Date.now()) {
         noBaseTrendThreshold:TREND_THRESHOLD,
         noBaseDirectionalScoreGap:Number((priceSide === 0 ? TREND_THRESHOLD : TREND_THRESHOLD - priceSide * currentScore).toFixed(6)),
         noBaseBlocker:priceSide === 0 ? 'PRICE_FLAT' : priceSide * currentScore < TREND_THRESHOLD ? 'CURRENT_SCORE_BELOW_TREND_THRESHOLD' : 'OTHER_GATE',
+        // Diagnostic-only provenance. Do not use this field in production gates.
+        directionRuleOrigin:reason === 'V6_LATE_HIGH_QUALITY_CONSENSUS'
+          ? 'LATE_HIGH_QUALITY_CONSENSUS'
+          : nextCandidate === 'WAIT' ? 'NO_BASE_DIRECTION' : reason,
+        directionRuleCandidates:{
+          trade15ShadowEligible:Boolean(trade15ShadowEligible),
+          trendBandShadowEligible:Boolean(trendBandShadowEligible),
+          lateConsensusEligible:Boolean(lateConsensusEligible),
+        },
+        directionRuleAttribution:'UNVERIFIED_PR23_PR24',
         candidateDirection:nextCandidate,
         candidateTicks,
         requiredTicks,

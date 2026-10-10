@@ -1,0 +1,23 @@
+name: Independent Settlement Audit Checks
+on:
+  pull_request:
+    paths:
+      - 'audit/independent-binance-settlement*.mjs'
+      - '.github/workflows/independent-settlement-audit.yml'
+  push:
+    paths:
+      - 'audit/independent-binance-settlement*.mjs'
+      - '.github/workflows/independent-settlement-audit.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check audit/independent-binance-settlement.mjs
+      - run: node --test audit/independent-binance-settlement.test.mjs

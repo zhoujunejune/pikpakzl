@@ -2901,6 +2901,7 @@ function selectiveV2EdgeRescueSummary() {
     }
     const allStats = summarize(all);
     const recentStats = summarize(recent);
+    const latest = all.length ? all[all.length-1] : null;
     const fused =
       (recentStats.samples >= SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES &&
        Number.isFinite(recentStats.accuracy) &&
@@ -2908,6 +2909,10 @@ function selectiveV2EdgeRescueSummary() {
       missStreak >= SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK;
     return {
       ...allStats,
+      latestEligible:latest ? {
+        roundStartMs:Number(latest.roundStartMs),
+        miss:latest.selectiveV2EdgeRescue.decision !== latest.actual,
+      } : null,
       recent6:recentStats,
       missStreak,
       fused,
@@ -2946,6 +2951,10 @@ function selectiveV2EdgeRescueSummary() {
     down,
     fuse:{
       globalFused,
+      latestEligible:eligible.length ? {
+        roundStartMs:Number(eligible[eligible.length-1].roundStartMs),
+        miss:eligible[eligible.length-1].selectiveV2EdgeRescue.decision !== eligible[eligible.length-1].actual,
+      } : null,
       globalReason:globalFused?'GLOBAL_RECENT_ACCURACY_BELOW_70_EARLY_FUSE':null,
       minGlobalSamples:SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES,
       minDirectionSamples:SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES,
@@ -5446,6 +5455,16 @@ shadowV5.deleteRetiredCandidates();
 shadowV7.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
+// One-time manual clearing of the existing Tier-1 rescue circuit. Persisted
+// rearm revision ensures normal restarts or future deploys cannot reset it again.
+{
+  const currentRescue = selectiveV2EdgeRescueSummary();
+  timedEdgeRescueFuse.rearmOnce('manual-rearm-current-fuse-2026-10-10-01', {
+    GLOBAL:currentRescue.fuse.latestEligible?.roundStartMs,
+    UP:currentRescue.up.latestEligible?.roundStartMs,
+    DOWN:currentRescue.down.latestEligible?.roundStartMs,
+  });
+}
 timedEdgeRescueFuse.reconcile(rounds.values());
 loadShadowCandidateArtifact();
 adaptiveGateShadow.ensureModel(Array.from(rounds.values()));

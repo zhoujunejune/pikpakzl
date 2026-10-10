@@ -25,11 +25,20 @@ export function selectVerifiedNoBase15s(row, status, now = Date.now()) {
       snapshot.observedAt > now || now - start > 20000 || now >= start + 300000 ||
       row.actual === 'UP' || row.actual === 'DOWN' || row.settledAt)
     return reject('NO_ELIGIBLE_PRESETTLEMENT_15S_FREEZE');
-  if (snapshot.facts?.dataFresh !== true || snapshot.facts?.bookMappingReliable !== true ||
-      snapshot.facts?.bookRoundAligned !== true ||
-      !Array.isArray(snapshot.facts?.gateFailures) || snapshot.facts.gateFailures.length ||
-      !finite(snapshot.facts?.upMid) || snapshot.facts.upMid < 0 ||
-      snapshot.facts.upMid > 1)
+  const fact=snapshot.facts;
+  const failures=fact?.gateFailures;
+  const cleanInput=fact?.dataFresh === true &&
+    Array.isArray(failures) && failures.length===0;
+  // Only the two dedicated prospective counterfactual pilots may present
+  // EXACTLY an absorption warning. Never waive stale data, an invalid topic,
+  // broken depth, stream stall, or any other feed-quality failure.
+  const absorptionOnly=fact?.dataFresh === false &&
+    fact?.absorptionRiskAtFreeze === true &&
+    Array.isArray(failures) && failures.length===1 &&
+    failures[0]==='ABSORPTION_RISK';
+  if ((!cleanInput && !absorptionOnly) ||
+      fact?.bookMappingReliable !== true || fact?.bookRoundAligned !== true ||
+      !finite(fact?.upMid) || fact.upMid<0 || fact.upMid>1)
     return reject('FROZEN_INPUT_QUALITY_NOT_PROVEN');
   if (!status || status.version !== V3_NO_BASE_15S_VERSION ||
       status.scope !== 'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S' ||
@@ -53,6 +62,11 @@ export function selectVerifiedNoBase15s(row, status, now = Date.now()) {
     Number.isInteger(c.maxConsecutiveMisses) && c.maxConsecutiveMisses <= 2
   ).sort((a,b)=>b.forwardAccuracy-a.forwardAccuracy || b.strictForwardSamples-a.strictForwardSamples);
   for (const proof of approved) {
+    const absorptionPilot=proof.candidateId==='ABS_PM_CURRENT15' ||
+      proof.candidateId==='ABS_PM_REGIME35';
+    // A new risk-classified model cannot be substituted for an ordinary
+    // clean model (or vice versa) even if the outcome stats look attractive.
+    if (absorptionOnly !== absorptionPilot) continue;
     const c = snapshot.candidates?.[proof.candidateId];
     const direction = c?.decision;
     if (!validDirection(direction) || c.qualified !== true ||
@@ -68,6 +82,7 @@ export function selectVerifiedNoBase15s(row, status, now = Date.now()) {
       strictForwardAccuracy:proof.forwardAccuracy,
       recent20Accuracy:proof.recent20.accuracy,
       verifiedScope:status.scope,
+      absorptionOnlyProspectivePilot:absorptionOnly,
     }};
   }
   return reject(approved.length ? 'QUALIFIED_MODEL_NOT_VALID_FOR_THIS_ROUND' : 'NO_75_PERCENT_FORWARD_QUALIFIED_MODEL');

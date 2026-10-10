@@ -13,6 +13,11 @@ export const V3_NO_BASE_20S_CONFIGS = Object.freeze([
   // Existing V3 0.60 production threshold remains completely unchanged.
   {id:'CURRENT_04_TREND_055_PM05',mode:'trend',currentMin:0.40,trendMin:0.55,pmMin:0.05},
   {id:'CURRENT_03_TREND_045_PM08',mode:'trend',currentMin:0.30,trendMin:0.45,pmMin:0.08},
+  // New prospective-only pilots for V3 no-base/flat-price regimes.
+  // Both need independent Binance prediction-market confirmation plus an
+  // independently signed component; no relaxed live V3/V2 trading gate.
+  {id:'PM_REGIME35_SUPPORT08',mode:'regime',regimeMin:0.35,pmMin:0.08},
+  {id:'PM_CURRENT25_SUPPORT08',mode:'currentGuard',currentMin:0.25,pmMin:0.08},
 ]);
 const finite=v=>v===null||v===undefined||v===''?null:(Number.isFinite(Number(v))?Number(v):null);
 const dir=s=>s>0?'UP':s<0?'DOWN':'WAIT';
@@ -32,6 +37,7 @@ export function freezeNoBase20s(row,facts,now=Date.now()){
   const upMid=finite(facts.predictionMarketUpMid);
   const current=finite(facts.currentScore),score=finite(facts.liveScore);
   const trend=finite(facts.currentTrendScore),distance=finite(facts.distanceFromOpenBps);
+  const regimeScore=finite(facts.regimeScore);
   const flow15=finite(facts.tradeCount15s);
   const depthAge=finite(facts.depthAgeMs);
   const streamLag=finite(facts.lastAggTradeAgeMs);
@@ -69,6 +75,19 @@ export function freezeNoBase20s(row,facts,now=Date.now()){
         if((regime==='UP'||regime==='DOWN')&&regime!==dir(pmSign)&&
           (finite(facts.regimeAgreement)??0)>=0.67)reasons.push('STRONG_REGIME_CONFLICT');
         if(reasons.length===0)sign=pmSign;
+      }else if(cfg.mode==='regime'||cfg.mode==='currentGuard'){
+        if(upMid===null||pmSign*(upMid-0.5)<cfg.pmMin)reasons.push('PM_SUPPORT_BELOW_MIN');
+        if(facts.predictionMarketConflict===true)reasons.push('PM_STRONG_CONFLICT');
+        if(cfg.mode==='regime' && (regimeScore===null||pmSign*regimeScore<cfg.regimeMin))
+          reasons.push('REGIME_SCORE_BELOW_MIN_OR_CONFLICT');
+        if(cfg.mode==='currentGuard' && (current===null||pmSign*current<cfg.currentMin))
+          reasons.push('CURRENT_BELOW_MIN_OR_CONFLICT');
+        if(cfg.mode==='currentGuard'){
+          const regime=String(facts.regimeDirection||'');
+          if((regime==='UP'||regime==='DOWN')&&regime!==dir(pmSign)&&
+             (finite(facts.regimeAgreement)??0)>=0.67)reasons.push('STRONG_REGIME_CONFLICT');
+        }
+        if(reasons.length===0)sign=pmSign;
       }else if(cfg.mode==='trend'){
         if(current===null||pmSign*current<cfg.currentMin)reasons.push('CURRENT_BELOW_MIN_OR_CONFLICT');
         if(trend===null||pmSign*trend<cfg.trendMin)reasons.push('TREND_BELOW_MIN_OR_CONFLICT');
@@ -86,7 +105,7 @@ export function freezeNoBase20s(row,facts,now=Date.now()){
     version:V3_NO_BASE_20S_VERSION,observedAt:now,round:start,observedDelayMs:delay,
     baseAbsentAtObservation:true,inputFrozenBeforeSettlement:true,
     productionEffect:'NONE_SHADOW_ONLY',
-    facts:{upMid,currentScore:current,blendedScore:score,currentTrendScore:trend,
+    facts:{upMid,currentScore:current,blendedScore:score,currentTrendScore:trend,regimeScore,
       distanceFromOpenBps:distance,flow15,predictionBookAgeMs:bookAge,
       sourceMarketTopicId:facts.predictionMarketTopicId??null,
       bookMappingReliable:facts.predictionMarketMappingReliable===true,

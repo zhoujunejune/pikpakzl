@@ -16,6 +16,7 @@ import { createShadowV7Client } from './shadow-v7-client.mjs';
 import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
+import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -139,6 +140,12 @@ const SELECTIVE_V2_EDGE_RESCUE_GLOBAL_MIN_SAMPLES = 5;
 const SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES = 5;
 const SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY = 0.70;
 const SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK = 3;
+const EDGE_RESCUE_FUSE_COOLDOWN_MINUTES = Math.max(5, Number(process.env.EDGE_RESCUE_FUSE_COOLDOWN_MINUTES || 30));
+const timedEdgeRescueFuse = createTimedEdgeRescueFuse({
+  file: HISTORY_FILE + '.edge-rescue-timed-fuse.json',
+  cooldownMs: EDGE_RESCUE_FUSE_COOLDOWN_MINUTES * 60 * 1000,
+  log,
+});
 
 // Forward-only expansion lanes. They only observe rounds that Tier-1 Edge Rescue
 // still rejects, so their strict-forward results measure genuinely incremental
@@ -2944,6 +2951,7 @@ function selectiveV2EdgeRescueSummary() {
       minDirectionSamples:SELECTIVE_V2_EDGE_RESCUE_DIRECTION_MIN_SAMPLES,
       minAccuracy:SELECTIVE_V2_EDGE_RESCUE_MIN_ACCURACY,
       maxMissStreak:SELECTIVE_V2_EDGE_RESCUE_MAX_MISS_STREAK,
+      timedCooldown:timedEdgeRescueFuse.status(),
     },
     production:{
       samples:productionRows.length,
@@ -2956,14 +2964,7 @@ function selectiveV2EdgeRescueSummary() {
 
 function selectiveV2EdgeRescueFuseState(direction) {
   const s = selectiveV2EdgeRescueSummary();
-  const dir = direction === 'UP' ? s.up : direction === 'DOWN' ? s.down : null;
-  if (s.fuse.globalFused) {
-    return {allowed:false,reason:s.fuse.globalReason,summary:s};
-  }
-  if (dir?.fused) {
-    return {allowed:false,reason:dir.fuseReason,summary:s};
-  }
-  return {allowed:true,reason:null,summary:s};
+  return {...timedEdgeRescueFuse.check(direction, s), summary:s};
 }
 
 function evaluateSelectiveV2EdgeRescueRow(row, selectiveQuality) {
@@ -4367,6 +4368,7 @@ async function settlePendingRounds() {
         const evidence = `OFFICIAL_${direction}:${official?.evidence || 'RESOLVED'}`;
         const legacyBefore = row.legacyOfficialDirectionBeforeRevalidation;
         applyOfficialSettlement(row, direction, evidence, Date.now());
+        timedEdgeRescueFuse.onSettled(row);
         if ((legacyBefore === 'UP' || legacyBefore === 'DOWN') && legacyBefore !== direction) {
           row.officialDirectionCorrectedFrom = legacyBefore;
           row.officialDirectionCorrectedAt = Date.now();
@@ -5181,7 +5183,9 @@ function productionSignalPayload(now = Date.now()) {
         shadowForwardStatus:'EDGE_RESCUE_ACTIVE',
         shadowForwardSamples:edgeFuse?.summary?.eligibleStrictForward?.samples ?? 0,
       };
-      freezeProductionLock(row, live);
+      if (freezeProductionLock(row, live)) {
+        timedEdgeRescueFuse.recordLock(baseDirection, row.roundStartMs);
+      }
       log('selective_v2_edge_rescue_production_lock', {
         round:row.roundStartMs,
         direction:baseDirection,
@@ -5442,6 +5446,7 @@ shadowV5.deleteRetiredCandidates();
 shadowV7.deleteRetiredCandidates();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
+timedEdgeRescueFuse.reconcile(rounds.values());
 loadShadowCandidateArtifact();
 adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
 preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));

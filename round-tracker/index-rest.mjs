@@ -19,7 +19,8 @@ import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, selectCurrent03PmAgree15s, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
 import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL, selectPmCurrent25Support0815s } from './pm-current25-support08-production.mjs';
-import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, candidateProductionSource, forward15sProofPass, selectForwardGated15sCandidates } from './unified-15s-candidate-router.mjs';
+import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass } from './unified-15s-candidate-router.mjs';
+import { selectLastResort15sBackups, lastResortSource, LOW_PRIORITY_BACKUP_VERSION } from './last-resort-15s-backups.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -167,12 +168,12 @@ const timedPmCurrent25Fuse = createTimedEdgeRescueFuse({
 });
 // Every additional forward-qualified candidate has independent 30-minute
 // global/UP/DOWN circuits and official production-settlement provenance.
-const verified15sFuses = Object.fromEntries(FORWARD_GATED_15S_IDS.map(id => [
+const lastResort15sFuses = Object.fromEntries(FORWARD_GATED_15S_IDS.map(id => [
   id,
   createTimedEdgeRescueFuse({
-    file: HISTORY_FILE + '.v3-no-base-15s-' + id.toLowerCase() + '-fuse.json',
+    file: HISTORY_FILE + '.last-resort-15s-' + id.toLowerCase() + '-fuse.json',
     cooldownMs: 30 * 60 * 1000,
-    productionSource: candidateProductionSource(id),
+    productionSource: lastResortSource(id),
     log,
   }),
 ]));
@@ -4410,7 +4411,7 @@ async function settlePendingRounds() {
         timedEdgeRescueFuse.onSettled(row);
         timedCurrent03PmFuse.onSettled(row);
         timedPmCurrent25Fuse.onSettled(row);
-        for (const circuit of Object.values(verified15sFuses)) circuit.onSettled(row);
+        for (const circuit of Object.values(lastResort15sFuses)) circuit.onSettled(row);
         if ((legacyBefore === 'UP' || legacyBefore === 'DOWN') && legacyBefore !== direction) {
           row.officialDirectionCorrectedFrom = legacyBefore;
           row.officialDirectionCorrectedAt = Date.now();
@@ -5035,16 +5036,17 @@ function all15sCandidateRegistryStats() {
   const status = ALL_15S_IDS.map(id => {
     const manual = id === PM_CURRENT25_SUPPORT08_MODEL || id === CURRENT03_PM_AGREE_MODEL;
     const source = id === PM_CURRENT25_SUPPORT08_MODEL ? PM_CURRENT25_SUPPORT08_SOURCE :
-      id === CURRENT03_PM_AGREE_MODEL ? CURRENT03_PM_AGREE_SOURCE : candidateProductionSource(id);
+      id === CURRENT03_PM_AGREE_MODEL ? CURRENT03_PM_AGREE_SOURCE : lastResortSource(id);
     const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
-      id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse : verified15sFuses[id];
+      id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse : lastResort15sFuses[id];
     const proof = byId.get(id);
-    const eligible = manual || forward15sProofPass(proof);
+    const eligible = true;
     return {
       candidateId:id,
       source,
-      entryPolicy:manual ? 'USER_OPT_IN_UNVALIDATED' : 'STRICT_FORWARD_75_AND_PER_SIDE_70',
+      entryPolicy:manual ? 'USER_OPT_IN_UNVALIDATED' : 'OPTION_B_LAST_RESORT_UNVERIFIED',
       eligibleForProduction:eligible,
+      forwardQualified:forward15sProofPass(proof),
       candidateForward:proof || null,
       production:current03PmAgreeProductionFuseSummary(rounds, source).production,
       timedFuse:fuse.status(),
@@ -5055,8 +5057,8 @@ function all15sCandidateRegistryStats() {
     configuredCandidates:status.length,
     userOptInCandidates:status.filter(x=>x.entryPolicy === 'USER_OPT_IN_UNVALIDATED').length,
     forwardGatedCandidates:status.filter(x=>x.entryPolicy !== 'USER_OPT_IN_UNVALIDATED').length,
-    forwardQualifiedCandidates:status.filter(x=>x.entryPolicy !== 'USER_OPT_IN_UNVALIDATED' && x.eligibleForProduction).length,
-    productionRoute:'STRICT_FORWARD_QUALIFIED_FIRST_THEN_PM_CURRENT25_THEN_CURRENT03_THEN_ORIGINAL_22S',
+    forwardQualifiedCandidates:status.filter(x=>x.entryPolicy !== 'USER_OPT_IN_UNVALIDATED' && x.forwardQualified).length,
+    productionRoute:'PM_CURRENT25_THEN_CURRENT03_THEN_ORIGINAL_22S_THEN_NINE_OPTION_B_LAST_RESORT_25_TO_35S',
     candidates:status,
   };
 }
@@ -5081,7 +5083,7 @@ function productionSignalPayload(now = Date.now()) {
       source: row.productionSource || 'UNKNOWN',
       model: row.productionModel || null,
       modelVersion: row.productionModelVersion || null,
-      facts: row.productionSource === CURRENT03_PM_AGREE_SOURCE || row.productionSource === PM_CURRENT25_SUPPORT08_SOURCE || FORWARD_GATED_15S_IDS.some(id => row.productionSource === candidateProductionSource(id))
+      facts: row.productionSource === CURRENT03_PM_AGREE_SOURCE || row.productionSource === PM_CURRENT25_SUPPORT08_SOURCE || FORWARD_GATED_15S_IDS.some(id => row.productionSource === lastResortSource(id))
         ? (row.v3NoBase15sShadow?.facts ?? null)
         : row.productionSource === VIP75_PRIMARY_SOURCE ||
         row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
@@ -5099,56 +5101,6 @@ function productionSignalPayload(now = Date.now()) {
     };
     logProductionSignalState(frozenLive);
     return { ok: true, live: frozenLive };
-  }
-
-  // All 11 configured: nine additional shadow pilots may lock ONLY after
-  // strict-forward 75% and per-direction quality proof; their own official
-  // production fuse can still veto the lock.
-  if (productionUsesSelectiveV2() && row) {
-    const forwardStatus = v3NoBase15sShadowSummary(rounds);
-    const eligiblePilots = selectForwardGated15sCandidates(row, forwardStatus, now);
-    for (const selected of eligiblePilots.candidates) {
-      const fuse = verified15sFuses[selected.id];
-      const officialProduction = current03PmAgreeProductionFuseSummary(rounds, selected.source);
-      const decision = fuse.check(selected.direction, officialProduction, now);
-      if (!decision.allowed) continue;
-      const live = {
-        round:row.roundStartMs,
-        status:'LOCKED',
-        signal:{
-          direction:selected.direction,
-          score:selected.score,
-          confidence:null,
-          modelProbability:null,
-        },
-        input:{round:row.roundStartMs},
-        generatedAt:selected.observedAt,
-        source:selected.source,
-        model:selected.id,
-        modelVersion:V3_NO_BASE_15S_VERSION,
-        facts:row.v3NoBase15sShadow.facts,
-        productionPolicy:productionPolicyName(),
-        fallbackUsed:true,
-        fallbackReason:'FORWARD_75_AND_SIDE_70_VERIFIED_15S_NO_BASE',
-        accuracyQualification:'STRICT_FORWARD_POLICY_75_ELIGIBLE_NOT_INDEPENDENTLY_CERTIFIED',
-        verified15sProof:selected.proof,
-        observedDelayMs:selected.observedAt-row.roundStartMs,
-        independentFuse:decision,
-      };
-      if (freezeProductionLock(row, live)) {
-        fuse.recordLock(selected.direction, row.roundStartMs);
-        log('forward_qualified_15s_candidate_production_lock',{
-          round:row.roundStartMs,
-          candidateId:selected.id,
-          direction:selected.direction,
-          source:selected.source,
-          qualifiedProof:selected.proof,
-          observedAt:selected.observedAt,
-        });
-      }
-      logProductionSignalState(live);
-      return {ok:true,live};
-    }
   }
 
   // Two previously user-opted-in 15s candidates, unchanged.
@@ -5423,11 +5375,48 @@ function productionSignalPayload(now = Date.now()) {
       return {ok:true,live};
     }
 
-    // Other experimental no-base, 20s and Edge Expansion candidates remain
-    // shadow-only until strict-forward verified. The original two user
-    // opted-in candidates are unchanged; all remaining new sources need
-    // threshold proof plus their own 30m fuse, and none can bypass the
-    // unchanged Selective V2/Tier-1 path at the normal 22s deadline.
+    // OPTION B: only after the two earlier 15s routes and Selective V2
+    // / Tier-1 have declined a production lock, try the nine strictly
+    // pre-frozen experimental candidates. They are NOT 75%-verified.
+    // Permit 25-35s only to let the regular 22s base finish first.
+    if (!vip75Backup) {
+      const lastResort = selectLastResort15sBackups(row, now);
+      for (const chosen of lastResort.candidates) {
+        const fuse = lastResort15sFuses[chosen.id];
+        const stats = current03PmAgreeProductionFuseSummary(rounds, chosen.source);
+        const circuit = fuse.check(chosen.direction, stats, now);
+        if (!circuit.allowed) continue;
+        const live = {
+          round:row.roundStartMs,
+          status:'LOCKED',
+          signal:{direction:chosen.direction,score:chosen.score,
+            confidence:null,modelProbability:null},
+          input:{round:row.roundStartMs},
+          generatedAt:chosen.observedAt,
+          source:chosen.source,
+          model:chosen.id,
+          modelVersion:LOW_PRIORITY_BACKUP_VERSION,
+          facts:row.v3NoBase15sShadow?.facts ?? null,
+          productionPolicy:productionPolicyName(),
+          fallbackUsed:true,
+          fallbackReason:'UNVERIFIED_LAST_RESORT_15S_AFTER_V2_WAIT',
+          accuracyQualification:'UNVERIFIED_OPTION_B_EXPERIMENTAL',
+          observedDelayMs:chosen.observedAt-row.roundStartMs,
+          independentFuse:circuit,
+        };
+        if (freezeProductionLock(row, live)) {
+          fuse.recordLock(chosen.direction,row.roundStartMs);
+          log('last_resort_15s_production_lock',{
+            round:row.roundStartMs,candidateId:chosen.id,
+            direction:chosen.direction,source:chosen.source,
+            observationTime:chosen.observedAt,
+            warning:'UNVALIDATED_LIVE_STRATEGY',
+          });
+          logProductionSignalState(live);
+          return {ok:true,live};
+        }
+      }
+    }
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
@@ -5685,7 +5674,7 @@ invalidateLegacyWinnerFlagSettlements();
 timedEdgeRescueFuse.reconcile(rounds.values());
 timedCurrent03PmFuse.reconcile(rounds.values());
 timedPmCurrent25Fuse.reconcile(rounds.values());
-for (const circuit of Object.values(verified15sFuses)) circuit.reconcile(rounds.values());
+for (const circuit of Object.values(lastResort15sFuses)) circuit.reconcile(rounds.values());
 loadShadowCandidateArtifact();
 adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
 preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));

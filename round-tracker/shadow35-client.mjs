@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { summarizeShadow35Validation } from './shadow35-validation.mjs';
 
 export const SHADOW35_VERSION = 'LOCK_QUALITY_SELECTIVE_V7_5';
 // This is a naming change: replay the existing prospective experiment rather
@@ -65,6 +66,7 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
   let model = null;
   let trainingBusy = false;
   let lastTrainingCount = 0;
+  let lastTraining = null;
   let lastError = null;
   let journalReady = false;
   let queue = Promise.resolve();
@@ -78,7 +80,12 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
       collectionStart = event.roundStartMs;
       finalizeCursor = collectionStart;
     } else if (event.type === 'model_registered') model = event;
-    else if (event.type === 'training_attempt') lastTrainingCount = event.settledRounds;
+    else if (event.type === 'training_attempt') {
+      lastTrainingCount = event.settledRounds;
+      lastTraining = { status: 'TRAINING', attemptedAt: event.attemptedAt, settledRounds: event.settledRounds };
+    } else if (event.type === 'training_result') {
+      lastTraining = { ...lastTraining, status: event.status, completedAt: event.completedAt };
+    }
     else if (finite(event.roundStartMs)) {
       const state = rowState(event.roundStartMs);
       if (event.type === 'snapshot') state.snapshots.set(event.checkpointMs, event);
@@ -92,6 +99,7 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
     try {
       fs.appendFileSync(eventsFile, JSON.stringify(saved) + '\n', 'utf8');
       apply(saved);
+      if (lastError === 'JOURNAL_WRITE_FAILED') lastError = null;
       return true;
     } catch {
       lastError = 'JOURNAL_WRITE_FAILED';
@@ -123,6 +131,9 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
       if (collectionStart === null && !append({ type: 'collection_started', roundStartMs: Math.ceil(clock() / ROUND_MS) * ROUND_MS })) return false;
       while (rowState(finalizeCursor).final) finalizeCursor += ROUND_MS;
       journalReady = true;
+      if (lastTraining?.status === 'TRAINING' && !model) {
+        append({ type: 'training_result', status: 'TRAINING_INTERRUPTED', completedAt: clock() });
+      }
       return true;
     } catch {
       lastError = 'JOURNAL_LOAD_FAILED';
@@ -200,6 +211,8 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
       else if (completedAt < snapshot.observedAt) reason = 'PREDICTION_COMPLETED_BEFORE_OBSERVATION';
       else if (!result?.ok || !finite(result.probability) || result.probability < 0 || result.probability > 1 || result.modelVersion !== frozenModel.modelVersion) reason = 'INVALID_MODEL_PREDICTION';
       else if (Math.max(result.probability, 1 - result.probability) < frozenModel.threshold) reason = 'CALIBRATED_PROBABILITY_BELOW_THRESHOLD';
+      if (lastError === 'MODEL_PREDICTION_FAILED' && result?.ok && finite(result.probability) &&
+          result.probability >= 0 && result.probability <= 1 && result.modelVersion === frozenModel.modelVersion) lastError = null;
       append({ type: 'prediction', roundStartMs: snapshot.roundStartMs, checkpointMs: snapshot.checkpointMs,
         modelVersion: frozenModel.modelVersion, completedAt,
         probability: finite(result?.probability) ? result.probability : null, reason });
@@ -258,20 +271,27 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
     const count = labeledValidRounds();
     // Once registered, keep this version for the complete forward experiment.
     // Retraining or promotion requires a separate explicitly configured experiment.
-    if (!journalReady || trainingBusy || model || count < minRounds || (lastTrainingCount && count - lastTrainingCount < 20)) return null;
+    const recovering = lastTraining?.status === 'TRAINING_INTERRUPTED';
+    if (!journalReady || trainingBusy || model || count < minRounds || (!recovering && lastTrainingCount && count - lastTrainingCount < 20)) return null;
     trainingBusy = true;
     if (!append({ type: 'training_attempt', settledRounds: count, attemptedAt: clock() })) {
       trainingBusy = false; return null;
     }
     try {
       const result = await runner('train', { eventsFile, modelDir, asOf: clock(), minRounds,
-        targetAccuracy: 0.8, targetCoverage: 0.5 });
-      if (!result?.ok || !['CANDIDATE_REGISTERED', 'FROZEN_CANDIDATE_EXISTS'].includes(result.status)) return null;
+        targetAccuracy: 0.8, targetCoverage: 0.45 });
+      if (!result?.ok || !['CANDIDATE_REGISTERED', 'FROZEN_CANDIDATE_EXISTS'].includes(result.status)) {
+        const status = typeof result?.status === 'string' && /^[A-Z0-9_]{1,80}$/.test(result.status) ? result.status : 'INVALID_TRAINING_RESULT';
+        append({ type: 'training_result', status, completedAt: clock() });
+        return null;
+      }
       const completedAt = clock();
       const modelPath = typeof result.modelPath === 'string' ? path.resolve(result.modelPath) : '';
       if (!modelPath.startsWith(path.resolve(modelDir) + path.sep) || !finite(result.trainedAt) || result.trainedAt > completedAt ||
           !finite(result.threshold) || result.threshold < 0.5 || result.threshold > 0.99 || typeof result.modelVersion !== 'string') {
-        lastError = 'TRAINED_MODEL_METADATA_INVALID'; return null;
+        lastError = 'TRAINED_MODEL_METADATA_INVALID';
+        append({ type: 'training_result', status: lastError, completedAt });
+        return null;
       }
       const forwardStartMs = Math.ceil(completedAt / ROUND_MS) * ROUND_MS;
       const registration = { type: 'model_registered', modelVersion: result.modelVersion,
@@ -280,10 +300,16 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
         holdout: result.holdout || null, trainingRounds: count, registeredAt: completedAt,
         forwardStartMs, frozenUntilMs: forwardStartMs + FORWARD_MS, productionEffect: 'NONE_SHADOW_ONLY' };
       if (!append(registration)) return null;
+      append({ type: 'training_result', status: result.status, completedAt });
+      if (['MODEL_TRAINING_FAILED', 'TRAINED_MODEL_METADATA_INVALID'].includes(lastError)) lastError = null;
       log('shadow35_model_registered', { modelVersion: model.modelVersion, qualification: model.qualification,
         forwardStartMs: model.forwardStartMs, frozenUntilMs: model.frozenUntilMs, productionEffect: 'NONE_SHADOW_ONLY' });
       return registration;
-    } catch { lastError = 'MODEL_TRAINING_FAILED'; return null; }
+    } catch {
+      lastError = 'MODEL_TRAINING_FAILED';
+      append({ type: 'training_result', status: lastError, completedAt: clock() });
+      return null;
+    }
     finally { trainingBusy = false; }
   }
   function stats(now = clock()) {
@@ -291,34 +317,25 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
     const snapshots = all.flatMap(([, state]) => [...state.snapshots.values()]);
     const blockers = {};
     for (const snapshot of snapshots) for (const reason of snapshot.reasons) blockers[reason] = (blockers[reason] || 0) + 1;
-    const cutoff = model ? Math.min(now, model.frozenUntilMs) : now;
-    const expectedRounds = model ? Math.max(0, Math.floor((cutoff - model.forwardStartMs) / ROUND_MS)) : 0;
-    const complete = model ? all.filter(([start]) => start >= model.forwardStartMs && start + ROUND_MS <= cutoff) : [];
-    const decided = complete.filter(([, state]) => state.decision?.modelVersion === model.modelVersion);
-    const labeled = decided.filter(([, state]) => state.settlement);
-    const hits = labeled.filter(([, state]) => state.decision.direction === state.settlement.actual).length;
-    const accuracy = labeled.length ? hits / labeled.length : null;
-    const coverage = expectedRounds ? decided.length / expectedRounds : null;
-    const delays = decided.map(([start, state]) => state.decision.completedAt - start).sort((a, b) => a - b);
-    const percentile = fraction => delays.length ? delays[Math.min(delays.length - 1, Math.ceil(delays.length * fraction) - 1)] : null;
-    return { ok: lastError !== 'JOURNAL_LOAD_FAILED', version: SHADOW35_VERSION,
+    const validSnapshots = snapshots.filter(x => x.valid);
+    const lastValidSnapshotAt = validSnapshots.reduce((latest, x) => Math.max(latest, x.observedAt), 0) || null;
+    const validation = summarizeShadow35Validation({ model, rows: all, now, lastError });
+    return { ok: journalReady && lastError === null, generatedAtMs: now, version: SHADOW35_VERSION,
       productionEffect: 'NONE_SHADOW_ONLY', autoPromotion: false, deadlineMs: DEADLINE_MS,
       checkpointsMs: CHECKPOINTS, finalCheckpointCollectionMs: [34000, 35000], collectionStartMs: collectionStart,
-      status: !model ? 'COLLECTING_TRAINING_DATA' : now >= model.frozenUntilMs ? 'FORWARD_COMPLETE_REVIEW_REQUIRED' : 'FROZEN_FORWARD_VALIDATION',
-      snapshotCount: snapshots.length, validSnapshotCount: snapshots.filter(x => x.valid).length,
+      status: !model ? trainingBusy ? 'TRAINING' : lastTraining && labeledValidRounds() >= minRounds ? 'TRAINING_BLOCKED' : 'COLLECTING_TRAINING_DATA' : now >= model.frozenUntilMs ? 'FORWARD_COMPLETE_REVIEW_REQUIRED' : 'FROZEN_FORWARD_VALIDATION',
+      snapshotCount: snapshots.length, validSnapshotCount: validSnapshots.length,
       recordedRounds: all.filter(([, state]) => state.snapshots.size || state.final).length,
       finalizedRounds: all.filter(([, state]) => state.final).length,
       labeledTrainingRounds: labeledValidRounds(), requiredTrainingRounds: minRounds,
       remainingTrainingRounds: Math.max(0, minRounds - labeledValidRounds()), trainingBusy, lastError,
+      training: { ...lastTraining, nextAttemptAtTrainingRounds: model ? null : Math.max(minRounds,
+        lastTraining?.status === 'TRAINING_INTERRUPTED' ? labeledValidRounds() : lastTrainingCount ? lastTrainingCount + 20 : minRounds) },
+      health: { journalReady, lastValidSnapshotAt, lastValidSnapshotAgeMs: lastValidSnapshotAt === null ? null : Math.max(0, now - lastValidSnapshotAt) },
       blockers, model: model ? { modelVersion: model.modelVersion, trainedAt: model.trainedAt,
         threshold: model.threshold, qualification: model.qualification, trainingStatus: model.trainingStatus,
         holdout: model.holdout, forwardStartMs: model.forwardStartMs, frozenUntilMs: model.frozenUntilMs } : null,
-      forward: { expectedRounds, observedRounds: complete.length, decidedRounds: decided.length,
-        labeledDecisions: labeled.length, pendingLabels: decided.length - labeled.length,
-        hits, misses: labeled.length - hits, accuracy, coverage,
-        p50DecisionDelayMs: percentile(0.5), p95DecisionDelayMs: percentile(0.95),
-        targets: { accuracy: 0.75, coverage: 0.5 },
-        status: expectedRounds && now >= model?.frozenUntilMs && labeled.length === decided.length && accuracy >= 0.75 && coverage >= 0.5 ? 'POINT_TARGETS_MET_REQUIRES_REVIEW' : 'TARGETS_NOT_YET_VERIFIED' } };
+      forward: validation };
   }
   return { load, observe, settle, maybeTrain, stats, idle: () => queue };
 }

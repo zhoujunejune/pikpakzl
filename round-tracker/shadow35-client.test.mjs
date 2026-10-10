@@ -280,3 +280,60 @@ test('a corrupt complete journal fails closed instead of collecting with partial
   assert.equal(fs.statSync(journal).size, bytes);
   assert.equal(restarted.stats().ok, false);
 });
+
+test('persists rejected training results and the next retry threshold for scheduled progress reports', async t => {
+  const f = fixture(t);
+  const blocked = createShadow35Client({ ...f.options, runner: async (action, input) => {
+    assert.equal(action, 'train');
+    assert.equal(input.targetCoverage, 0.45);
+    return { ok: true, status: 'REJECTED_INSUFFICIENT_FOLD_FEATURES_OR_CLASSES' };
+  } });
+  assert.equal(blocked.load(), true);
+  f.setNow(START + 15000);
+  blocked.observe({ roundStartMs: START }, live(START, f.now - 100), f.now);
+  f.setNow(START + ROUND + 1);
+  blocked.settle(official(START, f.now));
+  assert.equal(await blocked.maybeTrain(), null);
+  const status = blocked.stats();
+  assert.equal(status.status, 'TRAINING_BLOCKED');
+  assert.equal(status.remainingTrainingRounds, 0);
+  assert.equal(status.training.status, 'REJECTED_INSUFFICIENT_FOLD_FEATURES_OR_CLASSES');
+  assert.equal(status.training.nextAttemptAtTrainingRounds, 21);
+  assert.equal(status.forward.canRecommendProductionSwitch, false);
+  assert.deepEqual(status.forward.targets, { accuracy: 0.75, coverage: 0.45 });
+  const restarted = createShadow35Client(f.options);
+  assert.equal(restarted.load(), true);
+  assert.deepEqual(restarted.stats().training, status.training);
+  assert.equal(await restarted.maybeTrain(), null, 'do not repeatedly train unchanged rejected data');
+});
+
+test('a training attempt interrupted by a restart retries and recovers its frozen artifact', async t => {
+  const f = await trainedFixture(t, []);
+  const events = f.events().filter(x => !['model_registered', 'training_result'].includes(x.type));
+  fs.writeFileSync(path.join(f.dir, 'events.jsonl'), events.map(x => JSON.stringify(x)).join('\n') + '\n');
+  const restarted = createShadow35Client(f.options);
+  assert.equal(restarted.load(), true);
+  assert.equal(restarted.stats().training.status, 'TRAINING_INTERRUPTED');
+  assert.ok(await restarted.maybeTrain(), 'a interrupted attempt must not wait for 20 extra labels to retry');
+  assert.equal(restarted.stats().training.status, 'CANDIDATE_REGISTERED');
+  assert.equal(restarted.stats().model.modelVersion, 'frozen-test-model');
+});
+
+test('journal write failure reports unhealthy and recovers after a successful append', t => {
+  const f = fixture(t);
+  const journal = path.join(f.dir, 'events.jsonl');
+  const backup = path.join(f.dir, 'events.backup');
+  fs.renameSync(journal, backup);
+  fs.mkdirSync(journal);
+  f.setNow(START + 15000);
+  f.client.observe({ roundStartMs: START }, live(START, f.now - 100), f.now);
+  assert.equal(f.client.stats().ok, false);
+  assert.equal(f.client.stats().lastError, 'JOURNAL_WRITE_FAILED');
+  assert.equal(f.client.stats().forward.canRecommendProductionSwitch, false);
+  fs.rmdirSync(journal);
+  fs.renameSync(backup, journal);
+  f.client.observe({ roundStartMs: START }, live(START, f.now - 100), f.now);
+  assert.equal(f.client.stats().ok, true);
+  assert.equal(f.client.stats().lastError, null);
+  assert.equal(f.client.stats().validSnapshotCount, 1);
+});

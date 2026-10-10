@@ -4518,8 +4518,8 @@ function freezeProductionLock(row, live) {
   if (row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN') return false;
 
   row.productionPrediction = direction;
-  row.productionConfidence = Number.isFinite(Number(live?.signal?.confidence)) ? Number(live.signal.confidence) : null;
-  row.productionScore = Number.isFinite(Number(live?.signal?.score)) ? Number(live.signal.score) : null;
+  row.productionConfidence = live?.signal?.confidence == null ? null : (Number.isFinite(Number(live.signal.confidence)) ? Number(live.signal.confidence) : null);
+  row.productionScore = live?.signal?.score == null ? null : (Number.isFinite(Number(live.signal.score)) ? Number(live.signal.score) : null);
   row.productionSource = live?.source || 'UNKNOWN';
   row.productionGeneratedAt = Number.isFinite(Number(live?.generatedAt)) ? Number(live.generatedAt) : Date.now();
   row.productionDelayMs = Math.max(0, Number(row.productionGeneratedAt) - Number(row.roundStartMs));

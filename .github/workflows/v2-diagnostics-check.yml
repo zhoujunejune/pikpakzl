@@ -1,0 +1,26 @@
+name: V2 diagnostic validation
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/index-rest.mjs'
+      - '.github/workflows/v2-diagnostics-check.yml'
+  workflow_dispatch:
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check syntax
+        run: node --check round-tracker/index-rest.mjs
+      - name: Check diagnostic fields
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const code = fs.readFileSync('round-tracker/index-rest.mjs','utf8');
+          for (const field of ['baseDirectionDiagnostic:', 'A_V3_NO_BASE_DIRECTION', 'B_SELECTIVE_V2_REJECTED', 'edgeRescueFuseReason:', 'v2GateReasons:']) assert.ok(code.includes(field), `missing ${field}`);
+          assert.ok(code.includes("waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|')"));
+          NODE

@@ -6,6 +6,7 @@ on:
       - 'round-tracker/v3-no-base-20s-audit*.mjs'
       - 'round-tracker/v3-trend-band-forward*.mjs'
       - 'round-tracker/index-rest.mjs'
+      - 'round-tracker/verified-no-base-20s*.mjs'
       - '.github/workflows/v3-no-base-audit-tests.yml'
   workflow_dispatch:
 
@@ -28,5 +29,7 @@ jobs:
           node --check round-tracker/v3-trend-band-forward.test.mjs
           node --check round-tracker/index-rest.mjs
           node --check round-tracker/v3-no-base-20s-audit.test.mjs
+          node --check round-tracker/verified-no-base-20s.mjs
+          node --check round-tracker/verified-no-base-20s.test.mjs
       - name: Run 20-second strict-forward regression tests
-        run: node --test round-tracker/v3-no-base-20s-audit.test.mjs round-tracker/v3-trend-band-forward.test.mjs
+        run: node --test round-tracker/v3-no-base-20s-audit.test.mjs round-tracker/v3-trend-band-forward.test.mjs round-tracker/verified-no-base-20s.test.mjs

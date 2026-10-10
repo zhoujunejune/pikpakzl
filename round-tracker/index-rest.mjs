@@ -11,6 +11,7 @@ import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD
 import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
 import { selectVerifiedNoBase20s, VERIFIED_NO_BASE_SOURCE } from './verified-no-base-20s.mjs';
 import { selectVerifiedNoBase15s, VERIFIED_NO_BASE_SOURCE as VERIFIED_NO_BASE_15S_SOURCE } from './verified-no-base-15s.mjs';
+import { USER_CURRENT_PM_VERSION, USER_CURRENT_PM_SOURCE, USER_CURRENT_PM_START_MS, freezeUserCurrentPm, selectUserCurrentPm, userCurrentPmFuse } from './user-current-pm-rescue.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
@@ -4064,6 +4065,30 @@ async function pollSignal() {
         saveHistory();
       }
     }
+    // User-selected formula uses a separate immutable prospective capture,
+    // including V3 base directions that failed Selective V2. The ordinary
+    // no-base 15s shadow and its 75%-qualification gate are untouched.
+    if (
+      liveFacts && !row.userCurrentPm15s &&
+      Number(row.roundStartMs) >= USER_CURRENT_PM_START_MS &&
+      row.productionPrediction !== 'UP' && row.productionPrediction !== 'DOWN'
+    ) {
+      const userCandidate=freezeUserCurrentPm(row,liveFacts,Date.now());
+      if(userCandidate){
+        row.userCurrentPm15s=userCandidate;
+        saveHistory();
+        log('user_current_pm_15s_frozen',{
+          round:row.roundStartMs,
+          direction:userCandidate.direction,
+          reasons:userCandidate.reasons,
+          observedDelayMs:userCandidate.observedDelayMs,
+          sourceMarketTopicId:userCandidate.sourceMarketTopicId,
+          absorptionRisk:userCandidate.facts?.absorptionRisk,
+          userSelected:true,
+          qualification:'UNVERIFIED_RETROSPECTIVE_9_OF_11',
+        });
+      }
+    }
     // Capture a strictly prospective 15s rescue candidate before the V3 20s
     // direction deadline. This does not bypass the Selective V2/Edge filters.
     if (
@@ -5333,6 +5358,51 @@ function productionSignalPayload(now = Date.now()) {
         });
         logProductionSignalState(live);
         return { ok:true, live };
+      }
+    }
+
+    // User explicitly chose CURRENT>=0.25 + aligned PM strength product
+    // >=0.0075 as an IMMEDIATE production fallback. This lane is separate
+    // from the still-qualified 75% no-base paths and keeps its own early
+    // immutable inputs, official-outcome error fuse and original direction
+    // conflict protection. It is NOT proven to yield >=70% live accuracy.
+    const chosenRescue=selectUserCurrentPm(row,rounds,Date.now());
+    if(chosenRescue.allowed && chosenRescue.candidate){
+      const c=chosenRescue.candidate;
+      const live={
+        round:row.roundStartMs,
+        status:'LOCKED',
+        signal:{
+          direction:c.direction,
+          score:c.score,
+          confidence:null,
+          modelProbability:null,
+        },
+        input:{round:row.roundStartMs},
+        generatedAt:c.generatedAt,
+        source:USER_CURRENT_PM_SOURCE,
+        model:USER_CURRENT_PM_VERSION,
+        modelVersion:USER_CURRENT_PM_VERSION,
+        facts:row.userCurrentPm15s.facts,
+        productionPolicy:productionPolicyName(),
+        fallbackUsed:true,
+        fallbackReason:'USER_SELECTED_CURRENT_PM_RESCUE_15S',
+        accuracyQualification:'UNVERIFIED_USER_DIRECTED_RETROSPECTIVE_9_OF_11',
+        userCurrentPmFuse:chosenRescue.fuse,
+      };
+      if(freezeProductionLock(row,live)){
+        log('user_current_pm_production_lock',{
+          round:row.roundStartMs,direction:c.direction,
+          score:c.score,pmUpMid:c.pmUpMid,
+          combinedScore:c.combinedScore,
+          absorptionRisk:c.absorptionRisk,
+          observedAt:c.generatedAt,
+          recent5Accuracy:chosenRescue.fuse?.last5Accuracy??null,
+          recent10Accuracy:chosenRescue.fuse?.last10Accuracy??null,
+          accuracyQualification:live.accuracyQualification,
+        });
+        logProductionSignalState(live);
+        return {ok:true,live};
       }
     }
 

@@ -20,5 +20,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: railway-settlement-audit
-          path: |\n            railway-settlement-audit.json\n            railway-settlement-errors.log
+          path: |
+            railway-settlement-audit.json
+            railway-settlement-errors.log
           if-no-files-found: warn

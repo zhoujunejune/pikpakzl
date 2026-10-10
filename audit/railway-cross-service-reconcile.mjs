@@ -19,10 +19,11 @@ for(const row of history.records){
  try{
   const result=await get(url.toString());
   if(!result.resolved||!['UP','DOWN'].includes(result.direction)){items.push({round,status:'UNRESOLVED'});continue}
+  if(result.rejectedTopicId){items.push({round,status:'STALE_TOPIC_REJECTED',rejectedTopicId:result.rejectedTopicId,refetchedTopicId:result.marketTopicId});continue}
   if(result.marketTopicId&&topic&&String(result.marketTopicId)!==String(topic)){items.push({round,status:'TOPIC_MISMATCH'});continue}
-  if(Math.abs(Number(result.startDate)-round)>30000||Math.abs(Number(result.endDate)-(round+300000))>30000){items.push({round,status:'ROUND_MISMATCH'});continue}
+  if(!Number.isFinite(Number(result.startDate))||!Number.isFinite(Number(result.endDate))||Math.abs(Number(result.startDate)-round)>30000||Math.abs(Number(result.endDate)-(round+300000))>30000){items.push({round,status:'ROUND_MISMATCH'});continue}
   const direction=result.direction;
-  items.push({round,status:direction===(row.officialDirection??row.productionActual)?'MATCH':'MISMATCH',direction,calculatedResult:direction===prediction?'HIT':'MISS',topic:result.marketTopicId,hash:result.auditEvidence?.detailPayloadSha256,storedHashMatches:result.auditEvidence?.detailPayloadSha256===row.officialSettlementAudit?.detailPayloadSha256});
+  items.push({round,status:direction===(row.officialDirection??row.productionActual)?'MATCH':'MISMATCH',direction,calculatedResult:direction===prediction?'HIT':'MISS',topic:result.marketTopicId,hash:result.auditEvidence?.detailPayloadSha256??null,hashComparable:Boolean(result.auditEvidence?.detailPayloadSha256&&row.officialSettlementAudit?.detailPayloadSha256),storedHashMatches:result.auditEvidence?.detailPayloadSha256&&row.officialSettlementAudit?.detailPayloadSha256?result.auditEvidence.detailPayloadSha256===row.officialSettlementAudit.detailPayloadSha256:null});
  }catch(e){items.push({round,status:'ERROR',reason:String(e)})}
 }
 const matched=items.filter(x=>x.status==='MATCH'),hits=matched.filter(x=>x.calculatedResult==='HIT').length;

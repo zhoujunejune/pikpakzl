@@ -32,16 +32,20 @@ jobs:
       - name: Strict-forward and anti-leakage regression tests
         run: |
           node --test round-tracker/v3-no-base-15s-audit.test.mjs round-tracker/verified-no-base-15s.test.mjs round-tracker/v3-no-base-20s-audit.test.mjs round-tracker/verified-no-base-20s.test.mjs
-      - name: Confirm unchanged V2 production safety gates
+      - name: Verify accuracy-first 22s-only production routing
         run: |
           node --input-type=module -e '
             import fs from "node:fs";
             import assert from "node:assert/strict";
             const main=fs.readFileSync("round-tracker/index-rest.mjs","utf8");
-            assert(main.includes("selectiveV2EdgeRescueFuseState(baseDirection)"));
-            assert(main.includes("freezeProductionLock(row, live)"));
-            assert(main.includes("V3_NO_BASE_15S_FORWARD_TARGET"));
-            assert(main.indexOf("earlyNoBaseRescue") < main.indexOf("lateNoBaseRescue"));
-            assert(main.includes("from15s ? VERIFIED_NO_BASE_15S_SOURCE : VERIFIED_NO_BASE_SOURCE"));
-            assert(main.includes("v3NoBase15sShadowSummary(rounds)"));
+            const production=main.slice(main.indexOf("function productionSignalPayload("),main.indexOf("function productionSignalPayload(")+26000);
+            assert(production.includes("evaluateSelectiveQualityV2(baseDirection"));
+            assert(production.includes("selectiveV2EdgeRescueFuseState(baseDirection)"));
+            assert(production.includes("source:\x27SELECTIVE_V2_EDGE_RESCUE_PRIMARY\x27"));
+            assert(production.includes("freezeProductionLock(row, live)"));
+            assert(!production.includes("selectUserCurrentPm("));
+            assert(!production.includes("selectVerifiedNoBase15s("));
+            assert(!production.includes("selectVerifiedNoBase20s("));
+            assert(!production.includes("edgeRescueExpansion.selectProductionCandidate("));
+            assert(!main.includes("freezeUserCurrentPm("));
           '

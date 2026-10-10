@@ -3,7 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-export const SHADOW35_VERSION = 'SHADOW35_PROBABILITY_V1';
+export const SHADOW35_VERSION = 'LOCK_QUALITY_SELECTIVE_V7_5';
+// This is a naming change: replay the existing prospective experiment rather
+// than resetting its calendar, samples, immutable decisions or frozen model.
+const JOURNAL_VERSIONS = new Set([SHADOW35_VERSION, 'SHADOW35_PROBABILITY_V1']);
 const ROUND_MS = 300000;
 const DEADLINE_MS = 35000;
 const FORWARD_MS = 30 * 86400000;
@@ -113,7 +116,7 @@ export function createShadow35Client({ dir = '/data/shadow35', log = () => {},
         for (const line of lines) {
           if (!line) continue;
           const event = JSON.parse(line);
-          if (event.version !== SHADOW35_VERSION || event.schemaVersion !== 1) continue;
+          if (!JOURNAL_VERSIONS.has(event.version) || event.schemaVersion !== 1) continue;
           apply(event);
         }
       }

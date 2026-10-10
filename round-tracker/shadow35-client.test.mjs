@@ -175,6 +175,58 @@ test('restart preserves snapshot/label/lock idempotency and the 30 day frozen mo
   assert.equal(f.calls.filter(x => x.action === 'train').length, 1);
 });
 
+test('renaming the experiment replays legacy samples, official labels and frozen decisions without resetting its model', async t => {
+  const f = await trainedFixture(t, [0.91, 0.01]);
+  f.setNow(f.forwardStart + 15000);
+  f.client.observe({ roundStartMs: f.forwardStart }, live(f.forwardStart, f.forwardStart + 14900), f.forwardStart + 15000);
+  await f.client.idle();
+  f.setNow(f.forwardStart + ROUND + 1);
+  const settled = official(f.forwardStart, f.forwardStart + ROUND + 1);
+  assert.equal(f.client.settle(settled), true);
+  f.client.observe({ roundStartMs: f.forwardStart + ROUND }, null, f.forwardStart + ROUND + 1);
+  const originalStats = f.client.stats();
+  const journal = path.join(f.dir, 'events.jsonl');
+  const legacyEvents = f.events().map(event => ({ ...event, version: 'SHADOW35_PROBABILITY_V1' }));
+  fs.writeFileSync(journal, legacyEvents.map(event => JSON.stringify(event)).join('\n') + '\n');
+
+  const reloaded = createShadow35Client(f.options);
+  assert.equal(reloaded.load(), true);
+  const restored = reloaded.stats();
+  assert.equal(restored.version, 'LOCK_QUALITY_SELECTIVE_V7_5');
+  assert.deepEqual(restored, { ...originalStats, version: 'LOCK_QUALITY_SELECTIVE_V7_5' });
+  assert.equal(restored.collectionStartMs, START, 'a rename must preserve the original calendar denominator');
+  assert.equal(restored.validSnapshotCount, 2);
+  assert.equal(restored.labeledTrainingRounds, 2);
+  assert.equal(restored.forward.decidedRounds, 1);
+  assert.equal(restored.forward.labeledDecisions, 1);
+  assert.equal(restored.forward.hits, 1);
+  assert.equal(restored.model.frozenUntilMs, f.forwardStart + 30 * 86400000);
+  assert.equal(f.events().length, legacyEvents.length, 'loading legacy events cannot append a replacement experiment');
+  assert.equal(reloaded.settle(settled), false, 'the official settlement remains idempotent after migration');
+  reloaded.observe({ roundStartMs: f.forwardStart }, live(f.forwardStart, f.forwardStart + 14900), f.forwardStart + 15000);
+  await reloaded.idle();
+  assert.equal(f.events().length, legacyEvents.length, 'the old sample and first lock must not be duplicated');
+  assert.equal(await reloaded.maybeTrain(), null, 'the registered candidate remains frozen after a rename');
+
+  const nextRound = f.forwardStart + ROUND;
+  f.setNow(nextRound + 15000);
+  reloaded.observe({ roundStartMs: nextRound }, live(nextRound, nextRound + 14900), nextRound + 15000);
+  await reloaded.idle();
+  f.setNow(nextRound + ROUND + 1);
+  assert.equal(reloaded.settle(official(nextRound, nextRound + ROUND + 1, 'DOWN')), true);
+  reloaded.observe({ roundStartMs: nextRound + ROUND }, null, nextRound + ROUND + 1);
+  const migratedEvents = f.events();
+  assert.deepEqual(migratedEvents.slice(0, legacyEvents.length), legacyEvents, 'old records remain intact');
+  assert.ok(migratedEvents.length > legacyEvents.length);
+  assert.ok(migratedEvents.slice(legacyEvents.length).every(event => event.version === 'LOCK_QUALITY_SELECTIVE_V7_5'));
+  assert.equal(migratedEvents.filter(event => event.type === 'collection_started').length, 1);
+  assert.deepEqual(reloaded.stats().model, restored.model, 'new sampling must use the original frozen artifact');
+  assert.equal(reloaded.stats().forward.decidedRounds, 2);
+  assert.equal(reloaded.stats().forward.hits, 2);
+  assert.equal(f.calls.filter(call => call.action === 'train').length, 1);
+  assert.equal(f.calls.filter(call => call.action === 'predict').length, 2);
+});
+
 test('coverage includes downtime calendar rounds; stats is a read-only view', async t => {
   const f = await trainedFixture(t, []);
   f.setNow(f.forwardStart + 3 * ROUND + 15000);

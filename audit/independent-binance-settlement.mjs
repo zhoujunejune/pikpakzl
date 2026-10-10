@@ -21,6 +21,10 @@ async function detail(id) {
   return body.data??body;
 }
 function resolve(topic) {
+  // Price observations alone do not establish that Binance finalized a market.
+  const status=String(topic.status??topic.marketStatus??topic.settlementStatus??'').toUpperCase();
+  const finalized=new Set(['SETTLED','RESOLVED','FINISHED','CLOSED','COMPLETED']);
+  if(!finalized.has(status)) return null;
   const v=topic.variantData??topic.variant_data??{};
   const start=Number(v.startPrice??v.start_price),end=Number(v.endPrice??v.end_price);
   if(!Number.isFinite(start)||!Number.isFinite(end)||start<=0||end<=0)return null;
@@ -44,7 +48,7 @@ for(const row of rows) {
     if(!['UP','DOWN'].includes(official)){entry.reason='MISSING_OR_FLAT_SETTLEMENT';report.push(entry);continue;}
     entry.status='VERIFIED';entry.officialDirection=official;
     entry.result=official===direction?'HIT':'MISS';
-    entry.matchesStored=official===row.officialDirection;
+    entry.matchesStored=official===(row.officialDirection??row.productionActual);
     entry.detailPayloadSha256=crypto.createHash('sha256').update(JSON.stringify(topic)).digest('hex');
     entry.matchesStoredHash=entry.detailPayloadSha256===row.officialSettlementAudit?.detailPayloadSha256;
   }catch(e){entry.reason=String(e?.message??e);}

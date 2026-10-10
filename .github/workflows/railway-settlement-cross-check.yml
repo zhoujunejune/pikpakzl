@@ -1,0 +1,24 @@
+name: Railway Settlement Cross-Check
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '12 * * * *'
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cross-check frozen production rounds against fresh V3 resolution
+        run: node audit/railway-cross-service-reconcile.mjs > railway-settlement-audit.json
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: railway-settlement-audit
+          path: railway-settlement-audit.json
+          if-no-files-found: warn

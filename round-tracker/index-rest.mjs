@@ -18,6 +18,7 @@ import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, selectCurrent03PmAgree15s, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
+import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL, selectPmCurrent25Support0815s } from './pm-current25-support08-production.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -153,6 +154,14 @@ const timedCurrent03PmFuse = createTimedEdgeRescueFuse({
   file: HISTORY_FILE + '.current03-pm-15s-fuse.json',
   cooldownMs: 30 * 60 * 1000,
   productionSource: CURRENT03_PM_AGREE_SOURCE,
+  log,
+});
+// Independent 30-minute circuit for the additional 15s strategy.
+// It must never share outcomes or trip state with CURRENT_03_PM_AGREE.
+const timedPmCurrent25Fuse = createTimedEdgeRescueFuse({
+  file: HISTORY_FILE + '.pm-current25-support08-15s-fuse.json',
+  cooldownMs: 30 * 60 * 1000,
+  productionSource: PM_CURRENT25_SUPPORT08_SOURCE,
   log,
 });
 
@@ -4388,6 +4397,7 @@ async function settlePendingRounds() {
         applyOfficialSettlement(row, direction, evidence, Date.now());
         timedEdgeRescueFuse.onSettled(row);
         timedCurrent03PmFuse.onSettled(row);
+        timedPmCurrent25Fuse.onSettled(row);
         if ((legacyBefore === 'UP' || legacyBefore === 'DOWN') && legacyBefore !== direction) {
           row.officialDirectionCorrectedFrom = legacyBefore;
           row.officialDirectionCorrectedAt = Date.now();
@@ -5026,7 +5036,7 @@ function productionSignalPayload(now = Date.now()) {
       source: row.productionSource || 'UNKNOWN',
       model: row.productionModel || null,
       modelVersion: row.productionModelVersion || null,
-      facts: row.productionSource === CURRENT03_PM_AGREE_SOURCE
+      facts: row.productionSource === CURRENT03_PM_AGREE_SOURCE || row.productionSource === PM_CURRENT25_SUPPORT08_SOURCE
         ? (row.v3NoBase15sShadow?.facts ?? null)
         : row.productionSource === VIP75_PRIMARY_SOURCE ||
         row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
@@ -5046,9 +5056,57 @@ function productionSignalPayload(now = Date.now()) {
     return { ok: true, live: frozenLive };
   }
 
-  // User-requested 15s early override, restricted to CURRENT_03_PM_AGREE.
-  // It can lock before the regular V3 22s path ONLY with a pre-settlement
-  // frozen 15s snapshot and an independent official-results circuit.
+  // Two user-opted-in 15s candidates. PM_CURRENT25_SUPPORT08 has priority
+  // when both are available; CURRENT_03_PM_AGREE remains the fallback.
+  // Both reuse the exact pre-settlement snapshot and independent circuits.
+  if (productionUsesSelectiveV2() && row) {
+    const selectedPm25 = selectPmCurrent25Support0815s(row, now);
+    if (selectedPm25.allowed) {
+      const pm25Stats = current03PmAgreeProductionFuseSummary(rounds, PM_CURRENT25_SUPPORT08_SOURCE);
+      const pm25Fuse = timedPmCurrent25Fuse.check(selectedPm25.candidate.direction, pm25Stats, now);
+      if (pm25Fuse.allowed) {
+        const cand = selectedPm25.candidate;
+        const live = {
+          round:row.roundStartMs,
+          status:'LOCKED',
+          signal:{
+            direction:cand.direction,
+            score:cand.currentScore,
+            confidence:null,
+            modelProbability:null,
+          },
+          input:{round:row.roundStartMs},
+          generatedAt:cand.observedAt,
+          source:PM_CURRENT25_SUPPORT08_SOURCE,
+          model:PM_CURRENT25_SUPPORT08_MODEL,
+          modelVersion:V3_NO_BASE_15S_VERSION,
+          facts:row.v3NoBase15sShadow.facts,
+          productionPolicy:productionPolicyName(),
+          fallbackUsed:true,
+          fallbackReason:'USER_OPT_IN_UNVALIDATED_15S_NO_BASE',
+          accuracyQualification:'USER_OPT_IN_UNVALIDATED_15S_CANDIDATE',
+          observedDelayMs:cand.observedAt-row.roundStartMs,
+          independentFuse:pm25Fuse,
+        };
+        if (freezeProductionLock(row, live)) {
+          timedPmCurrent25Fuse.recordLock(cand.direction, row.roundStartMs);
+          log('pm_current25_support08_15s_production_lock',{
+            round:row.roundStartMs,direction:cand.direction,
+            observedAt:cand.observedAt,
+            predictionMarketUpMid:cand.predictionMarketUpMid,
+            currentScore:cand.currentScore,
+            sourceMarketTopicId:cand.sourceMarketTopicId,
+            accuracyQualification:'USER_OPT_IN_UNVALIDATED_15S_CANDIDATE',
+          });
+        }
+        logProductionSignalState(live);
+        return {ok:true,live};
+      }
+    }
+  }
+
+  // Second priority: CURRENT_03_PM_AGREE, then original 22s primary routes.
+  // No extra 15s candidate may lock a production round.
   if (productionUsesSelectiveV2() && row) {
     const selected15s = selectCurrent03PmAgree15s(row, now);
     if (selected15s.allowed) {
@@ -5270,9 +5328,9 @@ function productionSignalPayload(now = Date.now()) {
     }
 
     // Other experimental no-base, 20s and Edge Expansion candidates remain
-    // shadow-only. Explicit 15s CURRENT_03_PM_AGREE is separately opt-in
-    // and only locks before the base direction exists; it never bypasses
-    // Selective V2 or the Tier-1 gate at the normal 22s lock.
+    // shadow-only. The two explicitly opted-in 15s candidates can lock
+    // only from pre-settlement 15s snapshots and never bypass the unchanged
+    // Selective V2/Tier-1 eligibility on the 22s fallback route.
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
@@ -5529,6 +5587,7 @@ invalidateLegacyWinnerFlagSettlements();
 }
 timedEdgeRescueFuse.reconcile(rounds.values());
 timedCurrent03PmFuse.reconcile(rounds.values());
+timedPmCurrent25Fuse.reconcile(rounds.values());
 loadShadowCandidateArtifact();
 adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
 preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));
@@ -5653,6 +5712,7 @@ const signalHttpServer = http.createServer((req, res) => {
         v3NoBase20sRescue:v3NoBase20sShadowSummary(rounds),
         v3NoBase15sRescue:v3NoBase15sShadowSummary(rounds),
         current03PmAgree15sProduction:{...current03PmAgreeProductionFuseSummary(rounds), timedFuse:timedCurrent03PmFuse.status()},
+        pmCurrent25Support0815sProduction:{...current03PmAgreeProductionFuseSummary(rounds, PM_CURRENT25_SUPPORT08_SOURCE), timedFuse:timedPmCurrent25Fuse.status()},
         v3TrendBandForward:summarizeV3TrendBand(rounds),
         waitRescue:waitRescueShadowSummary(),
         adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),
@@ -5697,6 +5757,16 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(noBaseSpecialist.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/pm-current25-support08-15s-production-stats') {
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({
+      source:PM_CURRENT25_SUPPORT08_SOURCE,
+      qualification:'USER_OPT_IN_UNVALIDATED_15S_CANDIDATE',
+      ...current03PmAgreeProductionFuseSummary(rounds, PM_CURRENT25_SUPPORT08_SOURCE),
+      timedFuse:timedPmCurrent25Fuse.status(),
+    }));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/current03-pm-agree-15s-production-stats') {

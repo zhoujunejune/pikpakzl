@@ -71,9 +71,9 @@ export function selectCurrent03PmAgree15s(row, now = Date.now()) {
 
 // Production-only circuit stats use independent official settlement of
 // actually locked 15s signals; shadow HITs are not counted as live outcomes.
-export function current03PmAgreeProductionFuseSummary(rounds) {
+export function current03PmAgreeProductionFuseSummary(rounds, productionSource = CURRENT03_PM_AGREE_SOURCE) {
   const settled = Array.from(rounds?.values?.() || []).filter(r =>
-    r?.productionSource === CURRENT03_PM_AGREE_SOURCE &&
+    r?.productionSource === productionSource &&
     (r.productionPrediction === 'UP' || r.productionPrediction === 'DOWN') &&
     (r.productionResult === 'HIT' || r.productionResult === 'MISS') &&
     r.actualSource === 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' &&

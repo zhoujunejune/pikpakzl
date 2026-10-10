@@ -1,4 +1,9 @@
-# 35-second probability policy
+# LOCK_QUALITY_SELECTIVE_V7_5
+
+The 35-second shadow experiment is named `LOCK_QUALITY_SELECTIVE_V7_5`.
+New trained candidate versions use that same prefix followed by their training
+timestamp. The former `SHADOW35_PROBABILITY_V1` journal remains readable; naming
+does not reset collection, change the feature schema or enable production.
 
 This experiment collects every five-minute round, including rounds without a V6
 base direction, and evaluates an independent probability policy. It never emits

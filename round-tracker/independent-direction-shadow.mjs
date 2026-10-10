@@ -399,7 +399,8 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
   let state={schemaVersion:3,version:INDEPENDENT_DIRECTION_VERSION,model:null,
     priorModels:[],modelLineage:[],officialForwardLedger:[],
     lastAttemptSettledRoundMs:0,
-    lastAdaptationReason:null,adaptationAttempts:0,modelSwitches:0,lastInsufficientAt:0};
+    lastAdaptationReason:null,adaptationAttempts:0,modelSwitches:0,lastInsufficientAt:0,
+    challenger:null};
   function save(){
     if(!file)return;
     try{fs.mkdirSync(file.slice(0,file.lastIndexOf('/'))||'.',{recursive:true});
@@ -427,6 +428,14 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       roundEndMs:Number(row.roundEndMs),
       actual:row.actual,actualSource:row.actualSource,settledAt:Number(row.settledAt),
       shadowObservedAt:row.shadowObservedAt??null,
+      independentChallengerShadow:row.independentChallengerShadow?{
+        modelVersion:row.independentChallengerShadow.modelVersion,
+        trainedAt:row.independentChallengerShadow.trainedAt,
+        roundStartMs:row.independentChallengerShadow.roundStartMs,
+        observedAt:row.independentChallengerShadow.observedAt,
+        direction:row.independentChallengerShadow.direction,
+        marketRegime:row.independentChallengerShadow.marketRegime,
+      }:null,
       independentDirectionShadow:frozen?{
         modelVersion:frozen.modelVersion,trainedAt:frozen.trainedAt,
         roundStartMs:frozen.roundStartMs,observedAt:frozen.observedAt,
@@ -498,6 +507,17 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       switchAllowed:improve,productionEffect:'NONE_SHADOW_ONLY'
     });
     if(!improve){save();return false;}
+    // Candidate is shadow-only until an independently settled same-input
+    // forward comparison is available. Validation alone never promotes.
+    if(state.model){
+      state.challenger=trial.model;
+      save();
+      log('independent_direction_challenger_staged',{
+        modelVersion:trial.model.version,incumbent:state.model.version,
+        validation:trial.model.validation,forwardPromotionBlocked:true,
+        productionEffect:'NONE_SHADOW_ONLY'});
+      return false;
+    }
     if(state.model){
       state.priorModels=[{
         modelVersion:state.model.version,
@@ -538,6 +558,19 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
     const result=freezeIndependentModel(row,active);
     if(!result)return false;
     row.independentDirectionShadow=result;
+    // Freeze the candidate on exactly the same pre-settlement snapshot.
+    // No retrospective scoring or mutation of the incumbent freeze.
+    if(state.challenger && !row.independentChallengerShadow &&
+      Number(row.roundStartMs)>=Number(state.challenger.startRoundMs)){
+      const challenger=freezeIndependentModel(row,state.challenger);
+      if(challenger){
+        row.independentChallengerShadow=challenger;
+        log('independent_direction_challenger_forward_frozen',{
+          round:row.roundStartMs,modelVersion:challenger.modelVersion,
+          direction:challenger.direction,observedAt:challenger.observedAt,
+          productionEffect:'NONE_SHADOW_ONLY'});
+      }
+    }
     log('independent_direction_forward_frozen',{round:row.roundStartMs,
       modelName:INDEPENDENT_DIRECTION_NAME,modelVersion:result.modelVersion,direction:result.direction,
       probability:result.probability,observedAt:result.observedAt,
@@ -546,9 +579,29 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
   }
   function stats(rounds) {
     const all=Array.from(rounds);
+    const ledger=state.officialForwardLedger;
+    const candidate=state.challenger;
+    const paired=candidate?ledger.filter(r=>{
+      const a=r.independentDirectionShadow,b=r.independentChallengerShadow;
+      return b?.modelVersion===candidate.version &&
+        Number(b.observedAt)===Number(a?.observedAt) &&
+        Number(b.observedAt)===Number(r.shadowObservedAt) &&
+        Number(b.observedAt)>=Number(r.roundStartMs)+10000 &&
+        Number(b.observedAt)<=Number(r.roundStartMs)+22000 &&
+        Number(b.observedAt)<Number(r.roundEndMs) &&
+        (a?.direction==='UP'||a?.direction==='DOWN') &&
+        (b.direction==='UP'||b.direction==='DOWN');
+    }):[];
+    const challengerForward={modelVersion:candidate?.version??null,
+      pairedOfficialRounds:paired.length,
+      incumbent:summarizeOutcomes(paired.map(r=>({decision:r.independentDirectionShadow.direction,actual:r.actual}))),
+      challenger:summarizeOutcomes(paired.map(r=>({decision:r.independentChallengerShadow.direction,actual:r.actual}))),
+      promotionAllowed:false,
+      reason:'FORWARD_COMPARISON_OBSERVATION_ONLY_NO_AUTOMATIC_PROMOTION'};
     return {...independentAdaptiveProgramStats(all,state.modelLineage,state.officialForwardLedger),
       name:INDEPENDENT_DIRECTION_NAME,
       modelName:INDEPENDENT_DIRECTION_NAME,
+      challengerForward,
       currentModelForward:independentForwardStats(all,state.model),
       activeLearning:{enabled:true,policy:ADAPTIVE_POLICY,
         adaptationAttempts:state.adaptationAttempts,

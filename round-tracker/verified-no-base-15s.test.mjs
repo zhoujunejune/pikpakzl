@@ -59,3 +59,31 @@ test('never overrides an existing production freeze or accepts future input',()=
   assert.equal(selectVerifiedNoBase15s(row(),stats(),START+14000).allowed,false);
   assert.equal(selectVerifiedNoBase15s(row(),stats(),START+26000).allowed,false);
 });
+
+
+test('absorption-only prospective rescue may qualify ONLY with independent forward proof',()=>{
+ const r=row();r.v3NoBase15sShadow.facts={
+   ...r.v3NoBase15sShadow.facts,dataFresh:false,absorptionRiskAtFreeze:true,
+   gateFailures:['ABSORPTION_RISK'],upMid:0.67};
+ r.v3NoBase15sShadow.candidates={
+   PM_LEAN_03:{decision:'UP',qualified:true,reasons:[]},
+   ABS_PM_CURRENT15:{decision:'UP',qualified:true,reasons:[]}};
+ const s=stats();
+ assert.equal(selectVerifiedNoBase15s(r,s,START+16000).allowed,false);
+ s.candidates[0].candidateId='ABS_PM_CURRENT15';
+ const qualified=selectVerifiedNoBase15s(r,s,START+16000);
+ assert.equal(qualified.allowed,true);
+ assert.equal(qualified.candidate.absorptionOnlyProspectivePilot,true);
+ const unsafe=structuredClone(r);
+ unsafe.v3NoBase15sShadow.facts.gateFailures.push('PM_BOOK_STALE_OR_MISSING');
+ assert.equal(selectVerifiedNoBase15s(unsafe,s,START+16000).allowed,false);
+ const misaligned=structuredClone(r);
+ misaligned.v3NoBase15sShadow.facts.bookRoundAligned=false;
+ assert.equal(selectVerifiedNoBase15s(misaligned,s,START+16000).allowed,false);
+ const ordinary=structuredClone(r);
+ ordinary.v3NoBase15sShadow.facts.absorptionRiskAtFreeze=false;
+ assert.equal(selectVerifiedNoBase15s(ordinary,s,START+16000).allowed,false);
+ const badStats=stats();
+ badStats.candidates[0]={...proof,candidateId:'ABS_PM_CURRENT15',forwardAccuracy:0.67};
+ assert.equal(selectVerifiedNoBase15s(r,badStats,START+16000).allowed,false);
+});

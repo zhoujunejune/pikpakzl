@@ -1,4 +1,4 @@
-// Forward-only 20-second V3 no-base trials. Does not emit orders; production use is strictly forward-qualification gated.
+// Forward-only 15-second V3 no-base trials; only strict-forward-qualified directions may enter production.
 export const V3_NO_BASE_15S_VERSION = 'V3_NO_BASE_15S_RESCUE_SHADOW_V1';
 export const V3_NO_BASE_15S_START_MS = Date.parse('2026-10-10T10:00:00.000Z');
 export const V3_NO_BASE_15S_FORWARD_TARGET = 60;
@@ -18,6 +18,13 @@ export const V3_NO_BASE_15S_CONFIGS = Object.freeze([
   // independently signed component; no relaxed live V3/V2 trading gate.
   {id:'PM_REGIME35_SUPPORT08',mode:'regime',regimeMin:0.35,pmMin:0.08},
   {id:'PM_CURRENT25_SUPPORT08',mode:'currentGuard',currentMin:0.25,pmMin:0.08},
+  // Absorption-risk counterfactuals are separate prospective experiments.
+  // They cannot bypass any feed/round-alignment checks, and must independently
+  // pass the strict-forward 75% + per-side accuracy gates.
+  {id:'ABS_PM_CURRENT15',mode:'absorptionCurrent',pmMin:0.08,currentMin:0.15,
+    introducedAtMs:Date.parse('2026-10-10T11:50:00.000Z')},
+  {id:'ABS_PM_REGIME35',mode:'absorptionRegime',pmMin:0.08,regimeMin:0.35,
+    introducedAtMs:Date.parse('2026-10-10T11:50:00.000Z')},
 ]);
 const finite=v=>v===null||v===undefined||v===''?null:(Number.isFinite(Number(v))?Number(v):null);
 const dir=s=>s>0?'UP':s<0?'DOWN':'WAIT';
@@ -55,9 +62,18 @@ export function freezeNoBase15s(row,facts,now=Date.now()){
   const pmSign=upMid!==null&&upMid>=0.53?1:upMid!==null&&upMid<=0.47?-1:0;
   const candidates={};
   for(const cfg of V3_NO_BASE_15S_CONFIGS){
-    const reasons=[...missing];let sign=0;
+    const absorptionPilot=cfg.mode==='absorptionCurrent'||cfg.mode==='absorptionRegime';
+    // The original nine configurations retain their absorption gate.
+    // Only these two independently scored pilots can exclude this ONE
+    // risk warning from frozen counterfactual candidate formation.
+    const reasons=absorptionPilot
+      ? missing.filter(r=>r!=='ABSORPTION_RISK')
+      : [...missing];
+    let sign=0;
+    if(absorptionPilot && facts.absorptionRisk!==true)reasons.push('NOT_ABSORPTION_SCENARIO');
+    if(cfg.introducedAtMs && now<cfg.introducedAtMs)reasons.push('PILOT_NOT_STARTED');
     if(!pmSign)reasons.push('PM_NEUTRAL');
-    else if(fresh){
+    else if(reasons.length===0){
       if(cfg.mode==='pm'){
         if(score===null||pmSign*score>=-0.25)sign=pmSign;
         else reasons.push('BLENDED_PM_CONFLICT');
@@ -88,6 +104,27 @@ export function freezeNoBase15s(row,facts,now=Date.now()){
              (finite(facts.regimeAgreement)??0)>=0.67)reasons.push('STRONG_REGIME_CONFLICT');
         }
         if(reasons.length===0)sign=pmSign;
+      }else if(absorptionPilot){
+        if(upMid===null||pmSign*(upMid-0.5)<cfg.pmMin)
+          reasons.push('ABS_PM_SUPPORT_BELOW_MIN');
+        if(facts.predictionMarketConflict===true)
+          reasons.push('ABS_PM_CONFLICT');
+        if(flow15===null||flow15<16)
+          reasons.push('ABS_FLOW15_INSUFFICIENT');
+        if(cfg.mode==='absorptionCurrent' &&
+           (current===null||pmSign*current<cfg.currentMin))
+          reasons.push('ABS_CURRENT_BELOW_MIN_OR_CONFLICT');
+        if(cfg.mode==='absorptionRegime' &&
+           (regimeScore===null||pmSign*regimeScore<cfg.regimeMin))
+          reasons.push('ABS_REGIME_BELOW_MIN_OR_CONFLICT');
+        if(cfg.mode==='absorptionRegime' && current!==null && pmSign*current < -0.10)
+          reasons.push('ABS_CURRENT_STRONG_CONFLICT');
+        const regime=String(facts.regimeDirection||'');
+        if(cfg.mode==='absorptionCurrent' &&
+           (regime==='UP'||regime==='DOWN')&&regime!==dir(pmSign)&&
+           (finite(facts.regimeAgreement)??0)>=0.67)
+          reasons.push('ABS_STRONG_REGIME_CONFLICT');
+        if(reasons.length===0)sign=pmSign;
       }else if(cfg.mode==='trend'){
         if(current===null||pmSign*current<cfg.currentMin)reasons.push('CURRENT_BELOW_MIN_OR_CONFLICT');
         if(trend===null||pmSign*trend<cfg.trendMin)reasons.push('TREND_BELOW_MIN_OR_CONFLICT');
@@ -110,7 +147,8 @@ export function freezeNoBase15s(row,facts,now=Date.now()){
       sourceMarketTopicId:facts.predictionMarketTopicId??null,
       bookMappingReliable:facts.predictionMarketMappingReliable===true,
       bookRoundAligned:facts.predictionMarketRoundAligned===true,
-      dataFresh:fresh,gateFailures:missing},
+      dataFresh:fresh,gateFailures:missing,
+      absorptionRiskAtFreeze:facts.absorptionRisk===true},
     candidates,
   };
 }

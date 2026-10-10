@@ -14,7 +14,7 @@ import {
 test('shadow identity and review thresholds are preserved', () => {
   assert.equal(INDEPENDENT_DIRECTION_NAME, 'zl_new_vip75');
   assert.equal(INDEPENDENT_TARGET.accuracy, .75);
-  assert.ok(Array.isArray(independentFeatures({})));
+  assert.equal(independentFeatures({}), null);
 });
 
 test('direction selection is deterministic', () => {

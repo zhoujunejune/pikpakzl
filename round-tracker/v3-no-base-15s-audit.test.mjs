@@ -105,3 +105,41 @@ test('new pilots cannot backfill old frozen observations',()=>{
 });
 
 
+
+
+test('absorption-only pilots preserve original WAIT and never waive feed quality',()=>{
+ const start=Date.parse('2026-10-10T12:00:00.000Z');
+ const r={roundStartMs:start,prediction:'WAIT',predictedAt:null};
+ const absorbed={...facts,absorptionRisk:true,regimeScore:0.56,
+   predictionMarketUpMid:0.61,currentScore:0.30};
+ const f=freezeNoBase15s(r,absorbed,start+15500);
+ assert.deepEqual(f.facts.gateFailures,['ABSORPTION_RISK']);
+ assert.equal(f.facts.dataFresh,false);
+ assert.equal(f.facts.absorptionRiskAtFreeze,true);
+ assert.equal(f.candidates.PM_LEAN_03.decision,'WAIT');
+ assert.equal(f.candidates.ABS_PM_CURRENT15.decision,'UP');
+ assert.equal(f.candidates.ABS_PM_REGIME35.decision,'UP');
+ const stale=freezeNoBase15s(r,{...absorbed,depthAgeMs:8000},start+15500);
+ assert.equal(stale.candidates.ABS_PM_CURRENT15.decision,'WAIT');
+ assert.equal(stale.candidates.ABS_PM_REGIME35.decision,'WAIT');
+ const weak=freezeNoBase15s(r,{...absorbed,predictionMarketUpMid:0.52},start+15500);
+ assert.equal(weak.candidates.ABS_PM_CURRENT15.decision,'WAIT');
+ const conflicting=freezeNoBase15s(r,{...absorbed,currentScore:-0.5,regimeScore:-0.5},start+15500);
+ assert.equal(conflicting.candidates.ABS_PM_CURRENT15.decision,'WAIT');
+ assert.equal(conflicting.candidates.ABS_PM_REGIME35.decision,'WAIT');
+ const clean=freezeNoBase15s(r,{...absorbed,absorptionRisk:false},start+15500);
+ assert.equal(clean.candidates.ABS_PM_CURRENT15.decision,'WAIT');
+ assert.equal(clean.candidates.PM_LEAN_03.decision,'UP');
+});
+test('new absorption candidate histories cannot be backfilled or retrofitted',()=>{
+ const oldStart=Date.parse('2026-10-10T11:45:00.000Z');
+ const oldRow={roundStartMs:oldStart,prediction:'WAIT',predictedAt:null};
+ const f=freezeNoBase15s(oldRow,{...facts,absorptionRisk:true,regimeScore:0.56},oldStart+15500);
+ assert.equal(f.candidates.ABS_PM_CURRENT15.decision,'WAIT');
+ assert.ok(f.candidates.ABS_PM_CURRENT15.reasons.includes('PILOT_NOT_STARTED'));
+ const settled={...oldRow,actual:'UP',officialDirection:'UP',
+   resolutionEvidence:'OFFICIAL_UP:canonical_outcome_winner_direct:STRICT_ROUND_ALIGNED_TOPIC',
+   v3NoBase15sShadow:f};
+ const summary=summarizeNoBase15s(new Map([[oldStart,settled]]));
+ assert.equal(summary.candidates.find(c=>c.candidateId==='ABS_PM_CURRENT15').strictForwardSamples,0);
+});

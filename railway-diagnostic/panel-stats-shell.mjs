@@ -33,6 +33,62 @@ const statsCard = `<div class="c" id="roundStatsCard">
 <div class="muted" style="margin-top:10px">真实结果只认 Binance Prediction 官方 UP/DOWN；官方未结算时显示“待结算”。现货 K 线不再参与命中判定或 Shadow 训练标签。</div>
 </div>`;
 
+const previewCard = `<div class="c" id="waitVisibilityCard">
+<div class="k">实时方向观察 · 生产交易严格分离</div>
+<div class="big" id="wvTradeStatus">正在核对生产方向...</div>
+<div class="muted" id="wvMeta">预判方向只是供观察，不能代替生产锁定信号、也不触发下单。</div>
+<div class="grid" style="margin-top:12px">
+<div class="kv"><div class="k">最新15秒候选</div><div class="v" id="wvPreview">-</div></div>
+<div class="kv"><div class="k">预测市场盘口倾向</div><div class="v" id="wvPmSide">-</div></div>
+<div class="kv"><div class="k">最近20轮候选覆盖率</div><div class="v" id="wvCoverage">-</div></div>
+<div class="kv"><div class="k">已结算候选命中率</div><div class="v" id="wvHitRate">-</div></div>
+</div>
+<div class="muted" id="wvBlockers" style="margin-top:10px">正在读取拒绝原因...</div>
+<div style="overflow:auto;max-height:370px;margin-top:10px;border:1px solid #2b313d;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:640px"><thead style="position:sticky;top:0;background:#151922;z-index:2"><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">15秒候选（非下单）</th><th style="padding:8px 6px">生产</th><th style="padding:8px 6px">官方结果</th><th style="padding:8px 6px">候选结果</th><th style="padding:8px 6px">未通过原因</th></tr></thead><tbody id="wvRows"><tr><td colspan="6" style="padding:9px 6px">读取中...</td></tr></tbody></table></div>
+<div class="muted" style="margin-top:10px">候选方向、盘口倾向、生产已锁定方向是三种不同信息。候选仅按事前冻结记录计算；命中率采用系统登记的 Binance Prediction 结算，不代表独立审计认证。不会改变实际下单逻辑。</div>
+</div>`;
+
+const previewScript = `<script>(function(){
+'use strict';
+function e(id){return document.getElementById(id)}
+function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function tm(ms){return Number.isFinite(Number(ms))?new Date(Number(ms)).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'-'}
+function dir(v){return v==='UP'?'UP ↑':v==='DOWN'?'DOWN ↓':'WAIT'}
+function frozen(r){var f=r&&r.v3NoBase15sShadow;return f&&f.baseAbsentAtObservation===true&&f.inputFrozenBeforeSettlement===true&&Number(f.round)===Number(r.roundStartMs)?f:null}
+var priority=['ABS_PM_CURRENT15','ABS_PM_REGIME35','PM_CURRENT25_SUPPORT08','PM_REGIME35_SUPPORT08','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','CURRENT_03_PM_AGREE','BLENDED_04_PM_AGREE','PM_LEAN_03'];
+function candidate(f){if(!f||!f.candidates)return null;for(var i=0;i<priority.length;i++){var q=f.candidates[priority[i]];if(q&&(q.decision==='UP'||q.decision==='DOWN')&&q.qualified===true&&Array.isArray(q.reasons)&&q.reasons.length===0)return {direction:q.decision,model:priority[i]}}return null}
+function reason(f){if(!f)return '15秒尚未冻结';var x=f.facts||{};var failures=x.gateFailures||[];if(failures.length)return failures.join('、');var reasons=[];Object.keys(f.candidates||{}).forEach(function(k){var a=f.candidates[k];if(a&&a.decision==='WAIT'&&Array.isArray(a.reasons))reasons=reasons.concat(a.reasons)});var uniq=Array.from(new Set(reasons));return uniq.length?uniq.slice(0,2).join('、'):'模型确认条件未满足'}
+function official(r){return r&&(r.productionActual==='UP'||r.productionActual==='DOWN')?r.productionActual:null}
+function prod(r){return r&&(r.productionPrediction==='UP'||r.productionPrediction==='DOWN')?r.productionPrediction:null}
+function pm(f){var facts=f&&f.facts||{};var v=facts.upMid;if(!facts.bookMappingReliable||!facts.bookRoundAligned||!Number.isFinite(Number(v)))return '不可用';v=Number(v);if(v<0||v>1)return '不可用';return (v>=0.5?'UP':'DOWN')+'（UP报价 '+(v*100).toFixed(1)+'%）'}
+async function load(){
+if(!e('waitVisibilityCard'))return;
+try{
+var response=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});var j=await response.json();
+if(!response.ok||!j||!j.ok)throw Error((j&&j.error)||'轮次统计服务不可用');
+var rows=(j.records||[]).filter(function(r){return !!frozen(r)}).sort(function(a,b){return Number(b.roundStartMs)-Number(a.roundStartMs)});
+var newest=(j.records||[]).slice().sort(function(a,b){return Number(b.roundStartMs)-Number(a.roundStartMs)})[0]||null;
+var newestFrozen=frozen(newest),freshCandidate=candidate(newestFrozen),liveTrade=prod(newest);
+e('wvTradeStatus').innerHTML=liveTrade?'生产已锁定：<span class="on">'+esc(dir(liveTrade))+'</span>':'生产：<span class="warn">WAIT（未触发下单信号）</span>';
+e('wvPreview').innerHTML=freshCandidate?'<span class="on">'+esc(dir(freshCandidate.direction))+'</span>':'<span class="warn">WAIT</span>';
+e('wvPmSide').textContent=newestFrozen?pm(newestFrozen):'等待15秒冻结';
+var windowRows=rows.slice(0,20);var eligible=windowRows.filter(function(r){return !!candidate(frozen(r))});var reviewed=eligible.filter(function(r){return !!official(r)});
+var hits=reviewed.filter(function(r){return candidate(frozen(r)).direction===official(r)}).length;
+e('wvCoverage').textContent=windowRows.length?(eligible.length+'/'+windowRows.length+' · '+(100*eligible.length/windowRows.length).toFixed(1)+'%'):'0轮';
+e('wvHitRate').textContent=reviewed.length?(hits+'/'+reviewed.length+' · '+(100*hits/reviewed.length).toFixed(1)+'%'):'样本不足';
+e('wvMeta').textContent='最后记录：'+(newest?tm(newest.roundStartMs):'尚无轮次')+' · 15秒快照：'+rows.length+'轮 · 候选为前瞻试验，不代表可交易信号'+(j.stale?' · ⚠ 缓存已过期':'');
+e('wvBlockers').textContent=newestFrozen?'本轮未通过原因：'+reason(newestFrozen):'本轮15秒观察尚未完成；不会把未冻结的实时猜测计入候选准确率。';
+e('wvRows').innerHTML=rows.slice(0,12).map(function(r){
+var f=frozen(r),c=candidate(f),act=official(r),trade=prod(r);
+var x=c?(act?(c.direction===act?'命中':'未中'):'待结算'):'无候选';
+return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+esc(tm(r.roundStartMs))+'</td><td style="padding:9px 6px">'+esc(c?dir(c.direction)+' · '+c.model:'WAIT')+'</td><td style="padding:9px 6px">'+esc(trade?dir(trade):'WAIT')+'</td><td style="padding:9px 6px">'+esc(act||'待结算')+'</td><td style="padding:9px 6px">'+esc(x)+'</td><td style="padding:9px 6px">'+esc(c?'-':reason(f))+'</td></tr>'
+}).join('')||'<tr><td colspan="6" style="padding:10px 6px">暂无15秒前瞻快照</td></tr>';
+}catch(error){if(e('wvTradeStatus'))e('wvTradeStatus').textContent='方向观察读取失败';if(e('wvBlockers'))e('wvBlockers').textContent=error&&error.message?error.message:String(error)}
+}
+function boot(){load();setInterval(load,3000)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();</script>`;
+
 const statsScript = `<script>(function(){
 'use strict';
 function e(i){return document.getElementById(i)}
@@ -86,8 +142,8 @@ function boot(){load();setInterval(load,3000)}if(document.readyState==='loading'
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div class="c"><input id="amount"';
-  let out = html.includes(marker) ? html.replace(marker, `${statsCard}${marker}`) : html.replace('</body>', `${statsCard}</body>`);
-  return out.replace('</body>', `${statsScript}</body>`);
+  let out = html.includes(marker) ? html.replace(marker, `${previewCard}${statsCard}${marker}`) : html.replace('</body>', `${previewCard}${statsCard}</body>`);
+  return out.replace('</body>', `${statsScript}${previewScript}</body>`);
 }
 
 let child = null;

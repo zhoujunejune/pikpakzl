@@ -1,0 +1,27 @@
+name: Edge Rescue timed-fuse safety tests
+on:
+  pull_request:
+    paths:
+      - "round-tracker/edge-rescue-timed-fuse.mjs"
+      - "round-tracker/edge-rescue-timed-fuse.test.mjs"
+      - "round-tracker/index-rest.mjs"
+      - ".github/workflows/edge-rescue-timed-fuse.yml"
+  push:
+    branches: [main]
+    paths:
+      - "round-tracker/edge-rescue-timed-fuse.mjs"
+      - "round-tracker/edge-rescue-timed-fuse.test.mjs"
+      - "round-tracker/index-rest.mjs"
+      - ".github/workflows/edge-rescue-timed-fuse.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check production module syntax
+        run: node --check round-tracker/index-rest.mjs
+      - name: Test 30m cooldown and official-only recovery
+        run: node --test round-tracker/edge-rescue-timed-fuse.test.mjs

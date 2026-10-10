@@ -10,9 +10,6 @@ import { selectVip75Primary, shouldUseVip75Backup, VIP75_PRIMARY_NAME, VIP75_PRI
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
-import { selectVerifiedNoBase20s, VERIFIED_NO_BASE_SOURCE } from './verified-no-base-20s.mjs';
-import { selectVerifiedNoBase15s, VERIFIED_NO_BASE_SOURCE as VERIFIED_NO_BASE_15S_SOURCE } from './verified-no-base-15s.mjs';
-import { USER_CURRENT_PM_VERSION, USER_CURRENT_PM_SOURCE, USER_CURRENT_PM_START_MS, freezeUserCurrentPm, selectUserCurrentPm, userCurrentPmFuse } from './user-current-pm-rescue.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
@@ -4075,30 +4072,6 @@ async function pollSignal() {
         saveHistory();
       }
     }
-    // User-selected formula uses a separate immutable prospective capture,
-    // including V3 base directions that failed Selective V2. The ordinary
-    // no-base 15s shadow and its 75%-qualification gate are untouched.
-    if (
-      liveFacts && !row.userCurrentPm15s &&
-      Number(row.roundStartMs) >= USER_CURRENT_PM_START_MS &&
-      row.productionPrediction !== 'UP' && row.productionPrediction !== 'DOWN'
-    ) {
-      const userCandidate=freezeUserCurrentPm(row,liveFacts,Date.now());
-      if(userCandidate){
-        row.userCurrentPm15s=userCandidate;
-        saveHistory();
-        log('user_current_pm_15s_frozen',{
-          round:row.roundStartMs,
-          direction:userCandidate.direction,
-          reasons:userCandidate.reasons,
-          observedDelayMs:userCandidate.observedDelayMs,
-          sourceMarketTopicId:userCandidate.sourceMarketTopicId,
-          absorptionRisk:userCandidate.facts?.absorptionRisk,
-          userSelected:true,
-          qualification:'UNVERIFIED_RETROSPECTIVE_9_OF_11',
-        });
-      }
-    }
     // Capture a strictly prospective 15s rescue candidate before the V3 20s
     // direction deadline. This does not bypass the Selective V2/Edge filters.
     if (
@@ -5035,14 +5008,12 @@ function productionSignalPayload(now = Date.now()) {
       facts: row.productionSource === VIP75_PRIMARY_SOURCE ||
         row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
         row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY' ||
-        row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY' ||
-        row.productionSource === VERIFIED_NO_BASE_SOURCE
+        row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY'
         ? (row.shadowFacts ?? null)
         : (row.predictionFacts ?? null),
       productionPolicy: productionPolicyName(),
-      fallbackUsed: row.productionFallbackUsed === true || row.productionSource === 'V6_FALLBACK' || row.productionSource === VERIFIED_NO_BASE_SOURCE,
-      fallbackReason: row.productionFallbackReason || (row.productionSource === 'V6_FALLBACK' ? 'FROZEN_V6_FALLBACK'
-        : row.productionSource === VERIFIED_NO_BASE_SOURCE ? 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_20S' : null),
+      fallbackUsed: row.productionFallbackUsed === true || row.productionSource === 'V6_FALLBACK',
+      fallbackReason: row.productionFallbackReason || (row.productionSource === 'V6_FALLBACK' ? 'FROZEN_V6_FALLBACK' : null),
       shadowForwardStatus: shadowModelMetrics.status,
       shadowForwardSamples: shadowModelMetrics.forwardSamples,
       frozen: true,
@@ -5185,16 +5156,6 @@ function productionSignalPayload(now = Date.now()) {
     const edgeFuse = edgeRescue?.decision === baseDirection
       ? selectiveV2EdgeRescueFuseState(baseDirection)
       : null;
-    const edgeExpansionEvaluation =
-      baseDirection &&
-      q &&
-      !q.pass &&
-      edgeRescue?.decision !== baseDirection
-        ? (row.selectiveV2EdgeExpansionShadow?.version === SELECTIVE_V2_EDGE_EXPANSION_VERSION
-          ? row.selectiveV2EdgeExpansionShadow
-          : edgeRescueExpansion.evaluate(row, q, edgeRescue))
-        : null;
-
     if (edgeRescue?.decision === baseDirection && edgeFuse?.allowed) {
       const confidence = Number.isFinite(Number(row.modelProbability))
         ? Number(row.modelProbability)
@@ -5233,194 +5194,10 @@ function productionSignalPayload(now = Date.now()) {
       return {ok:true,live};
     }
 
-    // Record that the existing Selective V2 + Tier-1 path would have returned WAIT.
-    // Do not infer baseline WAIT from a historical missing production lock.
-    const baselineWaitNow = Date.now();
-    if (edgeExpansionEvaluation && !row.expansionBaselineWaitAt &&
-        Number.isFinite(Number(row.predictedAt)) &&
-        Number(row.predictedAt) >= Number(row.roundStartMs) &&
-        baselineWaitNow >= Number(edgeExpansionEvaluation.evaluatedAt) &&
-        baselineWaitNow < Number(row.roundEndMs)) {
-      row.expansionBaselineWaitAt = baselineWaitNow;
-      saveHistory();
-    }
-
-    // Tier-2/3 expansion only activates after independent strict-forward proof.
-    // It inherits the Tier-1 fuse so a degraded rescue regime cannot be widened.
-    const expansionCoreFuse = edgeExpansionEvaluation
-      ? selectiveV2EdgeRescueFuseState(baseDirection)
-      : null;
-    const expansionSelection =
-      edgeExpansionEvaluation && expansionCoreFuse?.allowed
-        ? edgeRescueExpansion.selectProductionCandidate(
-            rounds.values(),
-            edgeExpansionEvaluation,
-            baseDirection
-          )
-        : null;
-
-    if (expansionSelection?.allowed && expansionSelection?.candidate) {
-      const candidate = expansionSelection.candidate;
-      const confidence = Number.isFinite(Number(row.modelProbability))
-        ? Number(row.modelProbability)
-        : (Number.isFinite(Number(row.predictionConfidence)) ? Number(row.predictionConfidence) : null);
-      const score = Number.isFinite(Number(row.predictionScore)) ? Number(row.predictionScore) : null;
-      const live = {
-        round:row.roundStartMs,
-        status:'LOCKED',
-        signal:{direction:baseDirection,score,confidence,modelProbability:confidence},
-        input:{round:row.roundStartMs},
-        generatedAt:Number.isFinite(Number(row.predictedAt)) ? Number(row.predictedAt) : Date.now(),
-        source:'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY',
-        model:SELECTIVE_V2_EDGE_EXPANSION_VERSION + ':' + candidate.candidateId,
-        facts:row.predictionFacts ?? null,
-        productionPolicy:productionPolicyName(),
-        fallbackUsed:vip75Backup,
-        fallbackReason:vip75Backup ? 'VIP75_MISSING_AT_24S_V2_BACKUP' : null,
-        selectiveQuality:q,
-        edgeRescue:{
-          candidate:edgeRescue,
-          fuse:expansionCoreFuse ? {
-            allowed:Boolean(expansionCoreFuse.allowed),
-            reason:expansionCoreFuse.reason ?? null,
-          } : null,
-        },
-        edgeExpansion:{
-          candidateId:candidate.candidateId,
-          strictForwardSamples:candidate.strictForwardSamples,
-          strictForwardAccuracy:candidate.forwardAccuracy,
-          recent10Accuracy:candidate.recent10Accuracy,
-          incrementalCoverage:candidate.incrementalCoverage,
-          allowedDirections:candidate.allowedDirections,
-        },
-        shadowForwardStatus:'EDGE_EXPANSION_ACTIVE',
-        shadowForwardSamples:candidate.strictForwardSamples,
-      };
-      freezeProductionLock(row, live);
-      log('selective_v2_edge_expansion_production_lock', {
-        round:row.roundStartMs,
-        direction:baseDirection,
-        candidateId:candidate.candidateId,
-        strictForwardSamples:candidate.strictForwardSamples,
-        strictForwardAccuracy:candidate.forwardAccuracy,
-        recent10Accuracy:candidate.recent10Accuracy,
-        incrementalCoverage:candidate.incrementalCoverage,
-        allowedDirections:candidate.allowedDirections,
-      });
-      logProductionSignalState(live);
-      return {ok:true,live};
-    }
-
-    // Structural no-base repair: keep V3 and Selective V2 unchanged, but allow
-    // only previously frozen, independently measured 20s candidates with >=75%
-    // official strict-forward proof and intact current-round input safety.
-    // Unqualified trials continue to WAIT; this cannot force a trade.
-    const earlyNoBaseRescue = !baseDirection &&
-      row.v3NoBase15sShadow?.version === V3_NO_BASE_15S_VERSION &&
-      Date.now() - Number(row.roundStartMs) <= 20000
-      ? selectVerifiedNoBase15s(row, v3NoBase15sShadowSummary(rounds), Date.now())
-      : null;
-    // Prefer an eligible 15s immutable freeze. The existing 20s route stays
-    // untouched as fallback and neither route can claim a direction on weak proof.
-    const lateNoBaseRescue = !baseDirection &&
-      row.v3NoBase20sShadow?.version === V3_NO_BASE_20S_VERSION &&
-      Date.now() - Number(row.roundStartMs) <= 25000
-      ? selectVerifiedNoBase20s(row, v3NoBase20sShadowSummary(rounds), Date.now())
-      : null;
-    const noBaseRescue = earlyNoBaseRescue?.allowed ? earlyNoBaseRescue : lateNoBaseRescue;
-    if (noBaseRescue?.allowed && noBaseRescue.candidate) {
-      const candidate = noBaseRescue.candidate;
-      const from15s = candidate.verifiedScope === 'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S';
-      const rescueSnapshot = from15s ? row.v3NoBase15sShadow : row.v3NoBase20sShadow;
-      const live = {
-        round: row.roundStartMs,
-        status: 'LOCKED',
-        signal: {
-          direction: candidate.direction,
-          score: candidate.score,
-          // PM mid is market odds, not calibrated model confidence.
-          confidence: null,
-          modelProbability: null,
-        },
-        input: { round: row.roundStartMs },
-        generatedAt: candidate.observedAt,
-        source: from15s ? VERIFIED_NO_BASE_15S_SOURCE : VERIFIED_NO_BASE_SOURCE,
-        model: (from15s ? V3_NO_BASE_15S_VERSION : V3_NO_BASE_20S_VERSION) + ':' + candidate.candidateId,
-        facts: rescueSnapshot.facts,
-        productionPolicy: productionPolicyName(),
-        fallbackUsed: true,
-        fallbackReason: from15s ? 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_15S' : 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_20S',
-        verifiedNoBase: {
-          candidateId: candidate.candidateId,
-          strictForwardSamples: candidate.strictForwardSamples,
-          strictForwardAccuracy: candidate.strictForwardAccuracy,
-          recent20Accuracy: candidate.recent20Accuracy,
-          scope: candidate.verifiedScope,
-        },
-      };
-      if (freezeProductionLock(row, live)) {
-        log('selective_v2_verified_no_base_production_lock', {
-          round: row.roundStartMs,
-          freezeDelayMs:from15s ? 15000 : 20000,
-          candidateId: candidate.candidateId,
-          direction: candidate.direction,
-          strictForwardSamples: candidate.strictForwardSamples,
-          strictForwardAccuracy: candidate.strictForwardAccuracy,
-          recent20Accuracy: candidate.recent20Accuracy,
-          verifiedScope: candidate.verifiedScope,
-        });
-        logProductionSignalState(live);
-        return { ok:true, live };
-      }
-    }
-
-    // User explicitly chose CURRENT>=0.25 + aligned PM strength product
-    // >=0.0075 as an IMMEDIATE production fallback. This lane is separate
-    // from the still-qualified 75% no-base paths and keeps its own early
-    // immutable inputs, official-outcome error fuse and original direction
-    // conflict protection. It is NOT proven to yield >=70% live accuracy.
-    const chosenRescue=selectUserCurrentPm(row,rounds,Date.now());
-    if(chosenRescue.allowed && chosenRescue.candidate){
-      const c=chosenRescue.candidate;
-      const live={
-        round:row.roundStartMs,
-        status:'LOCKED',
-        signal:{
-          direction:c.direction,
-          score:c.score,
-          confidence:null,
-          modelProbability:null,
-        },
-        input:{round:row.roundStartMs},
-        generatedAt:c.generatedAt,
-        source:USER_CURRENT_PM_SOURCE,
-        model:USER_CURRENT_PM_VERSION,
-        modelVersion:USER_CURRENT_PM_VERSION,
-        facts:row.userCurrentPm15s.facts,
-        productionPolicy:productionPolicyName(),
-        fallbackUsed:true,
-        fallbackReason:'USER_SELECTED_CURRENT_PM_RESCUE_15S',
-        accuracyQualification:'UNVERIFIED_USER_DIRECTED_RETROSPECTIVE_9_OF_11',
-        userCurrentPmFuse:chosenRescue.fuse,
-      };
-      if(freezeProductionLock(row,live)){
-        log('user_current_pm_production_lock',{
-          round:row.roundStartMs,direction:c.direction,
-          score:c.score,pmUpMid:c.pmUpMid,
-          combinedScore:c.combinedScore,
-          absorptionRisk:c.absorptionRisk,
-          observedAt:c.generatedAt,
-          recent5Accuracy:chosenRescue.fuse?.last5Accuracy??null,
-          recent10Accuracy:chosenRescue.fuse?.last10Accuracy??null,
-          accuracyQualification:live.accuracyQualification,
-        });
-        logProductionSignalState(live);
-        return {ok:true,live};
-      }
-    }
-
-    // Unqualified no-base candidates remain shadow-only. Never invent a
-    // direction if there is no prospective strict-forward quality proof.
+    // Accuracy-first rollback: production locking is restricted to the verified
+    // 22-second V3 -> Selective V2 -> Edge Rescue Tier-1 route above.
+    // Experimental edge expansions, no-base and CURRENT+PM candidates cannot
+    // produce production locks; retained historical records remain auditable.
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
@@ -5455,18 +5232,6 @@ function productionSignalPayload(now = Date.now()) {
         fuse:edgeFuse ? {
           allowed:Boolean(edgeFuse.allowed),
           reason:edgeFuse.reason ?? null,
-        } : null,
-      } : null,
-      edgeExpansion: edgeExpansionEvaluation ? {
-        current: edgeExpansionEvaluation,
-        coreFuse: expansionCoreFuse ? {
-          allowed:Boolean(expansionCoreFuse.allowed),
-          reason:expansionCoreFuse.reason ?? null,
-        } : null,
-        selection: expansionSelection ? {
-          allowed:Boolean(expansionSelection.allowed),
-          reason:expansionSelection.reason ?? null,
-          candidateId: expansionSelection.candidate?.candidateId ?? null,
         } : null,
       } : null,
       shadowForwardStatus: s.status,

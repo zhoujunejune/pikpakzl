@@ -8,7 +8,9 @@ import { createIndependentDirectionShadow } from './independent-direction-shadow
 import { selectVip75Primary, shouldUseVip75Backup, VIP75_PRIMARY_NAME, VIP75_PRIMARY_SOURCE } from './vip75-primary.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
+import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
 import { selectVerifiedNoBase20s, VERIFIED_NO_BASE_SOURCE } from './verified-no-base-20s.mjs';
+import { selectVerifiedNoBase15s, VERIFIED_NO_BASE_SOURCE as VERIFIED_NO_BASE_15S_SOURCE } from './verified-no-base-15s.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
@@ -3931,6 +3933,7 @@ function ensureRound(roundStartMs) {
       selectiveV2NoBaseShadow: null,
       selectiveV2NoBaseContest: null,
       v3NoBase20sShadow: null,
+      v3NoBase15sShadow: null,
       v3TrendBandForward: null,
       baseDirectionRescueV2: null,
       selectiveV2HighPrecisionShadow: null,
@@ -4059,6 +4062,31 @@ async function pollSignal() {
           productionEffect:'NONE_SHADOW_ONLY',
         });
         saveHistory();
+      }
+    }
+    // Capture a strictly prospective 15s rescue candidate before the V3 20s
+    // direction deadline. This does not bypass the Selective V2/Edge filters.
+    if (
+      liveFacts &&
+      !row.v3NoBase15sShadow &&
+      Number(row.roundStartMs) >= V3_NO_BASE_15S_START_MS &&
+      live?.status !== 'LOCKED' &&
+      row.prediction !== 'UP' && row.prediction !== 'DOWN'
+    ) {
+      const early = evaluateV3NoBase15sShadow(row, liveFacts);
+      if (early) {
+        row.v3NoBase15sShadow = early;
+        saveHistory();
+        log('v3_no_base_15s_shadow_frozen', {
+          round:row.roundStartMs,
+          at:early.observedAt,
+          observedDelayMs:early.observedDelayMs,
+          directions:Object.fromEntries(Object.entries(early.candidates).map(([id,v])=>[id,v.decision])),
+          sourceMarketTopicId:early.facts.sourceMarketTopicId,
+          dataFresh:early.facts.dataFresh,
+          gateFailures:early.facts.gateFailures,
+          productionEffect:'NONE_UNLESS_STRICT_FORWARD_75_QUALIFIED',
+        });
       }
     }
     if (
@@ -4373,6 +4401,14 @@ async function settlePendingRounds() {
             (x.strictForwardSamples % 5 === 0 || x.strictForwardSamples === WAIT_RESCUE_FORWARD_TARGET)
           );
           if (milestone) log('wait_rescue_shadow_forward_progress', rescue);
+        }
+        if (row?.v3NoBase15sShadow?.version === V3_NO_BASE_15S_VERSION &&
+            row.v3NoBase15sShadow.baseAbsentAtObservation === true) {
+          const earlyTrial = v3NoBase15sShadowSummary(rounds);
+          if (earlyTrial.candidates.some(c => c.strictForwardSamples > 0 &&
+              (c.strictForwardSamples % 5 === 0 || c.strictForwardSamples === V3_NO_BASE_15S_FORWARD_TARGET))) {
+            log('v3_no_base_15s_strict_forward_progress', earlyTrial);
+          }
         }
         if (row?.v3NoBase20sShadow?.version === V3_NO_BASE_20S_VERSION &&
             row.prediction !== 'UP' && row.prediction !== 'DOWN') {
@@ -5241,13 +5277,23 @@ function productionSignalPayload(now = Date.now()) {
     // only previously frozen, independently measured 20s candidates with >=75%
     // official strict-forward proof and intact current-round input safety.
     // Unqualified trials continue to WAIT; this cannot force a trade.
-    const noBaseRescue = !baseDirection &&
+    const earlyNoBaseRescue = !baseDirection &&
+      row.v3NoBase15sShadow?.version === V3_NO_BASE_15S_VERSION &&
+      Date.now() - Number(row.roundStartMs) <= 20000
+      ? selectVerifiedNoBase15s(row, v3NoBase15sShadowSummary(rounds), Date.now())
+      : null;
+    // Prefer an eligible 15s immutable freeze. The existing 20s route stays
+    // untouched as fallback and neither route can claim a direction on weak proof.
+    const lateNoBaseRescue = !baseDirection &&
       row.v3NoBase20sShadow?.version === V3_NO_BASE_20S_VERSION &&
       Date.now() - Number(row.roundStartMs) <= 25000
       ? selectVerifiedNoBase20s(row, v3NoBase20sShadowSummary(rounds), Date.now())
       : null;
+    const noBaseRescue = earlyNoBaseRescue?.allowed ? earlyNoBaseRescue : lateNoBaseRescue;
     if (noBaseRescue?.allowed && noBaseRescue.candidate) {
       const candidate = noBaseRescue.candidate;
+      const from15s = candidate.verifiedScope === 'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S';
+      const rescueSnapshot = from15s ? row.v3NoBase15sShadow : row.v3NoBase20sShadow;
       const live = {
         round: row.roundStartMs,
         status: 'LOCKED',
@@ -5260,12 +5306,12 @@ function productionSignalPayload(now = Date.now()) {
         },
         input: { round: row.roundStartMs },
         generatedAt: candidate.observedAt,
-        source: VERIFIED_NO_BASE_SOURCE,
-        model: V3_NO_BASE_20S_VERSION + ':' + candidate.candidateId,
-        facts: row.v3NoBase20sShadow.facts,
+        source: from15s ? VERIFIED_NO_BASE_15S_SOURCE : VERIFIED_NO_BASE_SOURCE,
+        model: (from15s ? V3_NO_BASE_15S_VERSION : V3_NO_BASE_20S_VERSION) + ':' + candidate.candidateId,
+        facts: rescueSnapshot.facts,
         productionPolicy: productionPolicyName(),
         fallbackUsed: true,
-        fallbackReason: 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_20S',
+        fallbackReason: from15s ? 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_15S' : 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_20S',
         verifiedNoBase: {
           candidateId: candidate.candidateId,
           strictForwardSamples: candidate.strictForwardSamples,
@@ -5277,6 +5323,7 @@ function productionSignalPayload(now = Date.now()) {
       if (freezeProductionLock(row, live)) {
         log('selective_v2_verified_no_base_production_lock', {
           round: row.roundStartMs,
+          freezeDelayMs:from15s ? 15000 : 20000,
           candidateId: candidate.candidateId,
           direction: candidate.direction,
           strictForwardSamples: candidate.strictForwardSamples,
@@ -5661,6 +5708,7 @@ const signalHttpServer = http.createServer((req, res) => {
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
         noBaseContest:selectiveV2NoBaseContestSummary(),
         v3NoBase20sRescue:v3NoBase20sShadowSummary(rounds),
+        v3NoBase15sRescue:v3NoBase15sShadowSummary(rounds),
         v3TrendBandForward:summarizeV3TrendBand(rounds),
         waitRescue:waitRescueShadowSummary(),
         adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),
@@ -5700,6 +5748,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(noBaseSpecialist.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v3-no-base-15s-stats') {
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(v3NoBase15sShadowSummary(rounds)));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v3-trend-band-forward-stats') {

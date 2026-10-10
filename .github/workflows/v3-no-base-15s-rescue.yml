@@ -1,0 +1,47 @@
+name: V3 early no-base 15s rescue verification
+on:
+  push:
+    branches:
+      - feat/v3-no-base-15s-rescue-20261010
+    paths:
+      - 'round-tracker/index-rest.mjs'
+      - 'round-tracker/v3-no-base-15s-audit*'
+      - 'round-tracker/verified-no-base-15s*'
+      - '.github/workflows/v3-no-base-15s-rescue.yml'
+  pull_request:
+    paths:
+      - 'round-tracker/index-rest.mjs'
+      - 'round-tracker/v3-no-base-15s-audit*'
+      - 'round-tracker/verified-no-base-15s*'
+      - '.github/workflows/v3-no-base-15s-rescue.yml'
+  workflow_dispatch:
+jobs:
+  verify-early-rescue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check core production and new early modules
+        run: |
+          node --check round-tracker/index-rest.mjs
+          node --check round-tracker/v3-no-base-15s-audit.mjs
+          node --check round-tracker/verified-no-base-15s.mjs
+      - name: Strict-forward and anti-leakage regression tests
+        run: |
+          node --test round-tracker/v3-no-base-15s-audit.test.mjs round-tracker/verified-no-base-15s.test.mjs round-tracker/v3-no-base-20s-audit.test.mjs round-tracker/verified-no-base-20s.test.mjs
+      - name: Confirm unchanged V2 production safety gates
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            import assert from "node:assert/strict";
+            const main=fs.readFileSync("round-tracker/index-rest.mjs","utf8");
+            assert(main.includes("selectiveV2EdgeRescueFuseState(baseDirection)"));
+            assert(main.includes("freezeProductionLock(row, live)"));
+            assert(main.includes("V3_NO_BASE_15S_FORWARD_TARGET"));
+            assert(main.indexOf("earlyNoBaseRescue") < main.indexOf("lateNoBaseRescue"));
+            assert(main.includes("from15s ? VERIFIED_NO_BASE_15S_SOURCE : VERIFIED_NO_BASE_SOURCE"));
+            assert(main.includes("v3NoBase15sShadowSummary(rounds)"));
+          '

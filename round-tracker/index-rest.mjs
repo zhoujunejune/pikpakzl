@@ -7,6 +7,7 @@ import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75, shadow only
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
+import { selectVerifiedNoBase20s, VERIFIED_NO_BASE_SOURCE } from './verified-no-base-20s.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
@@ -4517,8 +4518,8 @@ function freezeProductionLock(row, live) {
   if (row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN') return false;
 
   row.productionPrediction = direction;
-  row.productionConfidence = Number.isFinite(Number(live?.signal?.confidence)) ? Number(live.signal.confidence) : null;
-  row.productionScore = Number.isFinite(Number(live?.signal?.score)) ? Number(live.signal.score) : null;
+  row.productionConfidence = live?.signal?.confidence == null ? null : (Number.isFinite(Number(live.signal.confidence)) ? Number(live.signal.confidence) : null);
+  row.productionScore = live?.signal?.score == null ? null : (Number.isFinite(Number(live.signal.score)) ? Number(live.signal.score) : null);
   row.productionSource = live?.source || 'UNKNOWN';
   row.productionGeneratedAt = Number.isFinite(Number(live?.generatedAt)) ? Number(live.generatedAt) : Date.now();
   row.productionDelayMs = Math.max(0, Number(row.productionGeneratedAt) - Number(row.roundStartMs));
@@ -4929,12 +4930,14 @@ function productionSignalPayload(now = Date.now()) {
       model: row.productionModel || null,
       facts: row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
         row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY' ||
-        row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY'
+        row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY' ||
+        row.productionSource === VERIFIED_NO_BASE_SOURCE
         ? (row.shadowFacts ?? null)
         : (row.predictionFacts ?? null),
       productionPolicy: productionPolicyName(),
-      fallbackUsed: row.productionSource === 'V6_FALLBACK',
-      fallbackReason: row.productionSource === 'V6_FALLBACK' ? 'FROZEN_V6_FALLBACK' : null,
+      fallbackUsed: row.productionSource === 'V6_FALLBACK' || row.productionSource === VERIFIED_NO_BASE_SOURCE,
+      fallbackReason: row.productionSource === 'V6_FALLBACK' ? 'FROZEN_V6_FALLBACK'
+        : row.productionSource === VERIFIED_NO_BASE_SOURCE ? 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_20S' : null,
       shadowForwardStatus: shadowModelMetrics.status,
       shadowForwardSamples: shadowModelMetrics.forwardSamples,
       frozen: true,
@@ -5138,8 +5141,60 @@ function productionSignalPayload(now = Date.now()) {
       return {ok:true,live};
     }
 
-    // No-base candidates remain shadow-only. Rescue layers never invent a
-    // direction when V3 has not produced one.
+    // Structural no-base repair: keep V3 and Selective V2 unchanged, but allow
+    // only previously frozen, independently measured 20s candidates with >=75%
+    // official strict-forward proof and intact current-round input safety.
+    // Unqualified trials continue to WAIT; this cannot force a trade.
+    const noBaseRescue = !baseDirection &&
+      row.v3NoBase20sShadow?.version === V3_NO_BASE_20S_VERSION &&
+      Date.now() - Number(row.roundStartMs) <= 25000
+      ? selectVerifiedNoBase20s(row, v3NoBase20sShadowSummary(rounds), Date.now())
+      : null;
+    if (noBaseRescue?.allowed && noBaseRescue.candidate) {
+      const candidate = noBaseRescue.candidate;
+      const live = {
+        round: row.roundStartMs,
+        status: 'LOCKED',
+        signal: {
+          direction: candidate.direction,
+          score: candidate.score,
+          // PM mid is market odds, not calibrated model confidence.
+          confidence: null,
+          modelProbability: null,
+        },
+        input: { round: row.roundStartMs },
+        generatedAt: candidate.observedAt,
+        source: VERIFIED_NO_BASE_SOURCE,
+        model: V3_NO_BASE_20S_VERSION + ':' + candidate.candidateId,
+        facts: row.v3NoBase20sShadow.facts,
+        productionPolicy: productionPolicyName(),
+        fallbackUsed: true,
+        fallbackReason: 'OFFICIAL_FORWARD_75_VERIFIED_NO_BASE_20S',
+        verifiedNoBase: {
+          candidateId: candidate.candidateId,
+          strictForwardSamples: candidate.strictForwardSamples,
+          strictForwardAccuracy: candidate.strictForwardAccuracy,
+          recent20Accuracy: candidate.recent20Accuracy,
+          scope: candidate.verifiedScope,
+        },
+      };
+      if (freezeProductionLock(row, live)) {
+        log('selective_v2_verified_no_base_production_lock', {
+          round: row.roundStartMs,
+          candidateId: candidate.candidateId,
+          direction: candidate.direction,
+          strictForwardSamples: candidate.strictForwardSamples,
+          strictForwardAccuracy: candidate.strictForwardAccuracy,
+          recent20Accuracy: candidate.recent20Accuracy,
+          verifiedScope: candidate.verifiedScope,
+        });
+        logProductionSignalState(live);
+        return { ok:true, live };
+      }
+    }
+
+    // Unqualified no-base candidates remain shadow-only. Never invent a
+    // direction if there is no prospective strict-forward quality proof.
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']

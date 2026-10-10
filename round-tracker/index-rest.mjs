@@ -4940,7 +4940,8 @@ function productionSignalPayload(now = Date.now()) {
       source: row.productionSource || 'UNKNOWN',
       model: row.productionModel || null,
       modelVersion: row.productionModelVersion || null,
-      facts: row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
+      facts: row.productionSource === VIP75_PRIMARY_SOURCE ||
+        row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
         row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY' ||
         row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_NO_BASE_PRIMARY' ||
         row.productionSource === VERIFIED_NO_BASE_SOURCE

@@ -5157,6 +5157,17 @@ function productionSignalPayload(now = Date.now()) {
       productionPolicy: productionPolicyName(),
       fallbackUsed: false,
       waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|'),
+      // Read-only attribution; does not participate in signal selection.
+      baseDirectionDiagnostic: {
+        roundId: String(row.roundStartMs),
+        frozenDirection: baseDirection === 'UP' || baseDirection === 'DOWN' ? baseDirection : null,
+        primaryWaitClass: !baseDirection ? 'A_V3_NO_BASE_DIRECTION' : 'B_SELECTIVE_V2_REJECTED',
+        v2GateReasons: Array.isArray(q?.reasons) ? [...q.reasons] : [],
+        edgeRescueCandidatePresent: Boolean(edgeRescue),
+        edgeRescueFuseAllowed: edgeFuse?.allowed === true,
+        edgeRescueFuseReason: edgeFuse?.reason ?? null,
+        observedAt: row.predictedAt ?? null,
+      },
       selectiveQuality: q,
       edgeRescue: edgeRescue ? {
         candidate:edgeRescue,

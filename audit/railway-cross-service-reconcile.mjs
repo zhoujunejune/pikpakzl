@@ -12,16 +12,16 @@ for(const row of history.records){
  seen.add(round);
  if(!['UP','DOWN'].includes(prediction))continue;
  const lock=Number(row.productionLockedAt);
- if(!Number.isFinite(lock)||lock<round||lock>=round+300000){items.push({round,status:'INVALID_FREEZE'});continue}
+ if(row.productionLockedAt==null||!Number.isFinite(lock)||lock<round||lock>=round+300000){items.push({round,status:'INVALID_FREEZE'});continue}
  const topic=row.predictionMarketTopicId??row.officialSettlementAudit?.marketTopicId;
  const url=new URL('/api/prediction-resolution',v3);url.searchParams.set('round',String(round));
  if(topic)url.searchParams.set('marketTopicId',String(topic));
  try{
   const result=await get(url.toString());
-  if(!result.resolved||!['UP','DOWN'].includes(result.direction)){items.push({round,status:'UNRESOLVED'});continue}
+  if(result.ok!==true||!result.resolved||!['UP','DOWN'].includes(result.direction)){items.push({round,status:'UNRESOLVED'});continue}
   if(result.rejectedTopicId){items.push({round,status:'STALE_TOPIC_REJECTED',rejectedTopicId:result.rejectedTopicId,refetchedTopicId:result.marketTopicId});continue}
   if(result.marketTopicId&&topic&&String(result.marketTopicId)!==String(topic)){items.push({round,status:'TOPIC_MISMATCH'});continue}
-  if(!Number.isFinite(Number(result.startDate))||!Number.isFinite(Number(result.endDate))||Math.abs(Number(result.startDate)-round)>30000||Math.abs(Number(result.endDate)-(round+300000))>30000){items.push({round,status:'ROUND_MISMATCH'});continue}
+  if(result.startDate==null||result.endDate==null||!Number.isFinite(Number(result.startDate))||!Number.isFinite(Number(result.endDate))||Math.abs(Number(result.startDate)-round)>30000||Math.abs(Number(result.endDate)-(round+300000))>30000){items.push({round,status:'ROUND_MISMATCH'});continue}
   const direction=result.direction;
   items.push({round,status:direction===(row.officialDirection??row.productionActual)?'MATCH':'MISMATCH',direction,calculatedResult:direction===prediction?'HIT':'MISS',topic:result.marketTopicId,hash:result.auditEvidence?.detailPayloadSha256??null,hashComparable:Boolean(result.auditEvidence?.detailPayloadSha256&&row.officialSettlementAudit?.detailPayloadSha256),storedHashMatches:result.auditEvidence?.detailPayloadSha256&&row.officialSettlementAudit?.detailPayloadSha256?result.auditEvidence.detailPayloadSha256===row.officialSettlementAudit.detailPayloadSha256:null});
  }catch(e){items.push({round,status:'ERROR',reason:String(e)})}

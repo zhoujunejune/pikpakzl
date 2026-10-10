@@ -1,5 +1,6 @@
 import { V3_NO_BASE_15S_VERSION } from './v3-no-base-15s-audit.mjs';
-import { FORWARD_GATED_15S_IDS, candidateProductionSource } from './unified-15s-candidate-router.mjs';
+import { FORWARD_GATED_15S_IDS } from './unified-15s-candidate-router.mjs';
+export const lastResortSource = id => FORWARD_GATED_15S_IDS.includes(id) ? 'LOW_PRIORITY_15S_' + id + '_PRIMARY' : null;
 
 // Option B: an experimental fallback, not a validated model.
 // It operates ONLY after the two early live routes and the 22-second
@@ -63,7 +64,7 @@ export function selectLastResort15sBackups(row, now = Date.now()) {
     const signedPm=c.decision==='UP' ? q.upMid-0.5 : 0.5-q.upMid;
     if (signedPm<0.03) continue;
     candidates.push({
-      id,source:candidateProductionSource(id),
+      id,source:lastResortSource(id),
       direction:c.decision,observedAt:f.observedAt,
       score:finite(q.currentScore)?q.currentScore:null,
       topicId:q.sourceMarketTopicId,absorptionOnly,

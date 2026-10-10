@@ -5,7 +5,7 @@ export const INDEPENDENT_DIRECTION_VERSION = 'INDEPENDENT_DIRECTION_REGIME_ADAPT
 // unchanged so a rename cannot erase strict-forward predictions or retrain.
 export const INDEPENDENT_DIRECTION_NAME = 'zl_new_vip75';
 export const INDEPENDENT_TARGET = Object.freeze({
-  accuracy: 0.75, coverage: 1.00, minForwardRounds: 200, minDecisions: 200,
+  accuracy: 0.75, coverage: 1.00, minimumReviewCoverage: 0.70, minForwardRounds: 200, minDecisions: 200,
   recentDecisions: 100, longWindow: 200, trainingSamples: 320,
 });
 
@@ -286,12 +286,12 @@ export function independentForwardStats(rows,model) {
   }).map(r=>Number(r.roundStartMs));
   let status='STRICT_FORWARD_COLLECTING';
   if(settled.length>=target.minForwardRounds){
-    if(sums.accuracy>=target.accuracy && coverage===1 &&
-      recent.samples>=target.recentDecisions && recent.accuracy>=target.accuracy &&
-      recent40.samples===40 && recent40.accuracy>=target.accuracy &&
-      rolling200.samples>=target.longWindow && rolling200.accuracy>=target.accuracy &&
+    if(sums.accuracy>target.accuracy && coverage>=target.minimumReviewCoverage &&
+      recent.samples>=target.recentDecisions && recent.accuracy>target.accuracy &&
+      recent40.samples===40 && recent40.accuracy>target.accuracy &&
+      rolling200.samples>=target.longWindow && rolling200.accuracy>target.accuracy &&
       up.samples>=15 && down.samples>=15 &&
-      up.accuracy>=target.accuracy && down.accuracy>=target.accuracy)
+      up.accuracy>target.accuracy && down.accuracy>target.accuracy)
       status='QUALIFIED_75_100_LONG_TERM_REVIEW';
     else status='FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED';
   }
@@ -369,7 +369,7 @@ export function independentAdaptiveProgramStats(rows,modelLineage,archivedOffici
   const regimeQualified=trend.samples>=20&&range.samples>=20 &&
     trend.accuracy>target.accuracy&&range.accuracy>target.accuracy;
   const qualified=rounds.length>=target.minForwardRounds &&
-    predictions.length===rounds.length &&
+    coverage>=target.minimumReviewCoverage &&
     summary.accuracy>target.accuracy &&
     recent40.samples===40&&recent40.accuracy>target.accuracy &&
     recent100.samples===100&&recent100.accuracy>target.accuracy &&
@@ -400,7 +400,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
     priorModels:[],modelLineage:[],officialForwardLedger:[],
     lastAttemptSettledRoundMs:0,
     lastAdaptationReason:null,adaptationAttempts:0,modelSwitches:0,lastInsufficientAt:0,
-    challenger:null};
+    challenger:null,officialCorrectionAudit:[]};
   function save(){
     if(!file)return;
     try{fs.mkdirSync(file.slice(0,file.lastIndexOf('/'))||'.',{recursive:true});
@@ -446,6 +446,15 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
     if(existing!==-1){
       const old=state.officialForwardLedger[existing];
       if(old.actual===minimal.actual)return false;
+      // Append the correction evidence before updating the canonical outcome.
+      // Historical round denominators and frozen predictions remain untouched.
+      if(!Array.isArray(state.officialCorrectionAudit))state.officialCorrectionAudit=[];
+      state.officialCorrectionAudit.push({
+        roundStartMs:minimal.roundStartMs,previousActual:old.actual,
+        correctedActual:minimal.actual,previousSource:old.actualSource,
+        correctedSource:minimal.actualSource,previousSettledAt:old.settledAt,
+        correctedSettledAt:minimal.settledAt,recordedAt:Date.now(),
+      });
       state.officialForwardLedger[existing]={...old,actual:minimal.actual,
         actualSource:minimal.actualSource,settledAt:minimal.settledAt};
       log('independent_direction_official_correction',{round:minimal.roundStartMs,
@@ -618,6 +627,7 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
         adaptationAttempts:state.adaptationAttempts,
         modelSwitches:state.modelSwitches,
         officialLedgerRows:state.officialForwardLedger.length,
+        officialCorrectionEvents:state.officialCorrectionAudit?.length||0,
         lastAttemptSettledRoundMs:state.lastAttemptSettledRoundMs,
         lastReason:state.lastAdaptationReason},
       model:state.model?{

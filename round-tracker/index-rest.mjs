@@ -19,6 +19,7 @@ import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, selectCurrent03PmAgree15s, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
 import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL, selectPmCurrent25Support0815s } from './pm-current25-support08-production.mjs';
+import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, candidateProductionSource, forward15sProofPass, selectForwardGated15sCandidates } from './unified-15s-candidate-router.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -164,6 +165,17 @@ const timedPmCurrent25Fuse = createTimedEdgeRescueFuse({
   productionSource: PM_CURRENT25_SUPPORT08_SOURCE,
   log,
 });
+// Every additional forward-qualified candidate has independent 30-minute
+// global/UP/DOWN circuits and official production-settlement provenance.
+const verified15sFuses = Object.fromEntries(FORWARD_GATED_15S_IDS.map(id => [
+  id,
+  createTimedEdgeRescueFuse({
+    file: HISTORY_FILE + '.v3-no-base-15s-' + id.toLowerCase() + '-fuse.json',
+    cooldownMs: 30 * 60 * 1000,
+    productionSource: candidateProductionSource(id),
+    log,
+  }),
+]));
 
 // Forward-only expansion lanes. They only observe rounds that Tier-1 Edge Rescue
 // still rejects, so their strict-forward results measure genuinely incremental
@@ -4398,6 +4410,7 @@ async function settlePendingRounds() {
         timedEdgeRescueFuse.onSettled(row);
         timedCurrent03PmFuse.onSettled(row);
         timedPmCurrent25Fuse.onSettled(row);
+        for (const circuit of Object.values(verified15sFuses)) circuit.onSettled(row);
         if ((legacyBefore === 'UP' || legacyBefore === 'DOWN') && legacyBefore !== direction) {
           row.officialDirectionCorrectedFrom = legacyBefore;
           row.officialDirectionCorrectedAt = Date.now();
@@ -5016,6 +5029,38 @@ function logProductionSignalState(live) {
   });
 }
 
+function all15sCandidateRegistryStats() {
+  const shadow = v3NoBase15sShadowSummary(rounds);
+  const byId = new Map(shadow.candidates.map(x => [x.candidateId, x]));
+  const status = ALL_15S_IDS.map(id => {
+    const manual = id === PM_CURRENT25_SUPPORT08_MODEL || id === CURRENT03_PM_AGREE_MODEL;
+    const source = id === PM_CURRENT25_SUPPORT08_MODEL ? PM_CURRENT25_SUPPORT08_SOURCE :
+      id === CURRENT03_PM_AGREE_MODEL ? CURRENT03_PM_AGREE_SOURCE : candidateProductionSource(id);
+    const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
+      id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse : verified15sFuses[id];
+    const proof = byId.get(id);
+    const eligible = manual || forward15sProofPass(proof);
+    return {
+      candidateId:id,
+      source,
+      entryPolicy:manual ? 'USER_OPT_IN_UNVALIDATED' : 'STRICT_FORWARD_75_AND_PER_SIDE_70',
+      eligibleForProduction:eligible,
+      candidateForward:proof || null,
+      production:current03PmAgreeProductionFuseSummary(rounds, source).production,
+      timedFuse:fuse.status(),
+    };
+  });
+  return {
+    ok:true,version:V3_NO_BASE_15S_VERSION,
+    configuredCandidates:status.length,
+    userOptInCandidates:status.filter(x=>x.entryPolicy === 'USER_OPT_IN_UNVALIDATED').length,
+    forwardGatedCandidates:status.filter(x=>x.entryPolicy !== 'USER_OPT_IN_UNVALIDATED').length,
+    forwardQualifiedCandidates:status.filter(x=>x.entryPolicy !== 'USER_OPT_IN_UNVALIDATED' && x.eligibleForProduction).length,
+    productionRoute:'STRICT_FORWARD_QUALIFIED_FIRST_THEN_PM_CURRENT25_THEN_CURRENT03_THEN_ORIGINAL_22S',
+    candidates:status,
+  };
+}
+
 function productionSignalPayload(now = Date.now()) {
   const expectedRound = Math.floor(Number(now) / 300000) * 300000;
   const row = rounds.get(String(expectedRound)) || null;
@@ -5036,7 +5081,7 @@ function productionSignalPayload(now = Date.now()) {
       source: row.productionSource || 'UNKNOWN',
       model: row.productionModel || null,
       modelVersion: row.productionModelVersion || null,
-      facts: row.productionSource === CURRENT03_PM_AGREE_SOURCE || row.productionSource === PM_CURRENT25_SUPPORT08_SOURCE
+      facts: row.productionSource === CURRENT03_PM_AGREE_SOURCE || row.productionSource === PM_CURRENT25_SUPPORT08_SOURCE || FORWARD_GATED_15S_IDS.some(id => row.productionSource === candidateProductionSource(id))
         ? (row.v3NoBase15sShadow?.facts ?? null)
         : row.productionSource === VIP75_PRIMARY_SOURCE ||
         row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
@@ -5056,7 +5101,58 @@ function productionSignalPayload(now = Date.now()) {
     return { ok: true, live: frozenLive };
   }
 
-  // Two user-opted-in 15s candidates. PM_CURRENT25_SUPPORT08 has priority
+  // All 11 configured: nine additional shadow pilots may lock ONLY after
+  // strict-forward 75% and per-direction quality proof; their own official
+  // production fuse can still veto the lock.
+  if (productionUsesSelectiveV2() && row) {
+    const forwardStatus = v3NoBase15sShadowSummary(rounds);
+    const eligiblePilots = selectForwardGated15sCandidates(row, forwardStatus, now);
+    for (const selected of eligiblePilots.candidates) {
+      const fuse = verified15sFuses[selected.id];
+      const officialProduction = current03PmAgreeProductionFuseSummary(rounds, selected.source);
+      const decision = fuse.check(selected.direction, officialProduction, now);
+      if (!decision.allowed) continue;
+      const live = {
+        round:row.roundStartMs,
+        status:'LOCKED',
+        signal:{
+          direction:selected.direction,
+          score:selected.score,
+          confidence:null,
+          modelProbability:null,
+        },
+        input:{round:row.roundStartMs},
+        generatedAt:selected.observedAt,
+        source:selected.source,
+        model:selected.id,
+        modelVersion:V3_NO_BASE_15S_VERSION,
+        facts:row.v3NoBase15sShadow.facts,
+        productionPolicy:productionPolicyName(),
+        fallbackUsed:true,
+        fallbackReason:'FORWARD_75_AND_SIDE_70_VERIFIED_15S_NO_BASE',
+        accuracyQualification:'STRICT_FORWARD_POLICY_75_ELIGIBLE_NOT_INDEPENDENTLY_CERTIFIED',
+        verified15sProof:selected.proof,
+        observedDelayMs:selected.observedAt-row.roundStartMs,
+        independentFuse:decision,
+      };
+      if (freezeProductionLock(row, live)) {
+        fuse.recordLock(selected.direction, row.roundStartMs);
+        log('forward_qualified_15s_candidate_production_lock',{
+          round:row.roundStartMs,
+          candidateId:selected.id,
+          direction:selected.direction,
+          source:selected.source,
+          qualifiedProof:selected.proof,
+          observedAt:selected.observedAt,
+        });
+      }
+      logProductionSignalState(live);
+      return {ok:true,live};
+    }
+  }
+
+  // Two previously user-opted-in 15s candidates, unchanged.
+  // PM_CURRENT25_SUPPORT08 has priority
   // when both are available; CURRENT_03_PM_AGREE remains the fallback.
   // Both reuse the exact pre-settlement snapshot and independent circuits.
   if (productionUsesSelectiveV2() && row) {
@@ -5328,9 +5424,10 @@ function productionSignalPayload(now = Date.now()) {
     }
 
     // Other experimental no-base, 20s and Edge Expansion candidates remain
-    // shadow-only. The two explicitly opted-in 15s candidates can lock
-    // only from pre-settlement 15s snapshots and never bypass the unchanged
-    // Selective V2/Tier-1 eligibility on the 22s fallback route.
+    // shadow-only until strict-forward verified. The original two user
+    // opted-in candidates are unchanged; all remaining new sources need
+    // threshold proof plus their own 30m fuse, and none can bypass the
+    // unchanged Selective V2/Tier-1 path at the normal 22s deadline.
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
@@ -5588,6 +5685,7 @@ invalidateLegacyWinnerFlagSettlements();
 timedEdgeRescueFuse.reconcile(rounds.values());
 timedCurrent03PmFuse.reconcile(rounds.values());
 timedPmCurrent25Fuse.reconcile(rounds.values());
+for (const circuit of Object.values(verified15sFuses)) circuit.reconcile(rounds.values());
 loadShadowCandidateArtifact();
 adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
 preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));
@@ -5713,6 +5811,7 @@ const signalHttpServer = http.createServer((req, res) => {
         v3NoBase15sRescue:v3NoBase15sShadowSummary(rounds),
         current03PmAgree15sProduction:{...current03PmAgreeProductionFuseSummary(rounds), timedFuse:timedCurrent03PmFuse.status()},
         pmCurrent25Support0815sProduction:{...current03PmAgreeProductionFuseSummary(rounds, PM_CURRENT25_SUPPORT08_SOURCE), timedFuse:timedPmCurrent25Fuse.status()},
+        all15sCandidateRegistry:all15sCandidateRegistryStats(),
         v3TrendBandForward:summarizeV3TrendBand(rounds),
         waitRescue:waitRescueShadowSummary(),
         adaptiveGate:adaptiveGateShadow.stats(Array.from(rounds.values())),
@@ -5757,6 +5856,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(noBaseSpecialist.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/15s-candidate-registry') {
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(all15sCandidateRegistryStats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/pm-current25-support08-15s-production-stats') {

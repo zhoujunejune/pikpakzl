@@ -1,0 +1,45 @@
+name: Shadow 35-second policy tests
+
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/**'
+      - 'fast-signal-engine/index.mjs'
+      - '.github/workflows/shadow35-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'round-tracker/shadow35*'
+      - 'round-tracker/test_shadow35_model.py'
+      - 'round-tracker/index-rest.mjs'
+      - 'fast-signal-engine/index.mjs'
+      - '.github/workflows/shadow35-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shadow35:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install model test dependencies
+        run: python -m pip install 'numpy>=2.1,<2.3' 'scikit-learn>=1.6,<1.8' 'joblib>=1.4,<2'
+      - name: Check deployment entry points
+        run: |
+          node --check fast-signal-engine/index.mjs
+          node --check round-tracker/index-rest.mjs
+          node --check round-tracker/shadow35-client.mjs
+          python -m py_compile round-tracker/shadow35-model.py
+      - name: Verify sequential policy and existing production guards
+        run: node --test round-tracker/*.test.mjs round-tracker/test/*.test.mjs
+      - name: Verify temporal model validation and Python contract
+        run: python -m unittest discover -s round-tracker -p 'test_shadow35_model.py' -v

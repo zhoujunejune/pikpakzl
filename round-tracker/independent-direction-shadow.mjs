@@ -507,6 +507,17 @@ export function createIndependentDirectionShadow({file,log=()=>{},minTrainingSam
       switchAllowed:improve,productionEffect:'NONE_SHADOW_ONLY'
     });
     if(!improve){save();return false;}
+    // Preserve an in-flight candidate until its paired official forward
+    // evaluation is complete. Never overwrite its immutable model identity.
+    if(state.challenger){
+      log('independent_direction_challenger_retained',{
+        modelVersion:state.challenger.version,
+        rejectedReplacement:trial.model.version,
+        reason:'PENDING_PAIRED_OFFICIAL_FORWARD_EVALUATION',
+        productionEffect:'NONE_SHADOW_ONLY'
+      });
+      save();return false;
+    }
     // Candidate is shadow-only until an independently settled same-input
     // forward comparison is available. Validation alone never promotes.
     if(state.model){

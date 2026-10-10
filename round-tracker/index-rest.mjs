@@ -426,6 +426,20 @@ const independentDirectionShadow = createIndependentDirectionShadow({
   log,
 });
 
+// Read-only retired-model telemetry: do not report the old training capability
+// as an active learning loop after the user's explicit retirement.
+function independentDirectionStatus() {
+  const stats = independentDirectionShadow.stats(rounds.values());
+  if (!VIP75_RETIRED) return stats;
+  return {
+    ...stats,
+    status:'RETIRED_USER_REQUEST',
+    retired:true,
+    productionEligible:false,
+    activeLearning:{...(stats.activeLearning || {}), enabled:false},
+  };
+}
+
 const baseDirectionRescueV2 = createBaseDirectionRescueV2({
   rounds,
   startMs:1791431100000,
@@ -4458,7 +4472,7 @@ async function settlePendingRounds() {
         maybeTrainShadowModel();
         shadowV2.maybeTrain(shadowTrainingRows());
         if (!VIP75_RETIRED) {
-          const forward=independentDirectionShadow.stats(rounds.values());
+          const forward=independentDirectionStatus();
           if(row.independentDirectionShadow && forward.decidedRounds>0 &&
             forward.decidedRounds%10===0) log('independent_direction_forward_progress',forward);
           independentDirectionShadow.trainIfNeeded(rounds.values());
@@ -5547,11 +5561,7 @@ if (!VIP75_RETIRED) {
   independentDirectionShadow.reconcileHistory(rounds.values());
   independentDirectionShadow.trainIfNeeded(rounds.values());
 }
-log('independent_direction_shadow_status', {
-  ...independentDirectionShadow.stats(rounds.values()),
-  retired: VIP75_RETIRED,
-  productionEligible: !VIP75_RETIRED,
-});
+log('independent_direction_shadow_status', independentDirectionStatus());
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());
@@ -5645,7 +5655,7 @@ const signalHttpServer = http.createServer((req, res) => {
       models:{
         noBaseSpecialist:noBaseSpecialist.stats(),
         baseDirectionRescueV2:baseDirectionRescueV2.stats(),
-        independentDirection:independentDirectionShadow.stats(rounds.values()),
+        independentDirection:independentDirectionStatus(),
         edgeRescueTier1:selectiveV2EdgeRescueSummary(),
         edgeRescueExpansion:edgeRescueExpansion.summary(rounds.values()),
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
@@ -5699,7 +5709,7 @@ const signalHttpServer = http.createServer((req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/independent-direction-stats') {
     res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
-    return res.end(JSON.stringify(independentDirectionShadow.stats(rounds.values())));
+    return res.end(JSON.stringify(independentDirectionStatus()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/base-direction-rescue-v2-stats') {
@@ -5867,7 +5877,7 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     shadowV2: shadowV2.stats(),
     shadowV3Dir: SHADOW_V3_DIR,
     shadowV3: shadowV3.stats(),
-    independentDirection: independentDirectionShadow.stats(rounds.values()),
+    independentDirection: independentDirectionStatus(),
     noBaseSpecialistDir: NO_BASE_SPECIALIST_DIR,
     noBaseSpecialistObserveMs: NO_BASE_SPECIALIST_OBSERVE_MS,
     noBaseSpecialist: noBaseSpecialist.stats(),

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 const KEYS = ['GLOBAL', 'UP', 'DOWN'];
 const fresh = () => ({
   mode: 'OPEN', until: 0, pendingRound: null, consecutiveHits: 0,
-  lastProcessedRound: null, reason: null,
+  lastProcessedRound: null, reason: null, rearmAfterRound: null,
 });
 
 // Strict-forward circuit: a 30-minute fuse cooldown, then at most one
@@ -14,10 +14,12 @@ export function createTimedEdgeRescueFuse({
   file, cooldownMs = 30 * 60 * 1000, now = () => Date.now(), log = () => {},
 } = {}) {
   const scopes = Object.fromEntries(KEYS.map(k => [k, fresh()]));
+  let rearmRevision = null;
   if (file) {
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (saved?.schemaVersion === 1) {
+        rearmRevision = typeof saved.rearmRevision === 'string' ? saved.rearmRevision : null;
         for (const key of KEYS) {
           const x = saved.scopes?.[key];
           if (x && ['OPEN', 'COOLDOWN', 'HALF_OPEN', 'PROBATION_OPEN'].includes(x.mode)) {
@@ -27,6 +29,8 @@ export function createTimedEdgeRescueFuse({
               consecutiveHits: Math.max(0, Number(x.consecutiveHits) || 0),
               pendingRound: Number.isFinite(Number(x.pendingRound)) && x.pendingRound != null
                 ? Number(x.pendingRound) : null,
+              rearmAfterRound: Number.isFinite(Number(x.rearmAfterRound)) && x.rearmAfterRound != null
+                ? Number(x.rearmAfterRound) : null,
             };
           }
         }
@@ -40,7 +44,7 @@ export function createTimedEdgeRescueFuse({
     if (!file) return;
     try {
       const temp = file + '.tmp-' + process.pid;
-      fs.writeFileSync(temp, JSON.stringify({ schemaVersion: 1, scopes }), 'utf8');
+      fs.writeFileSync(temp, JSON.stringify({ schemaVersion: 1, scopes, rearmRevision }), 'utf8');
       fs.renameSync(temp, file);
     } catch (e) {
       log('edge_fuse_state_save_failed', { error: String(e?.message || e) });
@@ -62,6 +66,48 @@ export function createTimedEdgeRescueFuse({
     emit(key, reason);
     persist();
   };
+  // A versioned, one-time acknowledgement of the *currently tripped* fuse.
+  // Existing historical outcomes remain available for audit but cannot
+  // immediately retrip the same fuse. A NEW adverse settled candidate that
+  // still breaches the original accuracy/miss-streak thresholds rearms it.
+  // Reapplying the same revision (including on restart) does nothing.
+  function rearmOnce(revision, latestRoundByScope = {}) {
+    if (typeof revision !== 'string' || !revision.trim() || rearmRevision === revision) return false;
+    for (const key of KEYS) {
+      const rawRound = latestRoundByScope[key];
+      const baseline = rawRound == null ? 0 : Number(rawRound);
+      scopes[key] = {
+        ...fresh(),
+        reason: 'MANUAL_ONE_TIME_FUSE_CLEAR',
+        rearmAfterRound: Number.isFinite(baseline) ? baseline : 0,
+      };
+      emit(key, 'MANUAL_ONE_TIME_FUSE_CLEAR');
+    }
+    rearmRevision = revision;
+    persist();
+    return true;
+  }
+
+  function rearmGuard(key, rawFused, latestEligible) {
+    const x = scopes[key];
+    if (x.rearmAfterRound == null) return rawFused;
+    if (!rawFused) {
+      // Old rolling accuracy has recovered: future violations use the
+      // pre-existing circuit rules normally, with no temporary exception.
+      x.rearmAfterRound = null;
+      persist();
+      return false;
+    }
+    const round = Number(latestEligible?.roundStartMs);
+    if (Number.isFinite(round) && round > x.rearmAfterRound &&
+        latestEligible?.miss === true) {
+      x.rearmAfterRound = null;
+      persist();
+      return true;
+    }
+    return false;
+  }
+
   const advance = (key, rawFused, at) => {
     const x = scopes[key];
     if (x.mode === 'OPEN' && rawFused) {
@@ -85,8 +131,8 @@ export function createTimedEdgeRescueFuse({
     if (direction !== 'UP' && direction !== 'DOWN') {
       return { allowed: false, reason: 'INVALID_DIRECTION' };
     }
-    const globalFused = summary?.fuse?.globalFused === true;
-    const dirFused = summary?.[direction.toLowerCase()]?.fused === true;
+    const globalFused = rearmGuard('GLOBAL', summary?.fuse?.globalFused === true, summary?.fuse?.latestEligible);
+    const dirFused = rearmGuard(direction, summary?.[direction.toLowerCase()]?.fused === true, summary?.[direction.toLowerCase()]?.latestEligible);
     advance('GLOBAL', globalFused, at);
     advance(direction, dirFused, at);
     for (const key of ['GLOBAL', direction]) {
@@ -163,6 +209,7 @@ export function createTimedEdgeRescueFuse({
   function status(at = now()) {
     return {
       cooldownMs,
+      rearmRevision,
       scopes: Object.fromEntries(KEYS.map(key => [key, {
         ...scopes[key],
         remainingMs: scopes[key].mode === 'COOLDOWN'
@@ -170,5 +217,5 @@ export function createTimedEdgeRescueFuse({
       }])),
     };
   }
-  return { check, recordLock, onSettled, reconcile, status };
+  return { check, recordLock, onSettled, reconcile, rearmOnce, status };
 }

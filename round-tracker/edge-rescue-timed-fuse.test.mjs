@@ -91,3 +91,64 @@ test('unverified or unrelated settlement cannot clear an outstanding trial', () 
   fuse.onSettled(settled(600000));
   assert.equal(fuse.check('UP', bad).allowed, false);
 });
+
+
+test('one-time manual clearing releases an existing fuse, ignoring stale failures until new adverse settlement', () => {
+  let t = 1000000;
+  const fuse = createTimedEdgeRescueFuse({ now: () => t });
+  assert.equal(fuse.check('UP', bad).allowed, false);
+  assert.equal(fuse.rearmOnce('manual-reset-v1', { GLOBAL: 300000, UP: 300000, DOWN: 150000 }), true);
+  const historicalFailure = {
+    ...bad,
+    fuse: { ...bad.fuse, latestEligible: { roundStartMs: 300000, miss: true } },
+    up: { ...bad.up, latestEligible: { roundStartMs: 300000, miss: true } },
+  };
+  assert.equal(fuse.check('UP', historicalFailure).allowed, true, 'stale failure must not instant re-fuse');
+  assert.equal(fuse.rearmOnce('manual-reset-v1', { GLOBAL: 999000, UP: 999000, DOWN: 999000 }), false);
+  const newHitStillPoor = {
+    ...historicalFailure,
+    fuse: { ...bad.fuse, latestEligible: { roundStartMs: 600000, miss: false } },
+    up: { ...bad.up, latestEligible: { roundStartMs: 600000, miss: false } },
+  };
+  assert.equal(fuse.check('UP', newHitStillPoor).allowed, true, 'new HIT cannot retrip legacy poor window');
+  const newMiss = {
+    ...historicalFailure,
+    fuse: { ...bad.fuse, latestEligible: { roundStartMs: 900000, miss: true } },
+    up: { ...bad.up, latestEligible: { roundStartMs: 900000, miss: true } },
+  };
+  assert.equal(fuse.check('UP', newMiss).reason, 'GLOBAL_COOLDOWN');
+  assert.equal(fuse.status().scopes.GLOBAL.rearmAfterRound, null, 'next fuse is normally armed');
+});
+
+test('manual clear revision persists and cannot silently reset a later fuse on restart', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-fuse-rearm-test-'));
+  const file = path.join(dir, 'fuse.json');
+  try {
+    const fuse = createTimedEdgeRescueFuse({ file, now: () => 1000000 });
+    fuse.rearmOnce('live-one-time-1', { GLOBAL: 100, UP: 100, DOWN: 50 });
+    const badNewMiss = {
+      ...bad,
+      fuse: { globalFused: true, latestEligible: { roundStartMs: 200, miss: true } },
+      up: { fused: true, latestEligible: { roundStartMs: 200, miss: true } },
+    };
+    assert.equal(fuse.check('UP', badNewMiss).allowed, false);
+    const restarted = createTimedEdgeRescueFuse({ file, now: () => 1000010 });
+    assert.equal(restarted.rearmOnce('live-one-time-1', { GLOBAL: 999, UP: 999 }), false);
+    assert.equal(restarted.status().scopes.GLOBAL.mode, 'COOLDOWN');
+    assert.equal(restarted.check('UP', badNewMiss).allowed, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('manual clear does not bypass regular rescue direction fuse after fresh miss', () => {
+  const fuse = createTimedEdgeRescueFuse({ now: () => 1000000 });
+  fuse.rearmOnce('live-one-time-2', { GLOBAL: 500, UP: 500, DOWN: 100 });
+  const upBadOnly = {
+    fuse: { globalFused: false, latestEligible: { roundStartMs: 600, miss: true } },
+    up: { fused: true, latestEligible: { roundStartMs: 600, miss: true } },
+    down: { fused: false, latestEligible: { roundStartMs: 110, miss: false } },
+  };
+  assert.equal(fuse.check('UP', upBadOnly).reason, 'UP_COOLDOWN');
+  assert.equal(fuse.check('DOWN', upBadOnly).allowed, true);
+});

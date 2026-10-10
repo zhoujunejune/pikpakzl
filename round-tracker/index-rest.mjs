@@ -4602,17 +4602,22 @@ function productionSummary() {
     coveragePct: settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null,
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
+    vip75PrimaryRounds: decided.filter(r => r.productionSource === VIP75_PRIMARY_SOURCE).length,
     selectiveV2Rounds: decided.filter(r => String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2')).length,
     edgeRescueRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY').length,
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
-    currentQualifiedModel: productionUsesSelectiveV2()
-      ? LOCK_QUALITY_V2_VERSION
+    currentQualifiedModel: productionUsesVip75()
+      ? VIP75_PRIMARY_NAME
+      : productionUsesSelectiveV2()
+        ? LOCK_QUALITY_V2_VERSION
       : productionUsesShadowV3()
         ? (pinnedShadowV3Candidate()?.modelVersion ?? null)
         : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
-    currentQualificationStatus: productionUsesSelectiveV2()
-      ? 'USER_PINNED_SELECTIVE_COLLECTING'
+    currentQualificationStatus: productionUsesVip75()
+      ? 'USER_PINNED_VIP75_WITH_INDEPENDENT_QUALITY_REVIEW_NOT_75_QUALIFIED'
+      : productionUsesSelectiveV2()
+        ? 'USER_PINNED_SELECTIVE_COLLECTING'
       : (productionShadowApproved() ? 'QUALIFIED' : 'NO_QUALIFIED_MODEL'),
     minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
     minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
@@ -5332,7 +5337,9 @@ function productionSignalPayload(now = Date.now()) {
       facts: row.predictionFacts ?? null,
       productionPolicy: productionPolicyName(),
       fallbackUsed: false,
-      waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|'),
+      waitReason: (vip75Backup && row?.vip75Review?.status === 'REJECT'
+        ? 'VIP75_TRUST_REJECTED_V2_BACKUP_WAIT:' : 'SELECTIVE_V2_WAIT:') + reasons.join('|'),
+      vip75TrustReview: vip75Backup ? (row?.vip75Review ?? null) : null,
       // Read-only attribution; does not participate in signal selection.
       baseDirectionDiagnostic: {
         roundId: String(row.roundStartMs),

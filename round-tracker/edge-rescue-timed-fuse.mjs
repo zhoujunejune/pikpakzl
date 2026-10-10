@@ -12,6 +12,7 @@ const fresh = () => ({
 // observations continue while blocked; no base or quality gates are bypassed.
 export function createTimedEdgeRescueFuse({
   file, cooldownMs = 30 * 60 * 1000, now = () => Date.now(), log = () => {},
+  productionSource = 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY',
 } = {}) {
   const scopes = Object.fromEntries(KEYS.map(k => [k, fresh()]));
   let rearmRevision = null;
@@ -167,7 +168,7 @@ export function createTimedEdgeRescueFuse({
     const round = Number(row?.roundStartMs);
     if (!Number.isFinite(round) ||
         row?.actualSource !== 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' ||
-        row?.productionSource !== 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY' ||
+        row?.productionSource !== productionSource ||
         !['HIT', 'MISS'].includes(row?.productionResult)) return;
     const direction = row.productionPrediction;
     if (direction !== 'UP' && direction !== 'DOWN') return;

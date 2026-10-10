@@ -117,6 +117,15 @@ class CausalModelTests(unittest.TestCase):
         import re
         self.assertEqual(tuple(re.findall(r"'([^']+)'", keys)), model.RAW_FEATURE_NAMES)
 
+    def test_45_percent_coverage_target_keeps_accuracy_constraint(self):
+        rounds = [round_row(i, "UP" if i < 9 else "DOWN", 1) for i in range(20)]
+        probabilities = {r["roundStartMs"]: [0.9 if i < 9 else 0.5] for i, r in enumerate(rounds)}
+        policy = model.select_threshold(rounds, probabilities)
+        self.assertEqual(policy["status"], "MET_ON_CALIBRATION_ONLY")
+        self.assertEqual(policy["selected"]["coverage"], 0.45)
+        self.assertEqual(policy["selected"]["accuracy"], 1.0)
+        self.assertEqual(model.select_threshold(rounds, probabilities, target_coverage=0.5)["status"], "UNMET")
+
 
 class ArtifactProtocolTests(unittest.TestCase):
     def invoke(self, action, payload):
@@ -137,11 +146,13 @@ class ArtifactProtocolTests(unittest.TestCase):
             events_path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
             as_of = START + 341 * model.ROUND_MS
             request = {"eventsFile": str(events_path), "modelDir": str(Path(directory) / "models"),
-                       "asOf": as_of, "minRounds": 300}
+                       "asOf": as_of, "minRounds": 300, "targetCoverage": 0.45}
             trained = self.invoke("train", request)
             self.assertEqual(trained["status"], "CANDIDATE_REGISTERED")
             self.assertEqual(trained["productionEffect"], "NONE_SHADOW_ONLY")
             self.assertFalse(trained["longTermValidated"])
+            self.assertEqual(trained["targetCoverage"], 0.45)
+            self.assertEqual(trained["forwardTargetCoverage"], 0.45)
             self.assertEqual(trained["qualification"], "UNMET")  # too few independent market days
             self.assertIn("INSUFFICIENT_HOLDOUT_DAILY_BLOCKS", trained["qualificationDetails"]["reasons"])
             frozen = self.invoke("train", {**request, "asOf": as_of + model.ROUND_MS})

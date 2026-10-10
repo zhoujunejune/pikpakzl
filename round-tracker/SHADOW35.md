@@ -40,8 +40,15 @@ than selecting the best checkpoint after settlement.
 
 The candidate and its threshold remain frozen for a 30-day forward experiment.
 Offline estimates or an apparent 75% hit rate do not establish long-term success.
-The forward report targets at least 75% accuracy and 50% coverage; uncertainty
-and different market periods still require review. An unsuccessful candidate
+The forward report targets at least 75% accuracy and 45% coverage. A production
+recommendation requires the complete frozen 30-day window, at least 1,000
+officially labeled predictions with no pending prediction labels, 95% Wilson
+and daily block-bootstrap lower bounds meeting both targets, and every rolling
+seven-day window meeting the point targets. Each direction also needs at least
+100 predictions and 75% accuracy. Missing calendar rounds remain in coverage;
+late, wrong-model or unsupported official records cannot qualify.
+This is evidence for the observed window, not a guarantee of future accuracy.
+An unsuccessful candidate
 remains visibly unqualified and is not a production fallback.
 
 ## Persistence and monitoring
@@ -59,7 +66,11 @@ Read-only monitoring:
 - `GET /api/training-status`, under `models.shadow35`
 
 Reports include valid snapshot counts, missing-input blockers, remaining training
-rounds, candidate/forward state, accuracy, coverage and decision latency. No API
+rounds, persistent training attempts/results and retry thresholds, candidate/forward
+state, confidence bounds, rolling-week stability, accuracy, coverage and decision
+latency. A fresh `shadow35_training_status` report is logged every minute so
+authorized scheduled checks can read it through Railway when HTTP is unavailable.
+No API
 credentials, raw wallet data or executable source payloads are exposed.
 
 The existing production model, first-lock policy, Redis transport and trading

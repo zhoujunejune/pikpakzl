@@ -5476,6 +5476,10 @@ log('wait_rescue_backtest_snapshot', waitRescueBacktest());
 log('wait_rescue_shadow_status', waitRescueShadowSummary());
 ensureCurrentRound();
 setInterval(pollSignal, POLL_MS).unref();
+// A fresh, safe report is also available through Railway logs when a scheduled
+// notification cannot reach the public read-only HTTP endpoint.
+log('shadow35_training_status', shadow35.stats());
+setInterval(() => log('shadow35_training_status', shadow35.stats()), 60000).unref();
 // Freeze the production direction in the background even when no browser is open
 // and trading is disabled. This keeps every 5-minute round auditable and ensures
 // the stats direction is exactly the same immutable direction consumers will see.

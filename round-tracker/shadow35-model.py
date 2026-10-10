@@ -307,7 +307,7 @@ def daily_block_interval(by_day):
             "coverage": np.quantile(coverage, [0.025, 0.975]).tolist()}
 
 
-def select_threshold(rounds, probabilities, target_accuracy=0.8, target_coverage=0.5):
+def select_threshold(rounds, probabilities, target_accuracy=0.8, target_coverage=0.45):
     candidates = []
     for i in range(50, 100):
         threshold = i / 100.0
@@ -408,10 +408,10 @@ def train_unlocked(payload):
     requested_minimum = finite(payload.get("minRounds", MIN_ROUNDS))
     minimum = max(MIN_ROUNDS, int(requested_minimum or MIN_ROUNDS))
     accuracy = finite(payload.get("targetAccuracy", 0.8))
-    coverage = finite(payload.get("targetCoverage", 0.5))
+    coverage = finite(payload.get("targetCoverage", 0.45))
     if not isinstance(path, str) or not isinstance(model_dir, str) or as_of is None:
         return {"ok": False, "status": "INVALID_TRAIN_REQUEST", "productionEffect": PRODUCTION_EFFECT}
-    if accuracy is None or coverage is None or accuracy < 0.8 or accuracy > 1 or coverage < 0.5 or coverage > 1:
+    if accuracy is None or coverage is None or accuracy < 0.8 or accuracy > 1 or coverage < 0.45 or coverage > 1:
         return {"ok": False, "status": "INVALID_TARGETS", "productionEffect": PRODUCTION_EFFECT}
     os.makedirs(model_dir, exist_ok=True)
     active_path = os.path.join(model_dir, "active-manifest.json")
@@ -466,7 +466,7 @@ def train_unlocked(payload):
                 "frozenUntilMs": as_of + FREEZE_MS, "trainEndRound": groups["train"][-1]["roundStartMs"],
                 "officialSettledRounds": diagnostics["officialSettledRounds"], "calendarRounds": len(rounds), "minRounds": minimum, "threshold": threshold,
                 "targetAccuracy": accuracy, "targetCoverage": coverage,
-                "forwardTargetAccuracy": 0.75, "forwardTargetCoverage": 0.5,
+                "forwardTargetAccuracy": 0.75, "forwardTargetCoverage": 0.45,
                 "checkpointsMs": list(CHECKPOINTS_MS), "deadlineMs": DEADLINE_MS,
                 "folds": {name: fold_range(items) for name, items in groups.items()},
                 "splitPolicy": "TIME_ORDERED_60_20_20_GROUPED_BY_ROUND",

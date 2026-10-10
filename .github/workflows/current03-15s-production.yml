@@ -1,8 +1,10 @@
-name: Current03 15s production safety
+name: Dual 15s production safety
 on:
   pull_request:
     paths:
       - "round-tracker/current03-pm-agree-production.mjs"
+      - "round-tracker/pm-current25-support08-production.mjs"
+      - "round-tracker/pm-current25-support08-production.test.mjs"
       - "round-tracker/current03-pm-agree-production.test.mjs"
       - "round-tracker/index-rest.mjs"
       - "round-tracker/edge-rescue-timed-fuse.mjs"
@@ -11,6 +13,8 @@ on:
     branches: [main]
     paths:
       - "round-tracker/current03-pm-agree-production.mjs"
+      - "round-tracker/pm-current25-support08-production.mjs"
+      - "round-tracker/pm-current25-support08-production.test.mjs"
       - "round-tracker/current03-pm-agree-production.test.mjs"
       - "round-tracker/index-rest.mjs"
       - "round-tracker/edge-rescue-timed-fuse.mjs"
@@ -27,9 +31,10 @@ jobs:
         run: |
           node --check round-tracker/index-rest.mjs
           node --check round-tracker/current03-pm-agree-production.mjs
+          node --check round-tracker/pm-current25-support08-production.mjs
       - name: Frozen 15s direction and circuit tests
         run: |
-          node --test round-tracker/current03-pm-agree-production.test.mjs round-tracker/v3-no-base-15s-audit.test.mjs round-tracker/edge-rescue-timed-fuse.test.mjs
+          node --test round-tracker/current03-pm-agree-production.test.mjs round-tracker/pm-current25-support08-production.test.mjs round-tracker/v3-no-base-15s-audit.test.mjs round-tracker/edge-rescue-timed-fuse.test.mjs
       - name: Verify exact-model live route and immutability
         run: |
           node --input-type=module -e '
@@ -38,6 +43,10 @@ jobs:
             const source=fs.readFileSync("round-tracker/index-rest.mjs","utf8");
             const code=source.slice(source.indexOf("function productionSignalPayload("));
             assert(code.includes("selectCurrent03PmAgree15s(row, now)"));
+            assert(code.includes("selectPmCurrent25Support0815s(row, now)"));
+            assert(code.indexOf("selectPmCurrent25Support0815s(row, now)") < code.indexOf("selectCurrent03PmAgree15s(row, now)"));
+            assert(code.includes("PM_CURRENT25_SUPPORT08_SOURCE"));
+            assert(code.includes("timedPmCurrent25Fuse.check("));
             assert(code.includes("CURRENT03_PM_AGREE_SOURCE"));
             assert(code.indexOf("selectCurrent03PmAgree15s(row, now)") < code.indexOf("evaluateSelectiveQualityV2(baseDirection"));
             assert(code.includes("timedCurrent03PmFuse.check("));

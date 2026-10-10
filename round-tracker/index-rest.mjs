@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
+import { createShadow35Client } from './shadow35-client.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
@@ -55,6 +56,7 @@ const SHADOW_V2_FILE = String(process.env.SHADOW_V2_FILE || `${HISTORY_FILE}.sha
 const SHADOW_V3_DIR = String(process.env.SHADOW_V3_DIR || '/data/shadow-v3');
 const SHADOW_V3_TRAIN_EVERY_ROUNDS = Math.max(10, Number(process.env.SHADOW_V3_TRAIN_EVERY_ROUNDS || 20));
 const SHADOW_V3_TRAIN_TIME_BUDGET = Math.max(30, Number(process.env.SHADOW_V3_TRAIN_TIME_BUDGET || 75));
+const SHADOW35_DIR = String(process.env.SHADOW35_DIR || '/data/shadow35');
 const NO_BASE_SPECIALIST_DIR = String(process.env.NO_BASE_SPECIALIST_DIR || '/data/no-base-specialist');
 const NO_BASE_SPECIALIST_MIN_SAMPLES = Math.max(80, Number(process.env.NO_BASE_SPECIALIST_MIN_SAMPLES || 120));
 const NO_BASE_SPECIALIST_FORWARD_TARGET = Math.max(30, Number(process.env.NO_BASE_SPECIALIST_FORWARD_TARGET || 60));
@@ -387,6 +389,8 @@ let shadowModelMetrics = {
 function log(event, extra = {}) {
   console.log(JSON.stringify({ event, service: 'round-tracker', at: new Date().toISOString(), ...extra }));
 }
+
+const shadow35 = createShadow35Client({ dir: SHADOW35_DIR, log });
 
 const shadowV2 = createShadowV2Engine({
   file: SHADOW_V2_FILE,
@@ -1293,6 +1297,7 @@ function applyAuthoritativeSettledHistoryOverrides() {
     }
     shadowV2.settle(row);
     shadowV3.settle(row);
+    shadow35.settle(row);
     noBaseSpecialist.settle(row);
     archiveSettledRow(row, 'settled_history_final_outcome_correction');
     log('authoritative_settled_history_override_applied', {
@@ -3989,12 +3994,17 @@ async function pollSignal() {
     if (!r.ok) throw new Error(`HTTP_${r.status}`);
     const json = await r.json();
     const live = json?.live;
-    if (!live?.round) return;
+    if (!live?.round) {
+      shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, live, Date.now());
+      return;
+    }
     if (Number(live.round) < STATS_START_MS) return;
     lastSignalOkAt = Date.now();
     lastSignalError = null;
 
     const row = ensureRound(Number(live.round));
+    // Isolated prospective journal: never mutates the production round or emits a lock.
+    shadow35.observe(row, live, Date.now());
     const liveFacts = live?.facts && typeof live.facts === 'object' ? live.facts : null;
     const elapsedMs = Date.now() - row.roundStartMs;
     // Persist V3's immutable first eligible 0.4-0.6 trend-band observation.
@@ -4279,6 +4289,7 @@ async function pollSignal() {
     }
   } catch (e) {
     lastSignalError = e?.message || String(e);
+    shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, null, Date.now());
   } finally {
     signalPollBusy = false;
   }
@@ -4396,6 +4407,7 @@ async function settlePendingRounds() {
         settleShadowForwardRegistry(row);
         shadowV2.settle(row);
         shadowV3.settle(row);
+        shadow35.settle(row);
         if (!VIP75_RETIRED) independentDirectionShadow.settle(row);
         noBaseSpecialist.settle(row);
         void shadowV4.settle(row);
@@ -4539,6 +4551,7 @@ async function settlePendingRounds() {
           independentDirectionShadow.trainIfNeeded(rounds.values());
         }
         void shadowV3.maybeTrain(row.roundStartMs);
+        void shadow35.maybeTrain();
         void noBaseSpecialist.maybeTrain(row.roundStartMs);
         void shadowV4.maybeTrain(row.roundStartMs);
         void shadowV5.maybeTrain(row.roundStartMs);
@@ -5649,6 +5662,8 @@ adaptiveGateShadow.load();
 preLockAdaptiveShadow.load();
 shadowV2.load();
 shadowV3.load();
+shadow35.load();
+for (const row of rounds.values()) shadow35.settle(row);
 noBaseSpecialist.load();
 shadowV4.load();
 shadowV5.load();
@@ -5668,6 +5683,7 @@ preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));
 maybeTrainShadowModel();
 shadowV2.maybeTrain(shadowTrainingRows());
 void shadowV3.maybeTrain();
+void shadow35.maybeTrain();
 void noBaseSpecialist.maybeTrain();
 void shadowV4.maybeTrain();
 void shadowV5.maybeTrain();
@@ -5770,6 +5786,7 @@ const signalHttpServer = http.createServer((req, res) => {
         },
       },
       models:{
+        shadow35:shadow35.stats(),
         noBaseSpecialist:noBaseSpecialist.stats(),
         baseDirectionRescueV2:baseDirectionRescueV2.stats(),
         independentDirection:independentDirectionStatus(),
@@ -5813,6 +5830,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-v3-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadowV3.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/shadow35-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(shadow35.stats()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {

@@ -1240,6 +1240,9 @@ function calculate(now = Date.now()) {
     score: direction === 'WAIT' ? Number(score.toFixed(6)) : frozenScore,
     confidence,
     generatedAt: direction === 'WAIT' ? now : frozenAt,
+    // Facts continue updating after the direction freezes. Consumers must not
+    // mistake the immutable direction timestamp for the age of these features.
+    factsCalculatedAt: now,
     reason: direction === 'WAIT'
       ? (nextCandidate !== 'WAIT' ? 'V6_CONFIRMING_CANDIDATE' : reason)
       : 'ROUND_SIGNAL_FROZEN_V6',
@@ -1273,6 +1276,7 @@ function calculate(now = Date.now()) {
       depthAgeMs: Number.isFinite(depthAgeMs) ? depthAgeMs : null,
       historyAgeMs,
       predictionMarketTopicId,
+      predictionMarketRound,
       predictionMarketTopicStartDate,
       predictionMarketTopicEndDate,
       predictionMarketTopicScore,
@@ -1709,6 +1713,9 @@ http.createServer(async (req, res) => {
       signal: locked ? { direction: s.direction, score: s.score, confidence: s.confidence } : null,
       input: { round: s.roundStartMs },
       generatedAt: s.generatedAt,
+      factsCalculatedAt: s.factsCalculatedAt ?? null,
+      reason: s.reason,
+      dataIntegrity: p.dataIntegrity,
       source: p.source,
       model: p.model,
       facts: s.facts,

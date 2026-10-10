@@ -2,7 +2,21 @@
 // This independently refetches V3 resolution, but is NOT direct-to-Binance independent certification.
 const v2=process.env.V2_URL||'https://signal-diagnostic-v2-production.up.railway.app';
 const v3=process.env.V3_URL||'https://signal-diagnostic-v3-production.up.railway.app';
-const get=async url=>{const r=await fetch(url,{signal:AbortSignal.timeout(15000),headers:{accept:'application/json'}});if(!r.ok)throw Error('HTTP_'+r.status+' '+url);return r.json()};
+const get=async url=>{
+ let lastError;
+ for(let attempt=1;attempt<=4;attempt++){
+  try{
+   const r=await fetch(url,{signal:AbortSignal.timeout(20000),headers:{accept:'application/json'}});
+   if(!r.ok){if(r.status<500&&r.status!==429)throw Error('PERMANENT_HTTP_'+r.status);throw Error('HTTP_'+r.status)}
+   return await r.json();
+  }catch(e){
+   lastError=e;
+   if(String(e).includes('PERMANENT_HTTP_'))break;
+   if(attempt<4)await new Promise(resolve=>setTimeout(resolve,Math.min(8000,1000*2**(attempt-1))));
+  }
+ }
+ throw Error('REQUEST_FAILED '+new URL(url).pathname+' '+String(lastError));
+};
 const history=await get(v2+'/api/round-stats');
 if(!Array.isArray(history.records))throw Error('Missing V2 records');
 const seen=new Set(),items=[];

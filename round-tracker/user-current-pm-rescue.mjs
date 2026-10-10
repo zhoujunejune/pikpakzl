@@ -85,7 +85,11 @@ export function userCurrentPmFuse(rounds, currentRound) {
   const settled=Array.from(rounds?.values?.()||[])
     .filter(x=>x&&finite(x.roundStartMs)&&x.roundStartMs < currentRound &&
       x.productionSource===USER_CURRENT_PM_SOURCE &&
-      (x.productionResult==='HIT'||x.productionResult==='MISS'))
+      (x.productionResult==='HIT'||x.productionResult==='MISS') &&
+      (x.productionActual==='UP'||x.productionActual==='DOWN') &&
+      x.officialDirection===x.productionActual &&
+      String(x.resolutionEvidence||'').startsWith('OFFICIAL_'+x.productionActual+':') &&
+      String(x.resolutionEvidence||'').includes('STRICT_ROUND_ALIGNED_TOPIC'))
     .sort((a,b)=>a.roundStartMs-b.roundStartMs);
   const recent5=settled.slice(-5);
   const recent10=settled.slice(-10);

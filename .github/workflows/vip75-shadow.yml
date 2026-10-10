@@ -1,0 +1,26 @@
+name: VIP75 shadow tests
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/**'
+      - '.github/workflows/vip75-shadow.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'round-tracker/**'
+      - '.github/workflows/vip75-shadow.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: round-tracker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: npm test

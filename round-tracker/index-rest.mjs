@@ -6,6 +6,7 @@ import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
 import { selectVip75Primary, shouldUseVip75Backup, VIP75_PRIMARY_NAME, VIP75_PRIMARY_SOURCE } from './vip75-primary.mjs';
+import { reviewVip75Signal, VIP75_TRUST_REVIEW_VERSION } from './vip75-trust-review.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { selectVerifiedNoBase20s, VERIFIED_NO_BASE_SOURCE } from './verified-no-base-20s.mjs';
@@ -1482,7 +1483,7 @@ function qualifiedShadowV6Candidate() {
 
 function productionPolicyName() {
   if (productionUsesVip75()) {
-    return 'IMMUTABLE_FIRST_LOCK_ZL_NEW_VIP75_WITH_V2_BACKUP';
+    return 'IMMUTABLE_FIRST_LOCK_VIP75_V2_TRUST_REVIEW_WITH_GATED_V2_BACKUP';
   }
   if (productionUsesSelectiveV2()) {
     return 'IMMUTABLE_FIRST_LOCK_SELECTIVE_V2';
@@ -4601,17 +4602,22 @@ function productionSummary() {
     coveragePct: settled.length ? Number(((decided.length / settled.length) * 100).toFixed(2)) : null,
     primaryShadowRounds: decided.filter(r => r.productionSource === 'SHADOW_CANDIDATE_PRIMARY').length,
     v3AutoMLRounds: decided.filter(r => r.productionSource === 'SHADOW_V3_AUTOML_PRIMARY').length,
+    vip75PrimaryRounds: decided.filter(r => r.productionSource === VIP75_PRIMARY_SOURCE).length,
     selectiveV2Rounds: decided.filter(r => String(r.productionSource || '').startsWith('LOCK_QUALITY_SELECTIVE_V2')).length,
     edgeRescueRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY').length,
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
-    currentQualifiedModel: productionUsesSelectiveV2()
-      ? LOCK_QUALITY_V2_VERSION
+    currentQualifiedModel: productionUsesVip75()
+      ? VIP75_PRIMARY_NAME
+      : productionUsesSelectiveV2()
+        ? LOCK_QUALITY_V2_VERSION
       : productionUsesShadowV3()
         ? (pinnedShadowV3Candidate()?.modelVersion ?? null)
         : (qualifiedShadowV6Candidate()?.candidate?.modelVersion ?? null),
-    currentQualificationStatus: productionUsesSelectiveV2()
-      ? 'USER_PINNED_SELECTIVE_COLLECTING'
+    currentQualificationStatus: productionUsesVip75()
+      ? 'USER_PINNED_VIP75_WITH_INDEPENDENT_QUALITY_REVIEW_NOT_75_QUALIFIED'
+      : productionUsesSelectiveV2()
+        ? 'USER_PINNED_SELECTIVE_COLLECTING'
       : (productionShadowApproved() ? 'QUALIFIED' : 'NO_QUALIFIED_MODEL'),
     minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
     minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
@@ -4940,6 +4946,7 @@ function productionSignalPayload(now = Date.now()) {
       source: row.productionSource || 'UNKNOWN',
       model: row.productionModel || null,
       modelVersion: row.productionModelVersion || null,
+      trustReview: row.productionSource === VIP75_PRIMARY_SOURCE ? (row.vip75Review ?? null) : null,
       facts: row.productionSource === VIP75_PRIMARY_SOURCE ||
         row.productionSource === 'SHADOW_CANDIDATE_PRIMARY' ||
         row.productionSource === 'SHADOW_V3_AUTOML_PRIMARY' ||
@@ -4966,6 +4973,39 @@ function productionSignalPayload(now = Date.now()) {
     // Previously locked production rounds are replayed by the immutable branch above.
     const vip = selectVip75Primary(row, now);
     if (vip.ready) {
+      // Review VIP75's own direction, using its frozen pre-settlement
+      // feature snapshot, independently through the existing V2 quality gate.
+      const existing = row.vip75Review;
+      let trust = existing?.version === VIP75_TRUST_REVIEW_VERSION &&
+        existing?.modelVersion === vip.modelVersion &&
+        existing?.observedAt === vip.generatedAt ? existing : null;
+      if (!trust) {
+        const v2Quality = evaluateSelectiveQualityV2(
+          vip.direction, row.shadowFacts,
+          vip.generatedAt - Number(row.roundStartMs), row.roundStartMs
+        );
+        trust = {
+          ...reviewVip75Signal({
+            row, vip, v2Review:v2Quality,
+            forwardStats:independentDirectionShadow.stats(rounds.values()),
+            now,
+          }),
+          modelVersion:vip.modelVersion,
+          observedAt:vip.generatedAt,
+        };
+        row.vip75Review = trust;
+        saveHistory();
+        log('vip75_primary_trust_review', {
+          round:row.roundStartMs,
+          direction:vip.direction,
+          modelVersion:vip.modelVersion,
+          status:trust.status,
+          reasons:trust.reasons,
+          v2Quality:trust.v2Quality,
+          strictForward:trust.strictForward,
+        });
+      }
+      if (trust.pass) {
       const live = {
         round:row.roundStartMs,
         status:'LOCKED',
@@ -4987,6 +5027,7 @@ function productionSignalPayload(now = Date.now()) {
         fallbackReason:null,
         // Selection is user-directed, NOT strict-forward qualified.
         accuracyQualification:'USER_PINNED_UNQUALIFIED_75_TARGET',
+        trustReview:trust,
       };
       if (freezeProductionLock(row, live)) {
         log('vip75_primary_production_lock', {
@@ -4995,14 +5036,18 @@ function productionSignalPayload(now = Date.now()) {
           modelVersion:vip.modelVersion,
           generatedAt:vip.generatedAt,
           accuracyQualification:live.accuracyQualification,
+          trustReviewVersion:trust.version,
         });
       }
       logProductionSignalState(live);
       return {ok:true,live};
+      }
+      // Rejected signals never reach a production lock. Attempt the
+      // independent V2/Edge path immediately, with the existing fuses.
     }
     // One-time late backup only. Before 24s do not let legacy V2 steal the
     // round from VIP75, even when V3 has an eligible base direction.
-    if (!shouldUseVip75Backup(row, now)) {
+    if (!vip.ready && !shouldUseVip75Backup(row, now)) {
       const live = {
         round:row?.roundStartMs ?? expectedRound,
         status:'WAIT',signal:null,
@@ -5023,6 +5068,9 @@ function productionSignalPayload(now = Date.now()) {
 
   if (productionUsesSelectiveV2() || productionUsesVip75()) {
     const vip75Backup = productionUsesVip75();
+    const vip75BackupReason = !vip75Backup ? null
+      : row?.vip75Review?.status === 'REJECT'
+        ? 'VIP75_TRUST_REJECTED_V2_BACKUP' : 'VIP75_MISSING_AT_24S_V2_BACKUP';
     if (!row) {
       const live = {
         round: expectedRound,
@@ -5074,7 +5122,7 @@ function productionSignalPayload(now = Date.now()) {
         facts: row.predictionFacts ?? null,
         productionPolicy: productionPolicyName(),
         fallbackUsed: vip75Backup,
-        fallbackReason: vip75Backup ? 'VIP75_MISSING_AT_24S_V2_BACKUP' : null,
+        fallbackReason: vip75BackupReason,
         selectiveQuality: q,
         shadowForwardStatus: selectiveQualityV2Summary().status,
         shadowForwardSamples: selectiveQualityV2Summary().forwardSamples,
@@ -5119,7 +5167,7 @@ function productionSignalPayload(now = Date.now()) {
         facts:row.predictionFacts ?? null,
         productionPolicy:productionPolicyName(),
         fallbackUsed:vip75Backup,
-        fallbackReason:vip75Backup ? 'VIP75_MISSING_AT_24S_V2_BACKUP' : null,
+        fallbackReason:vip75BackupReason,
         selectiveQuality:q,
         edgeRescue:{
           candidate:edgeRescue,
@@ -5184,7 +5232,7 @@ function productionSignalPayload(now = Date.now()) {
         facts:row.predictionFacts ?? null,
         productionPolicy:productionPolicyName(),
         fallbackUsed:vip75Backup,
-        fallbackReason:vip75Backup ? 'VIP75_MISSING_AT_24S_V2_BACKUP' : null,
+        fallbackReason:vip75BackupReason,
         selectiveQuality:q,
         edgeRescue:{
           candidate:edgeRescue,
@@ -5289,7 +5337,9 @@ function productionSignalPayload(now = Date.now()) {
       facts: row.predictionFacts ?? null,
       productionPolicy: productionPolicyName(),
       fallbackUsed: false,
-      waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|'),
+      waitReason: (vip75Backup && row?.vip75Review?.status === 'REJECT'
+        ? 'VIP75_TRUST_REJECTED_V2_BACKUP_WAIT:' : 'SELECTIVE_V2_WAIT:') + reasons.join('|'),
+      vip75TrustReview: vip75Backup ? (row?.vip75Review ?? null) : null,
       // Read-only attribution; does not participate in signal selection.
       baseDirectionDiagnostic: {
         roundId: String(row.roundStartMs),

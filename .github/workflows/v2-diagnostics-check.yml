@@ -25,5 +25,8 @@ jobs:
           import assert from 'node:assert/strict';
           const code = fs.readFileSync('round-tracker/index-rest.mjs','utf8');
           for (const field of ['baseDirectionDiagnostic:', 'A_V3_NO_BASE_DIRECTION', 'B_SELECTIVE_V2_REJECTED', 'edgeRescueFuseReason:', 'v2GateReasons:']) assert.ok(code.includes(field), `missing ${field}`);
-          assert.ok(code.includes("waitReason: 'SELECTIVE_V2_WAIT:' + reasons.join('|')"));
+          // Existing V2 WAIT remains distinct from a rejected VIP75 review.
+          assert.ok(code.includes("'SELECTIVE_V2_WAIT:'"));
+          assert.ok(code.includes("'VIP75_TRUST_REJECTED_V2_BACKUP_WAIT:'"));
+          assert.ok(code.includes(" + reasons.join('|')"));
           NODE

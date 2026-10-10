@@ -3,13 +3,16 @@ on:
   push:
     branches:
       - feat/vip75-primary-20261010
+      - fix/vip75-trust-review-20261010
     paths:
       - 'round-tracker/vip75-primary*'
+      - 'round-tracker/vip75-trust-review*'
       - 'round-tracker/index-rest.mjs'
       - '.github/workflows/vip75-primary-check.yml'
   pull_request:
     paths:
       - 'round-tracker/vip75-primary*'
+      - 'round-tracker/vip75-trust-review*'
       - 'round-tracker/index-rest.mjs'
       - '.github/workflows/vip75-primary-check.yml'
   workflow_dispatch:
@@ -26,7 +29,8 @@ jobs:
         run: |
           node --check round-tracker/index-rest.mjs
           node --check round-tracker/vip75-primary.mjs
-          node --test round-tracker/vip75-primary.test.mjs
+          node --check round-tracker/vip75-trust-review.mjs
+          node --test round-tracker/vip75-primary.test.mjs round-tracker/vip75-trust-review.test.mjs
       - name: Verify main production route and original fallback
         run: |
           node --input-type=module -e '
@@ -37,6 +41,12 @@ jobs:
             assert(fn.indexOf("if (productionUsesVip75()) {")<fn.indexOf("if (productionUsesSelectiveV2() || productionUsesVip75()) {"));
             assert(fn.includes("freezeProductionLock(row, live)"));
             assert(fn.includes("shouldUseVip75Backup(row, now)"));
+            assert(fn.includes("const v2Quality = evaluateSelectiveQualityV2("));
+            assert(fn.includes("forwardStats:independentDirectionShadow.stats(rounds.values())"));
+            assert(fn.includes("if (trust.pass) {"));
+            assert(fn.includes("if (!vip.ready && !shouldUseVip75Backup(row, now))"));
+            assert(fn.includes("VIP75_TRUST_REJECTED_V2_BACKUP"));
+            assert(fn.indexOf("if (trust.pass) {")<fn.indexOf("source:VIP75_PRIMARY_SOURCE,"));
             assert(fn.includes("selectiveV2EdgeRescueFuseState(baseDirection)"));
             assert(code.includes("row.productionFallbackUsed = Boolean(live?.fallbackUsed)"));
           '

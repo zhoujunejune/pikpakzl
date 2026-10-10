@@ -72,4 +72,36 @@ test('new independent confirmation candidates stay shadow-only and require agree
  assert.equal(stale.candidates.PM_FLOW15_CURRENT_03.decision,'WAIT');
 });
 
+
+test('flat-price no-base PM/regime pilots are prospective-only and never bypass quality gates',()=>{
+ const flat={...facts,distanceFromOpenBps:0,regimeScore:0.56};
+ const f=freezeNoBase20s(row(),flat,round+20500);
+ assert.equal(f.candidates.PM_REGIME35_SUPPORT08.decision,'UP');
+ assert.equal(f.candidates.PM_CURRENT25_SUPPORT08.decision,'UP');
+ assert.equal(f.productionEffect,'NONE_SHADOW_ONLY');
+ const conflict=freezeNoBase20s(row(),{...flat,regimeScore:-0.9,regimeDirection:'DOWN',regimeAgreement:0.9},round+20500);
+ assert.equal(conflict.candidates.PM_REGIME35_SUPPORT08.decision,'WAIT');
+ assert.equal(conflict.candidates.PM_CURRENT25_SUPPORT08.decision,'WAIT');
+ const bad=freezeNoBase20s(row(),{...flat,predictionMarketConflict:true},round+20500);
+ assert.equal(bad.candidates.PM_REGIME35_SUPPORT08.decision,'WAIT');
+ assert.equal(bad.candidates.PM_CURRENT25_SUPPORT08.decision,'WAIT');
+ const stale=freezeNoBase20s(row(),{...flat,predictionMarketBookAgeMs:6000},round+20500);
+ assert.equal(stale.candidates.PM_REGIME35_SUPPORT08.decision,'WAIT');
+ assert.equal(stale.candidates.PM_CURRENT25_SUPPORT08.decision,'WAIT');
+});
+test('new pilots cannot backfill old frozen observations',()=>{
+ const frozen=freezeNoBase20s(row(),{...facts,regimeScore:0.56},round+20500);
+ delete frozen.candidates.PM_REGIME35_SUPPORT08;
+ delete frozen.candidates.PM_CURRENT25_SUPPORT08;
+ const historical={...row(),actual:'UP',officialDirection:'UP',
+   resolutionEvidence:'OFFICIAL_UP:canonical_outcome_winner_direct:STRICT_ROUND_ALIGNED_TOPIC',
+   v3NoBase20sShadow:frozen};
+ const status=summarizeNoBase20s(new Map([[round,historical]]));
+ for(const id of ['PM_REGIME35_SUPPORT08','PM_CURRENT25_SUPPORT08']){
+   const candidate=status.candidates.find(x=>x.candidateId===id);
+   assert.equal(candidate.strictForwardSamples,0);
+   assert.equal(candidate.status,'COLLECTING');
+ }
+});
+
 import './independent-direction-shadow.test.mjs';

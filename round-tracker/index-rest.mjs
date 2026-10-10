@@ -33,6 +33,8 @@ const SHADOW_OBSERVE_MS = Math.max(10000, Number(process.env.SHADOW_OBSERVE_MS |
 const SHADOW_TRAIN_MIN_SAMPLES = Math.max(100, Number(process.env.SHADOW_TRAIN_MIN_SAMPLES || 300));
 const SHADOW_FORWARD_MIN_SAMPLES = Math.max(30, Number(process.env.SHADOW_FORWARD_MIN_SAMPLES || 60));
 const SHADOW_PRODUCTION_MODEL_VERSION = String(process.env.SHADOW_PRODUCTION_MODEL_VERSION || '').trim();
+// User retired zl_new_vip75 on 2026-10-10: preserve audit history, stop all live prediction/training.
+const VIP75_RETIRED = true;
 const PRODUCTION_MIN_FORWARD_SAMPLES = Math.max(20, Number(process.env.PRODUCTION_MIN_FORWARD_SAMPLES || 20));
 const PRODUCTION_MIN_FORWARD_ACCURACY = Math.max(0.5, Math.min(1, Number(process.env.PRODUCTION_MIN_FORWARD_ACCURACY || 0.65)));
 const CALIBRATION_BAND = Math.max(0.05, Number(process.env.CALIBRATION_SCORE_BAND || 0.15));
@@ -1457,7 +1459,7 @@ function productionUsesSelectiveV2() {
 }
 
 function productionUsesVip75() {
-  return SHADOW_PRODUCTION_MODEL_VERSION === VIP75_PRIMARY_NAME;
+  return !VIP75_RETIRED && SHADOW_PRODUCTION_MODEL_VERSION === VIP75_PRIMARY_NAME;
 }
 
 function pinnedShadowV3Candidate() {
@@ -4028,7 +4030,7 @@ async function pollSignal() {
       }
       observeShadowForwardRegistry(row, liveFacts);
       shadowV2.observe(row, liveFacts);
-      independentDirectionShadow.observe(row);
+      if (!VIP75_RETIRED) independentDirectionShadow.observe(row);
       saveHistory();
     }
     if (liveFacts && Number(row.roundStartMs) >= WAIT_RESCUE_SHADOW_START_MS) {
@@ -4327,7 +4329,7 @@ async function settlePendingRounds() {
         settleShadowForwardRegistry(row);
         shadowV2.settle(row);
         shadowV3.settle(row);
-        independentDirectionShadow.settle(row);
+        if (!VIP75_RETIRED) independentDirectionShadow.settle(row);
         noBaseSpecialist.settle(row);
         void shadowV4.settle(row);
         shadowV5.settle(row);
@@ -4455,10 +4457,12 @@ async function settlePendingRounds() {
         maybeFinalizeLegacyOfficialRevalidation();
         maybeTrainShadowModel();
         shadowV2.maybeTrain(shadowTrainingRows());
-        const forward=independentDirectionShadow.stats(rounds.values());
-        if(row.independentDirectionShadow && forward.decidedRounds>0 &&
-          forward.decidedRounds%10===0) log('independent_direction_forward_progress',forward);
-        independentDirectionShadow.trainIfNeeded(rounds.values());
+        if (!VIP75_RETIRED) {
+          const forward=independentDirectionShadow.stats(rounds.values());
+          if(row.independentDirectionShadow && forward.decidedRounds>0 &&
+            forward.decidedRounds%10===0) log('independent_direction_forward_progress',forward);
+          independentDirectionShadow.trainIfNeeded(rounds.values());
+        }
         void shadowV3.maybeTrain(row.roundStartMs);
         void noBaseSpecialist.maybeTrain(row.roundStartMs);
         void shadowV4.maybeTrain(row.roundStartMs);
@@ -5539,9 +5543,15 @@ void shadowV5.maybeTrain();
 void shadowV7.maybeTrain();
 applyPinnedProductionShadow();
 updateShadowForwardMetrics();
-independentDirectionShadow.reconcileHistory(rounds.values());
-independentDirectionShadow.trainIfNeeded(rounds.values());
-log('independent_direction_shadow_status',independentDirectionShadow.stats(rounds.values()));
+if (!VIP75_RETIRED) {
+  independentDirectionShadow.reconcileHistory(rounds.values());
+  independentDirectionShadow.trainIfNeeded(rounds.values());
+}
+log('independent_direction_shadow_status', {
+  ...independentDirectionShadow.stats(rounds.values()),
+  retired: VIP75_RETIRED,
+  productionEligible: !VIP75_RETIRED,
+});
 log('calibration_backtest_snapshot', calibrationBacktestPayload());
 log('v6_feature_audit_snapshot', v6FeatureAuditPayload());
 log('selective_v2_internal_direction_backtest_snapshot', selectiveV2InternalDirectionBacktest());

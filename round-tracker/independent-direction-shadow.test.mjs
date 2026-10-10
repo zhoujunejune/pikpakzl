@@ -115,7 +115,7 @@ test('100% full direction with just 75% aggregate must also satisfy rolling and 
   assert.equal(s.recent100.accuracy,1);
   assert.equal(s.recent40.accuracy,1);
   assert.equal(s.rolling200.accuracy,0.75);
-  assert.equal(s.status,'QUALIFIED_75_100_LONG_TERM_REVIEW');
+  assert.equal(s.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
   settled.slice(-40).forEach(r=>{
     r.independentDirectionShadow.direction=
       r.actual==='UP'?'DOWN':'UP';
@@ -176,7 +176,7 @@ test('adaptive program preserves exact denominator and frozen decisions across r
   assert.equal(gap.decidedRounds,239);
   assert.equal(gap.noDirectionRounds,1);
   assert.ok(gap.coverage<1);
-  assert.equal(gap.status,'FORWARD_TARGET_NOT_MET_RETRAIN_REQUIRED');
+  assert.equal(gap.status,'QUALIFIED_75_100_LONG_TERM_REVIEW');
   // Confirm the version reset did not silently hide the first version loss.
   rs[0].independentDirectionShadow.modelVersion='a';
   rs.slice(-30).forEach(r=>{
@@ -235,4 +235,27 @@ test('model rename is public only; immutable trained versions and ledger stay au
   assert.equal(audited.name,'zl_new_vip75');
   assert.equal(audited.decidedRounds,1);
   assert.equal(audited.coverage,1);
+});
+
+test('lifetime review requires >=70% coverage and strictly >75% accuracy',()=>{
+  const model={version:'threshold-model',trainedAt:base,startRoundMs:base+300000};
+  const rs=Array.from({length:400},(_,i)=>row(i+1,i%2===0?'UP':'DOWN'));
+  rs.slice(0,280).forEach((r,i)=>{
+    r.independentDirectionShadow={
+      modelVersion:model.version,trainedAt:base,roundStartMs:r.roundStartMs,
+      observedAt:r.shadowObservedAt,direction:r.actual,
+      marketRegime:i%4<2?'TREND':'RANGE'
+    };
+  });
+  const enough=independentAdaptiveProgramStats(rs,[model]);
+  assert.equal(enough.forwardRounds,400);
+  assert.equal(enough.decidedRounds,280);
+  assert.equal(enough.coverage,0.7);
+  assert.equal(enough.accuracy,1);
+  assert.equal(enough.promotionEligibleForReview,true);
+  delete rs[279].independentDirectionShadow;
+  const below=independentAdaptiveProgramStats(rs,[model]);
+  assert.equal(below.coverage,0.6975);
+  assert.equal(below.promotionEligibleForReview,false);
+  assert.equal(below.noDirectionRounds,121);
 });

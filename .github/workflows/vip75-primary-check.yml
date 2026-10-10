@@ -1,0 +1,42 @@
+name: VIP75 primary routing tests
+on:
+  push:
+    branches:
+      - feat/vip75-primary-20261010
+    paths:
+      - 'round-tracker/vip75-primary*'
+      - 'round-tracker/index-rest.mjs'
+      - '.github/workflows/vip75-primary-check.yml'
+  pull_request:
+    paths:
+      - 'round-tracker/vip75-primary*'
+      - 'round-tracker/index-rest.mjs'
+      - '.github/workflows/vip75-primary-check.yml'
+  workflow_dispatch:
+jobs:
+  primary-routing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate production syntax and isolated tests
+        run: |
+          node --check round-tracker/index-rest.mjs
+          node --check round-tracker/vip75-primary.mjs
+          node --test round-tracker/vip75-primary.test.mjs
+      - name: Verify main production route and original fallback
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            import assert from "node:assert/strict";
+            const code=fs.readFileSync("round-tracker/index-rest.mjs","utf8");
+            const fn=code.slice(code.indexOf("function productionSignalPayload("));
+            assert(fn.indexOf("if (productionUsesVip75()) {")<fn.indexOf("if (productionUsesSelectiveV2() || productionUsesVip75()) {"));
+            assert(fn.includes("freezeProductionLock(row, live)"));
+            assert(fn.includes("shouldUseVip75Backup(row, now)"));
+            assert(fn.includes("selectiveV2EdgeRescueFuseState(baseDirection)"));
+            assert(code.includes("row.productionFallbackUsed = Boolean(live?.fallbackUsed)"));
+          '

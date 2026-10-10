@@ -39,23 +39,23 @@ for(const row of rows) {
   const direction=row.productionPrediction;
   const lock=Number(row.productionLockedAt);
   if(!topicId){entry.reason='MISSING_MARKET_TOPIC_ID';report.push(entry);continue;}
-  if(!['UP','DOWN'].includes(direction)||!Number.isFinite(lock)||lock<round||lock>=round+300000){entry.reason='NO_VALID_FROZEN_PRODUCTION_SIGNAL';report.push(entry);continue;}
+  if(!['UP','DOWN'].includes(direction)||row.productionLockedAt==null||!Number.isFinite(lock)||lock<round||lock>=round+300000){entry.reason='NO_VALID_FROZEN_PRODUCTION_SIGNAL';report.push(entry);continue;}
   try {
     const topic=await detail(topicId);
     const start=Number(topic.startDate),end=Number(topic.endDate);
-    if(!Number.isFinite(start)||!Number.isFinite(end)||Math.abs(start-round)>30000||Math.abs(end-(round+300000))>30000){entry.reason='MARKET_ROUND_MISMATCH';report.push(entry);continue;}
+    if(topic.startDate==null||topic.endDate==null||!Number.isFinite(start)||!Number.isFinite(end)||Math.abs(start-round)>30000||Math.abs(end-(round+300000))>30000){entry.reason='MARKET_ROUND_MISMATCH';report.push(entry);continue;}
     const official=resolve(topic);
     if(!['UP','DOWN'].includes(official)){entry.reason='MISSING_OR_FLAT_SETTLEMENT';report.push(entry);continue;}
     entry.status='VERIFIED';entry.officialDirection=official;
     entry.result=official===direction?'HIT':'MISS';
     entry.matchesStored=official===(row.officialDirection??row.productionActual);
     entry.detailPayloadSha256=crypto.createHash('sha256').update(JSON.stringify(topic)).digest('hex');
-    entry.matchesStoredHash=entry.detailPayloadSha256===row.officialSettlementAudit?.detailPayloadSha256;
+    entry.matchesStoredHash=null; // V3 hashes its merged topic, not necessarily the raw Binance detail response.
   }catch(e){entry.reason=String(e?.message??e);}
   report.push(entry);
 }
 const verified=report.filter(r=>r.status==='VERIFIED');
 const hits=verified.filter(r=>r.result==='HIT').length;
-const out={generatedAt:new Date().toISOString(),source:'DIRECT_BINANCE_SIGNED_MARKET_DETAIL_INDEPENDENT_REFETCH',totalRows:rows.length,uniqueRoundIds:seen.size,verified:verified.length,hits,misses:verified.length-hits,accuracy:verified.length?hits/verified.length:null,storedDirectionDisagreements:verified.filter(r=>!r.matchesStored).length,storedHashDisagreements:verified.filter(r=>!r.matchesStoredHash).length,rounds:report};
+const out={generatedAt:new Date().toISOString(),source:'DIRECT_BINANCE_SIGNED_MARKET_DETAIL_INDEPENDENT_REFETCH',totalRows:rows.length,uniqueRoundIds:seen.size,verified:verified.length,hits,misses:verified.length-hits,accuracy:verified.length?hits/verified.length:null,storedDirectionDisagreements:verified.filter(r=>!r.matchesStored).length,storedHashDisagreements:null,hashComparisonNote:'Not comparable: V3 hashes merged topic metadata while this script hashes direct detail payload',rounds:report};
 process.stdout.write(JSON.stringify(out,null,2)+'\n');
 if(report.some(r=>r.status!=='VERIFIED'||!r.matchesStored))process.exitCode=2;

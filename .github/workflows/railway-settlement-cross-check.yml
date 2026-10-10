@@ -14,11 +14,11 @@ jobs:
         with:
           node-version: '22'
       - name: Cross-check frozen production rounds against fresh V3 resolution
-        run: node audit/railway-cross-service-reconcile.mjs > railway-settlement-audit.json
+        run: node audit/railway-cross-service-reconcile.mjs > railway-settlement-audit.json 2> railway-settlement-errors.log
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: railway-settlement-audit
-          path: railway-settlement-audit.json
+          path: |\n            railway-settlement-audit.json\n            railway-settlement-errors.log
           if-no-files-found: warn

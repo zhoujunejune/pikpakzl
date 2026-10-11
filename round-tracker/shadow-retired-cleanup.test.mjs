@@ -15,6 +15,8 @@ test('removes old orphan files without touching registered, pinned or unrelated 
     const orphan = path.join(dir, 'shadow-v3-automl-333.pkl');
     const archive = path.join(dir, 'round-history.jsonl');
     for (const file of [kept, pinned, orphan, archive]) fs.writeFileSync(file, 'test');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(orphan, old, old);
     fs.writeFileSync(path.join(dir, 'registry.json'), JSON.stringify({
       schemaVersion: 1,
       lastAttemptRound: 300,
@@ -23,7 +25,7 @@ test('removes old orphan files without touching registered, pinned or unrelated 
     const out = cleanupOrphanedShadowArtifacts({
       directories: [{ name: 'shadow-v3', dir }],
       protectedModelVersions: ['shadow-v3-automl-222'],
-      minAgeMs: 0,
+      minAgeMs: 1_000,
     });
     assert.equal(out.deleted, 1);
     assert.ok(!fs.existsSync(orphan));

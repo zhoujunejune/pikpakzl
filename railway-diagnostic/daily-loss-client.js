@@ -86,12 +86,44 @@
    await read();
   }
  }
+
+ let auditBusy=false;
+ async function readAudit(){
+  if(auditBusy||!el('dailyLossAuditArea'))return;
+  auditBusy=true;
+  try{
+   const response=await fetch('/api/daily-loss-audit?ts='+Date.now(),{cache:'no-store'});
+   const data=await response.json();
+   if(!response.ok)throw new Error('审计状态接口未就绪');
+   const completed=data.status!=='PENDING'&&data.status!=='FETCHING';
+   const safety='真实熔断未启用';
+   put('dailyLossAuditHeadline',completed?'自动审计：'+String(data.status||'未知')+' · '+safety:'自动审计尚未完成 · '+safety);
+   const pnl=Number(data.realizedPnlUsdt);
+   const hasPreliminary=data.realizedPnlUsdt!==null&&data.realizedPnlUsdt!==undefined&&Number.isFinite(pnl);
+   put('dailyLossPnl',hasPreliminary?pnl.toFixed(4)+' USDT（初步，未核验）':'尚未完成官方核验');
+   put('dailyLossRemaining','不可计算（未验收）');
+   put('dailyLossAuditCount',data.settlementCount===null||data.settlementCount===undefined?'未取得':String(data.settlementCount));
+   put('dailyLossAuditExposure',data.openExposureUsdt===null||data.openExposureUsdt===undefined?
+    '未核验':Number(data.openExposureUsdt).toFixed(2)+' USDT');
+   const items=Array.isArray(data.simulationCases)?data.simulationCases:[];
+   put('dailyLossAuditTests',items.length?items.filter(x=>x.passed).length+'/'+items.length+' 通过':'未执行');
+   put('dailyLossAuditAt',data.checkedAt?new Date(data.checkedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'等待中');
+   put('dailyLossAuditSummary','审计周期：每15分钟。统计日期：'+(data.day||'等待')+
+    '（北京时间）。官方结算数据只做初步统计，完整性/手续费/订单逐笔对账仍未独立认证。');
+   const errors=Array.isArray(data.errors)?data.errors:[];
+   put('dailyLossAuditErrors',errors.length?'待解决：'+errors.join('、'):
+     (completed?'数据已拉取，但尚不满足真实熔断的独立验收标准。':'等待首轮自动审计...'));
+  }catch(e){
+   put('dailyLossAuditHeadline','⚠ 自动验收状态未确认 · 真实熔断未启用');
+   put('dailyLossAuditErrors',String(e?.message||e));
+  }finally{auditBusy=false;}
+ }
  function boot(){
   if(!el('dailyLossCard'))return;
   el('dailyLossSaveButton')?.addEventListener('click',save);
   el('dailyLossEnableButton')?.addEventListener('click',()=>switchObservation(true));
   el('dailyLossDisableButton')?.addEventListener('click',()=>switchObservation(false));
-  void read();setInterval(read,15000);
+  void read();void readAudit();setInterval(read,15000);setInterval(readAudit,30000);
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);
  else boot();

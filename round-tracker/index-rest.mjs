@@ -16,6 +16,7 @@ import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
+import { selectiveV2HardFuseSummary } from './selective-v2-hard-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
 import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL } from './pm-current25-support08-production.mjs';
 import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, oneTimeOrStrict15sProofPass, selectForwardGated15sCandidates, candidateProductionSource } from './unified-15s-candidate-router.mjs';
@@ -84,6 +85,16 @@ const LOCK_QUALITY_BALANCED_CURRENT_SCORE_MIN = 0.50;
 const LOCK_QUALITY_MAX_DELAY_MS = 22000;
 const LOCK_QUALITY_REJECT_ABSORPTION = true;
 const LOCK_QUALITY_V2_VERSION = 'LOCK_QUALITY_SELECTIVE_V2';
+// Production kill switch defaults to ON: no Selective V2/Edge Rescue order until manually rearmed and verified.
+const SELECTIVE_V2_HARD_PAUSE = String(process.env.SELECTIVE_V2_HARD_PAUSE || '1') !== '0';
+const SELECTIVE_V2_SHADOW_RECOVERY_START_MS = Date.parse('2026-10-11T12:55:00Z');
+function selectiveV2LiveRisk(direction, excludeRound = null) {
+  return selectiveV2HardFuseSummary(rounds.values(), direction, {
+    paused:SELECTIVE_V2_HARD_PAUSE,
+    shadowStartMs:SELECTIVE_V2_SHADOW_RECOVERY_START_MS,
+    excludeRound,
+  });
+}
 const LOCK_QUALITY_V2_START_MS = Math.max(0, Number(process.env.LOCK_QUALITY_V2_START_MS || 1791180300000));
 const LOCK_QUALITY_V2_SUPPORT_MIN = Math.min(0.25, Math.max(0, Number(process.env.LOCK_QUALITY_V2_SUPPORT_MIN || 0.05)));
 const LOCK_QUALITY_V2_CURRENT_MIN = Math.min(0.95, Math.max(0.08, Number(process.env.LOCK_QUALITY_V2_CURRENT_MIN || 0.60)));
@@ -5222,6 +5233,14 @@ function productionSignalPayload(now = Date.now()) {
       frozen: true,
       productionLockedAt: row.productionLockedAt ?? null,
     };
+    // A frozen historical lock stays auditable but cannot re-enter the live order stream after a fuse.
+    if ((row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' || row.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY') &&
+        selectiveV2LiveRisk(row.productionPrediction, row.roundStartMs).blocked) {
+      const blocked = {...frozenLive, status:'WAIT', signal:null,
+        waitReason:'SELECTIVE_V2_HARD_FUSE_FROZEN_LOCK_SUPPRESSED'};
+      logProductionSignalState(blocked);
+      return {ok:true, live:blocked};
+    }
     logProductionSignalState(frozenLive);
     return { ok: true, live: frozenLive };
   }
@@ -5261,8 +5280,18 @@ function productionSignalPayload(now = Date.now()) {
     const direction = q?.pass && (q?.decision === 'UP' || q?.decision === 'DOWN')
       ? q.decision
       : null;
+    // Freeze a paper-only signal before its own official settlement; never backfill after settlement.
+    if (direction && !row.selectiveV2HardFuseShadow &&
+        Number.isFinite(Number(row.predictedAt)) &&
+        Number(row.predictedAt) >= row.roundStartMs &&
+        Number(row.predictedAt) < row.roundStartMs + 300000 &&
+        !row.settledAt && !row.actual) {
+      row.selectiveV2HardFuseShadow = {direction, frozenAt:Number(row.predictedAt),
+        policy:'SELECTIVE_V2_PRESETTLEMENT_PAPER_ONLY'};
+    }
+    const liveRisk = baseDirection ? selectiveV2LiveRisk(baseDirection, row.roundStartMs) : null;
 
-    if (direction) {
+    if (direction && !liveRisk?.blocked) {
       const confidence = Number.isFinite(Number(row.modelProbability))
         ? Number(row.modelProbability)
         : (Number.isFinite(Number(row.predictionConfidence)) ? Number(row.predictionConfidence) : null);
@@ -5296,7 +5325,7 @@ function productionSignalPayload(now = Date.now()) {
     // Preserve Selective V2 as the precision core. Only rescue a filtered
     // base-direction signal when it falls inside the historically high-quality
     // edge region and the independent strict-forward fuse is open.
-    const edgeRescue = baseDirection && q && !q.pass
+    const edgeRescue = baseDirection && q && !q.pass && !liveRisk?.blocked
       ? evaluateSelectiveV2EdgeRescueRow(row, q)
       : null;
     const edgeFuse = edgeRescue?.decision === baseDirection
@@ -5349,7 +5378,9 @@ function productionSignalPayload(now = Date.now()) {
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']
-      : (Array.isArray(q?.reasons) && q.reasons.length ? q.reasons : ['SELECTIVE_FILTER_WAIT']);
+      : liveRisk?.blocked
+        ? ['HARD_FUSE', ...(liveRisk.reasons || [])]
+        : (Array.isArray(q?.reasons) && q.reasons.length ? q.reasons : ['SELECTIVE_FILTER_WAIT']);
     const s = selectiveQualityV2Summary();
     const live = {
       round: row.roundStartMs,
@@ -5709,6 +5740,10 @@ const signalHttpServer = http.createServer((req, res) => {
         ...production,
         recent10:recent(10),
         recent20:recent(20),
+        selectiveV2HardFuse:{
+          up:selectiveV2LiveRisk('UP'),
+          down:selectiveV2LiveRisk('DOWN'),
+        },
         selectiveV2:{
           samples:selective.length,
           hits:selectiveHits,
@@ -5879,6 +5914,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-quality-v2-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(selectiveQualityV2Summary()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/selective-v2-hard-fuse') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ok:true, up:selectiveV2LiveRisk('UP'), down:selectiveV2LiveRisk('DOWN')}));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/selective-v2-high-precision-shadow-stats') {

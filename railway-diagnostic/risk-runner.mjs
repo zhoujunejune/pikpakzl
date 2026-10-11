@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import { hydrateRiskConfig } from './risk-config-storage.mjs';
 
 const CONTROL_FILE = '/tmp/risk-control.json';
 const STATUS_FILE = '/tmp/risk-runtime-status.json';
@@ -54,6 +55,10 @@ let child = null;
 let childKey = null;
 let desired = readConfig();
 let stopping = false;
+let storageReady = false;
+let storageHealthy = false;
+let storageError = null;
+let configPersisted = false;
 
 let lastWorkerStartedAt = null;
 function writeStatus() {
@@ -70,6 +75,9 @@ function writeStatus() {
     lastWorkerStartedAt,
     configurationSource: config.source,
     configUpdatedAt: config.updatedAt,
+    persistenceHealthy: storageHealthy,
+    persistedConfigFound: configPersisted,
+    persistenceError: storageError,
     transitioning: enabled && (!running || childKey !== configKey(config)),
   };
   try {
@@ -115,6 +123,7 @@ function startWorker(cfg) {
 }
 
 function reconcile() {
+  if (!storageReady) return;
   desired = readConfig();
   const enabled = desired.takeProfitEnabled || desired.stopLossEnabled;
   const wantedKey = configKey(desired);
@@ -136,13 +145,35 @@ log('risk_runtime_controller_started', {
 
 const timer = setInterval(reconcile, CHECK_MS);
 const statusTimer = setInterval(writeStatus, STATUS_MS);
-reconcile();
+let syncPending = false;
+async function syncPersistedConfig() {
+  if (syncPending) return;
+  syncPending = true;
+  try {
+    const outcome = await hydrateRiskConfig();
+    storageHealthy = true;
+    storageError = null;
+    configPersisted = Boolean(outcome.restored);
+  } catch (e) {
+    storageHealthy = false;
+    storageError = String(e?.message || e);
+    log('risk_config_redis_sync_failed', { error: storageError });
+  } finally {
+    syncPending = false;
+    storageReady = true;
+    reconcile();
+    writeStatus();
+  }
+}
+const syncTimer = setInterval(() => void syncPersistedConfig(), 15000);
+void syncPersistedConfig();
 writeStatus();
 
 function shutdown(signal) {
   stopping = true;
   clearInterval(timer);
   clearInterval(statusTimer);
+  clearInterval(syncTimer);
   if (child) child.kill('SIGTERM');
   log('risk_runtime_controller_stopped', { signal });
   setTimeout(() => process.exit(0), 150).unref();

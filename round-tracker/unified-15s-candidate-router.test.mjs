@@ -36,8 +36,8 @@ const stats=(items)=>({
   scope:'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S',
   observedNoBaseSettledRounds:180,candidates:items
 });
-const choose=(row,items,time=round+26000)=>
-  selectForwardGated15sCandidates(row,stats(items),time);
+const choose=(row,items,time=round+26000,phase='late')=>
+  selectForwardGated15sCandidates(row,stats(items),time,phase);
 
 test('exactly ten current 15s candidates, none including retired PM_LEAN_03',()=>{
   assert.equal(ALL_15S_IDS.length,10);
@@ -73,13 +73,26 @@ test('minimum 100 independent forward outcomes plus Wilson and rolling risk gate
   ])assert.equal(forward15sProofPass(bad),false,JSON.stringify(bad));
 });
 
-test('V2/Edge keep entire 0-25s priority; candidate can lock only 25-35s',()=>{
+test('only auto-qualified 15s candidates can preempt V2 at original 15-20s lock window',()=>{
   const row=makeRow(), p=proof('PM_FLOW15_CURRENT_03');
-  for(const delay of [0,14999,16000,20000,24999,35001,300000]){
-    assert.equal(choose(row,[p],round+delay).candidates.length,0,delay);
-  }
-  assert.equal(choose(row,[p],round+25000).candidates.length,1);
-  assert.equal(choose(row,[p],round+35000).candidates.length,1);
+  for(const delay of [0,14999,20001,22000,25000,35000,300000])
+    assert.equal(choose(row,[p],round+delay,'early').candidates.length,0,delay);
+  for(const delay of [15500,17000,20000])
+    assert.equal(choose(row,[p],round+delay,'early').candidates.length,1,delay);
+  const first=choose(row,[p],round+15500,'early').candidates[0];
+  assert.equal(first.source,candidateProductionSource('PM_FLOW15_CURRENT_03'));
+  assert.equal(first.observedAt,round+15500);
+  assert.equal(choose(row,[{...p,status:'COLLECTING'}],round+15500,'early').candidates.length,0);
+  assert.equal(choose(row,[{...p,currentMissStreak:3}],round+15500,'early').candidates.length,0);
+  assert.equal(choose(row,[{...p,strictForwardSamples:99}],round+15500,'early').candidates.length,0);
+});
+
+test('qualified 15s candidates may also rescue V2/Edge WAIT only at 25-35s',()=>{
+  const row=makeRow(),p=proof('PM_FLOW15_CURRENT_03');
+  for(const delay of [0,14999,16000,20000,24999,35001,300000])
+    assert.equal(choose(row,[p],round+delay,'late').candidates.length,0,delay);
+  assert.equal(choose(row,[p],round+25000,'late').candidates.length,1);
+  assert.equal(choose(row,[p],round+35000,'late').candidates.length,1);
 });
 
 test('all ten lanes require identical auto promotion evidence, including former early opt-ins',()=>{
@@ -153,4 +166,25 @@ test('higher strict-forward rate wins ties only among independently qualified ca
   const selected=choose(row,[weak,good]);
   assert.equal(selected.candidates.length,2);
   assert.equal(selected.candidates[0].id,good.candidateId);
+});
+
+test('early priority still respects immutable lock, official-settlement and frozen-data guards',()=>{
+  const row=makeRow(),p=proof('PM_FLOW15_CURRENT_03');
+  for(const patch of [
+    {productionPrediction:'DOWN'},{productionPrediction:'UP'},
+    {actual:'UP'},{settledAt:round+300000},
+    {roundStartMs:round+300000}
+  ])assert.equal(choose({...row,...patch},[p],round+15500,'early').candidates.length,0);
+  assert.equal(choose(makeRow({...facts,depthAgeMs:2500}),[p],round+15500,'early').candidates.length,0);
+  assert.equal(choose({...row,prediction:'DOWN',predictedAt:round+14000},[p],round+16000,'early').candidates.length,0);
+  assert.equal(choose(row,[p],round+15500,'unknown').candidates.length,0);
+});
+
+test('both former early opt-ins face full forward qualification before preempting V2',()=>{
+  const row=makeRow();
+  for(const id of ['PM_CURRENT25_SUPPORT08','CURRENT_03_PM_AGREE']){
+    const p=proof(id);
+    assert.equal(choose(row,[p],round+15500,'early').candidates.length,1,id);
+    assert.equal(choose(row,[{...p,recent30:{samples:30,accuracy:0.7}}],round+15500,'early').candidates.length,0,id);
+  }
 });

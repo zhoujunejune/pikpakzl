@@ -6,11 +6,15 @@ on:
     paths:
       - 'railway-diagnostic/panel-stats-shell.mjs'
       - 'railway-diagnostic/wait-visibility-panel.test.mjs'
+      - 'railway-diagnostic/control-shell.mjs'
+      - 'railway-diagnostic/risk-controls-ui.test.mjs'
       - '.github/workflows/wait-visibility-panel.yml'
   pull_request:
     paths:
       - 'railway-diagnostic/panel-stats-shell.mjs'
       - 'railway-diagnostic/wait-visibility-panel.test.mjs'
+      - 'railway-diagnostic/control-shell.mjs'
+      - 'railway-diagnostic/risk-controls-ui.test.mjs'
       - '.github/workflows/wait-visibility-panel.yml'
   workflow_dispatch:
 jobs:
@@ -23,4 +27,5 @@ jobs:
         with:
           node-version: '22'
       - run: node --check railway-diagnostic/panel-stats-shell.mjs
-      - run: node --test railway-diagnostic/wait-visibility-panel.test.mjs
+      - run: node --check railway-diagnostic/control-shell.mjs
+      - run: node --test railway-diagnostic/wait-visibility-panel.test.mjs railway-diagnostic/risk-controls-ui.test.mjs

@@ -20,7 +20,7 @@ import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
 import { selectiveV2HardFuseSummary } from './selective-v2-hard-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
 import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL } from './pm-current25-support08-production.mjs';
-import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, oneTimeOrStrict15sProofPass, selectForwardGated15sCandidates, selectUserFirst15sCandidates, userFirst15sProofPass, FIRST_LAYER_15S_IDS, candidateProductionSource } from './unified-15s-candidate-router.mjs';
+import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, oneTimeOrStrict15sProofPass, selectForwardGated15sCandidates, selectUserFirst15sCandidates, selectUserFirst15sWinner, userFirst15sProofPass, FIRST_LAYER_15S_IDS, candidateProductionSource } from './unified-15s-candidate-router.mjs';
 import { lastResortSource } from './last-resort-15s-backups.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
@@ -5207,13 +5207,20 @@ function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
     allowed.push({chosen,fuse,circuit});
     if (!firstLayer) break;
   }
-  // A first-layer disagreement is not a reliable direction: defer to the
-  // existing waterfall without overwriting an immutable round lock.
+  // User-defined precedence: PM_FLOW15_CURRENT_03 wins if both are
+  // independently risk-approved, including when their directions differ.
+  // Only use PM_CURRENT25_SUPPORT08 if FLOW15 cannot pass its own guards/fuse.
+  const firstLayerWinner = firstLayer ? selectUserFirst15sWinner(allowed) : null;
   if (firstLayer && new Set(allowed.map(x => x.chosen.direction)).size > 1) {
-    log('first_layer_15s_direction_conflict',{round:row.roundStartMs, candidates:allowed.map(x=>x.chosen.id)});
-    return null;
+    log('first_layer_15s_direction_conflict',{
+      round:row.roundStartMs, candidates:allowed.map(x=>x.chosen.id),
+      selected:firstLayerWinner?.chosen.id ?? null,
+      policy:'PM_FLOW15_CURRENT_03_FIRST',
+    });
   }
-  for (const {chosen,fuse,circuit} of allowed) {
+  for (const {chosen,fuse,circuit} of (firstLayer
+    ? (firstLayerWinner ? [firstLayerWinner] : [])
+    : allowed)) {
     const live = {
       round:row.roundStartMs,status:'LOCKED',
       signal:{direction:chosen.direction,score:chosen.score,

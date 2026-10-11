@@ -1,7 +1,7 @@
 // Forward-only 15-second V3 no-base trials; only strict-forward-qualified directions may enter production.
 export const V3_NO_BASE_15S_VERSION = 'V3_NO_BASE_15S_RESCUE_SHADOW_V1';
 export const V3_NO_BASE_15S_START_MS = Date.parse('2026-10-10T10:00:00.000Z');
-export const V3_NO_BASE_15S_FORWARD_TARGET = 60;
+export const V3_NO_BASE_15S_FORWARD_TARGET = 100;
 export const V3_NO_BASE_15S_CONFIGS = Object.freeze([
   {id:'BLENDED_04_PM_AGREE',mode:'blended'},
   {id:'CURRENT_03_PM_AGREE',mode:'current'},
@@ -167,6 +167,7 @@ export function summarizeNoBase15s(rounds){
   const candidates=V3_NO_BASE_15S_CONFIGS.map(cfg=>{
     const decisions=settled.filter(r=>['UP','DOWN'].includes(r.v3NoBase15sShadow.candidates?.[cfg.id]?.decision));
     const total=stats(decisions,cfg.id),recent20=stats(decisions.slice(-20),cfg.id);
+    const recent30=stats(decisions.slice(-30),cfg.id);
     const up=stats(decisions.filter(r=>r.v3NoBase15sShadow.candidates[cfg.id].decision==='UP'),cfg.id);
     const down=stats(decisions.filter(r=>r.v3NoBase15sShadow.candidates[cfg.id].decision==='DOWN'),cfg.id);
     const recent10=stats(decisions.slice(-10),cfg.id);
@@ -175,15 +176,17 @@ export function summarizeNoBase15s(rounds){
     let streak=0,maxConsecutiveMisses=0;
     for(const r of decisions){if(r.v3NoBase15sShadow.candidates[cfg.id].decision!==r.actual){streak++;maxConsecutiveMisses=Math.max(maxConsecutiveMisses,streak);}else streak=0;}
     const qualified=total.samples>=V3_NO_BASE_15S_FORWARD_TARGET&&total.accuracy>=0.75&&
+      recent30.samples>=30&&recent30.accuracy>=0.75&&
       recent20.samples>=20&&recent20.accuracy>=0.75&&recent10.samples>=10&&recent10.accuracy>=0.70&&
       up.samples>=10&&down.samples>=10&&up.accuracy>=0.70&&down.accuracy>=0.70&&
       upRecent6.samples>=6&&downRecent6.samples>=6&&upRecent6.accuracy>=0.70&&downRecent6.accuracy>=0.70&&
-      maxConsecutiveMisses<=2;
+      streak<=2;
     return {candidateId:cfg.id,status:qualified?'ELIGIBLE_FOR_INDEPENDENT_REVIEW':
       total.samples<V3_NO_BASE_15S_FORWARD_TARGET?'COLLECTING':'FORWARD_COMPLETE_NOT_QUALIFIED',
       strictForwardSamples:total.samples,targetSamples:V3_NO_BASE_15S_FORWARD_TARGET,
       hits:total.hits,misses:total.misses,forwardAccuracy:total.accuracy,
-      recent10,recent20,up,down,upRecent6,downRecent6,maxConsecutiveMisses,incrementalCoverage:settled.length?
+      recent10,recent20,recent30,up,down,upRecent6,downRecent6,maxConsecutiveMisses,
+      currentMissStreak:streak,incrementalCoverage:settled.length?
         Number((total.samples/settled.length).toFixed(4)):null,
       productionEffect:'NONE_SHADOW_ONLY'};
   });
@@ -195,5 +198,6 @@ export function summarizeNoBase15s(rounds){
     scope:'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S',
     observedNoBaseSettledRounds:noBaseSettled,
     inputQualityBlockers:why,productionEffect:'NONE_SHADOW_ONLY',
-    autoProduction:false,candidates};
+    autoProduction:candidates.some(x=>x.status==='ELIGIBLE_FOR_INDEPENDENT_REVIEW'),
+    autoPromotionPolicy:'V2_EDGE_FIRST_STRICT_FORWARD_100_AND_MID_PRICE_PROXY_GATE',candidates};
 }

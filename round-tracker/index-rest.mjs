@@ -5037,7 +5037,7 @@ function all15sCandidateRegistryStats() {
     return {
       candidateId:id,
       source,
-      entryPolicy:'AUTO_PROMOTE_AFTER_V2_EDGE_WITH_STRICT_FORWARD',
+      entryPolicy:'AUTO_PROMOTE_15S_FIRST_IF_STRICT_FORWARD_QUALIFIED',
       eligibleForProduction:eligible,
       forwardQualified:forward15sProofPass(proof),
       candidateForward:proof || null,
@@ -5051,9 +5051,65 @@ function all15sCandidateRegistryStats() {
     userOptInCandidates:0,
     forwardGatedCandidates:status.length,
     forwardQualifiedCandidates:status.filter(x=>x.forwardQualified).length,
-    productionRoute:'SELECTIVE_V2_THEN_EDGE_RESCUE_THEN_AUTO_QUALIFIED_15S_25_TO_35S',
+    productionRoute:'QUALIFIED_15S_15_TO_20S_THEN_SELECTIVE_V2_EDGE_THEN_QUALIFIED_15S_25_TO_35S',
     candidates:status,
   };
+}
+
+// Strictly qualified 15s signal paths are preferred at their original 15s freeze.
+// Their official-forward qualification, pricing proxy, and existing independent
+// 30-minute fuses are all checked at the moment of production lock.
+// If nothing qualifies by 20s, V2 + Edge Rescue retain their 22s path;
+// previously qualified 15s candidates can still rescue between 25-35s.
+function tryAutoPromoted15sLock(row, now, phase) {
+  if (!row || !productionUsesSelectiveV2()) return null;
+  const elapsed = now-row.roundStartMs;
+  const eligibleWindow = phase === 'early' ? elapsed >= 15000 && elapsed <= 20000 :
+    phase === 'late' ? elapsed >= 25000 && elapsed <= 35000 : false;
+  if (!eligibleWindow || !row.v3NoBase15sShadow) return null;
+  const forwardStatus = v3NoBase15sShadowSummary(rounds);
+  const promoted = selectForwardGated15sCandidates(row, forwardStatus, now, phase);
+  for (const chosen of promoted.candidates) {
+    const fuse = chosen.id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
+      chosen.id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse :
+      lastResort15sFuses[chosen.id];
+    if (!fuse || chosen.source !== candidateProductionSource(chosen.id)) continue;
+    const stats = current03PmAgreeProductionFuseSummary(rounds, chosen.source);
+    const circuit = fuse.check(chosen.direction, stats, now);
+    if (!circuit.allowed) continue;
+    const live = {
+      round:row.roundStartMs,status:'LOCKED',
+      signal:{direction:chosen.direction,score:chosen.score,
+        confidence:null,modelProbability:null},
+      input:{round:row.roundStartMs},
+      generatedAt:chosen.observedAt,
+      source:chosen.source,
+      model:chosen.id,
+      modelVersion:V3_NO_BASE_15S_VERSION,
+      facts:row.v3NoBase15sShadow?.facts ?? null,
+      productionPolicy:productionPolicyName(),
+      fallbackUsed:phase === 'late',
+      fallbackReason:phase === 'late'
+        ? 'AUTO_PROMOTED_STRICT_FORWARD_AFTER_V2_EDGE_WAIT'
+        : 'AUTO_PROMOTED_STRICT_FORWARD_15S_FIRST_LOCK',
+      accuracyQualification:'AUTO_PROMOTED_STRICT_FORWARD_100',
+      qualification:chosen.proof,
+      observedDelayMs:chosen.observedAt-row.roundStartMs,
+      independentFuse:circuit,
+    };
+    if (!freezeProductionLock(row, live)) continue;
+    fuse.recordLock(chosen.direction,row.roundStartMs);
+    log('auto_promoted_15s_production_lock',{
+      round:row.roundStartMs,candidateId:chosen.id,
+      direction:chosen.direction,source:chosen.source,
+      phase, frozenAt:chosen.observedAt,
+      evidence:chosen.proof,
+      priceNotice:'MIDPOINT_PROXY_NOT_EXECUTABLE_ASK_OR_REALIZED_PNL',
+    });
+    logProductionSignalState(live);
+    return {ok:true,live};
+  }
+  return null;
 }
 
 function productionSignalPayload(now = Date.now()) {
@@ -5096,8 +5152,10 @@ function productionSignalPayload(now = Date.now()) {
     return { ok: true, live: frozenLive };
   }
 
-  // Fifteen-second observations are captured for shadow learning only.
-  // Selective V2 and Edge Rescue retain first production-lock priority.
+  // A qualified 15s candidate locks first as soon as frozen at 15-20s.
+  // Unqualified / fused candidates never interfere with V2 or Edge Rescue.
+  const earlyPromoted = tryAutoPromoted15sLock(row, now, 'early');
+  if (earlyPromoted) return earlyPromoted;
 
   if (productionUsesSelectiveV2()) {
     if (!row) {
@@ -5210,54 +5268,10 @@ function productionSignalPayload(now = Date.now()) {
       return {ok:true,live};
     }
 
-    // Auto-promotion happens only AFTER both high-precision V2 layers declined.
-    // Every 15s model remains a frozen shadow candidate until >=100 strictly
-    // prospective official outcomes, directional gates, drift and price-proxy
-    // checks pass. Promotion/demotion is recalculated at every live opportunity.
-    // All original 30-minute, source-specific fuses stay unchanged.
-    if (now-row.roundStartMs >= 25000 && now-row.roundStartMs <= 35000) {
-      const forwardStatus = v3NoBase15sShadowSummary(rounds);
-      const promoted = selectForwardGated15sCandidates(row, forwardStatus, now);
-      for (const chosen of promoted.candidates) {
-        const fuse = chosen.id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
-          chosen.id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse :
-          lastResort15sFuses[chosen.id];
-        if (!fuse || chosen.source !== candidateProductionSource(chosen.id)) continue;
-        const stats = current03PmAgreeProductionFuseSummary(rounds, chosen.source);
-        const circuit = fuse.check(chosen.direction, stats, now);
-        if (!circuit.allowed) continue;
-        const live = {
-          round:row.roundStartMs,status:'LOCKED',
-          signal:{direction:chosen.direction,score:chosen.score,
-            confidence:null,modelProbability:null},
-          input:{round:row.roundStartMs},
-          generatedAt:chosen.observedAt,
-          source:chosen.source,
-          model:chosen.id,
-          modelVersion:V3_NO_BASE_15S_VERSION,
-          facts:row.v3NoBase15sShadow?.facts ?? null,
-          productionPolicy:productionPolicyName(),
-          fallbackUsed:true,
-          fallbackReason:'AUTO_PROMOTED_STRICT_FORWARD_AFTER_V2_EDGE_WAIT',
-          accuracyQualification:'AUTO_PROMOTED_STRICT_FORWARD_100',
-          qualification:chosen.proof,
-          observedDelayMs:chosen.observedAt-row.roundStartMs,
-          independentFuse:circuit,
-        };
-        if (freezeProductionLock(row, live)) {
-          fuse.recordLock(chosen.direction,row.roundStartMs);
-          log('auto_promoted_15s_production_lock',{
-            round:row.roundStartMs,candidateId:chosen.id,
-            direction:chosen.direction,source:chosen.source,
-            frozenAt:chosen.observedAt,
-            evidence:chosen.proof,
-            priceNotice:'MIDPOINT_PROXY_NOT_EXECUTABLE_ASK_OR_REALIZED_PNL',
-          });
-          logProductionSignalState(live);
-          return {ok:true,live};
-        }
-      }
-    }
+    // Only independently auto-promoted 15s strategies may rescue at 25-35s.
+    // This is a second opportunity, not a way to bypass the 100-round gate.
+    const latePromoted = tryAutoPromoted15sLock(row, now, 'late');
+    if (latePromoted) return latePromoted;
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']

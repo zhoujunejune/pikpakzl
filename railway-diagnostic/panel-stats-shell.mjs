@@ -48,7 +48,7 @@ const previewCard = `<div class="c" id="waitVisibilityCard">
 <div class="muted" style="margin-top:10px">候选方向、盘口倾向、生产已锁定方向是三种不同信息。候选仅按事前冻结记录计算；命中率采用系统登记的 Binance Prediction 结算，不代表独立审计认证。不会改变实际下单逻辑。</div>
 </div>`;
 
-const policyCard = \`<div class="c" id="signalPolicyCard">
+const policyCard = `<div class="c" id="signalPolicyCard">
 <div class="k">生产策略 · 晋级15秒信号优先（实时）</div>
 <div class="big" id="spTitle">正在读取晋级状态...</div>
 <div class="muted" style="margin-top:6px">只展示生产实际规则与已审核的候选资格；资格达标不代表本轮一定下单。</div>
@@ -71,9 +71,9 @@ const policyCard = \`<div class="c" id="signalPolicyCard">
 <tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">15秒模型</th><th style="padding:8px 6px">晋级资格</th><th style="padding:8px 6px">样本/100</th><th style="padding:8px 6px">总准确率</th><th style="padding:8px 6px">近30次</th><th style="padding:8px 6px">UP / DOWN</th><th style="padding:8px 6px">30分钟熔断</th></tr>
 </thead><tbody id="spRows"><tr><td colspan="7" style="padding:12px 6px">读取晋级记录中...</td></tr></tbody></table></div>
 <div class="muted" id="spNotice" style="margin-top:10px">未晋级策略仅保留观察记录。真实 LOCKED / WAIT 请看下方生产信号表；影子候选不等于实盘。</div>
-</div>\`;
+</div>`;
 
-const policyScript = \`<script>(function(){
+const policyScript = `<script>(function(){
 'use strict';
 function e(x){return document.getElementById(x)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -117,7 +117,7 @@ async function load(){
 }
 function boot(){load();setInterval(load,15000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
-})();</script>\`;
+})();</script>`;
 
 const previewScript = `<script>(function(){
 'use strict';

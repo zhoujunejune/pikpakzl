@@ -48,6 +48,7 @@ test('conservative full-wallet open stake exposure counts unique OPEN positions'
  assert.equal(r.openPositionCount,2);
  assert.equal(r.openExposureUsdt,3.65);
  assert.throws(()=>sumOpenExposure([{positionStatus:'OPEN',totalCost:'1'}]),/OPEN_POSITION_ID_MISSING/);
+ assert.throws(()=>sumOpenExposure([{tokenId:'a',totalCost:'1'}]),/OPEN_POSITION_STATUS_MISSING/);
  assert.throws(()=>sumOpenExposure([{tokenId:'a',positionStatus:'OPEN',totalCost:'-2'}]),/OPEN_TOTAL_COST_INVALID/);
  assert.throws(()=>sumOpenExposure([
   {tokenId:'a',positionStatus:'OPEN',totalCost:'1'},{tokenId:'a',positionStatus:'OPEN',totalCost:'2'}]),/OPEN_POSITION_DUPLICATE/);

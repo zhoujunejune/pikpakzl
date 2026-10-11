@@ -23,7 +23,7 @@ function simulate(){
  const requests=[];
  const context={
   document:{readyState:'complete',getElementById:id=>dom.get(id)||null},
-  setInterval:cb=>{context.tick=cb;return 0;},
+  setInterval:cb=>{if(!context.tick)context.tick=cb;return 0;},
   Date,Math,JSON,Number,String,Object,Array,Error,Boolean,isFinite,
  };
  class XHR{

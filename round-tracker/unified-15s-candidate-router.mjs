@@ -160,6 +160,19 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
   return {candidates:approved,reason:approved.length ? null : 'NO_FORWARD_QUALIFIED_MODEL'};
 }
 
+// Determine the winning already-risk-approved production route by user-defined
+// precedence. The first entry always wins, even if the other votes opposite.
+export function selectUserFirst15sWinner(allowed) {
+  if (!Array.isArray(allowed)) return null;
+  const accepted = allowed.filter(x =>
+    x?.chosen && FIRST_LAYER_15S_IDS.includes(x.chosen.id) &&
+    (x.chosen.direction === 'UP' || x.chosen.direction === 'DOWN'));
+  accepted.sort((a,b) =>
+    FIRST_LAYER_15S_IDS.indexOf(a.chosen.id) -
+    FIRST_LAYER_15S_IDS.indexOf(b.chosen.id));
+  return accepted[0] ?? null;
+}
+
 export function selectUserFirst15sCandidates(row, stats, now = Date.now()) {
   return selectForwardGated15sCandidates(row, stats, now, 'early', { userFirst:true });
 }

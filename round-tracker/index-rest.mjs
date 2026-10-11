@@ -85,12 +85,11 @@ const LOCK_QUALITY_BALANCED_CURRENT_SCORE_MIN = 0.50;
 const LOCK_QUALITY_MAX_DELAY_MS = 22000;
 const LOCK_QUALITY_REJECT_ABSORPTION = true;
 const LOCK_QUALITY_V2_VERSION = 'LOCK_QUALITY_SELECTIVE_V2';
-// Production kill switch defaults to ON: no Selective V2/Edge Rescue order until manually rearmed and verified.
-const SELECTIVE_V2_HARD_PAUSE = String(process.env.SELECTIVE_V2_HARD_PAUSE || '1') !== '0';
+// Selective V2 is rearmed automatically using per-direction official shadow proof.
+// Do not read the deprecated SELECTIVE_V2_HARD_PAUSE manual switch.
 const SELECTIVE_V2_SHADOW_RECOVERY_START_MS = Date.parse('2026-10-11T12:55:00Z');
 function selectiveV2LiveRisk(direction, excludeRound = null) {
   return selectiveV2HardFuseSummary(rounds.values(), direction, {
-    paused:SELECTIVE_V2_HARD_PAUSE,
     shadowStartMs:SELECTIVE_V2_SHADOW_RECOVERY_START_MS,
     excludeRound,
   });
@@ -5234,7 +5233,7 @@ function productionSignalPayload(now = Date.now()) {
       productionLockedAt: row.productionLockedAt ?? null,
     };
     // A frozen historical lock stays auditable but cannot re-enter the live order stream after a fuse.
-    if ((row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' || row.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY') &&
+    if (row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&
         selectiveV2LiveRisk(row.productionPrediction, row.roundStartMs).blocked) {
       const blocked = {...frozenLive, status:'WAIT', signal:null,
         waitReason:'SELECTIVE_V2_HARD_FUSE_FROZEN_LOCK_SUPPRESSED'};
@@ -5322,10 +5321,9 @@ function productionSignalPayload(now = Date.now()) {
       return { ok: true, live };
     }
 
-    // Preserve Selective V2 as the precision core. Only rescue a filtered
-    // base-direction signal when it falls inside the historically high-quality
-    // edge region and the independent strict-forward fuse is open.
-    const edgeRescue = baseDirection && q && !q.pass && !liveRisk?.blocked
+    // Edge Rescue is independent of the Selective V2 direction fuse.
+    // Keep Edge's original eligibility and its own timed/official-result fuse.
+    const edgeRescue = baseDirection && q && !q.pass
       ? evaluateSelectiveV2EdgeRescueRow(row, q)
       : null;
     const edgeFuse = edgeRescue?.decision === baseDirection

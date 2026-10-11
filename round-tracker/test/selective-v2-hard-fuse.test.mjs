@@ -1,61 +1,85 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { selectiveV2HardFuseSummary } from '../selective-v2-hard-fuse.mjs';
 const START = Date.parse('2026-10-11T13:00:00Z');
+const ACTIVATION = START + 20*300000;
 function settled(i, dir, hit, live=true, shadow=false) {
-  const roundStartMs = START + i*300000;
-  const row = {
-    roundStartMs, actual:hit?dir:(dir==='UP'?'DOWN':'UP'),
+  const roundStartMs=START+i*300000;
+  const actual=hit?dir:(dir==='UP'?'DOWN':'UP');
+  const row={
+    roundStartMs,actual,officialDirection:actual,
+    resolutionEvidence:'OFFICIAL_'+actual+':variantData.startPrice_endPrice:STRICT_ROUND_ALIGNED_TOPIC',
+    officialSettlementAudit:{
+      sourceEndpoint:'/sapi/v1/w3w/wallet/prediction/market/detail',
+      observedAt:new Date(roundStartMs+301000).toISOString(),
+    },
     productionSource:live?'LOCK_QUALITY_SELECTIVE_V2_PRIMARY':null,
     productionPrediction:live?dir:null,
     productionResult:live?(hit?'HIT':'MISS'):'NO_DECISION',
-    productionLockedAt:roundStartMs+20000,
-    officialDirection:hit?dir:(dir==='UP'?'DOWN':'UP'),
-    resolutionEvidence:'OFFICIAL_'+(hit?dir:(dir==='UP'?'DOWN':'UP'))+':variantData.startPrice_endPrice:STRICT_ROUND_ALIGNED_TOPIC',
-    officialSettlementAudit:{sourceEndpoint:'/sapi/v1/w3w/wallet/prediction/market/detail',
-      observedAt:new Date(roundStartMs+301000).toISOString()},
+    productionLockedAt:live?roundStartMs+20000:null,
   };
-  if(shadow) row.selectiveV2HardFuseShadow={direction:dir,frozenAt:roundStartMs+22000};
+  if(shadow)row.selectiveV2HardFuseShadow={direction:dir,frozenAt:roundStartMs+22000};
   return row;
 }
-test('kills live signals by default even when historical hit rate is high',()=>{
-  const rounds=Array.from({length:20},(_,i)=>settled(i,'UP',true));
-  const r=selectiveV2HardFuseSummary(rounds,'UP',{shadowStartMs:START});
-  assert.equal(r.blocked,true);
-  assert.ok(r.reasons.includes('MANUAL_SELECTIVE_V2_LIVE_PAUSE'));
+const status=(rows,dir)=>selectiveV2HardFuseSummary(rows,dir,{
+  activationMs:ACTIVATION,shadowStartMs:ACTIVATION,
 });
-test('separately trips the losing direction at 3 consecutive misses',()=>{
-  const rounds=Array.from({length:10},(_,i)=>settled(i,'DOWN',i<7));
-  const r=selectiveV2HardFuseSummary(rounds,'DOWN',{paused:false,shadowStartMs:START});
-  assert.equal(r.production.consecutiveMisses,3);
-  assert.equal(r.production.direction10.accuracy,0.7);
-  assert.ok(r.reasons.includes('DIRECTION_MISS_STREAK_3'));
-  assert.equal(r.blocked,true);
+test('no manual pause: healthy direction passes immediately, weak direction fuses',()=>{
+  const up=Array.from({length:10},(_,i)=>settled(i,'UP',i!==3&&i!==7));
+  const down=Array.from({length:10},(_,i)=>settled(i+10,'DOWN',i===1||i===4||i===6));
+  const rows=[...up,...down];
+  const u=status(rows,'UP'),d=status(rows,'DOWN');
+  assert.equal(u.blocked,false);
+  assert.equal(u.requiresManualApproval,false);
+  assert.equal(d.blocked,true);
+  assert.equal(d.shadow.remainingTo20,20);
 });
-test('insufficient or hindsight-created shadow records cannot release fuse',()=>{
-  const rounds=Array.from({length:20},(_,i)=>settled(i,'UP',true,false,true));
-  rounds[0].selectiveV2HardFuseShadow.frozenAt=rounds[0].roundStartMs+320000;
-  const r=selectiveV2HardFuseSummary(rounds,'UP',{paused:false,shadowStartMs:START});
-  assert.equal(r.shadow.samples,19);
-  assert.equal(r.shadow.recoveryReady,false);
-  assert.equal(r.blocked,true);
-});
-test('new independent official paper record can satisfy readiness, not manual pause',()=>{
-  const rounds=Array.from({length:20},(_,i)=>settled(i,'UP',i!==3 && i!==6 && i!==10 && i!==15,false,true));
-  const r=selectiveV2HardFuseSummary(rounds,'UP',{paused:true,shadowStartMs:START});
-  assert.equal(r.shadow.recoveryReady,true);
-  assert.equal(r.blocked,true);
-  const rearmed=selectiveV2HardFuseSummary(rounds,'UP',{paused:false,shadowStartMs:START});
-  assert.equal(rearmed.blocked,false);
-});
-
-test('overall warning must not fuse healthy UP when DOWN loses',()=>{
-  const upLive=Array.from({length:10},(_,i)=>settled(i,'UP',true));
-  const downLive=Array.from({length:10},(_,i)=>settled(i+10,'DOWN',false));
-  const newPaperUp=Array.from({length:20},(_,i)=>settled(i+20,'UP',true,false,true));
-  const r=selectiveV2HardFuseSummary([...upLive,...downLive,...newPaperUp],'UP',{paused:false,shadowStartMs:START});
-  assert.equal(r.production.global10.accuracy,0);
-  assert.equal(r.production.direction10.accuracy,1);
-  assert.equal(r.shadow.recoveryReady,true);
+test('DOWN automatically returns after 20 NEW official frozen paper results',()=>{
+  const hist=Array.from({length:10},(_,i)=>settled(i,'DOWN',i===1||i===4||i===6));
+  const paper=Array.from({length:20},(_,i)=>settled(i+20,'DOWN',i%5!==3,false,true));
+  assert.equal(status([...hist,...paper.slice(0,19)],'DOWN').blocked,true);
+  const r=status([...hist,...paper],'DOWN');
   assert.equal(r.blocked,false);
+  assert.equal(r.autoReleases,1);
+  assert.equal(r.shadow.recovery20.samples,20);
+  assert.equal(r.shadow.recovery20.accuracy,0.8);
+  assert.equal(r.requiresManualApproval,false);
+});
+test('frozen record after official settlement never counts toward recovery',()=>{
+  const hist=Array.from({length:10},(_,i)=>settled(i,'DOWN',i===1||i===4||i===6));
+  const paper=Array.from({length:20},(_,i)=>settled(i+20,'DOWN',true,false,true));
+  paper[4].selectiveV2HardFuseShadow.frozenAt=paper[4].roundStartMs+302000;
+  const r=status([...hist,...paper],'DOWN');
+  assert.equal(r.blocked,true);
+  assert.equal(r.shadow.samples,19);
+  assert.equal(r.shadow.remainingTo20,1);
+});
+test('a new 3-miss streak after automatic release fuses again and needs fresh recovery',()=>{
+  const hist=Array.from({length:10},(_,i)=>settled(i,'DOWN',i===1||i===4||i===6));
+  const paper=Array.from({length:20},(_,i)=>settled(i+20,'DOWN',true,false,true));
+  const losses=Array.from({length:3},(_,i)=>settled(40+i,'DOWN',false,true,true));
+  let r=status([...hist,...paper,...losses],'DOWN');
+  assert.equal(r.blocked,true);
+  assert.equal(r.tripCount,2);
+  assert.equal(r.autoReleases,1);
+  assert.equal(r.shadow.samples,0); // cannot recycle earlier proof
+  const newPaper=Array.from({length:20},(_,i)=>settled(i+44,'DOWN',true,false,true));
+  r=status([...hist,...paper,...losses,...newPaper],'DOWN');
+  assert.equal(r.blocked,false);
+  assert.equal(r.autoReleases,2);
+});
+test('global deterioration does not stop a healthy opposite side',()=>{
+  const up=Array.from({length:10},(_,i)=>settled(i,'UP',true));
+  const down=Array.from({length:10},(_,i)=>settled(i+10,'DOWN',false));
+  const r=status([...up,...down],'UP');
+  assert.equal(r.production.global10.accuracy,0);
+  assert.equal(r.blocked,false);
+});
+test('Edge Rescue has its own unchanged routing and frozen lock path',()=>{
+  const code=fs.readFileSync(new URL('../index-rest.mjs',import.meta.url),'utf8');
+  assert.match(code,/const edgeRescue = baseDirection && q && !q.pass\s*\? evaluateSelectiveV2EdgeRescueRow\(row, q\)/);
+  assert.match(code,/const edgeFuse = edgeRescue\?\.decision === baseDirection\s*\? selectiveV2EdgeRescueFuseState\(baseDirection\)/);
+  assert.match(code,/if \(\s*row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&\s*selectiveV2LiveRisk/);
+  assert.doesNotMatch(code,/const edgeRescue = baseDirection && q && !q.pass && !liveRisk/);
 });

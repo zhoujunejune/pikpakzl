@@ -1,6 +1,9 @@
-// Isolated, fail-closed Selective V2 live gate. Paper evaluation cannot authorize an order.
-export const SELECTIVE_V2_FUSE_VERSION = 'SELECTIVE_V2_HARD_FUSE_V1';
+// Selective V2 only. Edge Rescue and promoted 15s strategies use their own fuses.
+export const SELECTIVE_V2_FUSE_VERSION = 'SELECTIVE_V2_AUTO_RECOVERY_V2';
+const DEFAULT_ACTIVATION = Date.parse('2026-10-11T13:26:00Z');
+const DEFAULT_SHADOW_START = Date.parse('2026-10-11T12:55:00Z');
 const directionOk = x => x === 'UP' || x === 'DOWN';
+const outcome = d => d === 'HIT' || d === 'MISS';
 const strictOfficial = row =>
   directionOk(row?.actual) &&
   row?.officialDirection === row.actual &&
@@ -9,63 +12,112 @@ const strictOfficial = row =>
 const stat = rows => {
   const samples = rows.length;
   const hits = rows.filter(x => x.hit).length;
-  return {samples, hits, misses:samples-hits, accuracy:samples?Number((hits/samples).toFixed(4)):null};
+  return {samples,hits,misses:samples-hits,accuracy:samples?Number((hits/samples).toFixed(4)):null};
 };
-const tail = (rows, n) => rows.slice(-n);
-const missStreak = rows => {
-  let misses = 0;
-  for (let i=rows.length-1; i>=0 && !rows[i].hit; i--) misses++;
+const last = (xs,n) => xs.slice(-n);
+const missStreak = xs => {
+  let misses=0;
+  for(let i=xs.length-1;i>=0 && !xs[i].hit;i--) misses++;
   return misses;
 };
+const degraded = xs => (xs.length >= 10 && stat(last(xs,10)).accuracy < 0.60) ||
+  missStreak(xs) >= 3;
+const isLive = row => row?.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&
+  directionOk(row.productionPrediction) && outcome(row.productionResult) &&
+  strictOfficial(row) &&
+  Number.isFinite(Number(row.productionLockedAt || row.productionGeneratedAt)) &&
+  Number(row.productionLockedAt || row.productionGeneratedAt) >= Number(row.roundStartMs) &&
+  Number(row.productionLockedAt || row.productionGeneratedAt) < Number(row.roundStartMs)+300000;
+const isPaper = (row,d,shadowStartMs) => {
+  const paper = row?.selectiveV2HardFuseShadow;
+  const officialObservedAt = Date.parse(String(row?.officialSettlementAudit?.observedAt || ''));
+  const frozenAt = Number(paper?.frozenAt);
+  return directionOk(paper?.direction) && paper.direction === d &&
+    Number(row.roundStartMs) >= shadowStartMs &&
+    Number.isFinite(frozenAt) && frozenAt >= Number(row.roundStartMs) &&
+    frozenAt < Number(row.roundStartMs)+300000 &&
+    Number.isFinite(officialObservedAt) && frozenAt < officialObservedAt &&
+    strictOfficial(row);
+};
+function verifiedRecovery(xs) {
+  const r20=stat(last(xs,20)),r10=stat(last(xs,10));
+  return r20.samples===20 && r20.accuracy>=0.75 &&
+    r10.accuracy>=0.70 && missStreak(xs)<3;
+}
 
-// Only immutable, pre-settlement, real-production decisions count as live evidence.
-// Shadow evidence must be frozen within its own round, before official settlement.
-export function selectiveV2HardFuseSummary(rounds, direction, {
-  paused = true,
-  shadowStartMs = Date.parse('2026-10-11T12:55:00Z'),
-  excludeRound = null,
-} = {}) {
-  const all = Array.from(rounds || []).filter(x => x && Number(x.roundStartMs) !== Number(excludeRound));
-  const live = all
-    .filter(x => x.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&
-      directionOk(x.productionPrediction) &&
-      (x.productionResult === 'HIT' || x.productionResult === 'MISS') &&
-      strictOfficial(x) &&
-      Number(x.productionLockedAt || x.productionGeneratedAt || 0) < x.roundStartMs + 300000)
-    .sort((a,b)=>a.roundStartMs-b.roundStartMs)
-    .map(x=>({direction:x.productionPrediction,hit:x.productionResult==='HIT',round:x.roundStartMs}));
-  const filtered = live.filter(x=>x.direction===direction);
-  const global10 = stat(tail(live, 10));
-  const direction10 = stat(tail(filtered,10));
-  const consecutiveMisses = missStreak(filtered);
-  const globallyDegraded = global10.samples===10 && global10.accuracy < 0.60;
-  const directionDegraded = direction10.samples===10 && direction10.accuracy < 0.60;
-  const streakTripped = consecutiveMisses >= 3;
+// Evaluate a deterministic round-aligned state machine, not a permanent live
+// accuracy check: frozen losing production history must not block recovery forever.
+// On each fuse, only fresh pre-settlement paper records AFTER that fuse can rearm.
+// No manual unlock, no global cross-direction kill switch.
+export function selectiveV2HardFuseSummary(rounds,direction,{
+  activationMs=DEFAULT_ACTIVATION,
+  shadowStartMs=DEFAULT_SHADOW_START,
+  excludeRound=null,
+}={}) {
+  const rows=Array.from(rounds||[])
+    .filter(x => x && Number.isFinite(Number(x.roundStartMs)) &&
+      Number(x.roundStartMs)!==Number(excludeRound))
+    .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
+  const live=rows.filter(isLive).map(x=>({
+    direction:x.productionPrediction,hit:x.productionResult==='HIT',round:Number(x.roundStartMs),
+  }));
+  const global10=stat(last(live,10));
+  const ofDirection=live.filter(x=>x.direction===direction);
+  const direction10=stat(last(ofDirection,10));
+  const consecutiveMisses=missStreak(ofDirection);
+  if(!directionOk(direction)) return {
+    version:SELECTIVE_V2_FUSE_VERSION,direction,blocked:true,reasons:['INVALID_DIRECTION'],
+    production:{global10,direction10,consecutiveMisses},shadow:{recoveryReady:false},
+  };
 
-  const shadow = all.filter(x => {
-    const proof = x.selectiveV2HardFuseShadow;
-    return directionOk(proof?.direction) && proof.direction === direction &&
-      Number(x.roundStartMs)>=shadowStartMs &&
-      Number(proof.frozenAt)>=Number(x.roundStartMs) &&
-      Number(proof.frozenAt)<Number(x.roundStartMs)+300000 &&
-      Number(proof.frozenAt)<Number(x.officialSettlementAudit?.observedAt ? Date.parse(x.officialSettlementAudit.observedAt) : 0) &&
-      strictOfficial(x);
-  }).sort((a,b)=>a.roundStartMs-b.roundStartMs)
-    .map(x=>({hit:x.selectiveV2HardFuseShadow.direction===x.actual,round:x.roundStartMs}));
-  const recovery20 = stat(tail(shadow,20));
-  const recovery10 = stat(tail(shadow,10));
-  const recoveryReady = recovery20.samples===20 && recovery20.accuracy>=0.75 &&
-    recovery10.accuracy>=0.70 && missStreak(shadow)<3;
-  const reasons = [];
-  if (paused) reasons.push('MANUAL_SELECTIVE_V2_LIVE_PAUSE');
-  if (globallyDegraded) reasons.push('GLOBAL_LAST10_BELOW_60');
-  if (directionDegraded) reasons.push('DIRECTION_LAST10_BELOW_60');
-  if (streakTripped) reasons.push('DIRECTION_MISS_STREAK_3');
-  if (!recoveryReady) reasons.push('SHADOW_RECOVERY_NOT_VERIFIED');
+  const liveBefore=ofDirection.filter(x=>x.round<activationMs);
+  let window=last(liveBefore,10);
+  let blocked=degraded(window);
+  let trippedAt=blocked?activationMs-1:null;
+  let recoveredAt=null;
+  let autoReleases=0,tripCount=blocked?1:0;
+  let recoveryProof=[];
+  let latestQualifiedProof=[];
+  const byRound=new Map(ofDirection.map(x=>[x.round,x]));
+  for(const row of rows) {
+    const round=Number(row.roundStartMs);
+    if(round<activationMs) continue;
+    const liveRow=byRound.get(round);
+    if(liveRow && !blocked) {
+      window.push(liveRow);
+      window=last(window,10);
+      if(degraded(window)) {
+        blocked=true;trippedAt=round;tripCount++;
+        recoveryProof=[];
+      }
+    }
+    // Paper and live observations for the same round cannot reverse that round's fuse.
+    if(blocked && round>trippedAt && isPaper(row,direction,shadowStartMs)) {
+      recoveryProof.push({hit:row.selectiveV2HardFuseShadow.direction===row.actual,round});
+      if(verifiedRecovery(recoveryProof)) {
+        blocked=false;
+        recoveredAt=round;
+        autoReleases++;
+        latestQualifiedProof=last(recoveryProof,20);
+        recoveryProof=[];
+        window=[]; // reset stale loss window; new real orders form a fresh rolling window
+      }
+    }
+  }
+  const proofWindow=blocked?recoveryProof:latestQualifiedProof;
+  const recovery20=stat(last(proofWindow,20));
+  const recovery10=stat(last(proofWindow,10));
+  const recoveryReady=!blocked || verifiedRecovery(proofWindow);
+  const reasons=blocked?['SELECTIVE_V2_DIRECTION_FUSED','WAITING_NEW_OFFICIAL_SHADOW_RECOVERY']:[];
+  if(global10.samples===10 && global10.accuracy<0.60) reasons.push('GLOBAL_DRIFT_WARNING_ONLY');
   return {
-    // Overall drift is a dashboard warning: a losing DOWN side must not fuse healthy UP.
-    version:SELECTIVE_V2_FUSE_VERSION, direction, blocked:Boolean(paused || !recoveryReady || directionDegraded || streakTripped),
-    reasons, production:{global10,direction10,consecutiveMisses}, shadow:{startMs:shadowStartMs,samples:shadow.length,recovery20,recovery10,recoveryReady},
-    policy:'LIVE_PAUSE_AND_DIRECTION_FUSE_REQUIRE_NEW_STRICT_OFFICIAL_SHADOW_PROOF',
+    version:SELECTIVE_V2_FUSE_VERSION,direction,blocked,reasons,
+    production:{global10,direction10,consecutiveMisses,postResetWindow:stat(window),
+      recentLiveMissStreak:missStreak(window)},
+    shadow:{startMs:shadowStartMs,samples:proofWindow.length,recovery20,recovery10,
+      recoveryReady,remainingTo20:blocked?Math.max(0,20-proofWindow.length):0},
+    trippedAt,recoveredAt,tripCount,autoReleases,
+    requiresManualApproval:false,
+    policy:'AUTO_DIRECTION_FUSE_AND_AUTO_RELEASE_ON_NEW_OFFICIAL_PAPER_20_75_RECENT10_70',
   };
 }

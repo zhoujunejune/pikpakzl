@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 
 const CONTROL_FILE = '/tmp/risk-control.json';
+const STATUS_FILE = '/tmp/risk-runtime-status.json';
 const CHECK_MS = 300;
+const STATUS_MS = 2000;
 
 function envBool(name, fallback = 'false') {
   return !['0', 'false', 'off', 'no'].includes(String(process.env[name] || fallback).toLowerCase());
@@ -53,12 +55,39 @@ let childKey = null;
 let desired = readConfig();
 let stopping = false;
 
+let lastWorkerStartedAt = null;
+function writeStatus() {
+  const config = readConfig();
+  const enabled = config.takeProfitEnabled || config.stopLossEnabled;
+  const running = Boolean(child && !child.killed && child.exitCode === null);
+  const payload = {
+    at: new Date().toISOString(),
+    enabled,
+    workerRunning: running,
+    configApplied: enabled ? running && childKey === configKey(config) : !running,
+    controllerPid: process.pid,
+    workerPid: running ? child.pid : null,
+    lastWorkerStartedAt,
+    configurationSource: config.source,
+    configUpdatedAt: config.updatedAt,
+    transitioning: enabled && (!running || childKey !== configKey(config)),
+  };
+  try {
+    const temp = STATUS_FILE + '.tmp-' + process.pid;
+    fs.writeFileSync(temp, JSON.stringify(payload), 'utf8');
+    fs.renameSync(temp, STATUS_FILE);
+  } catch (e) {
+    log('risk_runtime_status_write_failed', { error: e?.message || String(e) });
+  }
+}
+
 function log(event, extra = {}) {
   console.log(JSON.stringify({ event, controller: 'risk-runner', at: new Date().toISOString(), ...extra }));
 }
 
 function startWorker(cfg) {
   childKey = configKey(cfg);
+  lastWorkerStartedAt = new Date().toISOString();
   child = spawn(process.execPath, ['risk-worker.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -106,11 +135,14 @@ log('risk_runtime_controller_started', {
 });
 
 const timer = setInterval(reconcile, CHECK_MS);
+const statusTimer = setInterval(writeStatus, STATUS_MS);
 reconcile();
+writeStatus();
 
 function shutdown(signal) {
   stopping = true;
   clearInterval(timer);
+  clearInterval(statusTimer);
   if (child) child.kill('SIGTERM');
   log('risk_runtime_controller_stopped', { signal });
   setTimeout(() => process.exit(0), 150).unref();

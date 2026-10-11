@@ -196,6 +196,7 @@ export function summarizeNoBase15s(rounds){
       if(r.v3NoBase15sShadow.candidates[cfg.id].decision===r.actual)runningHits++;
       if(runningHits/runningSamples<0.70)bootstrapRevoked=true;
     }
+    // A missing baseline must never grant special access.
     const oneTimeBootstrapEligible=ONE_TIME_15S_BOOTSTRAP_IDS.has(cfg.id)&&
       initial.samples>0&&initial.accuracy>=0.70&&!bootstrapRevoked;
     const qualified=total.samples>=V3_NO_BASE_15S_FORWARD_TARGET&&total.accuracy>=0.75&&

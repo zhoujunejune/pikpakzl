@@ -4451,7 +4451,7 @@ async function settlePendingRounds() {
         }
         if (row?.v3NoBase15sShadow?.version === V3_NO_BASE_15S_VERSION &&
             row.v3NoBase15sShadow.baseAbsentAtObservation === true) {
-          const earlyTrial = v3NoBase15sShadowSummary(rounds);
+          const earlyTrial = durable15sSummary();
           if (earlyTrial.candidates.some(c => c.strictForwardSamples > 0 &&
               (c.strictForwardSamples % 5 === 0 || c.strictForwardSamples === V3_NO_BASE_15S_FORWARD_TARGET))) {
             log('v3_no_base_15s_strict_forward_progress', earlyTrial);
@@ -5024,8 +5024,80 @@ function logProductionSignalState(live) {
   });
 }
 
+// Durable, monotonic bootstrap ledger. Missing/corrupt/unwritable storage fails closed.
+const BOOTSTRAP_LEDGER_FILE = process.env.BOOTSTRAP_LEDGER_FILE || '/data/15s-bootstrap-ledger.json';
+let bootstrapLedger = null;
+try {
+  const parsed = JSON.parse(fs.readFileSync(BOOTSTRAP_LEDGER_FILE, 'utf8'));
+  if (parsed?.version === 1 && parsed?.candidates && typeof parsed.candidates === 'object') bootstrapLedger = parsed;
+} catch (_) { /* First boot may initialize only with complete pre-cutoff evidence. */ }
+function durable15sSummary() {
+  const summary = v3NoBase15sShadowSummary(rounds);
+  const cutoff = Date.parse('2026-10-11T07:02:27.939Z');
+  const ids = new Set(['BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
+    'PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08',
+    'PM_REGIME35_SUPPORT08','PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15']);
+  const next = bootstrapLedger ? structuredClone(bootstrapLedger) : {version:1,candidates:{}};
+  let changed = false;
+  const all = Array.from(rounds.values()).filter(r => r?.roundStartMs >= cutoff &&
+    ['UP','DOWN'].includes(r?.actual) && r.officialDirection === r.actual &&
+    String(r.resolutionEvidence||'').startsWith('OFFICIAL_'+r.actual+':') &&
+    String(r.resolutionEvidence||'').includes('STRICT_ROUND_ALIGNED_TOPIC') &&
+    r.v3NoBase15sShadow?.version === V3_NO_BASE_15S_VERSION &&
+    r.v3NoBase15sShadow.inputFrozenBeforeSettlement === true &&
+    r.v3NoBase15sShadow.baseAbsentAtObservation === true &&
+    Number(r.v3NoBase15sShadow.observedAt)-Number(r.roundStartMs)>=15000 &&
+    Number(r.v3NoBase15sShadow.observedAt)-Number(r.roundStartMs)<=17000)
+    .sort((a,b)=>a.roundStartMs-b.roundStartMs);
+  for (const candidate of summary.candidates) {
+    if (!ids.has(candidate.candidateId)) continue;
+    const id = candidate.candidateId;
+    let state = next.candidates[id];
+    if (!state) {
+      // No historic pre-cutoff baseline means a fresh deployment cannot
+      // manufacture a one-time grant after evidence has disappeared.
+      const initial = Array.from(rounds.values()).filter(r => r.roundStartMs < cutoff &&
+        r.v3NoBase15sShadow?.candidates?.[id] && ['UP','DOWN'].includes(r.actual) &&
+        r.officialDirection === r.actual &&
+        String(r.resolutionEvidence||'').includes('STRICT_ROUND_ALIGNED_TOPIC') &&
+        ['UP','DOWN'].includes(r.v3NoBase15sShadow.candidates[id].decision));
+      const hits = initial.filter(r=>r.v3NoBase15sShadow.candidates[id].decision===r.actual).length;
+      state = {hits,samples:initial.length,revoked:initial.length===0 || hits/initial.length<0.70,processed:[]};
+      next.candidates[id] = state; changed = true;
+    }
+    const processed = new Set(state.processed);
+    for (const row of all) {
+      const direction = row.v3NoBase15sShadow.candidates?.[id]?.decision;
+      if (!['UP','DOWN'].includes(direction)) continue;
+      const key = String(row.roundStartMs);
+      if (processed.has(key)) continue;
+      state.samples++; if (direction === row.actual) state.hits++;
+      processed.add(key); changed = true;
+      if (state.hits/state.samples < 0.70) state.revoked = true;
+    }
+    state.processed = Array.from(processed);
+    candidate.oneTimeBootstrapRevoked = state.revoked;
+    candidate.oneTimeBootstrapEligible = !state.revoked;
+    candidate.oneTimeBootstrapDurableSamples = state.samples;
+    candidate.oneTimeBootstrapDurableAccuracy = state.samples ? state.hits/state.samples : null;
+  }
+  if (changed) {
+    try {
+      fs.mkdirSync(BOOTSTRAP_LEDGER_FILE.slice(0,BOOTSTRAP_LEDGER_FILE.lastIndexOf('/')), {recursive:true});
+      const temp = BOOTSTRAP_LEDGER_FILE+'.tmp-'+process.pid;
+      fs.writeFileSync(temp,JSON.stringify(next),'utf8');
+      fs.renameSync(temp,BOOTSTRAP_LEDGER_FILE);
+      bootstrapLedger=next;
+    } catch(e) {
+      log('bootstrap_ledger_persist_failed',{error:String(e)});
+      for(const c of summary.candidates) if(ids.has(c.candidateId)) c.oneTimeBootstrapEligible=false;
+    }
+  }
+  return summary;
+}
+
 function all15sCandidateRegistryStats() {
-  const shadow = v3NoBase15sShadowSummary(rounds);
+  const shadow = durable15sSummary();
   const byId = new Map(shadow.candidates.map(x => [x.candidateId, x]));
   const status = ALL_15S_IDS.map(id => {
     const manual = id === PM_CURRENT25_SUPPORT08_MODEL || id === CURRENT03_PM_AGREE_MODEL;
@@ -5069,7 +5141,7 @@ function tryAutoPromoted15sLock(row, now, phase) {
   const eligibleWindow = phase === 'early' ? elapsed >= 15000 && elapsed <= 20000 :
     phase === 'late' ? elapsed >= 25000 && elapsed <= 35000 : false;
   if (!eligibleWindow || !row.v3NoBase15sShadow) return null;
-  const forwardStatus = v3NoBase15sShadowSummary(rounds);
+  const forwardStatus = durable15sSummary();
   const promoted = selectForwardGated15sCandidates(row, forwardStatus, now, phase);
   for (const chosen of promoted.candidates) {
     const fuse = chosen.id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
@@ -5654,7 +5726,7 @@ const signalHttpServer = http.createServer((req, res) => {
         noBaseShadow:selectiveV2NoBaseShadowSummary(),
         noBaseContest:selectiveV2NoBaseContestSummary(),
         v3NoBase20sRescue:v3NoBase20sShadowSummary(rounds),
-        v3NoBase15sRescue:v3NoBase15sShadowSummary(rounds),
+        v3NoBase15sRescue:durable15sSummary(),
         current03PmAgree15sProduction:{...current03PmAgreeProductionFuseSummary(rounds), timedFuse:timedCurrent03PmFuse.status()},
         pmCurrent25Support0815sProduction:{...current03PmAgreeProductionFuseSummary(rounds, PM_CURRENT25_SUPPORT08_SOURCE), timedFuse:timedPmCurrent25Fuse.status()},
         all15sCandidateRegistry:all15sCandidateRegistryStats(),
@@ -5731,7 +5803,7 @@ const signalHttpServer = http.createServer((req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/v3-no-base-15s-stats') {
     res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
-    return res.end(JSON.stringify(v3NoBase15sShadowSummary(rounds)));
+    return res.end(JSON.stringify(durable15sSummary()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v3-trend-band-forward-stats') {

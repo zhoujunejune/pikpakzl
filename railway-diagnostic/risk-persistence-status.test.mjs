@@ -51,7 +51,7 @@ test('watchdog emits read-only heartbeat and UI shows not just enabled switch',(
  assert.match(control,/RISK_MONITOR_STATUS_UNAVAILABLE/);
  assert.match(control,/Date\.now\(\) - at > 12000/);
  assert.match(control,/riskLiveStatus/);
- assert.match(control,/id="quickRiskState"/);
+ assert.match(page,/id="quickRiskState"/);
  assert.match(control,/风控运行状态：监控进程在线、设置已加载（不代表卖单一定成交）/);
 });
 

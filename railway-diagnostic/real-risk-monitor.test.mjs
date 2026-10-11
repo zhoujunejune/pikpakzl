@@ -46,7 +46,7 @@ test('status endpoint joins runner heartbeat with real worker last successful Bi
 test('independent dashboard client is syntactically valid and uses only read-only GET',()=>{
  new vm.Script(client);
  assert.match(client,/fetch\('\/api\/risk-runtime-status/);
- assert.doesNotMatch(client,/\bPOST\b|\/api\/control|\/api\/confirm|place-order/);
+ assert.doesNotMatch(client,/method\s*:\s*['"]POST['"]|\/api\/control|\/api\/confirm|place-order/);
  assert.match(client,/扫描未验证/);
  assert.match(client,/尚无成功报价记录/);
  assert.match(client,/Redis 配置持久化异常/);

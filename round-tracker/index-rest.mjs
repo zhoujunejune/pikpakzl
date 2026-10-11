@@ -20,7 +20,7 @@ import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
 import { selectiveV2HardFuseSummary } from './selective-v2-hard-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
 import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL } from './pm-current25-support08-production.mjs';
-import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, oneTimeOrStrict15sProofPass, selectForwardGated15sCandidates, candidateProductionSource } from './unified-15s-candidate-router.mjs';
+import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, oneTimeOrStrict15sProofPass, selectForwardGated15sCandidates, selectUserFirst15sCandidates, userFirst15sProofPass, FIRST_LAYER_15S_IDS, candidateProductionSource } from './unified-15s-candidate-router.mjs';
 import { lastResortSource } from './last-resort-15s-backups.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
@@ -5137,11 +5137,14 @@ function all15sCandidateRegistryStats() {
     const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
       id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse : lastResort15sFuses[id];
     const proof = byId.get(id);
-    const eligible = oneTimeOrStrict15sProofPass(proof);
+    const firstLayerEligible = userFirst15sProofPass(proof);
+    const eligible = firstLayerEligible || oneTimeOrStrict15sProofPass(proof);
     return {
       candidateId:id,
       source,
-      entryPolicy:'AUTO_PROMOTE_15S_FIRST_IF_STRICT_FORWARD_QUALIFIED',
+      entryPolicy:FIRST_LAYER_15S_IDS.includes(id) ? 'USER_FIRST_15S_FORWARD_70_GATED' : 'AUTO_PROMOTE_15S_FIRST_IF_STRICT_FORWARD_QUALIFIED',
+      firstLayerPriority:FIRST_LAYER_15S_IDS.indexOf(id) + 1 || null,
+      firstLayerEligible,
       eligibleForProduction:eligible,
       forwardQualified:forward15sProofPass(proof),
       oneTimeBootstrapEligible:proof?.oneTimeBootstrapEligible === true,
@@ -5157,7 +5160,9 @@ function all15sCandidateRegistryStats() {
     userOptInCandidates:0,
     forwardGatedCandidates:status.length,
     forwardQualifiedCandidates:status.filter(x=>x.forwardQualified).length,
-    productionRoute:'QUALIFIED_15S_15_TO_20S_THEN_SELECTIVE_V2_EDGE_THEN_QUALIFIED_15S_25_TO_35S',
+    productionRoute:'USER_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_EDGE_THEN_LATE_15S',
+    firstLayerCandidates:[...FIRST_LAYER_15S_IDS],
+    firstLayerWindowMs:[15000,20000],
     candidates:status,
   };
 }
@@ -5168,14 +5173,30 @@ function all15sCandidateRegistryStats() {
 // If nothing qualifies by 20s, V2 + Edge Rescue retain their 22s path;
 // previously qualified 15s candidates can still rescue between 25-35s.
 function tryAutoPromoted15sLock(row, now, phase) {
+  return tryPriorityAware15sLock(row, now, phase, false);
+}
+
+function tryUserFirst15sLock(row, now) {
+  return tryPriorityAware15sLock(row, now, 'early', true);
+}
+
+function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
   if (!row || !productionUsesSelectiveV2()) return null;
   const elapsed = now-row.roundStartMs;
   const eligibleWindow = phase === 'early' ? elapsed >= 15000 && elapsed <= 20000 :
     phase === 'late' ? elapsed >= 25000 && elapsed <= 35000 : false;
   if (!eligibleWindow || !row.v3NoBase15sShadow) return null;
   const forwardStatus = durable15sSummary();
-  const promoted = selectForwardGated15sCandidates(row, forwardStatus, now, phase);
-  for (const chosen of promoted.candidates) {
+  const promoted = firstLayer
+    ? selectUserFirst15sCandidates(row, forwardStatus, now)
+    : selectForwardGated15sCandidates(row, forwardStatus, now, phase);
+  // These two candidates belong exclusively to the new first layer at 15s.
+  // Ordinary early fallback must not reintroduce a rejected/conflicting lock.
+  const candidates = firstLayer || phase !== 'early'
+    ? promoted.candidates
+    : promoted.candidates.filter(x => !FIRST_LAYER_15S_IDS.includes(x.id));
+  const allowed = [];
+  for (const chosen of candidates) {
     const fuse = chosen.id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
       chosen.id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse :
       lastResort15sFuses[chosen.id];
@@ -5183,6 +5204,16 @@ function tryAutoPromoted15sLock(row, now, phase) {
     const stats = current03PmAgreeProductionFuseSummary(rounds, chosen.source);
     const circuit = fuse.check(chosen.direction, stats, now);
     if (!circuit.allowed) continue;
+    allowed.push({chosen,fuse,circuit});
+    if (!firstLayer) break;
+  }
+  // A first-layer disagreement is not a reliable direction: defer to the
+  // existing waterfall without overwriting an immutable round lock.
+  if (firstLayer && new Set(allowed.map(x => x.chosen.direction)).size > 1) {
+    log('first_layer_15s_direction_conflict',{round:row.roundStartMs, candidates:allowed.map(x=>x.chosen.id)});
+    return null;
+  }
+  for (const {chosen,fuse,circuit} of allowed) {
     const live = {
       round:row.roundStartMs,status:'LOCKED',
       signal:{direction:chosen.direction,score:chosen.score,
@@ -5195,20 +5226,21 @@ function tryAutoPromoted15sLock(row, now, phase) {
       facts:row.v3NoBase15sShadow?.facts ?? null,
       productionPolicy:productionPolicyName(),
       fallbackUsed:phase === 'late',
-      fallbackReason:phase === 'late'
+      fallbackReason:firstLayer ? 'USER_FIRST_LAYER_DUAL_15S' : phase === 'late'
         ? 'AUTO_PROMOTED_STRICT_FORWARD_AFTER_V2_EDGE_WAIT'
         : 'AUTO_PROMOTED_STRICT_FORWARD_15S_FIRST_LOCK',
-      accuracyQualification:'AUTO_PROMOTED_STRICT_FORWARD_100',
+      productionLayer:firstLayer ? 'FIRST_USER_SELECTED_15S' : 'ORIGINAL_WATERFALL',
+      accuracyQualification:firstLayer ? 'USER_AUTHORIZED_FORWARD_70_MIN15' : 'AUTO_PROMOTED_STRICT_FORWARD_100',
       qualification:chosen.proof,
       observedDelayMs:chosen.observedAt-row.roundStartMs,
       independentFuse:circuit,
     };
     if (!freezeProductionLock(row, live)) continue;
     fuse.recordLock(chosen.direction,row.roundStartMs);
-    log('auto_promoted_15s_production_lock',{
+    log(firstLayer ? 'first_layer_15s_production_lock' : 'auto_promoted_15s_production_lock',{
       round:row.roundStartMs,candidateId:chosen.id,
       direction:chosen.direction,source:chosen.source,
-      phase, frozenAt:chosen.observedAt,
+      phase, firstLayer, frozenAt:chosen.observedAt,
       evidence:chosen.proof,
       priceNotice:'MIDPOINT_PROXY_NOT_EXECUTABLE_ASK_OR_REALIZED_PNL',
     });
@@ -5268,6 +5300,8 @@ function productionSignalPayload(now = Date.now()) {
 
   // A qualified 15s candidate locks first as soon as frozen at 15-20s.
   // Unqualified / fused candidates never interfere with V2 or Edge Rescue.
+  const firstLayer15s = tryUserFirst15sLock(row, now);
+  if (firstLayer15s) return firstLayer15s;
   const earlyPromoted = tryAutoPromoted15sLock(row, now, 'early');
   if (earlyPromoted) return earlyPromoted;
 

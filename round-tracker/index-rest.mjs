@@ -5172,7 +5172,15 @@ function all15sCandidateRegistryStats() {
 // 30-minute fuses are all checked at the moment of production lock.
 // If nothing qualifies by 20s, V2 + Edge Rescue retain their 22s path;
 // previously qualified 15s candidates can still rescue between 25-35s.
-function tryAutoPromoted15sLock(row, now, phase, firstLayer = false) {
+function tryAutoPromoted15sLock(row, now, phase) {
+  return tryPriorityAware15sLock(row, now, phase, false);
+}
+
+function tryUserFirst15sLock(row, now) {
+  return tryPriorityAware15sLock(row, now, 'early', true);
+}
+
+function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
   if (!row || !productionUsesSelectiveV2()) return null;
   const elapsed = now-row.roundStartMs;
   const eligibleWindow = phase === 'early' ? elapsed >= 15000 && elapsed <= 20000 :
@@ -5181,9 +5189,14 @@ function tryAutoPromoted15sLock(row, now, phase, firstLayer = false) {
   const forwardStatus = durable15sSummary();
   const promoted = firstLayer
     ? selectUserFirst15sCandidates(row, forwardStatus, now)
-    : selectForwardGated15sCandidates(row, forwardStatus, now, phase, { excludeUserFirst:phase === 'early' });
+    : selectForwardGated15sCandidates(row, forwardStatus, now, phase);
+  // These two candidates belong exclusively to the new first layer at 15s.
+  // Ordinary early fallback must not reintroduce a rejected/conflicting lock.
+  const candidates = firstLayer || phase !== 'early'
+    ? promoted.candidates
+    : promoted.candidates.filter(x => !FIRST_LAYER_15S_IDS.includes(x.id));
   const allowed = [];
-  for (const chosen of promoted.candidates) {
+  for (const chosen of candidates) {
     const fuse = chosen.id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
       chosen.id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse :
       lastResort15sFuses[chosen.id];
@@ -5287,7 +5300,7 @@ function productionSignalPayload(now = Date.now()) {
 
   // A qualified 15s candidate locks first as soon as frozen at 15-20s.
   // Unqualified / fused candidates never interfere with V2 or Edge Rescue.
-  const firstLayer15s = tryAutoPromoted15sLock(row, now, 'early', true);
+  const firstLayer15s = tryUserFirst15sLock(row, now);
   if (firstLayer15s) return firstLayer15s;
   const earlyPromoted = tryAutoPromoted15sLock(row, now, 'early');
   if (earlyPromoted) return earlyPromoted;

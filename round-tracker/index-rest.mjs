@@ -12,6 +12,7 @@ import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
+import { cleanupOrphanedShadowArtifacts } from './shadow-retired-cleanup.mjs';
 import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
@@ -922,6 +923,14 @@ function loadShadowModelArtifact() {
   try {
     const artifact = JSON.parse(fs.readFileSync(SHADOW_MODEL_FILE, 'utf8'));
     const model = artifact?.model;
+    // A failed rolling model is not a valid frozen candidate. Remove its
+    // persisted weights instead of reloading an already rejected artifact.
+    if (artifact?.metrics?.status === 'SHADOW_WALK_FORWARD_REJECTED' &&
+        model?.modelVersion !== SHADOW_PRODUCTION_MODEL_VERSION) {
+      fs.unlinkSync(SHADOW_MODEL_FILE);
+      log('shadow_rejected_model_artifact_deleted', { count: 1 });
+      return false;
+    }
     const featureKeysMatch =
       Array.isArray(artifact?.featureKeys) &&
       artifact.featureKeys.length === SHADOW_FEATURE_KEYS.length &&
@@ -2228,7 +2237,20 @@ function maybeTrainShadowModel() {
   };
   if (walkForwardPassed) maybePromoteShadowCandidate(trained, latestRound);
   updateShadowForwardMetrics();
-  saveShadowModelArtifact();
+  if (walkForwardPassed || trained.modelVersion === SHADOW_PRODUCTION_MODEL_VERSION) {
+    saveShadowModelArtifact();
+  } else {
+    // Keep failed training metrics in memory, but not failed model weights on
+    // the persistent volume. Frozen qualified candidates are stored separately.
+    try {
+      if (fs.existsSync(SHADOW_MODEL_FILE)) {
+        fs.unlinkSync(SHADOW_MODEL_FILE);
+        log('shadow_rejected_model_artifact_deleted', { count: 1 });
+      }
+    } catch (e) {
+      log('shadow_rejected_model_artifact_delete_failed', { error: e?.message || String(e) });
+    }
+  }
   const candidateForward = candidateForwardSummary();
   log('shadow_model_trained', {
     ...shadowModelMetrics,
@@ -5617,6 +5639,21 @@ noBaseSpecialist.deleteRetiredCandidates();
 shadowV4.deleteRetiredCandidates();
 shadowV5.deleteRetiredCandidates();
 shadowV7.deleteRetiredCandidates();
+// Dedicated artifact sweep covers orphan .pkl files left by older prunes or
+// interrupted training. Registry references and pinned production models win.
+const sweepShadowOrphans = () => cleanupOrphanedShadowArtifacts({
+  directories: [
+    { name: 'shadow-v3', dir: SHADOW_V3_DIR },
+    { name: 'shadow-v4', dir: SHADOW_V4_DIR },
+    { name: 'shadow-v5', dir: SHADOW_V5_DIR },
+    { name: 'shadow-v7', dir: SHADOW_V7_DIR },
+    { name: 'no-base-specialist', dir: NO_BASE_SPECIALIST_DIR },
+  ],
+  protectedModelVersions: [SHADOW_PRODUCTION_MODEL_VERSION],
+  log,
+});
+sweepShadowOrphans();
+setInterval(sweepShadowOrphans, 30 * 60 * 1000).unref();
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 // One-time manual clearing of the existing Tier-1 rescue circuit. Persisted

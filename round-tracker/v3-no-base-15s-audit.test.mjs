@@ -19,7 +19,7 @@ test('15s real no-base observation accepts only fresh, aligned signals; producti
  assert.equal(f.productionEffect,'NONE_SHADOW_ONLY');
  assert.equal(f.baseAbsentAtObservation,true);
  assert.equal(f.candidates.CURRENT_04_TREND_055_PM05.decision,'UP');
- assert.equal(f.candidates.PM_LEAN_03.decision,'UP');
+ assert.equal(f.candidates.CURRENT_03_PM_AGREE.decision,'UP');
  assert.equal(f.facts.dataFresh,true);
 });
 test('null book or depth age is NOT converted to fresh age zero',()=>{
@@ -27,7 +27,7 @@ test('null book or depth age is NOT converted to fresh age zero',()=>{
    const bad=freezeNoBase15s(row(),{...facts,[key]:null},round+15500);
    assert.ok(bad);
    assert.equal(bad.facts.dataFresh,false);
-   assert.equal(bad.candidates.PM_LEAN_03.decision,'WAIT');
+   assert.equal(bad.candidates.CURRENT_03_PM_AGREE.decision,'WAIT');
    assert.ok(bad.facts.gateFailures.length>0);
  }
 });
@@ -116,7 +116,7 @@ test('absorption-only pilots preserve original WAIT and never waive feed quality
  assert.deepEqual(f.facts.gateFailures,['ABSORPTION_RISK']);
  assert.equal(f.facts.dataFresh,false);
  assert.equal(f.facts.absorptionRiskAtFreeze,true);
- assert.equal(f.candidates.PM_LEAN_03.decision,'WAIT');
+ assert.equal(f.candidates.CURRENT_03_PM_AGREE.decision,'WAIT');
  assert.equal(f.candidates.ABS_PM_CURRENT15.decision,'UP');
  assert.equal(f.candidates.ABS_PM_REGIME35.decision,'UP');
  const stale=freezeNoBase15s(r,{...absorbed,depthAgeMs:8000},start+15500);
@@ -129,7 +129,7 @@ test('absorption-only pilots preserve original WAIT and never waive feed quality
  assert.equal(conflicting.candidates.ABS_PM_REGIME35.decision,'WAIT');
  const clean=freezeNoBase15s(r,{...absorbed,absorptionRisk:false},start+15500);
  assert.equal(clean.candidates.ABS_PM_CURRENT15.decision,'WAIT');
- assert.equal(clean.candidates.PM_LEAN_03.decision,'UP');
+ assert.equal(clean.candidates.CURRENT_03_PM_AGREE.decision,'UP');
 });
 test('new absorption candidate histories cannot be backfilled or retrofitted',()=>{
  const oldStart=Date.parse('2026-10-10T11:45:00.000Z');

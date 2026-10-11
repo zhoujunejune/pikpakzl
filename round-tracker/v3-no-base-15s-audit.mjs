@@ -3,7 +3,6 @@ export const V3_NO_BASE_15S_VERSION = 'V3_NO_BASE_15S_RESCUE_SHADOW_V1';
 export const V3_NO_BASE_15S_START_MS = Date.parse('2026-10-10T10:00:00.000Z');
 export const V3_NO_BASE_15S_FORWARD_TARGET = 60;
 export const V3_NO_BASE_15S_CONFIGS = Object.freeze([
-  {id:'PM_LEAN_03',mode:'pm'},
   {id:'BLENDED_04_PM_AGREE',mode:'blended'},
   {id:'CURRENT_03_PM_AGREE',mode:'current'},
   // New ex-ante independent confirmations, not relaxed production thresholds.

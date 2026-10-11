@@ -36,12 +36,14 @@ const stats=(items)=>({
   observedNoBaseSettledRounds:120,candidates:items,
 });
 
-test('all eleven candidate ids registered once; exactly two already opted-in',()=>{
-  assert.equal(ALL_15S_IDS.length,11);
+test('ten candidate ids registered once; exactly two already opted-in',()=>{
+  assert.equal(ALL_15S_IDS.length,10);
   assert.deepEqual(ALL_15S_IDS,V3_NO_BASE_15S_CONFIGS.map(x=>x.id));
-  assert.equal(new Set(ALL_15S_IDS).size,11);
+  assert.equal(new Set(ALL_15S_IDS).size,10);
   assert.equal(LIVE_OPT_IN_15S_IDS.length,2);
-  assert.equal(FORWARD_GATED_15S_IDS.length,9);
+  assert.ok(!ALL_15S_IDS.includes('PM_LEAN_03'));
+  assert.equal(candidateProductionSource('PM_LEAN_03'),null);
+  assert.equal(FORWARD_GATED_15S_IDS.length,8);
   assert.equal(FORWARD_GATED_15S_IDS.filter(x=>LIVE_OPT_IN_15S_IDS.includes(x)).length,0);
   for(const id of FORWARD_GATED_15S_IDS){
     assert.equal(candidateProductionSource(id),'VERIFIED_V3_NO_BASE_15S_'+id+'_PRIMARY');

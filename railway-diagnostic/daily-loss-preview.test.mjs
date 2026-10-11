@@ -34,7 +34,7 @@ test('daily loss card is prominent and contains no false claim of active enforce
   'dailyLossAmount','dailyLossPin','dailyLossSaveButton','dailyLossMessage','dailyLossHint'])
     assert.ok(page.includes('id="'+id+'"'),id);
  assert.match(page,/观察模式 · 尚未启用真实熔断/);
- assert.match(page,/尚未核对完整的官方已结算盈亏/);
+ assert.match(page,/官方已结算盈亏尚未独立核验/);
 });
 
 test('separate API only reads or saves PIN-protected Redis draft, no trading decisions',()=>{

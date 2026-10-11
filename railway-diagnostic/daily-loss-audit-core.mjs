@@ -72,7 +72,9 @@ export function sumOpenExposure(rows) {
   let sum=0,count=0;
   const seen=new Set();
   for(const p of rows) {
-    if(String(p?.positionStatus||'').toUpperCase()!=='OPEN') continue;
+    // ONGOING API entries with an unknown state cannot be silently counted as zero risk.
+    if(!p || typeof p.positionStatus!=='string' || !p.positionStatus.trim())throw new Error('OPEN_POSITION_STATUS_MISSING');
+    if(String(p.positionStatus).toUpperCase()!=='OPEN') continue;
     const key=p?.tokenId??p?.positionId??p?.id;
     if(key===undefined||key===null||!String(key).trim())throw new Error('OPEN_POSITION_ID_MISSING');
     if(seen.has(String(key)))throw new Error('OPEN_POSITION_DUPLICATE');

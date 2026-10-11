@@ -2,7 +2,7 @@ import { V3_NO_BASE_15S_VERSION } from './v3-no-base-15s-audit.mjs';
 import { FORWARD_GATED_15S_IDS } from './unified-15s-candidate-router.mjs';
 export const lastResortSource = id => FORWARD_GATED_15S_IDS.includes(id) ? 'LOW_PRIORITY_15S_' + id + '_PRIMARY' : null;
 
-// Option B: an experimental fallback, not a validated model.
+// Option B: eight experimental fallbacks, not validated models.
 // It operates ONLY after the two early live routes and the 22-second
 // Selective V2/Tier-1 routes have declined to lock the round.
 export const LOW_PRIORITY_BACKUP_VERSION = 'UNVERIFIED_15S_LAST_RESORT_V1';
@@ -17,7 +17,6 @@ const priority = Object.freeze([
   'BLENDED_04_PM_AGREE',
   'ABS_PM_CURRENT15',
   'ABS_PM_REGIME35',
-  'PM_LEAN_03',
 ]);
 const valid = d => d === 'UP' || d === 'DOWN';
 const finite = n => typeof n === 'number' && Number.isFinite(n);

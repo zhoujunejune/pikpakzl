@@ -5400,9 +5400,9 @@ function productionSignalPayload(now = Date.now()) {
     let v2FuseRescue = null, v2FuseRescueCircuit = null;
     if (baseDirection && q?.pass === true && liveRisk?.blocked === true) {
       v2FuseRescue = evaluateV2HardFuseRescue(row);
-      if (v2FuseRescue) {
+      if (v2FuseRescue && !row.v2HardFuseRescue) {
         row.v2HardFuseRescue = v2FuseRescue;
-        saveHistory(); // freeze candidate BEFORE official outcome / fuse check
+        saveHistory(); // freeze candidate only once, BEFORE official outcome
         log('v2_hard_fuse_rescue_candidate_frozen',{
           round:row.roundStartMs, direction:baseDirection,
           decision:v2FuseRescue.decision, reasons:v2FuseRescue.reasons,

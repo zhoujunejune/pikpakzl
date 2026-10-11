@@ -79,12 +79,11 @@
    if(data.enforcementEnabled!==false)throw new Error('服务器返回了意外熔断状态，请检查配置');
    if(el('dailyLossPin'))el('dailyLossPin').value='';
    put('dailyLossSwitchMessage',(enabled?'已开启':'已关闭')+'每日亏损观察开关；真实停单熔断尚未启用');
-   await read();
   }catch(e){
    put('dailyLossSwitchMessage',String(e.message||e));
-   await read();
   }finally{
    saving=false;
+   await read();
   }
  }
  function boot(){

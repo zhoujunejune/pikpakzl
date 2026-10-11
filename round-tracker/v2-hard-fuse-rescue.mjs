@@ -15,7 +15,7 @@ export function evaluateV2HardFuseRescue(row, now = Date.now()) {
   const direction = row.prediction;
   const f = row.predictionFacts || {};
   const sign = direction === 'UP' ? 1 : -1;
-  const upMid = Number(f.predictionMarketUpMid);
+  const upMid = f.predictionMarketUpMid == null ? NaN : Number(f.predictionMarketUpMid);
   const current = Number(f.currentScore);
   const trend = Number(f.currentTrendScore);
   const score = Number(row.predictionScore);

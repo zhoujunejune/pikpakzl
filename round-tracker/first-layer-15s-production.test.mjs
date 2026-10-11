@@ -92,7 +92,7 @@ test('real production waterfall is wired with the priority layer before all ordi
   const start=source.indexOf("function productionSignalPayload(now = Date.now())");
   assert.ok(start>0);
   const body=source.slice(start,start+12000);
-  const first=body.indexOf("tryAutoPromoted15sLock(row, now, 'early', true)");
+  const first=body.indexOf("tryUserFirst15sLock(row, now)");
   const regular=body.indexOf("tryAutoPromoted15sLock(row, now, 'early');");
   const primary=body.indexOf("if (productionUsesSelectiveV2())");
   const edge=body.indexOf('evaluateSelectiveV2EdgeRescueRow(row, q)');

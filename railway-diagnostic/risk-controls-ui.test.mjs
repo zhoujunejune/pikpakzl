@@ -46,6 +46,7 @@ function simulate(){
   }
  }
  context.XMLHttpRequest=XHR;
+ context.window=context;
  vm.runInNewContext(embedded,context);
  return {dom,cfg,requests,context};
 }

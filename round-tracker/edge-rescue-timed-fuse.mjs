@@ -208,11 +208,19 @@ export function createTimedEdgeRescueFuse({
   }
 
   function status(at = now()) {
+    // Read-only effective status: do not display an expired cooldown as active.
+    // The next signal check still owns the actual HALF_OPEN transition and
+    // preserves the original trial/settlement safety checks.
+    const effective = (key) => {
+      const x = scopes[key];
+      if (x.mode !== 'COOLDOWN' || at < x.until) return {...x};
+      return {...x, mode:'HALF_OPEN', reason:'COOLDOWN_EXPIRED_AWAITING_TRIAL', cooldownExpired:true};
+    };
     return {
       cooldownMs,
       rearmRevision,
       scopes: Object.fromEntries(KEYS.map(key => [key, {
-        ...scopes[key],
+        ...effective(key),
         remainingMs: scopes[key].mode === 'COOLDOWN'
           ? Math.max(0, scopes[key].until - at) : 0,
       }])),

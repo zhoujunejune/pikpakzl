@@ -119,6 +119,7 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
     const userFirst = options.userFirst === true && userFirst15sProofPass(x);
     if (!ALL_15S_IDS.includes(x.candidateId) ||
         (options.userFirst === true && !FIRST_LAYER_15S_IDS.includes(x.candidateId)) ||
+        (options.excludeUserFirst === true && FIRST_LAYER_15S_IDS.includes(x.candidateId)) ||
         (!oneTimeOrStrict15sProofPass(x) && !userFirst) ||
         ABSORPTION.has(x.candidateId) !== absorptionOnly) continue;
     const snapshot = f.candidates?.[x.candidateId];

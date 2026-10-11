@@ -11,10 +11,15 @@
    const data=await resp.json();
    if(!resp.ok||!data.ok)throw new Error(data.error||'观察配置读取失败');
    put('dailyLossMode','观察模式 · 不拦截任何真实交易');
+   const enabled=data.monitorEnabled===true;
+   put('dailyLossSwitchStatus',data.configured?(enabled?'观察开关：已开启（盈亏数据未核验）':'观察开关：已关闭'):'观察开关：尚未设置金额');
+   put('dailyLossEnforceStatus','真实交易熔断：未接入 · 不会拦截下单');
+   if(el('dailyLossEnableButton'))el('dailyLossEnableButton').disabled=saving||!data.configured||enabled;
+   if(el('dailyLossDisableButton'))el('dailyLossDisableButton').disabled=saving||!enabled;
    put('dailyLossLimitValue',data.configured&&Number.isFinite(data.dailyLimitUsdt)?money(data.dailyLimitUsdt):'尚未设置');
    put('dailyLossPnl','尚未完成官方核验');
    put('dailyLossRemaining','不可计算');
-   put('dailyLossHint','仅保存每日亏损观察阈值。尚未建立经独立核验的当日已实现盈亏统计，无法计算剩余额度。未启用任何自动停单或资金熔断规则。统计时区：北京时间。');
+   put('dailyLossHint','观察开关仅记录监控偏好；当日官方已实现盈亏尚未独立核验，因此无法计算剩余额度。无论开关开启或关闭，均不会拦截真实交易。统计时区：北京时间。');
    const input=el('dailyLossAmount'),editor=el('dailyLossEditor');
    if(input&&!saving&&!editor?.open&&data.configured&&Number.isFinite(data.dailyLimitUsdt))input.value=String(data.dailyLimitUsdt);
    loaded=true;
@@ -22,6 +27,7 @@
    if(!loaded){
     put('dailyLossLimitValue','读取失败');
     put('dailyLossMode','观察模式 · 配置不可验证');
+    put('dailyLossSwitchStatus','观察开关：无法读取');
    }
    put('dailyLossHint','配置服务不可用（'+String(e.message||e)+'）。每日亏损拦截从未启用，不能依赖本栏目保护资金。');
   }
@@ -54,9 +60,37 @@
    saving=false;if(button)button.disabled=false;
   }
  }
+
+ async function switchObservation(enabled){
+  if(saving)return;
+  const pin=String(el('dailyLossPin')?.value||el('pin')?.value||'').trim();
+  if(!pin){put('dailyLossSwitchMessage','请先在此栏目输入控制 PIN');return;}
+  saving=true;
+  if(el('dailyLossEnableButton'))el('dailyLossEnableButton').disabled=true;
+  if(el('dailyLossDisableButton'))el('dailyLossDisableButton').disabled=true;
+  put('dailyLossSwitchMessage','正在保存观察开关...');
+  try{
+   const response=await fetch('/api/daily-loss-limit',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({monitorEnabled:enabled,pin})
+   });
+   const data=await response.json();
+   if(!response.ok||!data.ok)throw new Error(data.error||'开关保存失败');
+   if(data.enforcementEnabled!==false)throw new Error('服务器返回了意外熔断状态，请检查配置');
+   if(el('dailyLossPin'))el('dailyLossPin').value='';
+   put('dailyLossSwitchMessage',(enabled?'已开启':'已关闭')+'每日亏损观察开关；真实停单熔断尚未启用');
+  }catch(e){
+   put('dailyLossSwitchMessage',String(e.message||e));
+  }finally{
+   saving=false;
+   await read();
+  }
+ }
  function boot(){
   if(!el('dailyLossCard'))return;
   el('dailyLossSaveButton')?.addEventListener('click',save);
+  el('dailyLossEnableButton')?.addEventListener('click',()=>switchObservation(true));
+  el('dailyLossDisableButton')?.addEventListener('click',()=>switchObservation(false));
   void read();setInterval(read,15000);
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);

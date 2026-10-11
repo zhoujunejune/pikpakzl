@@ -53,6 +53,10 @@ export function forward15sProofPass(x) {
     Number.isInteger(x.currentMissStreak) && x.currentMissStreak <= 2;
 }
 
+export function oneTimeOrStrict15sProofPass(x) {
+  return forward15sProofPass(x) || x?.oneTimeBootstrapEligible === true;
+}
+
 export function selectForwardGated15sCandidates(row, stats, now = Date.now(), phase = 'late') {
   const reject = reason => ({candidates:[], reason});
   const elapsed = now - (row?.roundStartMs ?? NaN);
@@ -89,7 +93,7 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
     return reject('INSUFFICIENT_STRICT_FORWARD_EVIDENCE');
   const approved = [];
   for (const x of stats.candidates) {
-    if (!ALL_15S_IDS.includes(x.candidateId) || !forward15sProofPass(x) ||
+    if (!ALL_15S_IDS.includes(x.candidateId) || !oneTimeOrStrict15sProofPass(x) ||
         ABSORPTION.has(x.candidateId) !== absorptionOnly) continue;
     const snapshot = f.candidates?.[x.candidateId];
     const direction = snapshot?.decision;
@@ -110,6 +114,7 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
       source:candidateProductionSource(x.candidateId),
       proof:{strictForwardSamples:x.strictForwardSamples,
         forwardAccuracy:x.forwardAccuracy,recent30Accuracy:x.recent30.accuracy,
+        oneTimeBootstrap:x.oneTimeBootstrapEligible === true && !forward15sProofPass(x),
         lower95:lower,estimatedPriceMid:mid,estimatedNetEdge:lower-mid-0.03,
         upAccuracy:x.up.accuracy,downAccuracy:x.down.accuracy},
     });

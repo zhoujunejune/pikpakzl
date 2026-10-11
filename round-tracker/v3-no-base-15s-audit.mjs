@@ -4,6 +4,9 @@ export const V3_NO_BASE_15S_START_MS = Date.parse('2026-10-10T10:00:00.000Z');
 export const V3_NO_BASE_15S_FORWARD_TARGET = 100;
 // One-time user-authorized bootstrap. Normal re-promotion still requires the original strict proof.
 export const ONE_TIME_15S_BOOTSTRAP_AT_MS = Date.parse('2026-10-11T07:02:27.939Z');
+// Fail closed before the bounded round-history window can discard the original
+// settlement evidence. No restart or history truncation may renew this grant.
+export const ONE_TIME_15S_BOOTSTRAP_EXPIRES_AT_MS = ONE_TIME_15S_BOOTSTRAP_AT_MS + 200 * 300000;
 export const ONE_TIME_15S_BOOTSTRAP_IDS = Object.freeze(new Set([
   'BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
   'PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05',
@@ -196,7 +199,11 @@ export function summarizeNoBase15s(rounds){
       if(r.v3NoBase15sShadow.candidates[cfg.id].decision===r.actual)runningHits++;
       if(runningHits/runningSamples<0.70)bootstrapRevoked=true;
     }
-    const oneTimeBootstrapEligible=ONE_TIME_15S_BOOTSTRAP_IDS.has(cfg.id)&&
+    // A missing baseline (e.g. after ephemeral storage loss) must never grant access.
+    // The absolute expiry prevents a previously revoked grant being recreated
+    // after old losing rounds age out of the bounded in-memory history.
+    const bootstrapExpired=Date.now()>=ONE_TIME_15S_BOOTSTRAP_EXPIRES_AT_MS;
+    const oneTimeBootstrapEligible=!bootstrapExpired&&ONE_TIME_15S_BOOTSTRAP_IDS.has(cfg.id)&&
       initial.samples>0&&initial.accuracy>=0.70&&!bootstrapRevoked;
     const qualified=total.samples>=V3_NO_BASE_15S_FORWARD_TARGET&&total.accuracy>=0.75&&
       recent30.samples>=30&&recent30.accuracy>=0.75&&
@@ -207,6 +214,7 @@ export function summarizeNoBase15s(rounds){
     return {candidateId:cfg.id,status:qualified?'ELIGIBLE_FOR_INDEPENDENT_REVIEW':
       total.samples<V3_NO_BASE_15S_FORWARD_TARGET?'COLLECTING':'FORWARD_COMPLETE_NOT_QUALIFIED',
       oneTimeBootstrapEligible,oneTimeBootstrapRevoked:bootstrapRevoked,
+      oneTimeBootstrapExpired:bootstrapExpired,
       oneTimeBootstrapInitialSamples:initial.samples,
       strictForwardSamples:total.samples,targetSamples:V3_NO_BASE_15S_FORWARD_TARGET,
       hits:total.hits,misses:total.misses,forwardAccuracy:total.accuracy,

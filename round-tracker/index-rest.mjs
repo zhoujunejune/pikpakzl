@@ -16,10 +16,10 @@ import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
-import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, selectCurrent03PmAgree15s, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
-import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL, selectPmCurrent25Support0815s } from './pm-current25-support08-production.mjs';
-import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass } from './unified-15s-candidate-router.mjs';
-import { selectLastResort15sBackups, lastResortSource, LOW_PRIORITY_BACKUP_VERSION } from './last-resort-15s-backups.mjs';
+import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
+import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL } from './pm-current25-support08-production.mjs';
+import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, selectForwardGated15sCandidates, candidateProductionSource } from './unified-15s-candidate-router.mjs';
+import { lastResortSource } from './last-resort-15s-backups.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
@@ -5029,16 +5029,15 @@ function all15sCandidateRegistryStats() {
   const byId = new Map(shadow.candidates.map(x => [x.candidateId, x]));
   const status = ALL_15S_IDS.map(id => {
     const manual = id === PM_CURRENT25_SUPPORT08_MODEL || id === CURRENT03_PM_AGREE_MODEL;
-    const source = id === PM_CURRENT25_SUPPORT08_MODEL ? PM_CURRENT25_SUPPORT08_SOURCE :
-      id === CURRENT03_PM_AGREE_MODEL ? CURRENT03_PM_AGREE_SOURCE : lastResortSource(id);
+    const source = candidateProductionSource(id);
     const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
       id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse : lastResort15sFuses[id];
     const proof = byId.get(id);
-    const eligible = true;
+    const eligible = forward15sProofPass(proof);
     return {
       candidateId:id,
       source,
-      entryPolicy:manual ? 'USER_OPT_IN_UNVALIDATED' : 'OPTION_B_LAST_RESORT_UNVERIFIED',
+      entryPolicy:'AUTO_PROMOTE_AFTER_V2_EDGE_WITH_STRICT_FORWARD',
       eligibleForProduction:eligible,
       forwardQualified:forward15sProofPass(proof),
       candidateForward:proof || null,
@@ -5049,10 +5048,10 @@ function all15sCandidateRegistryStats() {
   return {
     ok:true,version:V3_NO_BASE_15S_VERSION,
     configuredCandidates:status.length,
-    userOptInCandidates:status.filter(x=>x.entryPolicy === 'USER_OPT_IN_UNVALIDATED').length,
-    forwardGatedCandidates:status.filter(x=>x.entryPolicy !== 'USER_OPT_IN_UNVALIDATED').length,
-    forwardQualifiedCandidates:status.filter(x=>x.entryPolicy !== 'USER_OPT_IN_UNVALIDATED' && x.forwardQualified).length,
-    productionRoute:'PM_CURRENT25_THEN_CURRENT03_THEN_ORIGINAL_22S_THEN_EIGHT_OPTION_B_LAST_RESORT_25_TO_35S',
+    userOptInCandidates:0,
+    forwardGatedCandidates:status.length,
+    forwardQualifiedCandidates:status.filter(x=>x.forwardQualified).length,
+    productionRoute:'SELECTIVE_V2_THEN_EDGE_RESCUE_THEN_AUTO_QUALIFIED_15S_25_TO_35S',
     candidates:status,
   };
 }
@@ -5097,104 +5096,8 @@ function productionSignalPayload(now = Date.now()) {
     return { ok: true, live: frozenLive };
   }
 
-  // Two previously user-opted-in 15s candidates, unchanged.
-  // PM_CURRENT25_SUPPORT08 has priority
-  // when both are available; CURRENT_03_PM_AGREE remains the fallback.
-  // Both reuse the exact pre-settlement snapshot and independent circuits.
-  if (productionUsesSelectiveV2() && row) {
-    const selectedPm25 = selectPmCurrent25Support0815s(row, now);
-    if (selectedPm25.allowed) {
-      const pm25Stats = current03PmAgreeProductionFuseSummary(rounds, PM_CURRENT25_SUPPORT08_SOURCE);
-      const pm25Fuse = timedPmCurrent25Fuse.check(selectedPm25.candidate.direction, pm25Stats, now);
-      if (pm25Fuse.allowed) {
-        const cand = selectedPm25.candidate;
-        const live = {
-          round:row.roundStartMs,
-          status:'LOCKED',
-          signal:{
-            direction:cand.direction,
-            score:cand.currentScore,
-            confidence:null,
-            modelProbability:null,
-          },
-          input:{round:row.roundStartMs},
-          generatedAt:cand.observedAt,
-          source:PM_CURRENT25_SUPPORT08_SOURCE,
-          model:PM_CURRENT25_SUPPORT08_MODEL,
-          modelVersion:V3_NO_BASE_15S_VERSION,
-          facts:row.v3NoBase15sShadow.facts,
-          productionPolicy:productionPolicyName(),
-          fallbackUsed:true,
-          fallbackReason:'USER_OPT_IN_UNVALIDATED_15S_NO_BASE',
-          accuracyQualification:'USER_OPT_IN_UNVALIDATED_15S_CANDIDATE',
-          observedDelayMs:cand.observedAt-row.roundStartMs,
-          independentFuse:pm25Fuse,
-        };
-        if (freezeProductionLock(row, live)) {
-          timedPmCurrent25Fuse.recordLock(cand.direction, row.roundStartMs);
-          log('pm_current25_support08_15s_production_lock',{
-            round:row.roundStartMs,direction:cand.direction,
-            observedAt:cand.observedAt,
-            predictionMarketUpMid:cand.predictionMarketUpMid,
-            currentScore:cand.currentScore,
-            sourceMarketTopicId:cand.sourceMarketTopicId,
-            accuracyQualification:'USER_OPT_IN_UNVALIDATED_15S_CANDIDATE',
-          });
-        }
-        logProductionSignalState(live);
-        return {ok:true,live};
-      }
-    }
-  }
-
-  // Second priority: CURRENT_03_PM_AGREE, then original 22s primary routes.
-  // No extra 15s candidate may lock a production round.
-  if (productionUsesSelectiveV2() && row) {
-    const selected15s = selectCurrent03PmAgree15s(row, now);
-    if (selected15s.allowed) {
-      const current03Stats = current03PmAgreeProductionFuseSummary(rounds);
-      const fuse15s = timedCurrent03PmFuse.check(selected15s.candidate.direction, current03Stats, now);
-      if (fuse15s.allowed) {
-        const cand = selected15s.candidate;
-        const live = {
-          round:row.roundStartMs,
-          status:'LOCKED',
-          signal:{
-            direction:cand.direction,
-            score:cand.currentScore,
-            confidence:null,
-            modelProbability:null,
-          },
-          input:{round:row.roundStartMs},
-          generatedAt:cand.observedAt,
-          source:CURRENT03_PM_AGREE_SOURCE,
-          model:CURRENT03_PM_AGREE_MODEL,
-          modelVersion:V3_NO_BASE_15S_VERSION,
-          facts:row.v3NoBase15sShadow.facts,
-          productionPolicy:productionPolicyName(),
-          fallbackUsed:true,
-          fallbackReason:'USER_OPT_IN_UNVALIDATED_15S_NO_BASE',
-          accuracyQualification:'USER_OPT_IN_UNVALIDATED_15S_CANDIDATE',
-          observedDelayMs:cand.observedAt-row.roundStartMs,
-          independentFuse:fuse15s,
-        };
-        if (freezeProductionLock(row, live)) {
-          timedCurrent03PmFuse.recordLock(cand.direction, row.roundStartMs);
-          log('current03_pm_agree_15s_production_lock',{
-            round:row.roundStartMs,
-            direction:cand.direction,
-            observedAt:cand.observedAt,
-            predictionMarketUpMid:cand.predictionMarketUpMid,
-            currentScore:cand.currentScore,
-            sourceMarketTopicId:cand.sourceMarketTopicId,
-            accuracyQualification:'USER_OPT_IN_UNVALIDATED_15S_CANDIDATE',
-          });
-        }
-        logProductionSignalState(live);
-        return {ok:true,live};
-      }
-    }
-  }
+  // Fifteen-second observations are captured for shadow learning only.
+  // Selective V2 and Edge Rescue retain first production-lock priority.
 
   if (productionUsesSelectiveV2()) {
     if (!row) {
@@ -5307,42 +5210,48 @@ function productionSignalPayload(now = Date.now()) {
       return {ok:true,live};
     }
 
-    // OPTION B: only after the two earlier 15s routes and Selective V2
-    // / Tier-1 have declined a production lock, try the nine strictly
-    // pre-frozen experimental candidates. They are NOT 75%-verified.
-    // Permit 25-35s only to let the regular 22s base finish first.
-    {
-      const lastResort = selectLastResort15sBackups(row, now);
-      for (const chosen of lastResort.candidates) {
-        const fuse = lastResort15sFuses[chosen.id];
+    // Auto-promotion happens only AFTER both high-precision V2 layers declined.
+    // Every 15s model remains a frozen shadow candidate until >=100 strictly
+    // prospective official outcomes, directional gates, drift and price-proxy
+    // checks pass. Promotion/demotion is recalculated at every live opportunity.
+    // All original 30-minute, source-specific fuses stay unchanged.
+    if (now-row.roundStartMs >= 25000 && now-row.roundStartMs <= 35000) {
+      const forwardStatus = v3NoBase15sShadowSummary(rounds);
+      const promoted = selectForwardGated15sCandidates(row, forwardStatus, now);
+      for (const chosen of promoted.candidates) {
+        const fuse = chosen.id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
+          chosen.id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse :
+          lastResort15sFuses[chosen.id];
+        if (!fuse || chosen.source !== candidateProductionSource(chosen.id)) continue;
         const stats = current03PmAgreeProductionFuseSummary(rounds, chosen.source);
         const circuit = fuse.check(chosen.direction, stats, now);
         if (!circuit.allowed) continue;
         const live = {
-          round:row.roundStartMs,
-          status:'LOCKED',
+          round:row.roundStartMs,status:'LOCKED',
           signal:{direction:chosen.direction,score:chosen.score,
             confidence:null,modelProbability:null},
           input:{round:row.roundStartMs},
           generatedAt:chosen.observedAt,
           source:chosen.source,
           model:chosen.id,
-          modelVersion:LOW_PRIORITY_BACKUP_VERSION,
+          modelVersion:V3_NO_BASE_15S_VERSION,
           facts:row.v3NoBase15sShadow?.facts ?? null,
           productionPolicy:productionPolicyName(),
           fallbackUsed:true,
-          fallbackReason:'UNVERIFIED_LAST_RESORT_15S_AFTER_V2_WAIT',
-          accuracyQualification:'UNVERIFIED_OPTION_B_EXPERIMENTAL',
+          fallbackReason:'AUTO_PROMOTED_STRICT_FORWARD_AFTER_V2_EDGE_WAIT',
+          accuracyQualification:'AUTO_PROMOTED_STRICT_FORWARD_100',
+          qualification:chosen.proof,
           observedDelayMs:chosen.observedAt-row.roundStartMs,
           independentFuse:circuit,
         };
         if (freezeProductionLock(row, live)) {
           fuse.recordLock(chosen.direction,row.roundStartMs);
-          log('last_resort_15s_production_lock',{
+          log('auto_promoted_15s_production_lock',{
             round:row.roundStartMs,candidateId:chosen.id,
             direction:chosen.direction,source:chosen.source,
-            observationTime:chosen.observedAt,
-            warning:'UNVALIDATED_LIVE_STRATEGY',
+            frozenAt:chosen.observedAt,
+            evidence:chosen.proof,
+            priceNotice:'MIDPOINT_PROXY_NOT_EXECUTABLE_ASK_OR_REALIZED_PNL',
           });
           logProductionSignalState(live);
           return {ok:true,live};

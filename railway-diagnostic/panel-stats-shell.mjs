@@ -213,7 +213,7 @@ function boot(){load();setInterval(load,3000)}if(document.readyState==='loading'
 
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
-  const marker = '<div class="c"><input id="amount"';
+  const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${policyCard}${previewCard}${statsCard}${marker}`) : html.replace('</body>', `${policyCard}${previewCard}${statsCard}</body>`);
   return out.replace('</body>', `${statsScript}${previewScript}${policyScript}</body>`);
 }

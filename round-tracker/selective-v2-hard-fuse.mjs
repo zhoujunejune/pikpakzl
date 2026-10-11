@@ -63,7 +63,8 @@ export function selectiveV2HardFuseSummary(rounds, direction, {
   if (streakTripped) reasons.push('DIRECTION_MISS_STREAK_3');
   if (!recoveryReady) reasons.push('SHADOW_RECOVERY_NOT_VERIFIED');
   return {
-    version:SELECTIVE_V2_FUSE_VERSION, direction, blocked:Boolean(paused || !recoveryReady || globallyDegraded || directionDegraded || streakTripped),
+    // Overall drift is a dashboard warning: a losing DOWN side must not fuse healthy UP.
+    version:SELECTIVE_V2_FUSE_VERSION, direction, blocked:Boolean(paused || !recoveryReady || directionDegraded || streakTripped),
     reasons, production:{global10,direction10,consecutiveMisses}, shadow:{startMs:shadowStartMs,samples:shadow.length,recovery20,recovery10,recoveryReady},
     policy:'LIVE_PAUSE_AND_DIRECTION_FUSE_REQUIRE_NEW_STRICT_OFFICIAL_SHADOW_PROOF',
   };

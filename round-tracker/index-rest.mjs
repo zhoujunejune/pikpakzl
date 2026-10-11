@@ -17,6 +17,7 @@ import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
+import { SOURCE as V2_FUSE_RESCUE_SOURCE, VERSION as V2_FUSE_RESCUE_VERSION, evaluateV2HardFuseRescue, summarizeV2HardFuseRescue } from './v2-hard-fuse-rescue.mjs';
 import { selectiveV2HardFuseSummary } from './selective-v2-hard-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
 import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL } from './pm-current25-support08-production.mjs';
@@ -158,6 +159,13 @@ const EDGE_RESCUE_FUSE_COOLDOWN_MINUTES = Math.max(5, Number(process.env.EDGE_RE
 const timedEdgeRescueFuse = createTimedEdgeRescueFuse({
   file: HISTORY_FILE + '.edge-rescue-timed-fuse.json',
   cooldownMs: EDGE_RESCUE_FUSE_COOLDOWN_MINUTES * 60 * 1000,
+  log,
+});
+// Independent production source, official-result fuse and persisted cooldown.
+const timedV2FuseRescue = createTimedEdgeRescueFuse({
+  file: HISTORY_FILE + '.v2-hard-fuse-rescue.json',
+  cooldownMs:30 * 60 * 1000,
+  productionSource:V2_FUSE_RESCUE_SOURCE,
   log,
 });
 // Independent fuse: the newly user-opted-in 15s candidate has NO proven
@@ -4433,6 +4441,7 @@ async function settlePendingRounds() {
         const legacyBefore = row.legacyOfficialDirectionBeforeRevalidation;
         applyOfficialSettlement(row, direction, evidence, Date.now());
         timedEdgeRescueFuse.onSettled(row);
+        timedV2FuseRescue.onSettled(row);
         timedCurrent03PmFuse.onSettled(row);
         timedPmCurrent25Fuse.onSettled(row);
         for (const circuit of Object.values(lastResort15sFuses)) circuit.onSettled(row);
@@ -5384,6 +5393,58 @@ function productionSignalPayload(now = Date.now()) {
       return { ok: true, live };
     }
 
+
+    // Quality-pass V2 can be blocked by its own directional fuse. Try an
+    // independently confirmed rescue without bypassing that fuse or altering
+    // the existing Edge Rescue gate, fuse or settled statistics.
+    let v2FuseRescue = null, v2FuseRescueCircuit = null;
+    if (baseDirection && q?.pass === true && liveRisk?.blocked === true) {
+      v2FuseRescue = evaluateV2HardFuseRescue(row);
+      if (v2FuseRescue) {
+        row.v2HardFuseRescue = v2FuseRescue;
+        saveHistory(); // freeze candidate BEFORE official outcome / fuse check
+        log('v2_hard_fuse_rescue_candidate_frozen',{
+          round:row.roundStartMs, direction:baseDirection,
+          decision:v2FuseRescue.decision, reasons:v2FuseRescue.reasons,
+        });
+      }
+      if (v2FuseRescue?.decision === baseDirection) {
+        v2FuseRescueCircuit = timedV2FuseRescue.check(
+          baseDirection, summarizeV2HardFuseRescue(rounds.values()));
+        if (v2FuseRescueCircuit.allowed) {
+          const confidence = Number.isFinite(Number(row.modelProbability))
+            ? Number(row.modelProbability) : null;
+          const live = {
+            round:row.roundStartMs,status:'LOCKED',
+            signal:{direction:baseDirection,score:row.predictionScore??null,
+              confidence,modelProbability:confidence},
+            input:{round:row.roundStartMs},
+            generatedAt:Number.isFinite(Number(row.predictedAt))
+              ? Number(row.predictedAt) : now,
+            source:V2_FUSE_RESCUE_SOURCE,model:V2_FUSE_RESCUE_VERSION,
+            facts:row.predictionFacts??null,
+            productionPolicy:productionPolicyName(),
+            fallbackUsed:true,fallbackReason:'V2_HARD_FUSE_INDEPENDENT_RESCUE',
+            selectiveQuality:q,
+            v2HardFuseRescue:{
+              candidate:v2FuseRescue,
+              fuse:{allowed:true,reason:v2FuseRescueCircuit.reason??null},
+            },
+          };
+          if (freezeProductionLock(row,live)) {
+            timedV2FuseRescue.recordLock(baseDirection,row.roundStartMs);
+            log('v2_hard_fuse_rescue_production_lock',{
+              round:row.roundStartMs,direction:baseDirection,
+              v2HardFuseReasons:liveRisk.reasons||[],
+              evidence:v2FuseRescue.evidence,
+            });
+            logProductionSignalState(live);
+            return {ok:true,live};
+          }
+        }
+      }
+    }
+
     // Edge Rescue is independent of the Selective V2 direction fuse.
     // Keep Edge's original eligibility and its own timed/official-result fuse.
     const edgeRescue = baseDirection && q && !q.pass
@@ -5464,6 +5525,8 @@ function productionSignalPayload(now = Date.now()) {
         edgeRescueCandidatePresent: Boolean(edgeRescue),
         edgeRescueFuseAllowed: edgeFuse?.allowed === true,
         edgeRescueFuseReason: edgeFuse?.reason ?? null,
+        v2HardFuseRescueCandidate:v2FuseRescue?.decision??null,
+        v2HardFuseRescueFuseReason:v2FuseRescueCircuit?.reason??null,
         observedAt: row.predictedAt ?? null,
       },
       selectiveQuality: q,
@@ -5708,6 +5771,7 @@ invalidateLegacyWinnerFlagSettlements();
   });
 }
 timedEdgeRescueFuse.reconcile(rounds.values());
+timedV2FuseRescue.reconcile(rounds.values());
 timedCurrent03PmFuse.reconcile(rounds.values());
 timedPmCurrent25Fuse.reconcile(rounds.values());
 for (const circuit of Object.values(lastResort15sFuses)) circuit.reconcile(rounds.values());

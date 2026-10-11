@@ -67,8 +67,8 @@ jobs:
             assert(source.includes("AUTO_PROMOTED_STRICT_FORWARD_AFTER_V2_EDGE_WAIT"));
             assert(source.includes("current03PmAgreeProductionFuseSummary(rounds, chosen.source)"));
             assert(source.includes("selectForwardGated15sCandidates(row, forwardStatus, now, phase)"));
-            assert(code.includes("fuse.recordLock(chosen.direction,row.roundStartMs)"));
-            assert(code.includes("AUTO_PROMOTED_STRICT_FORWARD_100"));
+            assert(source.includes("fuse.recordLock(chosen.direction,row.roundStartMs)"));
+            assert(source.includes("AUTO_PROMOTED_STRICT_FORWARD_100"));
             assert(code.includes("freezeProductionLock(row, live)"));
             const qualification=fs.readFileSync("round-tracker/unified-15s-candidate-router.mjs","utf8");
             assert(qualification.includes("strictForwardSamples >= 100"));

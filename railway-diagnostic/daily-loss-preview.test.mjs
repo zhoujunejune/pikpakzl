@@ -13,7 +13,7 @@ test('preview configuration strictly checks money bounds, precision and retains 
  const end=storage.indexOf('\nfunction decodeDraft(raw)',start);
  assert.ok(start>=0&&end>start);
  const normalize=vm.runInNewContext(storage.slice(start,end).replace('export ','')+'\nnormalizeDailyLossDraft',{
-  RangeError,Date,Number,String,Math
+  RangeError,Date,Number,String,Math,DAILY_LOSS_TZ:'Asia/Shanghai',DAILY_LOSS_MODE:'OBSERVE_ONLY'
  });
  assert.equal(normalize({dailyLimitUsdt:'5.25'}).dailyLimitUsdt,5.25);
  assert.equal(normalize({dailyLimitUsdt:0.01}).dailyLimitUsdt,0.01);

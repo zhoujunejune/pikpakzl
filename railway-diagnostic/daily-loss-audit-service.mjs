@@ -122,11 +122,16 @@ export async function runDailyLossAuditOnce(nowMs=Date.now()){
     report.openPositionCount=open.openPositionCount;
     report.openExposureVerified=true;
     report.checks.push('OFFICIAL_OPEN_POSITIONS_FETCHED');
-    const orders=await fetchAll('/sapi/v1/w3w/wallet/prediction/order/history',{
-      walletAddress:address},'orders');
-    report.orderHistoryCount=orders.rows.length;
-    report.checks.push('OFFICIAL_ORDER_HISTORY_FETCHED');
-    const orderTopics=new Set(orders.rows.map(x=>String(x?.marketTopicId||'')).filter(Boolean));
+    // Order history may be large and the provider may cap/ignore offsets. A bounded
+    // first page is evidence only, NEVER a certified full historical order ledger.
+    const orderPayload=await signedGet('/sapi/v1/w3w/wallet/prediction/order/history',{
+      walletAddress:address,offset:0,limit:PAGE_SIZE});
+    const orders=assertArray(orderPayload,'orders');
+    report.orderHistoryCount=orders.length;
+    report.orderHistoryScope='SAMPLED_FIRST_PAGE_UNVERIFIED';
+    report.checks.push('OFFICIAL_ORDER_HISTORY_FIRST_PAGE_FETCHED');
+    report.errors.push('ORDER_HISTORY_COMPLETENESS_UNVERIFIED');
+    const orderTopics=new Set(orders.map(x=>String(x?.marketTopicId||'')).filter(Boolean));
     const settledTopics=current.rows.map(x=>x.marketTopicId).filter(Boolean);
     const matched=settledTopics.filter(id=>orderTopics.has(id)).length;
     report.orderTopicMatches=matched;

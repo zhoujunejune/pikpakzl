@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { freezeNoBase15s, V3_NO_BASE_15S_VERSION } from './v3-no-base-15s-audit.mjs';
 import {
   FIRST_LAYER_15S_IDS, userFirst15sProofPass,
-  selectUserFirst15sCandidates, selectForwardGated15sCandidates
+  selectUserFirst15sCandidates, selectUserFirst15sWinner,
+  selectForwardGated15sCandidates
 } from './unified-15s-candidate-router.mjs';
 
 const round = Date.parse('2026-10-11T15:00:00.000Z');
@@ -100,4 +101,26 @@ test('real production waterfall is wired with the priority layer before all ordi
   assert.ok(source.includes('first_layer_15s_direction_conflict'));
   assert.ok(source.includes("lastResort15sFuses[chosen.id]"));
   assert.ok(source.includes('timedPmCurrent25Fuse'));
+});
+
+test('FLOW15 wins first-layer UP/DOWN conflicts irrespective of candidate array order',()=>{
+  const flow={chosen:{id:'PM_FLOW15_CURRENT_03',direction:'UP'},fuse:{},circuit:{allowed:true}};
+  const second={chosen:{id:'PM_CURRENT25_SUPPORT08',direction:'DOWN'},fuse:{},circuit:{allowed:true}};
+  assert.equal(selectUserFirst15sWinner([second,flow]),flow);
+  assert.equal(selectUserFirst15sWinner([flow,second]),flow);
+  assert.equal(selectUserFirst15sWinner([second]),second);
+  assert.equal(selectUserFirst15sWinner([]),null);
+  assert.equal(selectUserFirst15sWinner(null),null);
+  assert.equal(selectUserFirst15sWinner([{chosen:{id:'OTHER',direction:'UP'}},second]),second);
+});
+
+test('first-layer conflict no longer falls through to Selective V2 or Edge Rescue',()=>{
+  const source=fs.readFileSync(fileURLToPath(new URL('./index-rest.mjs',import.meta.url)),'utf8');
+  const start=source.indexOf('const firstLayerWinner = firstLayer ? selectUserFirst15sWinner(allowed) : null;');
+  assert.ok(start > 0,'a priority arbiter must run after risk/fuse approval');
+  const block=source.slice(start,source.indexOf('for (const {chosen,fuse,circuit} of (firstLayer',start));
+  assert.ok(block.includes('first_layer_15s_direction_conflict'));
+  assert.ok(block.includes('selected:firstLayerWinner?.chosen.id'));
+  assert.ok(!block.includes('return null;'),'direction disagreement must never discard both eligible candidates');
+  assert.ok(source.includes('firstLayerWinner ? [firstLayerWinner] : []'));
 });

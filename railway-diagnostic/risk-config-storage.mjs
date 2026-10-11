@@ -55,7 +55,7 @@ async function redisClient() {
       return client;
     }).catch(async error => {
       connecting = null;
-      try { candidate.destroy(); } catch {}
+      try { if (typeof candidate.disconnect === 'function') await candidate.disconnect(); else if (typeof candidate.destroy === 'function') candidate.destroy(); } catch {}
       throw new Error('RISK_REDIS_CONNECT_FAILED:' + String(error?.code || error?.message || 'UNKNOWN'));
     });
   }

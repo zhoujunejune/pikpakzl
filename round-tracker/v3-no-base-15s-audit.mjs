@@ -2,6 +2,14 @@
 export const V3_NO_BASE_15S_VERSION = 'V3_NO_BASE_15S_RESCUE_SHADOW_V1';
 export const V3_NO_BASE_15S_START_MS = Date.parse('2026-10-10T10:00:00.000Z');
 export const V3_NO_BASE_15S_FORWARD_TARGET = 100;
+// One-time user-authorized bootstrap. Normal re-promotion still requires the original strict proof.
+export const ONE_TIME_15S_BOOTSTRAP_AT_MS = Date.parse('2026-10-11T07:02:27.939Z');
+export const ONE_TIME_15S_BOOTSTRAP_IDS = Object.freeze(new Set([
+  'BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
+  'PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05',
+  'CURRENT_03_TREND_045_PM08','PM_REGIME35_SUPPORT08',
+  'PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15',
+]));
 export const V3_NO_BASE_15S_CONFIGS = Object.freeze([
   {id:'BLENDED_04_PM_AGREE',mode:'blended'},
   {id:'CURRENT_03_PM_AGREE',mode:'current'},
@@ -175,6 +183,21 @@ export function summarizeNoBase15s(rounds){
     const downRecent6=stats(decisions.filter(r=>r.v3NoBase15sShadow.candidates[cfg.id].decision==='DOWN').slice(-6),cfg.id);
     let streak=0,maxConsecutiveMisses=0;
     for(const r of decisions){if(r.v3NoBase15sShadow.candidates[cfg.id].decision!==r.actual){streak++;maxConsecutiveMisses=Math.max(maxConsecutiveMisses,streak);}else streak=0;}
+    // Bootstrap is derived from immutable official-settled forward rows; once any
+    // post-bootstrap prefix pushes cumulative accuracy below 70%, it is revoked.
+    // The normal strict-forward qualification is never relaxed for re-promotion.
+    const beforeBootstrap=decisions.filter(r=>r.roundStartMs<ONE_TIME_15S_BOOTSTRAP_AT_MS);
+    const initial=stats(beforeBootstrap,cfg.id);
+    let bootstrapRevoked=false;
+    let runningHits=initial.hits;
+    let runningSamples=initial.samples;
+    for(const r of decisions.filter(r=>r.roundStartMs>=ONE_TIME_15S_BOOTSTRAP_AT_MS)){
+      runningSamples++;
+      if(r.v3NoBase15sShadow.candidates[cfg.id].decision===r.actual)runningHits++;
+      if(runningHits/runningSamples<0.70)bootstrapRevoked=true;
+    }
+    const oneTimeBootstrapEligible=ONE_TIME_15S_BOOTSTRAP_IDS.has(cfg.id)&&
+      initial.samples>0&&initial.accuracy>=0.70&&!bootstrapRevoked;
     const qualified=total.samples>=V3_NO_BASE_15S_FORWARD_TARGET&&total.accuracy>=0.75&&
       recent30.samples>=30&&recent30.accuracy>=0.75&&
       recent20.samples>=20&&recent20.accuracy>=0.75&&recent10.samples>=10&&recent10.accuracy>=0.70&&
@@ -183,6 +206,8 @@ export function summarizeNoBase15s(rounds){
       streak<=2;
     return {candidateId:cfg.id,status:qualified?'ELIGIBLE_FOR_INDEPENDENT_REVIEW':
       total.samples<V3_NO_BASE_15S_FORWARD_TARGET?'COLLECTING':'FORWARD_COMPLETE_NOT_QUALIFIED',
+      oneTimeBootstrapEligible,oneTimeBootstrapRevoked:bootstrapRevoked,
+      oneTimeBootstrapInitialSamples:initial.samples,
       strictForwardSamples:total.samples,targetSamples:V3_NO_BASE_15S_FORWARD_TARGET,
       hits:total.hits,misses:total.misses,forwardAccuracy:total.accuracy,
       recent10,recent20,recent30,up,down,upRecent6,downRecent6,maxConsecutiveMisses,

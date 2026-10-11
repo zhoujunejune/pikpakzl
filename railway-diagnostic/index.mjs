@@ -740,6 +740,19 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
 <div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：新一轮 LOCKED → 后端先准备市场/方向（不提前拿 Quote）→ 你点一次“确认下单” → 后端即时获取最新 Quote → 立刻调用 Binance Prediction 下单 API → 再核验真实订单状态。</div></div>
 <div class="c"><div class="k">Prediction 可用余额</div><div class="wallet" id="walletBalance">读取中...</div><div class="muted" id="walletMeta">正在连接 Binance Prediction...</div></div>
 <div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随新信号</button><button class="stop" onclick="setV(false)">停止跟随</button><div class="muted" id="quickRiskState" role="status" aria-live="polite" style="margin-top:12px">风控进程状态：读取中…</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
+<div class="c" id="realRiskStatusCard" style="border:1px solid #435069">
+  <div class="k">交易风控 · 真实运行状态</div>
+  <div class="big" id="realRiskHeadline" role="status" aria-live="polite" style="font-size:21px;margin:8px 0">正在连接风控监控...</div>
+  <div class="muted" id="realRiskHealth">检查风控工作进程与交易所持仓数据，不以开关状态代替真实运行状态。</div>
+  <div class="grid" style="margin-top:12px">
+    <div class="kv"><div class="k">自动止盈</div><div class="v" id="realRiskTp">核对中...</div></div>
+    <div class="kv"><div class="k">自动止损</div><div class="v" id="realRiskSl">核对中...</div></div>
+    <div class="kv"><div class="k">持仓扫描</div><div class="v" id="realRiskScan" style="font-size:14px">核对中...</div></div>
+    <div class="kv"><div class="k">卖出报价检查</div><div class="v" id="realRiskQuote" style="font-size:14px">核对中...</div></div>
+  </div>
+  <div class="muted" id="realRiskDetails" style="margin-top:12px">尚未确认最近一次扫描或卖出报价；系统运行不保证卖单一定成交。</div>
+  <div class="muted" id="realRiskUpdated" style="margin-top:5px">状态更新时间：等待响应</div>
+</div>
 <div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">方向</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>

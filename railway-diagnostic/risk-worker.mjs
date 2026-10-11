@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 
 const API = 'https://api.binance.com';
 const API_KEY = process.env.BINANCE_PREDICTION_API_KEY || '';
@@ -24,8 +25,63 @@ let paymentCache = null;
 let paymentCacheAt = 0;
 const topicCache = new Map();
 const sellState = new Map();
+// Read-only health output for the control panel. No trade inputs or decisions depend on it.
+const WORKER_HEALTH_FILE = '/tmp/risk-worker-health.json';
+const health = {
+  at: null,
+  pid: process.pid,
+  lastTickStartedAt: null,
+  lastTickFinishedAt: null,
+  lastSuccessfulPositionsAt: null,
+  positionsSeen: null,
+  lastQuoteAt: null,
+  lastQuoteAmount: null,
+  quoteChecks: 0,
+  quoteErrors: 0,
+  lastErrorAt: null,
+  lastError: null,
+  lastSellEventAt: null,
+  lastSellEvent: null,
+};
+function emitHealth() {
+  health.at = new Date().toISOString();
+  try {
+    const filename = WORKER_HEALTH_FILE + '.tmp-' + process.pid;
+    fs.writeFileSync(filename, JSON.stringify(health), 'utf8');
+    fs.renameSync(filename, WORKER_HEALTH_FILE);
+  } catch (err) {
+    // Health monitoring must never interrupt SELL/QUOTE processing.
+    console.error(JSON.stringify({event:'risk_health_write_failed', error:String(err?.message||err)}));
+  }
+}
+function trackHealthEvent(event, extra) {
+  const at = new Date().toISOString();
+  if (event === 'risk_check') {
+    health.lastQuoteAt = at;
+    health.lastQuoteAmount = Number.isFinite(Number(extra.currentSellAmount)) ? Number(extra.currentSellAmount) : null;
+    health.quoteChecks += 1;
+    health.lastError = null;
+  } else if (event === 'risk_sell_quote_failed') {
+    health.quoteErrors += 1;
+    health.lastErrorAt = at;
+    health.lastError = String(extra.error || event).slice(0,160);
+  } else if (event === 'risk_wallet_error' || event === 'risk_positions_error' ||
+             event === 'risk_invalid_position' || event === 'risk_tick_exception' ||
+             event === 'risk_sell_exception' || event === 'risk_sell_failed' ||
+             event === 'risk_sell_unknown') {
+    health.lastErrorAt = at;
+    health.lastError = String(extra.error || event).slice(0,160);
+  }
+  if (event === 'risk_sell_submitted' || event === 'risk_sell_unknown' ||
+      event === 'risk_sell_failed' || event === 'risk_triggered') {
+    health.lastSellEventAt = at;
+    health.lastSellEvent = event;
+  }
+}
+
 
 function log(event, extra = {}) {
+  trackHealthEvent(event, extra);
   console.log(JSON.stringify({ event, worker: 'risk', at: new Date().toISOString(), ...extra }));
 }
 
@@ -418,6 +474,7 @@ async function tick() {
   if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED) || workerBusy) return;
   if (!API_KEY || !API_SECRET) return;
   workerBusy = true;
+  health.lastTickStartedAt = new Date().toISOString();
   try {
     const wallet = await resolveWallet();
     if (!wallet.ok) {
@@ -429,6 +486,8 @@ async function tick() {
       log('risk_positions_error', { error: positionsResult.error, code: positionsResult.code ?? null });
       return;
     }
+    health.lastSuccessfulPositionsAt = new Date().toISOString();
+    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;
     const payment = await getPaymentRoute();
     const activeTokens = new Set();
 
@@ -506,6 +565,7 @@ async function tick() {
   } catch (e) {
     log('risk_tick_exception', { error: e?.message || String(e) });
   } finally {
+    health.lastTickFinishedAt = new Date().toISOString();
     workerBusy = false;
   }
 }
@@ -523,5 +583,8 @@ log('risk_worker_started', {
   hasWalletId: Boolean(ENV_WALLET_ID),
 });
 
+const healthTimer = setInterval(emitHealth, 2000);
+healthTimer.unref();
+emitHealth();
 setInterval(tick, POLL_MS);
 void tick();

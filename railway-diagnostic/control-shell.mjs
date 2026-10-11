@@ -8,6 +8,8 @@ const PORT = Number(process.env.PORT || 3000);
 const INNER_PORT = Number(process.env.INNER_CONTROL_PORT || 3001);
 const CONTROL_PIN_SHA256 = process.env.CONTROL_PIN_SHA256 || '';
 const RISK_CONTROL_FILE = '/tmp/risk-control.json';
+const RISK_WORKER_HEALTH_FILE = '/tmp/risk-worker-health.json';
+const RISK_STATUS_FILE = '/tmp/risk-runtime-status.json';
 let persistenceReady = false;
 let persistenceHealthy = false;
 let persistenceRestored = false;
@@ -126,7 +128,7 @@ function injectRiskControls(html) {
   if (html.includes('id="slCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${riskCards}${marker}`) : html.replace('</body>', `${riskCards}</body>`);
-  out = out.replace('</body>', `${riskScript}</body>`);
+  out = out.replace('</body>', `${riskScript}<script src="/risk-monitor-client.js?v=2" defer></script></body>`);
   return out;
 }
 
@@ -176,12 +178,66 @@ startInner();
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
+  if (req.method === 'GET' && url.pathname === '/risk-monitor-client.js') {
+    try {
+      res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(fs.readFileSync(new URL('./risk-monitor-client.js', import.meta.url), 'utf8'));
+    } catch (e) {
+      return sendJson(res, 503, { ok: false, error: 'RISK_MONITOR_SCRIPT_UNAVAILABLE' });
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/risk-runtime-status') {
     try {
-      const result = JSON.parse(fs.readFileSync('/tmp/risk-runtime-status.json', 'utf8'));
+      const result = JSON.parse(fs.readFileSync(RISK_STATUS_FILE, 'utf8'));
+      const now = Date.now();
       const at = Date.parse(result.at || '');
-      const stale = !Number.isFinite(at) || Date.now() - at > 12000 || Date.now() < at - 5000;
-      return sendJson(res, 200, { ok: true, ...result, stale, checkedAt: new Date().toISOString() });
+      const stale = !Number.isFinite(at) || now - at > 12000 || now < at - 5000;
+      const config = readRiskConfig();
+      const enabled = Boolean(config.takeProfitEnabled || config.stopLossEnabled);
+      let workerHealth = null;
+      let workerAlive = false;
+      let workerMonitorStale = enabled;
+      try {
+        const data = JSON.parse(fs.readFileSync(RISK_WORKER_HEALTH_FILE, 'utf8'));
+        const workerAt = Date.parse(data.at || '');
+        workerAlive = Boolean(enabled && result.workerRunning && result.workerPid &&
+          data.pid === result.workerPid && Number.isFinite(workerAt) &&
+          now - workerAt <= 12000 && now >= workerAt - 5000);
+        if (workerAlive) {
+          workerHealth = {
+            at: data.at,
+            lastTickStartedAt: data.lastTickStartedAt || null,
+            lastTickFinishedAt: data.lastTickFinishedAt || null,
+            lastSuccessfulPositionsAt: data.lastSuccessfulPositionsAt || null,
+            positionsSeen: Number.isInteger(data.positionsSeen) ? data.positionsSeen : null,
+            lastQuoteAt: data.lastQuoteAt || null,
+            lastQuoteAmount: Number.isFinite(data.lastQuoteAmount) ? data.lastQuoteAmount : null,
+            quoteChecks: Number.isInteger(data.quoteChecks) ? data.quoteChecks : 0,
+            quoteErrors: Number.isInteger(data.quoteErrors) ? data.quoteErrors : 0,
+            lastError: data.lastError || null,
+            lastErrorAt: data.lastErrorAt || null,
+            lastSellEventAt: data.lastSellEventAt || null,
+            lastSellEvent: data.lastSellEvent || null,
+          };
+        }
+        workerMonitorStale = enabled && !workerAlive;
+      } catch (e) {
+        workerMonitorStale = enabled;
+      }
+      const lastScanAt = Date.parse(workerHealth?.lastSuccessfulPositionsAt || '');
+      const scanFresh = workerAlive && Number.isFinite(lastScanAt) && now - lastScanAt <= 30000 && now >= lastScanAt - 5000;
+      const monitorState = stale ? 'UNVERIFIED' : !enabled ? 'DISABLED' :
+        !result.workerRunning || !result.configApplied || workerMonitorStale ? 'WORKER_UNVERIFIED' :
+        !scanFresh ? 'SCAN_UNVERIFIED' : 'SCANNING';
+      return sendJson(res, 200, {
+        ok: true, ...result, stale, checkedAt: new Date().toISOString(),
+        takeProfitEnabled: config.takeProfitEnabled,
+        takeProfitPercent: config.takeProfitPercent,
+        stopLossEnabled: config.stopLossEnabled,
+        stopLossPercent: config.stopLossPercent,
+        monitorState, workerMonitorStale, scanFresh, workerHealth,
+      });
     } catch (e) {
       return sendJson(res, 503, { ok: false, error: 'RISK_MONITOR_STATUS_UNAVAILABLE' });
     }

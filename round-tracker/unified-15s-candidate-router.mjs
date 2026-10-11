@@ -5,7 +5,8 @@ import {
 } from './v3-no-base-15s-audit.mjs';
 
 // All ten candidates observe strictly prospective official outcomes.
-// They can be promoted only after Selective V2 and Edge Rescue fail to lock.
+// Only strategies with live strict-forward qualification may lock at 15-20s,
+// before Selective V2's 22s cutoff; a qualified 25-35s backup remains after V2.
 export const LIVE_OPT_IN_15S_IDS = Object.freeze([
   'PM_CURRENT25_SUPPORT08', 'CURRENT_03_PM_AGREE',
 ]);
@@ -52,14 +53,16 @@ export function forward15sProofPass(x) {
     Number.isInteger(x.currentMissStreak) && x.currentMissStreak <= 2;
 }
 
-export function selectForwardGated15sCandidates(row, stats, now = Date.now()) {
+export function selectForwardGated15sCandidates(row, stats, now = Date.now(), phase = 'late') {
   const reject = reason => ({candidates:[], reason});
+  const elapsed = now - (row?.roundStartMs ?? NaN);
+  const windowOk = phase === 'early' ? elapsed >= 15000 && elapsed <= 20000 :
+    phase === 'late' ? elapsed >= 25000 && elapsed <= 35000 : false;
   if (!row || !finite(now) || !finite(row.roundStartMs) ||
-      row.roundStartMs % 300000 !== 0 ||
-      now-row.roundStartMs < 25000 || now-row.roundStartMs > 35000 ||
+      row.roundStartMs % 300000 !== 0 || !windowOk ||
       isDirection(row.productionPrediction) || isDirection(row.actual) ||
       row.settledAt || row.productionSettledAt)
-    return reject('OUTSIDE_POST_V2_25_TO_35S_WINDOW');
+    return reject('OUTSIDE_QUALIFIED_15S_LOCK_WINDOW');
   const f = row.v3NoBase15sShadow;
   if (!f || f.version !== V3_NO_BASE_15S_VERSION ||
       f.baseAbsentAtObservation !== true || f.inputFrozenBeforeSettlement !== true ||

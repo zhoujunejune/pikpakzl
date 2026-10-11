@@ -20,7 +20,7 @@ function log(event, extra = {}) {
 const statsCard = `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
-<div class="muted" id="rsMeta">生产信号：冻结 Shadow；真实结果只采用 Binance Prediction 官方结算。</div>
+<div class="muted" id="rsMeta">生产信号：已晋级15秒候选优先 → Selective V2 → Edge Rescue → 已晋级15秒末级补救。真实结果采用 Binance Prediction 官方结算。</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">已结算</div><div class="v" id="rsSettled">-</div></div>
 <div class="kv"><div class="k">有效判断</div><div class="v" id="rsDecided">-</div></div>
@@ -36,9 +36,9 @@ const statsCard = `<div class="c" id="roundStatsCard">
 const previewCard = `<div class="c" id="waitVisibilityCard">
 <div class="k">实时方向观察 · 生产交易严格分离</div>
 <div class="big" id="wvTradeStatus">正在核对生产方向...</div>
-<div class="muted" id="wvMeta">预判方向只是供观察，不能代替生产锁定信号、也不触发下单。</div>
+<div class="muted" id="wvMeta">未晋级的15秒预测只能作为观察，绝不代表生产已放行；查看晋级资格请看上方表格。</div>
 <div class="grid" style="margin-top:12px">
-<div class="kv"><div class="k">最新15秒候选</div><div class="v" id="wvPreview">-</div></div>
+<div class="kv"><div class="k">最新15秒观察方向</div><div class="v" id="wvPreview">-</div></div>
 <div class="kv"><div class="k">预测市场盘口倾向</div><div class="v" id="wvPmSide">-</div></div>
 <div class="kv"><div class="k">最近20轮候选覆盖率</div><div class="v" id="wvCoverage">-</div></div>
 <div class="kv"><div class="k">已结算候选命中率</div><div class="v" id="wvHitRate">-</div></div>
@@ -48,6 +48,77 @@ const previewCard = `<div class="c" id="waitVisibilityCard">
 <div class="muted" style="margin-top:10px">候选方向、盘口倾向、生产已锁定方向是三种不同信息。候选仅按事前冻结记录计算；命中率采用系统登记的 Binance Prediction 结算，不代表独立审计认证。不会改变实际下单逻辑。</div>
 </div>`;
 
+const policyCard = `<div class="c" id="signalPolicyCard">
+<div class="k">生产策略 · 晋级15秒信号优先（实时）</div>
+<div class="big" id="spTitle">正在读取晋级状态...</div>
+<div class="muted" style="margin-top:6px">只展示生产实际规则与已审核的候选资格；资格达标不代表本轮一定下单。</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px">
+  <span class="on" style="padding:6px 8px;border:1px solid #365b48;border-radius:7px">15—20秒 · 已晋级候选优先</span>
+  <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">未锁定 → Selective V2</span>
+  <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">未放行 → Edge Rescue</span>
+  <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">25—35秒 · 晋级候选再补救</span>
+  <span class="warn" style="padding:6px 8px;border:1px solid #59492d;border-radius:7px">全部未通过 → WAIT</span>
+</div>
+<div class="grid" style="margin-top:12px">
+  <div class="kv"><div class="k">已获得晋级资格</div><div class="v" id="spQualified">-</div></div>
+  <div class="kv"><div class="k">观察 / 未达标</div><div class="v" id="spObserve">-</div></div>
+  <div class="kv"><div class="k">前瞻样本要求</div><div class="v">100次 / 策略</div></div>
+  <div class="kv"><div class="k">进度数据</div><div class="v" id="spFreshness">读取中</div></div>
+</div>
+<div class="muted" id="spRule" style="margin-top:10px">晋级条件：累计准确率≥75%、Wilson 95%下界≥70%，近期与 UP/DOWN 双方向条件全部通过。原30分钟独立熔断保持不变。</div>
+<div style="overflow:auto;max-height:410px;margin-top:12px;border:1px solid #2b313d;border-radius:10px">
+<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:820px"><thead style="position:sticky;top:0;background:#151922;z-index:2">
+<tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">15秒模型</th><th style="padding:8px 6px">晋级资格</th><th style="padding:8px 6px">样本/100</th><th style="padding:8px 6px">总准确率</th><th style="padding:8px 6px">近30次</th><th style="padding:8px 6px">UP / DOWN</th><th style="padding:8px 6px">30分钟熔断</th></tr>
+</thead><tbody id="spRows"><tr><td colspan="7" style="padding:12px 6px">读取晋级记录中...</td></tr></tbody></table></div>
+<div class="muted" id="spNotice" style="margin-top:10px">未晋级策略仅保留观察记录。真实 LOCKED / WAIT 请看下方生产信号表；影子候选不等于实盘。</div>
+</div>`;
+
+const policyScript = `<script>(function(){
+'use strict';
+function e(x){return document.getElementById(x)}
+function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function pct(v){return typeof v==='number'&&isFinite(v)?(100*v).toFixed(1)+'%':'-'}
+function age(v){return typeof v==='number'&&isFinite(v)?v:'-'}
+function circuit(x){var scopes=x&&x.scopes||{};var closed=Object.keys(scopes).filter(function(k){return scopes[k]&&scopes[k].mode==='COOLDOWN'});return closed.length?'冷却：'+closed.join('/'):Object.keys(scopes).some(function(k){return scopes[k]&&scopes[k].mode==='HALF_OPEN'})?'试运行中':'未冷却'}
+var ids=['BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','PM_REGIME35_SUPPORT08','PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15','ABS_PM_REGIME35'];
+async function load(){
+ if(!e('signalPolicyCard'))return;
+ try{
+  var r=await fetch('/api/training-status?ts='+Date.now(),{cache:'no-store'});
+  var j=await r.json();
+  if(!r.ok||!j||j.ok!==true)throw Error(j&&j.error||'训练数据不可用');
+  var registry=j.models&&j.models.all15sCandidateRegistry;
+  if(!registry||!Array.isArray(registry.candidates))throw Error('晋级注册表不存在');
+  var by={};registry.candidates.forEach(function(x){if(x&&x.candidateId)by[x.candidateId]=x});
+  var approved=0,observing=0;
+  e('spRows').innerHTML=ids.map(function(id){
+   var x=by[id],proof=x&&x.candidateForward;
+   if(!x){observing++;return '<tr style="border-top:1px solid #2b313d"><td style="padding:8px 6px">'+esc(id)+'</td><td colspan="6" style="padding:8px 6px">该模型的生产资格数据未返回</td></tr>'}
+   var ok=x.forwardQualified===true&&x.eligibleForProduction===true;
+   if(ok)approved++;else observing++;
+   var n=proof&&Number.isFinite(Number(proof.strictForwardSamples))?Number(proof.strictForwardSamples):null;
+   var progress=n===null?'未获取':n+'/100 ('+Math.min(100,100*n/100).toFixed(0)+'%)';
+   var status=ok?'<span class="on">资格已达标</span>':(proof&&proof.status==='FORWARD_COMPLETE_NOT_QUALIFIED'?'<span class="bad">失格／未达标</span>':'<span class="warn">观察训练中</span>');
+   var sides=proof?'UP '+age(proof.up&&proof.up.samples)+'次 '+pct(proof.up&&proof.up.accuracy)+' / DOWN '+age(proof.down&&proof.down.samples)+'次 '+pct(proof.down&&proof.down.accuracy):'-';
+   return '<tr style="border-top:1px solid #2b313d"><td style="padding:8px 6px">'+esc(id)+'</td><td style="padding:8px 6px">'+status+'</td><td style="padding:8px 6px">'+esc(progress)+'</td><td style="padding:8px 6px">'+esc(pct(proof&&proof.forwardAccuracy))+'</td><td style="padding:8px 6px">'+esc(pct(proof&&proof.recent30&&proof.recent30.accuracy))+'</td><td style="padding:8px 6px">'+esc(sides)+'</td><td style="padding:8px 6px">'+esc(circuit(x.timedFuse))+'</td></tr>';
+  }).join('');
+  e('spQualified').textContent=approved+'/10';
+  e('spObserve').textContent=observing+'/10';
+  e('spTitle').innerHTML=approved?'<span class="on">'+approved+'种15秒策略具备晋级资格</span>':'<span class="warn">当前无已晋级15秒策略；生产按 Selective V2 + Edge Rescue 运行</span>';
+  e('spFreshness').textContent='已同步';
+  e('spNotice').textContent='生产路由：'+(registry.productionRoute||'已晋级15秒优先 → V2 → Edge → 已晋级15秒末级补救')+'；资格门槛只是生产准入，当前轮次仍需行情、价格与独立熔断检查。每15秒同步一次，不把影子预测计为实盘。';
+ }catch(err){
+  e('spTitle').textContent='晋级状态读取失败，不能判断是否已晋级';
+  e('spFreshness').textContent='不可用';
+  e('spQualified').textContent='未获取';
+  e('spObserve').textContent='未获取';
+  e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">无法取得生产晋级记录：'+esc(err&&err.message||String(err))+'</td></tr>';
+ }
+}
+function boot(){load();setInterval(load,15000)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();</script>`;
+
 const previewScript = `<script>(function(){
 'use strict';
 function e(id){return document.getElementById(id)}
@@ -55,7 +126,7 @@ function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(c){retu
 function tm(ms){return Number.isFinite(Number(ms))?new Date(Number(ms)).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'-'}
 function dir(v){return v==='UP'?'UP ↑':v==='DOWN'?'DOWN ↓':'WAIT'}
 function frozen(r){var f=r&&r.v3NoBase15sShadow;return f&&f.baseAbsentAtObservation===true&&f.inputFrozenBeforeSettlement===true&&Number(f.round)===Number(r.roundStartMs)?f:null}
-var priority=['ABS_PM_CURRENT15','ABS_PM_REGIME35','PM_CURRENT25_SUPPORT08','PM_REGIME35_SUPPORT08','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','CURRENT_03_PM_AGREE','BLENDED_04_PM_AGREE','PM_LEAN_03'];
+var priority=['ABS_PM_CURRENT15','ABS_PM_REGIME35','PM_CURRENT25_SUPPORT08','PM_REGIME35_SUPPORT08','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','CURRENT_03_PM_AGREE','BLENDED_04_PM_AGREE'];
 function candidate(f){if(!f||!f.candidates)return null;for(var i=0;i<priority.length;i++){var q=f.candidates[priority[i]];if(q&&(q.decision==='UP'||q.decision==='DOWN')&&q.qualified===true&&Array.isArray(q.reasons)&&q.reasons.length===0)return {direction:q.decision,model:priority[i]}}return null}
 function reason(f){if(!f)return '15秒尚未冻结';var x=f.facts||{};var failures=x.gateFailures||[];if(failures.length)return failures.join('、');var reasons=[];Object.keys(f.candidates||{}).forEach(function(k){var a=f.candidates[k];if(a&&a.decision==='WAIT'&&Array.isArray(a.reasons))reasons=reasons.concat(a.reasons)});var uniq=Array.from(new Set(reasons));return uniq.length?uniq.slice(0,2).join('、'):'模型确认条件未满足'}
 function official(r){return r&&(r.productionActual==='UP'||r.productionActual==='DOWN')?r.productionActual:null}
@@ -70,7 +141,7 @@ var rows=(j.records||[]).filter(function(r){return !!frozen(r)}).sort(function(a
 var newest=(j.records||[]).slice().sort(function(a,b){return Number(b.roundStartMs)-Number(a.roundStartMs)})[0]||null;
 var newestFrozen=frozen(newest),freshCandidate=candidate(newestFrozen),liveTrade=prod(newest);
 e('wvTradeStatus').innerHTML=liveTrade?'生产已锁定：<span class="on">'+esc(dir(liveTrade))+'</span>':'生产：<span class="warn">WAIT（未触发下单信号）</span>';
-e('wvPreview').innerHTML=freshCandidate?'<span class="on">'+esc(dir(freshCandidate.direction))+'</span>':'<span class="warn">WAIT</span>';
+e('wvPreview').innerHTML=freshCandidate?'<span class="on">'+esc(dir(freshCandidate.direction))+'</span> <span class="muted">（仅观察）</span>':'<span class="warn">WAIT（无候选）</span>';
 e('wvPmSide').textContent=newestFrozen?pm(newestFrozen):'等待15秒冻结';
 var windowRows=rows.slice(0,20);var eligible=windowRows.filter(function(r){return !!candidate(frozen(r))});var reviewed=eligible.filter(function(r){return !!official(r)});
 var hits=reviewed.filter(function(r){return candidate(frozen(r)).direction===official(r)}).length;
@@ -94,6 +165,7 @@ const statsScript = `<script>(function(){
 function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
+function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return 'Edge Rescue';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒已晋级 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
 var errMsg='';
@@ -133,8 +205,8 @@ e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedR
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent='生产策略：冻结 Shadow 主信号 · 命中判定只认 Binance Prediction 官方 UP/DOWN · 官方未结算保持待结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · Shadow 特征观察期 '+((h.shadowObserveMs||j.shadowObserveMs)?Number(h.shadowObserveMs||j.shadowObserveMs)/1000+'秒':'读取中')+' · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
-var a=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)}).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=x.productionSource==='SHADOW_CANDIDATE_PRIMARY'?'Shadow':(x.productionSource==='SHADOW_V3_AUTOML_PRIMARY'?'V3 AutoML':(x.productionSource==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY'?'Selective V2':(x.productionSource==='V6_FALLBACK'?'V6回退':(x.productionSource||'WAIT')))),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
+e('rsMeta').textContent='当前路由：已晋级15秒(15—20秒) → Selective V2 → Edge Rescue → 已晋级15秒(25—35秒) → WAIT · 只认 Binance Prediction 官方结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · Shadow 特征观察期 '+((h.shadowObserveMs||j.shadowObserveMs)?Number(h.shadowObserveMs||j.shadowObserveMs)/1000+'秒':'读取中')+' · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
+var a=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)}).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;
@@ -142,8 +214,8 @@ function boot(){load();setInterval(load,3000)}if(document.readyState==='loading'
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div class="c"><input id="amount"';
-  let out = html.includes(marker) ? html.replace(marker, `${previewCard}${statsCard}${marker}`) : html.replace('</body>', `${previewCard}${statsCard}</body>`);
-  return out.replace('</body>', `${statsScript}${previewScript}</body>`);
+  let out = html.includes(marker) ? html.replace(marker, `${policyCard}${previewCard}${statsCard}${marker}`) : html.replace('</body>', `${policyCard}${previewCard}${statsCard}</body>`);
+  return out.replace('</body>', `${statsScript}${previewScript}${policyScript}</body>`);
 }
 
 let child = null;

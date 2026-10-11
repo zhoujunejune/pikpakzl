@@ -16,6 +16,9 @@ on:
       - 'railway-diagnostic/risk-worker.mjs'
       - 'railway-diagnostic/risk-monitor-client.js'
       - 'railway-diagnostic/real-risk-monitor.test.mjs'
+      - 'railway-diagnostic/daily-loss-draft.mjs'
+      - 'railway-diagnostic/daily-loss-client.js'
+      - 'railway-diagnostic/daily-loss-preview.test.mjs'
       - '.github/workflows/wait-visibility-panel.yml'
   pull_request:
     paths:
@@ -31,6 +34,9 @@ on:
       - 'railway-diagnostic/risk-worker.mjs'
       - 'railway-diagnostic/risk-monitor-client.js'
       - 'railway-diagnostic/real-risk-monitor.test.mjs'
+      - 'railway-diagnostic/daily-loss-draft.mjs'
+      - 'railway-diagnostic/daily-loss-client.js'
+      - 'railway-diagnostic/daily-loss-preview.test.mjs'
       - '.github/workflows/wait-visibility-panel.yml'
   workflow_dispatch:
 jobs:
@@ -49,4 +55,6 @@ jobs:
       - run: node --check railway-diagnostic/risk-config-storage.mjs
       - run: node --check railway-diagnostic/risk-worker.mjs
       - run: node --check railway-diagnostic/risk-monitor-client.js
-      - run: node --test railway-diagnostic/wait-visibility-panel.test.mjs railway-diagnostic/risk-controls-ui.test.mjs railway-diagnostic/control-quick-inputs.test.mjs railway-diagnostic/risk-persistence-status.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - run: node --check railway-diagnostic/daily-loss-draft.mjs
+      - run: node --check railway-diagnostic/daily-loss-client.js
+      - run: node --test railway-diagnostic/wait-visibility-panel.test.mjs railway-diagnostic/risk-controls-ui.test.mjs railway-diagnostic/control-quick-inputs.test.mjs railway-diagnostic/risk-persistence-status.test.mjs railway-diagnostic/real-risk-monitor.test.mjs railway-diagnostic/daily-loss-preview.test.mjs

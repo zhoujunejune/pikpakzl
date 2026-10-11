@@ -18,7 +18,7 @@ import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
 import { PM_CURRENT25_SUPPORT08_SOURCE, PM_CURRENT25_SUPPORT08_MODEL } from './pm-current25-support08-production.mjs';
-import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, selectForwardGated15sCandidates, candidateProductionSource } from './unified-15s-candidate-router.mjs';
+import { ALL_15S_IDS, FORWARD_GATED_15S_IDS, forward15sProofPass, oneTimeOrStrict15sProofPass, selectForwardGated15sCandidates, candidateProductionSource } from './unified-15s-candidate-router.mjs';
 import { lastResortSource } from './last-resort-15s-backups.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
@@ -5033,13 +5033,15 @@ function all15sCandidateRegistryStats() {
     const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
       id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse : lastResort15sFuses[id];
     const proof = byId.get(id);
-    const eligible = forward15sProofPass(proof);
+    const eligible = oneTimeOrStrict15sProofPass(proof);
     return {
       candidateId:id,
       source,
       entryPolicy:'AUTO_PROMOTE_15S_FIRST_IF_STRICT_FORWARD_QUALIFIED',
       eligibleForProduction:eligible,
       forwardQualified:forward15sProofPass(proof),
+      oneTimeBootstrapEligible:proof?.oneTimeBootstrapEligible === true,
+      oneTimeBootstrapRevoked:proof?.oneTimeBootstrapRevoked === true,
       candidateForward:proof || null,
       production:current03PmAgreeProductionFuseSummary(rounds, source).production,
       timedFuse:fuse.status(),

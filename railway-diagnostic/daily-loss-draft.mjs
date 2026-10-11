@@ -27,7 +27,8 @@ function decodeDraft(raw) {
   if (data?.mode !== DAILY_LOSS_MODE || data?.timezone !== DAILY_LOSS_TZ ||
       typeof data.updatedAt !== 'string' || !Number.isFinite(Date.parse(data.updatedAt)))
     throw new Error('DAILY_LOSS_DRAFT_INVALID');
-  return {...validated,updatedAt:data.updatedAt};
+  if (data.monitorEnabled !== undefined && typeof data.monitorEnabled !== 'boolean') throw new Error('DAILY_LOSS_MONITOR_INVALID');
+  return {...validated,updatedAt:data.updatedAt,monitorEnabled:data.monitorEnabled === true};
 }
 
 async function client() {
@@ -52,8 +53,21 @@ export async function getDailyLossDraft() {
 }
 
 export async function saveDailyLossDraft(input) {
-  const data=normalizeDailyLossDraft(input);
   const db=await client();
+  const previous=decodeDraft(await db.get(DAILY_LOSS_DRAFT_KEY));
+  const data={...normalizeDailyLossDraft(input),monitorEnabled:previous?.monitorEnabled===true};
+  await db.set(DAILY_LOSS_DRAFT_KEY,JSON.stringify(data));
+  return data;
+}
+
+// The switch enables a *draft observation preference*, not live order blocking.
+// Callers serialize save/toggle writes so the existing cap is not lost.
+export async function setDailyLossMonitoring(enabled) {
+  if (typeof enabled !== 'boolean') throw new TypeError('监控开关必须为布尔值');
+  const db=await client();
+  const previous=decodeDraft(await db.get(DAILY_LOSS_DRAFT_KEY));
+  if (!previous) throw new RangeError('请先保存每日亏损金额，再开启观察开关');
+  const data={...previous,monitorEnabled:enabled,updatedAt:new Date().toISOString()};
   await db.set(DAILY_LOSS_DRAFT_KEY,JSON.stringify(data));
   return data;
 }

@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {freezeNoBase15s,V3_NO_BASE_15S_VERSION,V3_NO_BASE_15S_CONFIGS} from './v3-no-base-15s-audit.mjs';
+import { freezeNoBase15s, V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_CONFIGS } from './v3-no-base-15s-audit.mjs';
 import {
-  ALL_15S_IDS,LIVE_OPT_IN_15S_IDS,FORWARD_GATED_15S_IDS,
-  candidateProductionSource,forward15sProofPass,selectForwardGated15sCandidates,
+  ALL_15S_IDS, LIVE_OPT_IN_15S_IDS, FORWARD_GATED_15S_IDS,
+  candidateProductionSource, forward15sProofPass, wilsonLower95,
+  selectForwardGated15sCandidates
 } from './unified-15s-candidate-router.mjs';
+
 const round=Date.parse('2026-10-10T17:00:00.000Z');
 const facts={
   predictionMarketMappingReliable:true,predictionMarketRoundAligned:true,
@@ -13,111 +15,142 @@ const facts={
   liveScore:0.80,distanceFromOpenBps:1.25,tradeCount15s:22,
   depthAgeMs:100,lastAggTradeAgeMs:200,tradeStreamStalled:false,
   absorptionRisk:false,regimeDirection:'UP',regimeAgreement:0.80,
-  regimeScore:0.78, predictionMarketConflict:false,
+  regimeScore:0.78,predictionMarketConflict:false
 };
 function makeRow(f=facts){
   const r={roundStartMs:round,prediction:null,predictedAt:null};
   return {...r,v3NoBase15sShadow:freezeNoBase15s(r,f,round+15500)};
 }
 function proof(id){
-  return {
-    candidateId:id,status:'ELIGIBLE_FOR_INDEPENDENT_REVIEW',
-    strictForwardSamples:80,forwardAccuracy:0.80,
-    recent20:{samples:20,accuracy:0.80},
-    recent10:{samples:10,accuracy:0.80},
-    up:{samples:40,accuracy:0.80},down:{samples:40,accuracy:0.80},
+  return {candidateId:id,status:'ELIGIBLE_FOR_INDEPENDENT_REVIEW',
+    strictForwardSamples:120,hits:104,misses:16,forwardAccuracy:0.8667,
+    recent30:{samples:30,accuracy:0.8667},recent20:{samples:20,accuracy:0.85},
+    recent10:{samples:10,accuracy:0.8},
+    up:{samples:70,accuracy:0.8571},down:{samples:50,accuracy:0.88},
     upRecent6:{samples:6,accuracy:0.8333},downRecent6:{samples:6,accuracy:0.8333},
-    maxConsecutiveMisses:2,
+    maxConsecutiveMisses:4,currentMissStreak:0
   };
 }
 const stats=(items)=>({
   version:V3_NO_BASE_15S_VERSION,
   scope:'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S',
-  observedNoBaseSettledRounds:120,candidates:items,
+  observedNoBaseSettledRounds:180,candidates:items
 });
+const choose=(row,items,time=round+26000)=>
+  selectForwardGated15sCandidates(row,stats(items),time);
 
-test('ten candidate ids registered once; exactly two already opted-in',()=>{
+test('exactly ten current 15s candidates, none including retired PM_LEAN_03',()=>{
   assert.equal(ALL_15S_IDS.length,10);
   assert.deepEqual(ALL_15S_IDS,V3_NO_BASE_15S_CONFIGS.map(x=>x.id));
   assert.equal(new Set(ALL_15S_IDS).size,10);
   assert.equal(LIVE_OPT_IN_15S_IDS.length,2);
-  assert.ok(!ALL_15S_IDS.includes('PM_LEAN_03'));
-  assert.equal(candidateProductionSource('PM_LEAN_03'),null);
   assert.equal(FORWARD_GATED_15S_IDS.length,8);
-  assert.equal(FORWARD_GATED_15S_IDS.filter(x=>LIVE_OPT_IN_15S_IDS.includes(x)).length,0);
-  for(const id of FORWARD_GATED_15S_IDS){
-    assert.equal(candidateProductionSource(id),'VERIFIED_V3_NO_BASE_15S_'+id+'_PRIMARY');
+  assert.equal(candidateProductionSource('PM_LEAN_03'),null);
+  assert.equal(candidateProductionSource('PM_CURRENT25_SUPPORT08'),'PM_CURRENT25_SUPPORT08_15S_PRIMARY');
+  assert.equal(candidateProductionSource('CURRENT_03_PM_AGREE'),'CURRENT_03_PM_AGREE_15S_PRIMARY');
+  assert.equal(candidateProductionSource('ABS_PM_CURRENT15'),'LOW_PRIORITY_15S_ABS_PM_CURRENT15_PRIMARY');
+});
+
+test('minimum 100 independent forward outcomes plus Wilson and rolling risk gates',()=>{
+  const x=proof('PM_FLOW15_CURRENT_03');
+  assert.equal(forward15sProofPass(x),true);
+  assert.ok(wilsonLower95(x.hits,x.strictForwardSamples)>0.7);
+  assert.equal(wilsonLower95(4,0),null);
+  for(const bad of [
+    {...x,status:'COLLECTING'},
+    {...x,strictForwardSamples:99,hits:83,misses:16},
+    {...x,strictForwardSamples:120,hits:85,misses:35,forwardAccuracy:0.7083},
+    {...x,recent30:{samples:30,accuracy:0.70}},
+    {...x,recent20:{samples:20,accuracy:0.70}},
+    {...x,recent10:{samples:10,accuracy:0.60}},
+    {...x,up:{samples:9,accuracy:1}},
+    {...x,down:{samples:50,accuracy:0.69}},
+    {...x,upRecent6:{samples:6,accuracy:0.66}},
+    {...x,downRecent6:{samples:6,accuracy:0.66}},
+    {...x,currentMissStreak:3},
+    {...x,hits:110,misses:11},
+    {...x,strictForwardSamples:120,hits:90,misses:30,forwardAccuracy:0.75},
+  ])assert.equal(forward15sProofPass(bad),false,JSON.stringify(bad));
+});
+
+test('V2/Edge keep entire 0-25s priority; candidate can lock only 25-35s',()=>{
+  const row=makeRow(), p=proof('PM_FLOW15_CURRENT_03');
+  for(const delay of [0,14999,16000,20000,24999,35001,300000]){
+    assert.equal(choose(row,[p],round+delay).candidates.length,0,delay);
   }
+  assert.equal(choose(row,[p],round+25000).candidates.length,1);
+  assert.equal(choose(row,[p],round+35000).candidates.length,1);
 });
 
-test('no new pilot can be promoted without all strict-forward directional gates',()=>{
-  const a=proof('PM_FLOW15_CURRENT_03');
-  assert.equal(forward15sProofPass(a),true);
-  for(const changed of [
-    {...a,status:'COLLECTING'},
-    {...a,strictForwardSamples:59},
-    {...a,forwardAccuracy:0.74},
-    {...a,recent20:{samples:20,accuracy:0.70}},
-    {...a,recent10:{samples:10,accuracy:0.60}},
-    {...a,up:{samples:9,accuracy:1}},
-    {...a,down:{samples:40,accuracy:0.69}},
-    {...a,upRecent6:{samples:6,accuracy:0.66}},
-    {...a,maxConsecutiveMisses:3},
-  ]) assert.equal(forward15sProofPass(changed),false);
+test('all ten lanes require identical auto promotion evidence, including former early opt-ins',()=>{
+  const row=makeRow();
+  for(const id of ['CURRENT_03_PM_AGREE','PM_CURRENT25_SUPPORT08','PM_FLOW15_CURRENT_03']){
+    const passed=choose(row,[proof(id)]);
+    assert.equal(passed.candidates.length,1,id);
+    assert.equal(passed.candidates[0].source,candidateProductionSource(id));
+    assert.equal(choose(row,[{...proof(id),status:'COLLECTING'}]).candidates.length,0,id);
+  }
+  assert.equal(choose(row,[]).reason,'NO_FORWARD_QUALIFIED_MODEL');
 });
 
-test('genuinely frozen clean 15s candidates qualify only with prospective proof',()=>{
-  const r=makeRow();
-  const s=stats([proof('PM_FLOW15_CURRENT_03'),proof('PM_TREND_045_CURRENT_03')]);
-  const selected=selectForwardGated15sCandidates(r,s,round+17000);
-  assert.equal(selected.candidates.length,2);
-  assert.equal(selected.candidates[0].direction,'UP');
-  assert.ok(selected.candidates.every(x=>FORWARD_GATED_15S_IDS.includes(x.id)));
-  const noProof=selectForwardGated15sCandidates(r,stats([]),round+17000);
-  assert.equal(noProof.candidates.length,0);
-  assert.equal(noProof.reason,'NO_FORWARD_QUALIFIED_MODEL');
+test('post-V2 rejected base may be rescued only in matching direction and after 15s freeze',()=>{
+  const row=makeRow(),p=proof('PM_FLOW15_CURRENT_03');
+  assert.equal(choose({...row,prediction:'UP',predictedAt:round+22000},[p]).candidates.length,1);
+  assert.equal(choose({...row,prediction:'DOWN',predictedAt:round+22000},[p]).candidates.length,0);
+  assert.equal(choose({...row,prediction:'UP',predictedAt:round+14000},[p]).candidates.length,0);
+  for(const change of [
+    {productionPrediction:'UP'},{actual:'UP'},{settledAt:round+300000},
+    {productionSettledAt:round+300000},{roundStartMs:round+300000}
+  ])assert.equal(choose({...row,...change},[p]).candidates.length,0);
 });
 
-test('candidate live qualifiers never re-evaluate settled, shifted, stale or backfilled rounds',()=>{
-  const r=makeRow(),s=stats([proof('PM_FLOW15_CURRENT_03')]);
-  for(const time of [round+14999,round+20001,round+300000])
-    assert.equal(selectForwardGated15sCandidates(r,s,time).candidates.length,0);
-  for(const patch of [
-    {prediction:'UP'}, {predictedAt:round+16000},{productionPrediction:'DOWN'},
-    {actual:'UP'},{settledAt:round+299000},{roundStartMs:round+300000}
-  ])assert.equal(selectForwardGated15sCandidates({...r,...patch},s,round+17000).candidates.length,0);
-  assert.equal(selectForwardGated15sCandidates({
-    ...r,v3NoBase15sShadow:{...r.v3NoBase15sShadow,observedAt:round+17500}
-  },s,round+19000).candidates.length,0);
-});
-
-test('ordinary candidates cannot bypass stale quote, absorption or missing topic',()=>{
-  const s=stats([proof('PM_FLOW15_CURRENT_03')]);
-  for(const patch of [
-    {predictionMarketBookAgeMs:7000}, {predictionMarketMappingReliable:false},
+test('never count retroactive/future, stale, cross-round or malformed captures',()=>{
+  const p=proof('PM_FLOW15_CURRENT_03'), row=makeRow();
+  for(const capture of [
+    {observedAt:round+18000},{round:round-300000},
+    {inputFrozenBeforeSettlement:false},{baseAbsentAtObservation:false},
+    {observedAt:round+300001}
+  ]){
+    const changed={...row,v3NoBase15sShadow:{...row.v3NoBase15sShadow,...capture}};
+    assert.equal(choose(changed,[p]).candidates.length,0);
+  }
+  for(const change of [
+    {predictionMarketBookAgeMs:7000},{predictionMarketMappingReliable:false},
     {predictionMarketRoundAligned:false},{predictionMarketTopicId:null},
     {absorptionRisk:true},{tradeStreamStalled:true},{depthAgeMs:2000}
-  ])assert.equal(selectForwardGated15sCandidates(makeRow({...facts,...patch}),s,round+17000).candidates.length,0,
-  JSON.stringify(patch));
+  ])assert.equal(choose(makeRow({...facts,...change}),[p]).candidates.length,0);
 });
 
-test('absorption pilots qualify only for exactly absorption-risk scenarios',()=>{
-  const s=stats([proof('ABS_PM_CURRENT15'),proof('ABS_PM_REGIME35'),proof('PM_FLOW15_CURRENT_03')]);
-  const clean=selectForwardGated15sCandidates(makeRow(),s,round+17000);
-  assert.ok(clean.candidates.every(x=>!x.id.startsWith('ABS_')));
-  const absorb=makeRow({...facts,absorptionRisk:true});
-  const candidates=selectForwardGated15sCandidates(absorb,s,round+17000).candidates;
-  assert.ok(candidates.length>0);
-  assert.ok(candidates.every(x=>x.id.startsWith('ABS_')));
-  const stale=makeRow({...facts,absorptionRisk:true,depthAgeMs:5000});
-  assert.equal(selectForwardGated15sCandidates(stale,s,round+17000).candidates.length,0);
+test('absorption pilots must not escape absorption-only safety scope',()=>{
+  const p=proof('ABS_PM_CURRENT15');
+  const clean=choose(makeRow(),[p]);
+  assert.equal(clean.candidates.length,0);
+  const risky=makeRow({...facts,absorptionRisk:true});
+  assert.equal(choose(risky,[p]).candidates.length,1);
+  const unsafe=makeRow({...facts,absorptionRisk:true,depthAgeMs:5000});
+  assert.equal(choose(unsafe,[p]).candidates.length,0);
 });
 
-test('live priority prefers stronger qualified proof over weaker one',()=>{
-  const r=makeRow();
-  const strong={...proof('PM_FLOW15_CURRENT_03'),forwardAccuracy:0.85};
-  const weak={...proof('PM_TREND_045_CURRENT_03'),forwardAccuracy:0.76};
-  const x=selectForwardGated15sCandidates(r,stats([weak,strong]),round+17000);
-  assert.equal(x.candidates[0].id,strong.candidateId);
-  assert.equal(x.candidates[1].id,weak.candidateId);
+test('conservative market mid-price proxy blocks overpriced binary signals',()=>{
+  const p=proof('CURRENT_03_PM_AGREE');
+  assert.equal(choose(makeRow({...facts,predictionMarketUpMid:0.91}),[p]).candidates.length,0);
+  const safe=choose(makeRow(),[p]);
+  assert.equal(safe.candidates.length,1);
+  assert.ok(safe.candidates[0].proof.estimatedNetEdge>0.02);
+});
+
+test('auto demotes on deteriorating recent evidence and can re-promote without deploying code',()=>{
+  const row=makeRow(), good=proof('PM_FLOW15_CURRENT_03');
+  assert.equal(choose(row,[good]).candidates.length,1);
+  assert.equal(choose(row,[{...good,recent30:{samples:30,accuracy:0.66}}]).candidates.length,0);
+  assert.equal(choose(row,[{...good,currentMissStreak:3}]).candidates.length,0);
+  assert.equal(choose(row,[good]).candidates.length,1);
+});
+
+test('higher strict-forward rate wins ties only among independently qualified candidates',()=>{
+  const row=makeRow();
+  const good=proof('PM_FLOW15_CURRENT_03'),weak={...proof('PM_TREND_045_CURRENT_03'),forwardAccuracy:0.78};
+  const selected=choose(row,[weak,good]);
+  assert.equal(selected.candidates.length,2);
+  assert.equal(selected.candidates[0].id,good.candidateId);
 });

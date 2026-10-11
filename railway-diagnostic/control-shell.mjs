@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { hydrateRiskConfig, persistRiskConfig } from './risk-config-storage.mjs';
 import { getDailyLossDraft, saveDailyLossDraft, setDailyLossMonitoring } from './daily-loss-draft.mjs';
+import { startDailyLossAuditService, stopDailyLossAuditService, currentDailyLossAudit } from './daily-loss-audit-service.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PORT = Number(process.env.INNER_CONTROL_PORT || 3001);
@@ -201,6 +202,10 @@ http.createServer(async (req, res) => {
 
   // Draft-only guardrail. Must not gate or submit orders until an independently audited
   // daily realized PnL stream and a separately reviewed execution-level fuse are available.
+  if (req.method === 'GET' && url.pathname === '/api/daily-loss-audit') {
+    return sendJson(res, 200, { ...currentDailyLossAudit(), mode: 'READ_ONLY_SHADOW', enforcementEnabled: false, verifiedForLiveFuse: false });
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/daily-loss-limit') {
     try {
       const draft = await getDailyLossDraft();
@@ -349,11 +354,13 @@ http.createServer(async (req, res) => {
   return proxy(req, res);
 }).listen(PORT, '0.0.0.0', () => {
   log('control_shell_started', { port: PORT, innerPort: INNER_PORT, riskControlFile: RISK_CONTROL_FILE });
+  startDailyLossAuditService();
 });
 
 function shutdown(signal) {
   stopping = true;
   clearInterval(persistenceSyncTimer);
+  stopDailyLossAuditService();
   if (inner) inner.kill('SIGTERM');
   log('control_shell_stopped', { signal });
   setTimeout(() => process.exit(0), 150).unref();

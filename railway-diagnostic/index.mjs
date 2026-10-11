@@ -779,6 +779,18 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
     <div id="dailyLossMessage" class="muted" role="status" aria-live="polite"></div>
   </details>
   <div class="muted" id="dailyLossHint" style="margin-top:12px">每日亏损监控开关只记录你的观察偏好。官方已结算盈亏尚未独立核验，无法计算真实剩余额度；真正的每日亏损停单保护仍未接入后台。</div>
+  <div style="margin-top:14px;border-top:1px solid #414b5d;padding-top:12px" id="dailyLossAuditArea">
+    <div style="font-weight:800;margin-bottom:6px">自动验收与官方对账</div>
+    <div id="dailyLossAuditHeadline" class="warn" role="status" aria-live="polite">自动审计启动中...</div>
+    <div class="muted" id="dailyLossAuditSummary" style="margin-top:8px">只读采集和模拟订单拦截，不会影响生产交易。</div>
+    <div class="grid" style="margin-top:10px">
+      <div class="kv"><div class="k">官方已结算记录</div><div class="v" id="dailyLossAuditCount">读取中</div></div>
+      <div class="kv"><div class="k">未结算最大成本敞口</div><div class="v" id="dailyLossAuditExposure">未核验</div></div>
+      <div class="kv"><div class="k">模拟用例</div><div class="v" id="dailyLossAuditTests">未执行</div></div>
+      <div class="kv"><div class="k">上次审计</div><div class="v" id="dailyLossAuditAt" style="font-size:13px">等待中</div></div>
+    </div>
+    <div class="muted" id="dailyLossAuditErrors" style="margin-top:10px">独立结算对账和正式交易熔断尚未验收完成。</div>
+  </div>
 </div>
 <div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">方向</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>

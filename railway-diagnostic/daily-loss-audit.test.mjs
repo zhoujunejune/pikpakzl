@@ -77,6 +77,9 @@ test('scheduled audits use only signed Binance GET, run every 15min, persist res
  assert.match(service,/lPush\(HISTORY_KEY,summary\)/);
  assert.match(service,/lTrim\(HISTORY_KEY,0,95\)/);
  assert.match(service,/INDEPENDENT_ORDER_PNL_RECONCILIATION_REQUIRED/);
+ assert.match(service,/ORDER_HISTORY_COMPLETENESS_UNVERIFIED/);
+ assert.match(service,/SAMPLED_FIRST_PAGE_UNVERIFIED/);
+ assert.match(service,/offset:0,limit:PAGE_SIZE/);
  assert.match(service,/verified:false/);
  assert.match(service,/enforcementEnabled:false/);
  assert.match(shell,/startDailyLossAuditService\(\)/);

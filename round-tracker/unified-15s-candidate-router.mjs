@@ -89,7 +89,8 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
   if (!stats || stats.version !== V3_NO_BASE_15S_VERSION ||
       stats.scope !== 'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S' ||
       !Array.isArray(stats.candidates) ||
-      stats.observedNoBaseSettledRounds < V3_NO_BASE_15S_FORWARD_TARGET)
+      (stats.observedNoBaseSettledRounds < V3_NO_BASE_15S_FORWARD_TARGET &&
+       !stats.candidates.some(x => x.oneTimeBootstrapEligible === true)))
     return reject('INSUFFICIENT_STRICT_FORWARD_EVIDENCE');
   const approved = [];
   for (const x of stats.candidates) {
@@ -106,7 +107,10 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
     const lower=wilsonLower95(x.hits,x.strictForwardSamples);
     const mid=direction==='UP'?q.upMid:1-q.upMid;
     // Midpoint is only a price PROXY, never a verified executable ask/fill or P&L.
-    if (lower===null || lower-(mid+0.03)<0.02)continue;
+    // Explicit one-time exception: skip ONLY the Wilson-based price-edge test.
+    // After bootstrap revocation, strict re-promotion again uses this exact gate.
+    const bootstrapOnly=x.oneTimeBootstrapEligible===true && !forward15sProofPass(x);
+    if (!bootstrapOnly && (lower===null || lower-(mid+0.03)<0.02))continue;
     approved.push({
       id:x.candidateId, direction, observedAt:f.observedAt,
       score:finite(q.currentScore) ? q.currentScore : null,
@@ -114,7 +118,8 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
       source:candidateProductionSource(x.candidateId),
       proof:{strictForwardSamples:x.strictForwardSamples,
         forwardAccuracy:x.forwardAccuracy,recent30Accuracy:x.recent30.accuracy,
-        oneTimeBootstrap:x.oneTimeBootstrapEligible === true && !forward15sProofPass(x),
+        oneTimeBootstrap:bootstrapOnly,
+        wilsonPriceGateApplied:!bootstrapOnly,
         lower95:lower,estimatedPriceMid:mid,estimatedNetEdge:lower-mid-0.03,
         upAccuracy:x.up.accuracy,downAccuracy:x.down.accuracy},
     });

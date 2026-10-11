@@ -50,18 +50,33 @@ function simulate(){
  vm.runInNewContext(embedded,context);
  return {dom,cfg,requests,context};
 }
-test('one tap on each independent card reveals slider, number, quick presets and local PIN',()=>{
+test('one combined risk-control column contains two independently clickable settings',()=>{
+ assert.match(html,/id="riskControlsCard"/);
+ assert.equal((html.match(/class="c risk-combined"/g)||[]).length,1);
+ assert.match(html,/自动止盈止损/);
+ assert.ok(html.indexOf('id="tp50Card"')<html.indexOf('id="slCard"'));
  for(const [side,label] of [['tp','止盈'],['sl','止损']]){
   assert.match(html,new RegExp('id="'+side+'Editor"'));
   assert.match(html,new RegExp('点此调整'+label+'比例'));
   assert.match(html,new RegExp('id="'+side+'Range"'));
   assert.match(html,new RegExp('id="'+side+'Percent"'));
   assert.match(html,new RegExp('id="'+side+'Pin"'));
-  assert.match(html,new RegExp("riskPreset\\('"+side+"',25\\)"));
+  assert.match(html,new RegExp("riskPreset\\\\('"+side+"',25\\\\)"));
  }
- assert.ok(html.indexOf('id="tp50Card"')<html.indexOf('id="slCard"'));
- assert.match(html,/保存比例.*不会自动开启或关闭止盈/);
+ assert.match(html,/保存比例不会开启或关闭止盈/);
 });
+test('opening one row closes the other editor without changing saved settings',()=>{
+ const {dom,cfg,context,requests}=simulate();
+ context.riskOpen('tp');dom.get('tpEditor').open=true;
+ dom.get('tpPercent').value='72';
+ context.riskOpen('sl');dom.get('slEditor').open=true;
+ assert.equal(dom.get('tpEditor').open,false);
+ assert.equal(dom.get('tpPercent').value,50);
+ assert.equal(cfg.takeProfitPercent,50);
+ assert.equal(cfg.stopLossPercent,25);
+ assert.equal(requests.filter(x=>x.method==='POST').length,0);
+});
+
 test('editing take-profit writes only takeProfitPercent, preserving stop loss and enabled flags',()=>{
  const {dom,cfg,requests,context}=simulate();
  assert.equal(dom.get('tpValue').textContent,'50%');

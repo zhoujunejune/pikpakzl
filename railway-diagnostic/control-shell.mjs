@@ -92,7 +92,7 @@ const riskScript = "<script>(function(){\n'use strict';\nvar cfg={takeProfitEnab
 
 function injectRiskControls(html) {
   if (html.includes('id="slCard"')) return html;
-  const marker = '<div class="c"><input id="amount"';
+  const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${riskCards}${marker}`) : html.replace('</body>', `${riskCards}</body>`);
   out = out.replace('</body>', `${riskScript}</body>`);
   return out;

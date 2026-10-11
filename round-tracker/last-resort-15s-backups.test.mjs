@@ -20,12 +20,14 @@ const make=(f=facts)=>{
   const r={roundStartMs:start,prediction:null,predictedAt:null};
   return {...r,v3NoBase15sShadow:freezeNoBase15s(r,f,start+15500)};
 };
-test('Option B registers exactly nine lower-priority experimental sources',()=>{
+test('Option B registers exactly eight lower-priority experimental sources',()=>{
   const ids=V3_NO_BASE_15S_CONFIGS.map(x=>x.id).filter(x=>!['PM_CURRENT25_SUPPORT08','CURRENT_03_PM_AGREE'].includes(x));
-  assert.equal(ids.length,9);
-  assert.equal(new Set(ids.map(lastResortSource)).size,9);
+  assert.equal(ids.length,8);
+  assert.equal(new Set(ids.map(lastResortSource)).size,8);
   assert.ok(ids.every(x=>lastResortSource(x)==='LOW_PRIORITY_15S_'+x+'_PRIMARY'));
   assert.equal(lastResortSource('CURRENT_03_PM_AGREE'),null);
+  assert.equal(lastResortSource('PM_LEAN_03'),null);
+  assert.ok(!ids.includes('PM_LEAN_03'));
   assert.equal(LOW_PRIORITY_BACKUP_VERSION,'UNVERIFIED_15S_LAST_RESORT_V1');
 });
 test('backup cannot preempt 15s live routes or regular 22s lock',()=>{
@@ -76,4 +78,11 @@ test('absorption-only pilot never leaks into clean mode and never bypasses other
   assert.ok(risk.candidates.length>0);
   assert.ok(risk.candidates.every(x=>x.id.startsWith('ABS_')));
   assert.equal(selectLastResort15sBackups(make({...facts,absorptionRisk:true,depthAgeMs:3500}),start+26000).candidates.length,0);
+});
+
+test('retired PM_LEAN_03 cannot regain live eligibility from a forged frozen snapshot',()=>{
+  const r=make();
+  r.v3NoBase15sShadow.candidates.PM_LEAN_03={decision:'UP',qualified:true,reasons:[]};
+  const candidates=selectLastResort15sBackups(r,start+26000).candidates;
+  assert.ok(candidates.every(c=>c.id!=='PM_LEAN_03'));
 });

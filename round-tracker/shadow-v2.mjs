@@ -355,14 +355,19 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
     state.candidates = state.candidates.filter(c=>{
       const s=candidateSummary(c);
       const legacy=(c.engineVersion||c.trainingMethod)!==ENGINE_VERSION;
-      const retired=s.forwardSamples>=20 && Number.isFinite(Number(s.forwardAccuracy)) && Number(s.forwardAccuracy)<0.65;
+      const forwardAccuracy=Number(s.forwardAccuracy);
+      const retiredEarly=s.forwardSamples>=20 && Number.isFinite(forwardAccuracy) && forwardAccuracy<0.65;
+      // Completed candidates below their own 70% qualification floor cannot
+      // improve: the forward observer stops at the frozen sample target.
+      const retiredFinished=s.forwardSamples>=forwardTarget && Number.isFinite(forwardAccuracy) && forwardAccuracy<0.70;
+      const retired=retiredEarly || retiredFinished;
       if(legacy||retired){
         removed.push({
           modelVersion:c.modelVersion,
           engineVersion:c.engineVersion||c.trainingMethod||null,
           forwardSamples:s.forwardSamples,
           forwardAccuracy:s.forwardAccuracy,
-          reason:legacy?'LEGACY_PIPELINE':'STRICT_FORWARD_BELOW_65_AFTER_20',
+          reason:legacy?'LEGACY_PIPELINE':retiredFinished?'FORWARD_COMPLETE_BELOW_70':'STRICT_FORWARD_BELOW_65_AFTER_20',
         });
         return false;
       }
@@ -370,7 +375,8 @@ export function createShadowV2Engine({file,minSamples=300,forwardTarget=60,maxCa
     });
     if(removed.length){
       save();
-      log('shadow_v2_retired_models_deleted',{count:removed.length,retentionAccuracy:0.65,retentionMinSamples:20,models:removed});
+      // Do not retain deleted model identifiers in new runtime log payloads.
+      log('shadow_v2_retired_models_deleted',{count:removed.length,retentionAccuracy:0.65,retentionMinSamples:20,completedAccuracyFloor:0.70});
     }
     return removed;
   }

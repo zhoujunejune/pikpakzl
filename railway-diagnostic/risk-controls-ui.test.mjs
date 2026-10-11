@@ -61,7 +61,7 @@ test('one combined risk-control column contains two independently clickable sett
   assert.match(html,new RegExp('id="'+side+'Range"'));
   assert.match(html,new RegExp('id="'+side+'Percent"'));
   assert.match(html,new RegExp('id="'+side+'Pin"'));
-  assert.match(html,new RegExp("riskPreset\\\\('"+side+"',25\\\\)"));
+  assert.ok(html.includes("riskPreset('"+side+"',25)"));
  }
  assert.match(html,/保存比例不会开启或关闭止盈/);
 });

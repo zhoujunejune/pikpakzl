@@ -48,3 +48,14 @@ test('new independent official paper record can satisfy readiness, not manual pa
   const rearmed=selectiveV2HardFuseSummary(rounds,'UP',{paused:false,shadowStartMs:START});
   assert.equal(rearmed.blocked,false);
 });
+
+test('overall warning must not fuse healthy UP when DOWN loses',()=>{
+  const upLive=Array.from({length:10},(_,i)=>settled(i,'UP',true));
+  const downLive=Array.from({length:10},(_,i)=>settled(i+10,'DOWN',false));
+  const newPaperUp=Array.from({length:20},(_,i)=>settled(i+20,'UP',true,false,true));
+  const r=selectiveV2HardFuseSummary([...upLive,...downLive,...newPaperUp],'UP',{paused:false,shadowStartMs:START});
+  assert.equal(r.production.global10.accuracy,0);
+  assert.equal(r.production.direction10.accuracy,1);
+  assert.equal(r.shadow.recoveryReady,true);
+  assert.equal(r.blocked,false);
+});

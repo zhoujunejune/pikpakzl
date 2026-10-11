@@ -1,0 +1,103 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { freezeNoBase15s, V3_NO_BASE_15S_VERSION } from './v3-no-base-15s-audit.mjs';
+import {
+  FIRST_LAYER_15S_IDS, userFirst15sProofPass,
+  selectUserFirst15sCandidates, selectForwardGated15sCandidates
+} from './unified-15s-candidate-router.mjs';
+
+const round = Date.parse('2026-10-11T15:00:00.000Z');
+const facts = {
+  predictionMarketMappingReliable:true,predictionMarketRoundAligned:true,
+  predictionMarketTopicId:'same-official-round',predictionMarketBookAgeMs:100,
+  predictionMarketUpMid:0.66,currentScore:0.7,currentTrendScore:0.8,
+  liveScore:0.9,distanceFromOpenBps:1.4,tradeCount15s:30,
+  depthAgeMs:200,lastAggTradeAgeMs:200,tradeStreamStalled:false,
+  absorptionRisk:false,regimeDirection:'UP',regimeAgreement:0.7,
+  regimeScore:0.8,predictionMarketConflict:false
+};
+const row=(f=facts)=> {
+  const r={roundStartMs:round,predictedAt:null,prediction:null};
+  return {...r,v3NoBase15sShadow:freezeNoBase15s(r,f,round+15500)};
+};
+function proof(id,n,hits) {
+  const rate=Number((hits/n).toFixed(4));
+  return {candidateId:id,status:'COLLECTING',strictForwardSamples:n,hits,
+    misses:n-hits,forwardAccuracy:rate,
+    recent10:{samples:10,accuracy:0.8},
+    recent20:{samples:Math.min(n,20),accuracy:0.8},
+    recent30:{samples:n,accuracy:rate},
+    up:{samples:Math.floor(n/2),accuracy:0.78},
+    down:{samples:Math.ceil(n/2),accuracy:0.8},
+    currentMissStreak:1,oneTimeBootstrapEligible:false,
+    oneTimeBootstrapRevoked:false
+  };
+}
+const p1=proof('PM_FLOW15_CURRENT_03',19,17);
+const p2=proof('PM_CURRENT25_SUPPORT08',25,19);
+const stats=(candidates)=>({
+  version:V3_NO_BASE_15S_VERSION,
+  scope:'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S',
+  observedNoBaseSettledRounds:30,
+  candidates
+});
+
+test('both user-selected 15s signals are first-layer eligible before ordinary 100-round gate',()=>{
+  assert.deepEqual(FIRST_LAYER_15S_IDS,['PM_FLOW15_CURRENT_03','PM_CURRENT25_SUPPORT08']);
+  const got=selectUserFirst15sCandidates(row(),stats([p2,p1]),round+16000);
+  assert.deepEqual(got.candidates.map(x=>x.id),FIRST_LAYER_15S_IDS);
+  assert.ok(got.candidates.every(x=>x.proof.userAuthorizedFirstLayer===true));
+  assert.ok(got.candidates.every(x=>x.proof.wilsonPriceGateApplied===false));
+  // User opt-in is not silently granted to the original secondary routes.
+  assert.equal(selectForwardGated15sCandidates(row(),stats([p2,p1]),round+16000,'early',{excludeUserFirst:true}).candidates.length,0);
+});
+
+test('unavailable first signal falls through to the second candidate',()=>{
+  const bad={...p1,forwardAccuracy:0.65};
+  const got=selectUserFirst15sCandidates(row(),stats([bad,p2]),round+16000);
+  assert.deepEqual(got.candidates.map(x=>x.id),['PM_CURRENT25_SUPPORT08']);
+});
+
+test('priority first layer auto-rejects poor overall/recent/directional quality or revoked bootstrap',()=>{
+  for(const bad of [
+    {...p1,forwardAccuracy:0.69},
+    {...p1,recent10:{samples:10,accuracy:0.6}},
+    {...p1,up:{samples:9,accuracy:0.6}},
+    {...p1,currentMissStreak:3},
+    {...p1,oneTimeBootstrapRevoked:true},
+    {...p1,strictForwardSamples:14,hits:12,misses:2}
+  ])assert.equal(userFirst15sProofPass(bad),false,JSON.stringify(bad));
+});
+
+test('first-layer selection refuses unfrozen/stale and out-of-window or already locked data',()=>{
+  for(const delay of [10000,14500,20001,22000,25000])
+    assert.equal(selectUserFirst15sCandidates(row(),stats([p1,p2]),round+delay).candidates.length,0);
+  for(const patch of [
+    {productionPrediction:'UP'}, {productionPrediction:'DOWN'},
+    {actual:'UP'}, {settledAt:round+300000},
+    {predictedAt:round+14000,prediction:'UP'}
+  ]) assert.equal(selectUserFirst15sCandidates({...row(),...patch},stats([p1,p2]),round+16000).candidates.length,0);
+  for(const patch of [
+    {predictionMarketBookAgeMs:8000},
+    {predictionMarketRoundAligned:false},
+    {absorptionRisk:true},{tradeStreamStalled:true},
+    {depthAgeMs:3000},
+  ])assert.equal(selectUserFirst15sCandidates(row({...facts,...patch}),stats([p1,p2]),round+16000).candidates.length,0);
+});
+
+test('real production waterfall is wired with the priority layer before all ordinary lock routes',()=>{
+  const source=fs.readFileSync(fileURLToPath(new URL('./index-rest.mjs',import.meta.url)),'utf8');
+  const start=source.indexOf("function productionSignalPayload(now = Date.now())");
+  assert.ok(start>0);
+  const body=source.slice(start,start+12000);
+  const first=body.indexOf("tryAutoPromoted15sLock(row, now, 'early', true)");
+  const regular=body.indexOf("tryAutoPromoted15sLock(row, now, 'early');");
+  const primary=body.indexOf("if (productionUsesSelectiveV2())");
+  const edge=body.indexOf('evaluateSelectiveV2EdgeRescueRow(row, q)');
+  assert.ok(first>=0 && first<regular && regular<primary && primary<edge);
+  assert.ok(source.includes('first_layer_15s_direction_conflict'));
+  assert.ok(source.includes("lastResort15sFuses[chosen.id]"));
+  assert.ok(source.includes('timedPmCurrent25Fuse'));
+});

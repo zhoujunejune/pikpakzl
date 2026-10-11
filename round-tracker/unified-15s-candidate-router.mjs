@@ -14,6 +14,9 @@ export const FORWARD_GATED_15S_IDS = Object.freeze(
   V3_NO_BASE_15S_CONFIGS.map(x => x.id).filter(x => !LIVE_OPT_IN_15S_IDS.includes(x)),
 );
 export const ALL_15S_IDS = Object.freeze(V3_NO_BASE_15S_CONFIGS.map(x => x.id));
+export const FIRST_LAYER_15S_IDS = Object.freeze([
+  'PM_FLOW15_CURRENT_03', 'PM_CURRENT25_SUPPORT08',
+]);
 const isDirection = x => x === 'UP' || x === 'DOWN';
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const ratio = x => finite(x) && x >= 0 && x <= 1;
@@ -57,7 +60,25 @@ export function oneTimeOrStrict15sProofPass(x) {
   return forward15sProofPass(x) || x?.oneTimeBootstrapEligible === true;
 }
 
-export function selectForwardGated15sCandidates(row, stats, now = Date.now(), phase = 'late') {
+// New opt-in authorizes only these two routes to use their established
+// 15+ official forward samples instead of the ordinary 100-round gate.
+// Permanent old bootstrap revocation still wins.
+export function userFirst15sProofPass(x) {
+  return FIRST_LAYER_15S_IDS.includes(x?.candidateId) &&
+    x.oneTimeBootstrapRevoked !== true &&
+    Number.isInteger(x.strictForwardSamples) && x.strictForwardSamples >= 15 &&
+    Number.isInteger(x.hits) && Number.isInteger(x.misses) &&
+    x.hits+x.misses === x.strictForwardSamples &&
+    ratio(x.forwardAccuracy) && x.forwardAccuracy >= 0.70 &&
+    x.recent10?.samples >= 10 && ratio(x.recent10.accuracy) &&
+    x.recent10.accuracy >= 0.70 &&
+    x.up?.samples >= 5 && x.down?.samples >= 5 &&
+    ratio(x.up.accuracy) && x.up.accuracy >= 0.65 &&
+    ratio(x.down.accuracy) && x.down.accuracy >= 0.65 &&
+    Number.isInteger(x.currentMissStreak) && x.currentMissStreak <= 2;
+}
+
+export function selectForwardGated15sCandidates(row, stats, now = Date.now(), phase = 'late', options = {}) {
   const reject = reason => ({candidates:[], reason});
   const elapsed = now - (row?.roundStartMs ?? NaN);
   const windowOk = phase === 'early' ? elapsed >= 15000 && elapsed <= 20000 :
@@ -90,11 +111,15 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
       stats.scope !== 'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S' ||
       !Array.isArray(stats.candidates) ||
       (stats.observedNoBaseSettledRounds < V3_NO_BASE_15S_FORWARD_TARGET &&
-       !stats.candidates.some(x => x.oneTimeBootstrapEligible === true)))
+       !stats.candidates.some(x => x.oneTimeBootstrapEligible === true) &&
+        !(options.userFirst === true && stats.candidates.some(userFirst15sProofPass))))
     return reject('INSUFFICIENT_STRICT_FORWARD_EVIDENCE');
   const approved = [];
   for (const x of stats.candidates) {
-    if (!ALL_15S_IDS.includes(x.candidateId) || !oneTimeOrStrict15sProofPass(x) ||
+    const userFirst = options.userFirst === true && userFirst15sProofPass(x);
+    if (!ALL_15S_IDS.includes(x.candidateId) ||
+        (options.userFirst === true && !FIRST_LAYER_15S_IDS.includes(x.candidateId)) ||
+        (!oneTimeOrStrict15sProofPass(x) && !userFirst) ||
         ABSORPTION.has(x.candidateId) !== absorptionOnly) continue;
     const snapshot = f.candidates?.[x.candidateId];
     const direction = snapshot?.decision;
@@ -110,7 +135,7 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
     // Explicit one-time exception: skip ONLY the Wilson-based price-edge test.
     // After bootstrap revocation, strict re-promotion again uses this exact gate.
     const bootstrapOnly=x.oneTimeBootstrapEligible===true && !forward15sProofPass(x);
-    if (!bootstrapOnly && (lower===null || lower-(mid+0.03)<0.02))continue;
+    if (!bootstrapOnly && !userFirst && (lower===null || lower-(mid+0.03)<0.02))continue;
     approved.push({
       id:x.candidateId, direction, observedAt:f.observedAt,
       score:finite(q.currentScore) ? q.currentScore : null,
@@ -119,17 +144,21 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
       proof:{strictForwardSamples:x.strictForwardSamples,
         forwardAccuracy:x.forwardAccuracy,recent30Accuracy:x.recent30.accuracy,
         oneTimeBootstrap:bootstrapOnly,
-        wilsonPriceGateApplied:!bootstrapOnly,
+        userAuthorizedFirstLayer:userFirst,
+        wilsonPriceGateApplied:!bootstrapOnly && !userFirst,
         lower95:lower,estimatedPriceMid:mid,estimatedNetEdge:lower-mid-0.03,
         upAccuracy:x.up.accuracy,downAccuracy:x.down.accuracy},
     });
   }
-  // Quality-qualified candidates win over speculative opt-in routes. Prefer
-  // higher independently observed forward accuracy, then a stable ID.
-  approved.sort((a,b) =>
-    b.proof.forwardAccuracy-a.proof.forwardAccuracy ||
-    b.proof.strictForwardSamples-a.proof.strictForwardSamples ||
-    a.id.localeCompare(b.id)
-  );
+  // Ordinary routes retain the original risk-based ordering.
+  approved.sort(options.userFirst === true
+    ? (a,b) => FIRST_LAYER_15S_IDS.indexOf(a.id)-FIRST_LAYER_15S_IDS.indexOf(b.id)
+    : (a,b) => b.proof.forwardAccuracy-a.proof.forwardAccuracy ||
+      b.proof.strictForwardSamples-a.proof.strictForwardSamples ||
+      a.id.localeCompare(b.id));
   return {candidates:approved,reason:approved.length ? null : 'NO_FORWARD_QUALIFIED_MODEL'};
+}
+
+export function selectUserFirst15sCandidates(row, stats, now = Date.now()) {
+  return selectForwardGated15sCandidates(row, stats, now, 'early', { userFirst:true });
 }

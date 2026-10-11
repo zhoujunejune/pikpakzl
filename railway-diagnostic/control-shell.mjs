@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { hydrateRiskConfig, persistRiskConfig } from './risk-config-storage.mjs';
-import { getDailyLossDraft, saveDailyLossDraft } from './daily-loss-draft.mjs';
+import { getDailyLossDraft, saveDailyLossDraft, setDailyLossMonitoring } from './daily-loss-draft.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PORT = Number(process.env.INNER_CONTROL_PORT || 3001);
@@ -17,6 +17,8 @@ let persistenceRestored = false;
 let persistenceError = null;
 let syncInFlight = false;
 let writeChain = Promise.resolve();
+let dailyLossWriteChain = Promise.resolve();
+function serializeDailyLossWrite(operation) { const next = dailyLossWriteChain.catch(() => {}).then(operation); dailyLossWriteChain = next; return next; }
 async function syncRiskConfig() {
   if (syncInFlight) return;
   syncInFlight = true;
@@ -205,6 +207,7 @@ http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true, ...draft, configured: Boolean(draft),
         dailyLimitUsdt: draft?.dailyLimitUsdt ?? null,
+        monitorEnabled: draft?.monitorEnabled === true,
         mode: 'OBSERVE_ONLY', enforcementEnabled: false,
         realizedPnlUsdt: null, realizedPnlVerified: false, remainingLossUsdt: null,
         pnlError: 'OFFICIAL_DAILY_REALIZED_PNL_NOT_INDEPENDENTLY_VERIFIED',
@@ -212,7 +215,7 @@ http.createServer(async (req, res) => {
       });
     } catch (e) {
       log('daily_loss_read_failed', { error: String(e?.message || e) });
-      return sendJson(res, 503, {ok:false, error:'每日亏损观察值暂不可读取，请检查 Redis 连接', mode:'OBSERVE_ONLY', enforcementEnabled:false});
+      return sendJson(res, 503, {ok:false, error:'每日亏损观察值暂不可读取，请检查 Redis 连接', mode:'OBSERVE_ONLY', monitorEnabled:false, enforcementEnabled:false});
     }
   }
 
@@ -220,10 +223,14 @@ http.createServer(async (req, res) => {
     const body = await readJsonBody(req);
     if (!pinOK(body.pin)) return sendJson(res, 401, {ok:false, error:'PIN 错误'});
     try {
-      const saved = await saveDailyLossDraft({dailyLimitUsdt: body.dailyLimitUsdt});
-      log('daily_loss_preview_saved', { limitUsdt:saved.dailyLimitUsdt, mode:'OBSERVE_ONLY' });
+      if (Object.prototype.hasOwnProperty.call(body,'enforcementEnabled') || Object.prototype.hasOwnProperty.call(body,'mode')) return sendJson(res, 400, {ok:false,error:'真实每日亏损熔断尚未开放；只能切换观察状态'});
+      const changingSwitch = Object.prototype.hasOwnProperty.call(body,'monitorEnabled');
+      if (changingSwitch && typeof body.monitorEnabled !== 'boolean') return sendJson(res, 400, {ok:false,error:'开关值无效'});
+      if (!changingSwitch && !Object.prototype.hasOwnProperty.call(body,'dailyLimitUsdt')) return sendJson(res, 400, {ok:false,error:'缺少每日亏损金额'});
+      const saved = await serializeDailyLossWrite(() => changingSwitch ? setDailyLossMonitoring(body.monitorEnabled) : saveDailyLossDraft({dailyLimitUsdt: body.dailyLimitUsdt}));
+      log('daily_loss_preview_saved', { limitUsdt:saved.dailyLimitUsdt, monitorEnabled:saved.monitorEnabled, mode:'OBSERVE_ONLY' });
       return sendJson(res, 200, {
-        ok:true, ...saved, configured:true, enforcementEnabled:false,
+        ok:true, ...saved, configured:true, monitorEnabled:saved.monitorEnabled===true, enforcementEnabled:false,
         realizedPnlUsdt:null, realizedPnlVerified:false, remainingLossUsdt:null,
         message:'仅观察参数已保存，真实交易熔断尚未启用',
       });

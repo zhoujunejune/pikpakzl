@@ -117,12 +117,16 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
   for (const x of stats.candidates) {
     const firstLayerId = FIRST_LAYER_15S_IDS.includes(x.candidateId);
     const userFirst = firstLayerId && userFirst15sProofPass(x);
+    const standardProof = oneTimeOrStrict15sProofPass(x);
+    // The 30-round exception is EXCLUSIVE to the priority entry point.
+    // Ordinary rescue retains its original qualification threshold.
+    const routeProof = options.userFirst === true
+      ? userFirst
+      : standardProof && (!firstLayerId || userFirst);
     if (!ALL_15S_IDS.includes(x.candidateId) ||
         (options.userFirst === true && !firstLayerId) ||
         (options.excludeUserFirst === true && firstLayerId) ||
-        // Bootstrap alone must never bypass the stricter first-layer gate,
-        // including when the same model is considered in a late fallback.
-        (firstLayerId ? !userFirst : !oneTimeOrStrict15sProofPass(x)) ||
+        !routeProof ||
         ABSORPTION.has(x.candidateId) !== absorptionOnly) continue;
     const snapshot = f.candidates?.[x.candidateId];
     const direction = snapshot?.decision;

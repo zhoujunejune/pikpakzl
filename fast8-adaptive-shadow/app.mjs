@@ -194,6 +194,14 @@ function stats(){
   const latestView=latest?{round:latest.round,direction:latest.signal,regime:latest.regime,
     delayMs:latest.publishedAt?latest.publishedAt-latest.round:null,
     fallbackLevel:latest.fallbackLevel,modelVersion:latest.modelVersion}:null;
+  const first=r.filter(s=>s.round<start+1000*ROUND_MS);
+  const settledFirst=first.filter(s=>s.label&&s.decision),timelyFirst=settledFirst.filter(s=>
+    s.decision.publishedAt&&s.decision.publishedAt<=s.round+8000);
+  const firstHits=timelyFirst.filter(s=>s.decision.signal===s.label.actual).length;
+  const firstExpected=Math.min(expected,1000),firstPublished=first.filter(s=>s.decision&&
+    s.decision.publishedAt&&s.decision.publishedAt<=s.round+8000).length;
+  const validated=firstExpected===1000&&firstPublished===1000&&
+    settledFirst.length===1000&&firstHits>=650;
   return {family:ADAPTIVE_VERSION,generatedAt:new Date().toISOString(),shadowOnly:true,
     productionEffect:'NONE_SHADOW_ONLY',autoPromotion:false,executionEligible:false,
     state:model?'ADAPTIVE_MODEL_ACTIVE':'BASELINE_COLLECTING',experimentStartRound:start,
@@ -201,7 +209,12 @@ function stats(){
     coverage:expected?decided.length/expected:null,onTimeRounds:ontime.length,
     onTimeCoverage:expected?ontime.length/expected:null,
     labeled:labeled.length,pending:decided.length-labeled.length,hits,misses:labeled.length-hits,
-    accuracy:labeled.length?hits/labeled.length:null,latest:latestView,recent100:recent(),
+    accuracy:labeled.length?hits/labeled.length:null,
+    validation:{window:'FIRST_1000_CONSECUTIVE_CALENDAR_ROUNDS',
+      expected:firstExpected,onTime:firstPublished,settled:settledFirst.length,
+      hits:firstHits,passed:validated,
+      status:validated?'OBSERVED_TARGET_MET':firstExpected<1000?'COLLECTING':'NOT_MET_OR_PENDING'},
+    latest:latestView,recent100:recent(),
     publicationMs:{p95:timings.length?timings[Math.ceil(timings.length*.95)-1]:null,
       max:timings.at(-1)??null},
     training:{samples:samples().length,required:300,last:lastTraining,busy,

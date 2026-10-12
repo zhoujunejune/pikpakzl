@@ -154,7 +154,7 @@ test('panel never advertises retired Edge Rescue as an active production layer',
   assert.doesNotMatch(dom.get('spTitle').innerHTML,/Selective V2 \+ Edge Rescue/);
   assert.doesNotMatch(dom.get('spNotice').textContent,/V2_EDGE_THEN_WAIT/);
   assert.match(dom.get('spNotice').textContent,/HARD_FUSE_RESCUE_THEN_WAIT/);
-  const stats=source.match(/const statsScript = \x60<script>([\\s\\S]*?)<\\/script>\x60;/)?.[1];
+  const stats=source.slice(source.indexOf('const statsScript = '),source.indexOf('function injectStats('));
   assert.ok(stats);
   assert.match(source,/Edge Rescue 已永久淘汰/);
   assert.match(source,/已删除策略（历史记录）/);

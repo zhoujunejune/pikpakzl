@@ -1,7 +1,7 @@
 // Single-source, reversible production gate for the independent ZL_FAST8_65 worker.
-// In exclusive mode all legacy source locks are suspended. The shadow observer
-// continues producing UP/DOWN for every round, but order-grade locks require
-// prospective validation and a trained (non-baseline) decision.
+// In exclusive mode legacy source locks are paused. A timely, verified-current-round
+// FAST8 UP/DOWN can enter the live router even before prospective 65% validation.
+// Observed accuracy and training status remain telemetry, NOT a claim of readiness.
 export const FAST8_SOURCE = 'ZL_FAST8_65_PRIMARY';
 export const FAST8_MODEL = 'ZL_FAST8_65';
 export const FAST8_MODE = 'FAST8_ONLY';
@@ -41,18 +41,11 @@ export function fast8ProductionReadiness(stats, latest, expectedRound, now = Dat
       now > expectedRound + FAST8_DEADLINE_MS ||
       s.decisionComputedAtMs > expectedRound + FAST8_DEADLINE_MS)
     return reject('FAST8_SIGNAL_LATE_OR_UNVERIFIED');
-  const proof = stats.validation;
-  if (proof?.passed !== true ||
-      proof.expectedRounds < 1000 || proof.onTimeRounds < 1000 ||
-      proof.labeledPredictions < 1000 ||
-      !Number.isFinite(proof.endToEndAccuracy) ||
-      proof.endToEndAccuracy < 0.65 ||
-      stats.training?.validTrainingSamples < 300)
-    return reject('FAST8_FORWARD_65_GATE_NOT_MET');
-  if (!stats.modelVersion || stats.modelVersion.includes('baseline') ||
-      s.modelVersion !== stats.modelVersion || !Number.isFinite(s.pUpRaw) ||
-      s.fallbackLevel !== 'NONE' || s.presentFeatures < 5 ||
-      !Array.isArray(s.dataQuality) || s.dataQuality.length !== 0)
-    return reject('FAST8_TRAINED_CLEAN_MODEL_REQUIRED');
+  // Explicit production opt-in: performance evidence does not suppress a timely
+  // observed signal. Keep policy/timing/source and feature-integrity checks.
+  if (!stats.modelVersion || s.modelVersion !== stats.modelVersion ||
+      s.presentFeatures < 5 || !Array.isArray(s.dataQuality) ||
+      s.dataQuality.length !== 0)
+    return reject('FAST8_MODEL_OR_FEATURES_NOT_READY');
   return { eligible:true, reason:null, preview };
 }

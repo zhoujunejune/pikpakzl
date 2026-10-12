@@ -1,0 +1,14 @@
+# ZL_FAST8_ADAPTIVE_SHADOW_V1 (isolated, shadow only)
+
+This **separate service** is a forward-only adaptive research candidate, not a replacement for `ZL_FAST8_65` V2. It does **not** import the production router, trading client, Redis, wallet data, PINs, or order endpoints. The original Railway production project and all deployed trading services remain unchanged.
+
+- Data: public read-only Binance BTCUSDT spot 1-minute candles (features are honest 1m proxies, **not** 5s order book or prediction-market microstructure). Internal official labels: GET the existing **read-only** `/api/fast8-stats` endpoint and match official results by five-minute round ID; these are **not independently certified**.
+- Decisions: freeze at about T0 + 2 seconds, never emit WAIT (parity fallback explicitly tagged when no information), durability first (fsync journal), record publication timestamp and full missed calendar denominator. Whole-service outages cannot guarantee 100% on-time directions.
+- Adaptation: auto-identify `TREND`, `RANGE`, `HIGH_VOL` regimes; train global logistic regression at 300 eligible officially settled, <=8s forward predictions with at least 5 real features. Retain L2 training with chronological purged 80/20 holdout. Add regime specialists once there are 300 eligible samples in that regime. Candidates must match or exceed the baseline and have holdout Brier <0.26 to activate at the next full round. Re-evaluate after 100 additional valid labels, or 50 when drift is detected; use no more than latest 2000. Disable an active model if its last 100 realized predictions lag their paired baseline by more than 5.
+- Validation: pre-registered initial 1000 consecutive five-minute calendar rounds, strict all-round accuracy vs 65% target, no selecting favorable windows later. Re-training doesn't reset the validation clock. Evidence remains labelled as internal official and shadow only. A measured 65% sample result is **not** a guarantee of future performance.
+- Persistence: append-only `/data/adaptive-events.jsonl`; allocate a dedicated persistent volume. Never share or mount V2's volume.
+- Read-only endpoints: `/healthz`, `/api/shadow/status`, `/api/shadow/latest`. No POST handlers.
+
+Build from `/fast8-adaptive-shadow` with Dockerfile. Run `node --test core.test.mjs` and `node --check app.mjs`. Avoid linking this experimental branch as the main production service source; use an independently created Railway project/service and pin the branch.
+
+**Limitation:** this service requires outbound access to Binance public spot candles and the read-only FAST8 results endpoint. If unavailable, it will keep returning directional fallbacks (when running) and report failures, but no qualified machine-learning training samples accrue. Do not claim it is successfully learning without accepted trained weights and prospective results.

@@ -95,9 +95,10 @@ test('panel lists only active candidates instead of resurrecting deleted models'
   const {dom,readPath}=await renderPolicy(policyFixture(false));
   assert.match(readPath,/api\/training-status/);
   assert.match(policyHtml,/15—20秒/);
-  assert.match(policyHtml,/25—35秒/);
+  assert.doesNotMatch(policyHtml,/25—35秒/);
+  assert.match(policyHtml,/停止晋级/);
   assert.match(policyHtml,/Edge Rescue/);
-  assert.match(dom.get('spTitle').innerHTML,/当前无已晋级15秒策略/);
+  assert.match(dom.get('spTitle').innerHTML,/当前无现役15秒策略可放行/);
   assert.equal(dom.get('spQualified').textContent,'0/8');
   assert.equal(dom.get('spObserve').textContent,'8/8');
   assert.doesNotMatch(dom.get('spRows').innerHTML,/BLENDED_04_PM_AGREE/);
@@ -105,13 +106,13 @@ test('panel lists only active candidates instead of resurrecting deleted models'
   assert.doesNotMatch(dom.get('spRows').innerHTML,/PM_LEAN_03/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/zl_new_vip75/);
 });
-test('panel differentiates promoted candidate and observation-only model',async()=>{
+test('panel differentiates current live risk permission and blocked models',async()=>{
   const {dom}=await renderPolicy(policyFixture(true));
   assert.equal(dom.get('spQualified').textContent,'1/8');
   assert.equal(dom.get('spObserve').textContent,'7/8');
-  assert.match(dom.get('spTitle').innerHTML,/1种15秒策略具备晋级资格/);
-  assert.match(dom.get('spRows').innerHTML,/资格已达标/);
-  assert.match(dom.get('spRows').innerHTML,/观察训练中/);
+  assert.match(dom.get('spTitle').innerHTML,/1种现役15秒策略可放行/);
+  assert.match(dom.get('spRows').innerHTML,/现役可放行/);
+  assert.match(dom.get('spRows').innerHTML,/暂不可放行/);
 });
 test('unavailable training API is not incorrectly reported as zero promoted',async()=>{
   const {dom}=await renderPolicy({ok:false,error:'TIMEOUT'});
@@ -124,8 +125,9 @@ test('official history labels historical speculative locks separately from promo
   assert.ok(stats);
   new vm.Script(stats);
   assert.match(stats,/productionFallbackReason/);
-  assert.match(stats,/15秒已晋级/);
+  assert.match(stats,/15秒现役/);
   assert.match(stats,/15秒历史试验/);
   assert.match(stats,/SELECTIVE_V2_EDGE_RESCUE_PRIMARY/);
-  assert.match(stats,/当前路由：已晋级15秒/);
+  assert.match(stats,/当前路由：现役15秒/);
+  assert.doesNotMatch(stats,/25—35秒/);
 });

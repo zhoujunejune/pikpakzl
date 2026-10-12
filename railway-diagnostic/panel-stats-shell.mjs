@@ -51,7 +51,7 @@ const previewCard = `<div class="c" id="waitVisibilityCard">
 const policyCard = `<div class="c" id="signalPolicyCard">
 <div class="k">生产信号来源 · 独占模式与候选风控</div>
 <div class="big" id="spTitle">正在读取现役信号状态...</div>
-<div class="muted" style="margin-top:6px">以当前生产信号源开关为准；被暂停的旧策略不参与锁定，历史统计继续保留。</div>
+<div class="muted" style="margin-top:6px">以当前生产信号源开关为准；原有15秒策略停止晋级，被暂停的旧策略不参与锁定，历史统计继续保留。</div>
 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px">
   <span class="on" style="padding:6px 8px;border:1px solid #365b48;border-radius:7px">15—20秒 · 固定现役信号</span>
   <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">未锁定 → Selective V2</span>

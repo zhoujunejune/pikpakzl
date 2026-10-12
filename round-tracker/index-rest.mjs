@@ -5155,7 +5155,7 @@ function all15sCandidateRegistryStats() {
     return {
       candidateId:id,
       source,
-      entryPolicy:FIRST_LAYER_15S_IDS.includes(id) ? 'USER_FIRST_15S_FORWARD_70_GATED' : 'AUTO_PROMOTE_15S_FIRST_IF_STRICT_FORWARD_QUALIFIED',
+      entryPolicy:FIRST_LAYER_15S_IDS.includes(id) ? 'USER_FIRST_15S_FORWARD_80_MIN30_PRICE_GATED' : 'AUTO_PROMOTE_15S_FIRST_IF_STRICT_FORWARD_QUALIFIED',
       firstLayerPriority:FIRST_LAYER_15S_IDS.indexOf(id) + 1 || null,
       firstLayerEligible,
       eligibleForProduction:eligible,
@@ -5259,7 +5259,7 @@ function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
         ? 'AUTO_PROMOTED_STRICT_FORWARD_AFTER_V2_EDGE_WAIT'
         : 'AUTO_PROMOTED_STRICT_FORWARD_15S_FIRST_LOCK',
       productionLayer:firstLayer ? 'FIRST_USER_SELECTED_15S' : 'ORIGINAL_WATERFALL',
-      accuracyQualification:firstLayer ? 'USER_AUTHORIZED_FORWARD_70_MIN15' : 'AUTO_PROMOTED_STRICT_FORWARD_100',
+      accuracyQualification:firstLayer ? 'USER_AUTHORIZED_FORWARD_80_MIN30_PRICE_GATED' : 'AUTO_PROMOTED_STRICT_FORWARD_100',
       qualification:chosen.proof,
       observedDelayMs:chosen.observedAt-row.roundStartMs,
       independentFuse:circuit,

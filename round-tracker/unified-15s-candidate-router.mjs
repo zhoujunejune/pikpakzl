@@ -60,21 +60,20 @@ export function oneTimeOrStrict15sProofPass(x) {
   return forward15sProofPass(x) || x?.oneTimeBootstrapEligible === true;
 }
 
-// New opt-in authorizes only these two routes to use their established
-// 15+ official forward samples instead of the ordinary 100-round gate.
-// Permanent old bootstrap revocation still wins.
+// Only the two designated first-layer routes use this stricter fast-track gate.
+// A permanently revoked bootstrap may return ONLY via the full strict-forward proof.
 export function userFirst15sProofPass(x) {
   return FIRST_LAYER_15S_IDS.includes(x?.candidateId) &&
-    x.oneTimeBootstrapRevoked !== true &&
-    Number.isInteger(x.strictForwardSamples) && x.strictForwardSamples >= 15 &&
+    (x.oneTimeBootstrapRevoked !== true || forward15sProofPass(x)) &&
+    Number.isInteger(x.strictForwardSamples) && x.strictForwardSamples >= 30 &&
     Number.isInteger(x.hits) && Number.isInteger(x.misses) &&
     x.hits+x.misses === x.strictForwardSamples &&
-    ratio(x.forwardAccuracy) && x.forwardAccuracy >= 0.70 &&
+    ratio(x.forwardAccuracy) && x.forwardAccuracy >= 0.80 &&
     x.recent10?.samples >= 10 && ratio(x.recent10.accuracy) &&
-    x.recent10.accuracy >= 0.70 &&
+    x.recent10.accuracy >= 0.80 &&
     x.up?.samples >= 5 && x.down?.samples >= 5 &&
-    ratio(x.up.accuracy) && x.up.accuracy >= 0.65 &&
-    ratio(x.down.accuracy) && x.down.accuracy >= 0.65 &&
+    ratio(x.up.accuracy) && x.up.accuracy >= 0.75 &&
+    ratio(x.down.accuracy) && x.down.accuracy >= 0.75 &&
     Number.isInteger(x.currentMissStreak) && x.currentMissStreak <= 2;
 }
 
@@ -116,11 +115,18 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
     return reject('INSUFFICIENT_STRICT_FORWARD_EVIDENCE');
   const approved = [];
   for (const x of stats.candidates) {
-    const userFirst = options.userFirst === true && userFirst15sProofPass(x);
+    const firstLayerId = FIRST_LAYER_15S_IDS.includes(x.candidateId);
+    const userFirst = firstLayerId && userFirst15sProofPass(x);
+    const standardProof = oneTimeOrStrict15sProofPass(x);
+    // The 30-round exception is EXCLUSIVE to the priority entry point.
+    // Ordinary rescue retains its original qualification threshold.
+    const routeProof = options.userFirst === true
+      ? userFirst
+      : standardProof && (!firstLayerId || userFirst);
     if (!ALL_15S_IDS.includes(x.candidateId) ||
-        (options.userFirst === true && !FIRST_LAYER_15S_IDS.includes(x.candidateId)) ||
-        (options.excludeUserFirst === true && FIRST_LAYER_15S_IDS.includes(x.candidateId)) ||
-        (!oneTimeOrStrict15sProofPass(x) && !userFirst) ||
+        (options.userFirst === true && !firstLayerId) ||
+        (options.excludeUserFirst === true && firstLayerId) ||
+        !routeProof ||
         ABSORPTION.has(x.candidateId) !== absorptionOnly) continue;
     const snapshot = f.candidates?.[x.candidateId];
     const direction = snapshot?.decision;
@@ -136,7 +142,8 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
     // Explicit one-time exception: skip ONLY the Wilson-based price-edge test.
     // After bootstrap revocation, strict re-promotion again uses this exact gate.
     const bootstrapOnly=x.oneTimeBootstrapEligible===true && !forward15sProofPass(x);
-    if (!bootstrapOnly && !userFirst && (lower===null || lower-(mid+0.03)<0.02))continue;
+    const priceGateApplied = firstLayerId || (!bootstrapOnly && !userFirst);
+    if (priceGateApplied && (lower===null || lower-(mid+0.03)<0.02))continue;
     approved.push({
       id:x.candidateId, direction, observedAt:f.observedAt,
       score:finite(q.currentScore) ? q.currentScore : null,
@@ -146,7 +153,7 @@ export function selectForwardGated15sCandidates(row, stats, now = Date.now(), ph
         forwardAccuracy:x.forwardAccuracy,recent30Accuracy:x.recent30.accuracy,
         oneTimeBootstrap:bootstrapOnly,
         userAuthorizedFirstLayer:userFirst,
-        wilsonPriceGateApplied:!bootstrapOnly && !userFirst,
+        wilsonPriceGateApplied:priceGateApplied,
         lower95:lower,estimatedPriceMid:mid,estimatedNetEdge:lower-mid-0.03,
         upAccuracy:x.up.accuracy,downAccuracy:x.down.accuracy},
     });

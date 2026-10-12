@@ -99,17 +99,19 @@ test('panel lists only active candidates instead of resurrecting deleted models'
   assert.match(policyHtml,/停止晋级/);
   assert.match(policyHtml,/Edge Rescue/);
   assert.match(dom.get('spTitle').innerHTML,/当前无现役15秒策略可放行/);
-  assert.equal(dom.get('spQualified').textContent,'0/8');
-  assert.equal(dom.get('spObserve').textContent,'8/8');
+  assert.equal(dom.get('spQualified').textContent,'0/6');
+  assert.equal(dom.get('spObserve').textContent,'6/6');
   assert.doesNotMatch(dom.get('spRows').innerHTML,/BLENDED_04_PM_AGREE/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/ABS_PM_REGIME35/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/PM_LEAN_03/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/zl_new_vip75/);
+  assert.doesNotMatch(dom.get('spRows').innerHTML,/PM_TREND_045_CURRENT_03/);
+  assert.doesNotMatch(dom.get('spRows').innerHTML,/CURRENT_04_TREND_055_PM05/);
 });
 test('panel differentiates current live risk permission and blocked models',async()=>{
   const {dom}=await renderPolicy(policyFixture(true));
-  assert.equal(dom.get('spQualified').textContent,'1/8');
-  assert.equal(dom.get('spObserve').textContent,'7/8');
+  assert.equal(dom.get('spQualified').textContent,'1/6');
+  assert.equal(dom.get('spObserve').textContent,'5/6');
   assert.match(dom.get('spTitle').innerHTML,/1种现役15秒策略可放行/);
   assert.match(dom.get('spRows').innerHTML,/现役可放行/);
   assert.match(dom.get('spRows').innerHTML,/暂不可放行/);
@@ -130,4 +132,19 @@ test('official history labels historical speculative locks separately from promo
   assert.match(stats,/SELECTIVE_V2_EDGE_RESCUE_PRIMARY/);
   assert.match(stats,/当前路由：现役15秒/);
   assert.doesNotMatch(stats,/25—35秒/);
+});
+
+test('permanently deleted strategies cannot return in the policy panel even from a stale registry',async()=>{
+  const stale=policyFixture(true);
+  stale.models.all15sCandidateRegistry.candidates.push({
+    candidateId:'BLENDED_04_PM_AGREE', eligibleForProduction:true
+  });
+  stale.models.all15sCandidateRegistry.candidates.push({
+    candidateId:'ABS_PM_REGIME35', eligibleForProduction:true
+  });
+  const {dom}=await renderPolicy(stale);
+  assert.equal(dom.get('spQualified').textContent,'1/6');
+  for(const id of ['PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','BLENDED_04_PM_AGREE','ABS_PM_REGIME35']){
+    assert.equal(dom.get('spRows').innerHTML.includes(id),false,id);
+  }
 });

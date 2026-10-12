@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadow35Client } from './shadow35-client.mjs';
+import { createFast8Client } from './fast8-client.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
@@ -447,6 +448,10 @@ function log(event, extra = {}) {
 }
 
 const shadow35 = createShadow35Client({ dir: SHADOW35_DIR, log });
+const fast8 = createFast8Client({
+  dir: '/data/fast8-65', log,
+  onReady: () => { for (const row of rounds.values()) fast8.settle(row); },
+});
 
 const shadowV2 = createShadowV2Engine({
   file: SHADOW_V2_FILE,
@@ -643,6 +648,7 @@ function applyOfficialSettlement(row, direction, evidence = null, settledAt = Da
     : 'NO_DECISION';
   row.productionSettledAt = settledAt;
   row.nextSettleAt = 0;
+  fast8.settle(row);
   return true;
 }
 
@@ -4067,6 +4073,7 @@ async function pollSignal() {
     if (!r.ok) throw new Error(`HTTP_${r.status}`);
     const json = await r.json();
     const live = json?.live;
+    fast8.observe(live, Date.now());
     if (!live?.round) {
       shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, live, Date.now());
       return;
@@ -5868,6 +5875,7 @@ log('selective_v2_no_base_contest_status', selectiveV2NoBaseContestSummary());
 log('wait_rescue_backtest_snapshot', waitRescueBacktest());
 log('wait_rescue_shadow_status', waitRescueShadowSummary());
 ensureCurrentRound();
+fast8.start();
 setInterval(pollSignal, POLL_MS).unref();
 // A fresh, safe report is also available through Railway logs when a scheduled
 // notification cannot reach the public read-only HTTP endpoint.
@@ -6004,6 +6012,16 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow35-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(shadow35.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/fast8-stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(fast8.stats()));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/fast8-latest') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(fast8.latest()));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/no-base-specialist-stats') {
@@ -6273,3 +6291,4 @@ signalHttpServer.listen(PORT, '0.0.0.0', () => {
     lockQualityProductionEffect: productionUsesSelectiveV2() ? 'PRIMARY' : 'NONE_SHADOW_ONLY',
   });
 });
+

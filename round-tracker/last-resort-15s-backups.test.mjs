@@ -20,10 +20,10 @@ const make=(f=facts)=>{
   const r={roundStartMs:start,prediction:null,predictedAt:null};
   return {...r,v3NoBase15sShadow:freezeNoBase15s(r,f,start+15500)};
 };
-test('Option B registers exactly eight lower-priority experimental sources',()=>{
+test('Option B registers exactly seven lower-priority experimental sources',()=>{
   const ids=V3_NO_BASE_15S_CONFIGS.map(x=>x.id).filter(x=>!['PM_CURRENT25_SUPPORT08','CURRENT_03_PM_AGREE'].includes(x));
-  assert.equal(ids.length,8);
-  assert.equal(new Set(ids.map(lastResortSource)).size,8);
+  assert.equal(ids.length,7);
+  assert.equal(new Set(ids.map(lastResortSource)).size,7);
   assert.ok(ids.every(x=>lastResortSource(x)==='LOW_PRIORITY_15S_'+x+'_PRIMARY'));
   assert.equal(lastResortSource('CURRENT_03_PM_AGREE'),null);
   assert.equal(lastResortSource('PM_LEAN_03'),null);

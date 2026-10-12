@@ -13,7 +13,7 @@ const round = Date.parse('2026-10-11T15:00:00.000Z');
 const facts = {
   predictionMarketMappingReliable:true,predictionMarketRoundAligned:true,
   predictionMarketTopicId:'same-official-round',predictionMarketBookAgeMs:100,
-  predictionMarketUpMid:0.66,currentScore:0.7,currentTrendScore:0.8,
+  predictionMarketUpMid:0.60,currentScore:0.7,currentTrendScore:0.8,
   liveScore:0.9,distanceFromOpenBps:1.4,tradeCount15s:30,
   depthAgeMs:200,lastAggTradeAgeMs:200,tradeStreamStalled:false,
   absorptionRisk:false,regimeDirection:'UP',regimeAgreement:0.7,
@@ -36,8 +36,8 @@ function proof(id,n,hits) {
     oneTimeBootstrapRevoked:false
   };
 }
-const p1=proof('PM_FLOW15_CURRENT_03',19,17);
-const p2=proof('PM_CURRENT25_SUPPORT08',25,19);
+const p1=proof('PM_FLOW15_CURRENT_03',40,36);
+const p2=proof('PM_CURRENT25_SUPPORT08',40,35);
 const stats=(candidates)=>({
   version:V3_NO_BASE_15S_VERSION,
   scope:'OFFICIAL_SETTLED_STRICT_FORWARD_NO_BASE_AT_15S',
@@ -50,25 +50,26 @@ test('both user-selected 15s signals are first-layer eligible before ordinary 10
   const got=selectUserFirst15sCandidates(row(),stats([p2,p1]),round+16000);
   assert.deepEqual(got.candidates.map(x=>x.id),FIRST_LAYER_15S_IDS);
   assert.ok(got.candidates.every(x=>x.proof.userAuthorizedFirstLayer===true));
-  assert.ok(got.candidates.every(x=>x.proof.wilsonPriceGateApplied===false));
+  assert.ok(got.candidates.every(x=>x.proof.wilsonPriceGateApplied===true));
   // User opt-in is not silently granted to the original secondary routes.
   assert.equal(selectForwardGated15sCandidates(row(),stats([p2,p1]),round+16000,'early',{excludeUserFirst:true}).candidates.length,0);
 });
 
 test('unavailable first signal falls through to the second candidate',()=>{
-  const bad={...p1,forwardAccuracy:0.65};
+  const bad={...p1,forwardAccuracy:0.79};
   const got=selectUserFirst15sCandidates(row(),stats([bad,p2]),round+16000);
   assert.deepEqual(got.candidates.map(x=>x.id),['PM_CURRENT25_SUPPORT08']);
 });
 
 test('priority first layer auto-rejects poor overall/recent/directional quality or revoked bootstrap',()=>{
   for(const bad of [
-    {...p1,forwardAccuracy:0.69},
-    {...p1,recent10:{samples:10,accuracy:0.6}},
-    {...p1,up:{samples:9,accuracy:0.6}},
+    {...p1,forwardAccuracy:0.799},
+    {...p1,recent10:{samples:10,accuracy:0.7}},
+    {...p1,up:{samples:20,accuracy:0.74}},
+    {...p1,down:{samples:20,accuracy:0.74}},
     {...p1,currentMissStreak:3},
     {...p1,oneTimeBootstrapRevoked:true},
-    {...p1,strictForwardSamples:14,hits:12,misses:2}
+    {...p1,strictForwardSamples:29,hits:26,misses:3}
   ])assert.equal(userFirst15sProofPass(bad),false,JSON.stringify(bad));
 });
 
@@ -123,4 +124,34 @@ test('first-layer conflict no longer falls through to Selective V2 or Edge Rescu
   assert.ok(block.includes('selected:firstLayerWinner?.chosen.id'));
   assert.ok(!block.includes('return null;'),'direction disagreement must never discard both eligible candidates');
   assert.ok(source.includes('firstLayerWinner ? [firstLayerWinner] : []'));
+});
+
+test('legacy 15-sample bootstrap cannot bypass first-layer gating in early OR late routing',()=>{
+  const old={...proof('PM_FLOW15_CURRENT_03',27,23),oneTimeBootstrapEligible:true};
+  assert.equal(userFirst15sProofPass(old),false);
+  for(const phase of ['early','late']){
+    const time=round+(phase==='early'?16000:26000);
+    const got=selectForwardGated15sCandidates(row(),stats([old]),time,phase,
+      phase==='early'?{userFirst:true}:{});
+    assert.equal(got.candidates.length,0,phase);
+  }
+  const other=proof('PM_TREND_045_CURRENT_03',27,23);
+  other.oneTimeBootstrapEligible=true;
+  const got=selectForwardGated15sCandidates(row(),stats([other]),round+26000,'late');
+  assert.equal(got.candidates.length,1,'unrelated original fallback eligibility unchanged');
+});
+
+test('first-layer new sample, win-rate, directional and Wilson-price requirements',()=>{
+  const min=proof('PM_FLOW15_CURRENT_03',30,27);
+  assert.equal(userFirst15sProofPass(min),true);
+  assert.equal(selectUserFirst15sCandidates(row(),stats([min]),round+16000).candidates.length,1);
+  for(const p of [
+    {...min,strictForwardSamples:29,hits:26,misses:3},
+    {...min,forwardAccuracy:0.79},
+    {...min,recent10:{samples:10,accuracy:0.7}},
+    {...min,up:{samples:15,accuracy:0.74}},
+  ])assert.equal(userFirst15sProofPass(p),false);
+  assert.equal(selectUserFirst15sCandidates(
+    row({...facts,predictionMarketUpMid:0.86}),stats([min]),round+16000
+  ).candidates.length,0,'expensive midpoint is rejected even if direction proof passes');
 });

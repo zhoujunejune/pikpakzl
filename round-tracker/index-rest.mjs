@@ -4,6 +4,7 @@ import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadow35Client } from './shadow35-client.mjs';
 import { createFast8Client } from './fast8-client.mjs';
+import { FAST8_SOURCE, FAST8_MODEL, FAST8_MODE, LEGACY_MODE, fast8ProductionReadiness } from './fast8-production-gate.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
@@ -28,6 +29,9 @@ import { lastResortSource } from './last-resort-15s-backups.mjs';
 import { createClient } from 'redis';
 import { WebSocketServer } from 'ws';
 
+// Reversible signal-source switch: only FAST8 can enter the production router.
+// Legacy code and model artifacts remain intact for a later explicit rollback.
+const PRODUCTION_SIGNAL_SOURCE_MODE = String(process.env.PRODUCTION_SIGNAL_SOURCE_MODE || FAST8_MODE).trim().toUpperCase() === LEGACY_MODE ? LEGACY_MODE : FAST8_MODE;
 const PORT = Number(process.env.PORT || 3000);
 const SYMBOL = String(process.env.SYMBOL || 'BTCUSDT').toUpperCase();
 const SIGNAL_ORIGIN = String(process.env.SIGNAL_ORIGIN || 'https://signal-diagnostic-v3-production.up.railway.app').replace(/\/+$/, '');
@@ -256,6 +260,8 @@ const signalWsClients = new Set();
 const signalWss = new WebSocketServer({ noServer: true });
 
 function buildLockedSignalEnvelope(row, live) {
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
+      (row?.productionSource ?? live?.source) !== FAST8_SOURCE) return null;
   const round = Number(row?.roundStartMs ?? live?.round);
   const direction = String(row?.productionPrediction ?? live?.signal?.direction ?? '').toUpperCase();
   if (!Number.isFinite(round) || (direction !== 'UP' && direction !== 'DOWN')) return null;
@@ -338,6 +344,29 @@ async function ensureSignalRedisPublisher() {
   }
   await signalRedisConnectPromise;
   return signalRedisPublisher?.isReady ? signalRedisPublisher : null;
+}
+
+// Remove a cached legacy "latest" envelope during the source switch.
+// The append-only Redis settlement/order audit stream is deliberately preserved.
+async function clearPausedLegacyLatestSignal() {
+  if (PRODUCTION_SIGNAL_SOURCE_MODE !== FAST8_MODE) return;
+  const redis = await ensureSignalRedisPublisher();
+  if (!redis) {
+    log('fast8_legacy_cache_clear_deferred',{reason:'REDIS_NOT_READY'});
+    return;
+  }
+  try {
+    const cached = await redis.get(SIGNAL_REDIS_LATEST_KEY);
+    if (!cached) return;
+    let envelope;
+    try { envelope = JSON.parse(cached); } catch { envelope = null; }
+    if (envelope?.upstreamSource !== FAST8_SOURCE) {
+      await redis.del(SIGNAL_REDIS_LATEST_KEY);
+      log('fast8_paused_legacy_latest_cache_cleared',{source:envelope?.upstreamSource||'UNKNOWN'});
+    }
+  } catch(e) {
+    log('fast8_legacy_cache_clear_failed',{error:e?.message||String(e)});
+  }
 }
 
 async function persistAndPublishLockedSignal(envelope) {
@@ -1571,6 +1600,7 @@ function qualifiedShadowV6Candidate() {
 }
 
 function productionPolicyName() {
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE) return 'EXCLUSIVE_ZL_FAST8_65_STRICT_65_GATE_NO_LEGACY_FALLBACK';
   if (productionUsesSelectiveV2()) {
     return 'IMMUTABLE_FIRST_LOCK_SELECTIVE_V2';
   }
@@ -4679,6 +4709,7 @@ function freezeProductionLock(row, live) {
   const direction = live?.signal?.direction;
   if (direction !== 'UP' && direction !== 'DOWN') return false;
   if (row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN') return false;
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE && live.source !== FAST8_SOURCE) return false;
   // Explicitly retired: never emit new locks for these historical signal sources.
   if (live.source === 'ZL_NEW_VIP75_PRIMARY' || live.source === 'LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY') return false;
   if (isPermanentlyRetiredProductionSignal(live.source, live.model)) return false;
@@ -5266,7 +5297,9 @@ function all15sCandidateRegistryStats() {
     userOptInCandidates:0,
     forwardGatedCandidates:status.length,
     forwardQualifiedCandidates:status.filter(x=>x.forwardQualified).length,
-    productionRoute:'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT',
+    productionRoute:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
+      ? 'EXCLUSIVE_ZL_FAST8_65_8SEC_THEN_65_QUALITY_GATE_THEN_WAIT_ALL_LEGACY_PAUSED'
+      : 'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT',
     newPromotionsEnabled:false,
     late15sFallbackEnabled:false,
     firstLayerCandidates:[...FIRST_LAYER_15S_IDS],
@@ -5374,9 +5407,54 @@ function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
   return null;
 }
 
+// In this mode all previous production branches are suspended, NOT deleted.
+// A valid 8-second shadow direction remains visible during qualification, but
+// will never become a Redis/WS order signal while the 65% gate is unmet.
+function fast8ExclusiveSignalPayload(row, expectedRound, now) {
+  const stats = fast8.stats();
+  const readiness = fast8ProductionReadiness(stats, fast8.latest(), expectedRound, now);
+  if (readiness.eligible && row && !['UP','DOWN'].includes(row.productionPrediction)) {
+    const prediction = readiness.preview;
+    const live = {
+      round: expectedRound, status: 'LOCKED',
+      signal: {direction:prediction.direction, score:null,confidence:null,modelProbability:null},
+      input: {round:expectedRound}, generatedAt:prediction.persistedAtMs,
+      source:FAST8_SOURCE,model:FAST8_MODEL,modelVersion:prediction.modelVersion,
+      productionPolicy:productionPolicyName(),fallbackUsed:false,
+      fast8Qualification:{validationSamples:stats.validation.labeledPredictions,
+        accuracy:stats.validation.endToEndAccuracy,verifiedAt:stats.generatedAtMs},
+    };
+    if (freezeProductionLock(row, live)) {
+      log('fast8_exclusive_production_lock',{round:expectedRound,
+        direction:prediction.direction,modelVersion:prediction.modelVersion});
+      logProductionSignalState(live);
+      return {ok:true,live};
+    }
+  }
+  const reason = row && ['UP','DOWN'].includes(row.productionPrediction)
+    ? 'PAUSED_LEGACY_LOCK_UNTIL_NEXT_ROUND' : readiness.reason;
+  const live = {
+    round:expectedRound,status:'WAIT',signal:null,input:{round:expectedRound},
+    generatedAt:null,source:FAST8_SOURCE,model:FAST8_MODEL,
+    productionPolicy:productionPolicyName(),fallbackUsed:false,
+    waitReason: reason || 'FAST8_NOT_READY',
+    fast8Preview:readiness.preview,
+    fast8Gate:{eligible:readiness.eligible,
+      accuracy:stats.predictionAccuracy??null,samples:stats.labeledPredictions??0,
+      validationPassed:stats.validation?.passed === true},
+    otherProductionSourcesPaused:true,
+  };
+  logProductionSignalState(live);
+  return {ok:true,live};
+}
+
 function productionSignalPayload(now = Date.now()) {
   const expectedRound = Math.floor(Number(now) / 300000) * 300000;
   const row = rounds.get(String(expectedRound)) || null;
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
+      !(row?.productionSource === FAST8_SOURCE && ['UP','DOWN'].includes(row.productionPrediction))) {
+    return fast8ExclusiveSignalPayload(row, expectedRound, now);
+  }
   // A production direction is immutable for the entire 5-minute round.
   // If it has already been frozen, every subsequent request returns exactly that lock.
   if (row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN') {
@@ -5802,6 +5880,13 @@ function payload() {
     summary: summary(),
     productionSummary: productionSummary(),
     productionPolicy: productionPolicyName(),
+    productionSignalSourceMode:PRODUCTION_SIGNAL_SOURCE_MODE,
+    fast8ProductionStatus:{model:FAST8_MODEL,source:FAST8_SOURCE,otherSourcesPaused:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE,
+      ...(()=>{const st=fast8.stats(), current=Math.floor(Date.now()/300000)*300000,
+        r=fast8ProductionReadiness(st,fast8.latest(),current);return {gateEligible:r.eligible,
+        gateReason:r.reason,preview:r.preview,validationPassed:st.validation?.passed===true,
+        accuracy:st.predictionAccuracy??null,settledSamples:st.labeledPredictions??0,
+        trainingSamples:st.training?.validTrainingSamples??0};})()},
     productionQualification: {
       minForwardSamples: PRODUCTION_MIN_FORWARD_SAMPLES,
       minForwardAccuracy: PRODUCTION_MIN_FORWARD_ACCURACY,
@@ -5950,6 +6035,7 @@ try {
   log('production_signal_background_error', { error: e?.message || String(e) });
 }
 void ensureSignalRedisPublisher();
+void clearPausedLegacyLatestSignal();
 log('locked_signal_transport_bootstrap', {
   model: SIGNAL_MODEL_NAME,
   redisConfigured: Boolean(SIGNAL_REDIS_URL),
@@ -6216,7 +6302,9 @@ const signalHttpServer = http.createServer((req, res) => {
     return res.end(JSON.stringify({
       ok: true,
       model: SIGNAL_MODEL_NAME,
-      signal: latestSignalEnvelope,
+      signal:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE &&
+        (live?.source!==FAST8_SOURCE || live.status!=='LOCKED') ? null : latestSignalEnvelope,
+      productionSignalSourceMode:PRODUCTION_SIGNAL_SOURCE_MODE,
       transport: {
         redisConfigured: Boolean(SIGNAL_REDIS_URL),
         redisConnected: signalRedisConnected,

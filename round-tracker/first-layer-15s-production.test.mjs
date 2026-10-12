@@ -155,3 +155,22 @@ test('first-layer new sample, win-rate, directional and Wilson-price requirement
     row({...facts,predictionMarketUpMid:0.86}),stats([min]),round+16000
   ).candidates.length,0,'expensive midpoint is rejected even if direction proof passes');
 });
+
+test('production has exactly three live signal layers and no future 15s promotion',()=>{
+  const source=fs.readFileSync(fileURLToPath(new URL('./index-rest.mjs',import.meta.url)),'utf8');
+  const start=source.indexOf('function productionSignalPayload(now = Date.now())');
+  const end=source.indexOf('if (productionUsesShadowV3())',start);
+  const live=source.slice(start,end);
+  assert.ok(start>0 && end>start);
+  assert.match(live,/tryUserFirst15sLock\(row, now\)/);
+  assert.match(live,/tryAutoPromoted15sLock\(row, now, 'early'\)/);
+  assert.match(live,/if \(productionUsesSelectiveV2\(\)\)/);
+  assert.doesNotMatch(live,/tryAutoPromoted15sLock\(row, now, 'late'\)/);
+  assert.match(source,/phase !== 'early'\) return null/);
+  assert.match(source,/newPromotionsEnabled:false/);
+  assert.match(source,/late15sFallbackEnabled:false/);
+  assert.match(source,/FROZEN_STARTUP_GRANTS\.has\(x\.candidateId\) && x\.oneTimeBootstrapEligible === true/);
+  assert.match(source,/const FROZEN_STARTUP_GRANTS = new Set/);
+  assert.match(source,/!deleted\.has\(c\.candidateId\)/);
+  assert.ok(!source.includes("productionRoute:'USER_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_EDGE_THEN_LATE_15S'"));
+});

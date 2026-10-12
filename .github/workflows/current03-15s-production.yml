@@ -45,7 +45,7 @@ jobs:
       - name: Frozen 15s direction and circuit tests
         run: |
           node --test round-tracker/current03-pm-agree-production.test.mjs round-tracker/pm-current25-support08-production.test.mjs round-tracker/unified-15s-candidate-router.test.mjs round-tracker/last-resort-15s-backups.test.mjs round-tracker/v3-no-base-15s-audit.test.mjs round-tracker/edge-rescue-timed-fuse.test.mjs
-      - name: Verify accuracy-first routing and automatic strict-forward promotion
+      - name: Verify frozen 15s cohort and three-layer production routing
         run: |
           node --input-type=module -e '
             import fs from "node:fs";
@@ -55,25 +55,22 @@ jobs:
             const early=code.indexOf("tryAutoPromoted15sLock(row, now, \x27early\x27)");
             const base=code.indexOf("evaluateSelectiveQualityV2(baseDirection");
             const edge=code.indexOf("selectiveV2EdgeRescueFuseState(baseDirection)");
-            const late=code.indexOf("tryAutoPromoted15sLock(row, now, \x27late\x27)");
-            assert(early>=0&&base>early&&edge>base&&late>edge);
-            assert(source.includes("function tryAutoPromoted15sLock(row, now, phase)"));
-            assert(source.includes("phase === \x27early\x27 ? elapsed >= 15000 && elapsed <= 20000"));
-            assert(source.includes("phase === \x27late\x27 ? elapsed >= 25000 && elapsed <= 35000"));
+            assert(early>=0 && base>early && edge>base);
+            assert(!code.includes("tryAutoPromoted15sLock(row, now, \x27late\x27)"));
+            assert(source.includes("phase !== \x27early\x27) return null"));
+            assert(source.includes("const FROZEN_STARTUP_GRANTS = new Set("));
+            assert(source.includes("x.oneTimeBootstrapEligible === true"));
+            assert(source.includes("newPromotionsEnabled:false"));
+            assert(source.includes("late15sFallbackEnabled:false"));
+            assert(source.includes("current03PmAgreeProductionFuseSummary(rounds, chosen.source)"));
+            assert(source.includes("fuse.recordLock(chosen.direction,row.roundStartMs)"));
+            assert(code.includes("freezeProductionLock(row, live)"));
             assert(!code.includes("selectLastResort15sBackups(row, now)"));
             assert(!code.includes("selectCurrent03PmAgree15s(row, now)"));
             assert(!code.includes("selectPmCurrent25Support0815s(row, now)"));
-            assert(source.includes("AUTO_PROMOTED_STRICT_FORWARD_15S_FIRST_LOCK"));
-            assert(source.includes("AUTO_PROMOTED_STRICT_FORWARD_AFTER_V2_EDGE_WAIT"));
-            assert(source.includes("current03PmAgreeProductionFuseSummary(rounds, chosen.source)"));
-            assert(source.includes("selectForwardGated15sCandidates(row, forwardStatus, now, phase)"));
-            assert(source.includes("fuse.recordLock(chosen.direction,row.roundStartMs)"));
-            assert(source.includes("AUTO_PROMOTED_STRICT_FORWARD_100"));
-            assert(code.includes("freezeProductionLock(row, live)"));
             const qualification=fs.readFileSync("round-tracker/unified-15s-candidate-router.mjs","utf8");
             assert(qualification.includes("strictForwardSamples >= 100"));
             assert(qualification.includes("wilsonLower95"));
             assert(qualification.includes("recent30.accuracy"));
-            assert(qualification.includes("lower-(mid+0.03)<0.02"));
             assert(!qualification.includes("PM_LEAN_03"));
           '

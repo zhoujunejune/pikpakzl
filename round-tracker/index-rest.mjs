@@ -5077,7 +5077,22 @@ let bootstrapLedger = null;
 try {
   const parsed = JSON.parse(fs.readFileSync(BOOTSTRAP_LEDGER_FILE, 'utf8'));
   if (parsed?.version === 1 && parsed?.candidates && typeof parsed.candidates === 'object') bootstrapLedger = parsed;
-} catch (_) { /* First boot may initialize only with complete pre-cutoff evidence. */ }
+} catch (_) { /* Missing ledger is fail-closed for new production admissions. */ }
+// Frozen production cohort from the 2026-10-12 official-forward snapshot.
+// No future candidate promotions; a settled <70% revocation is irreversible.
+// Startup also requires an existing, non-revoked durable grant so a lost
+// ledger cannot recreate a signal after restart or redeployment.
+const FROZEN_ACTIVE_15S_IDS = new Set([
+  'CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03',
+  'CURRENT_03_TREND_045_PM08','PM_REGIME35_SUPPORT08',
+  'PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15',
+]);
+const FROZEN_STARTUP_GRANTS = new Set(
+  Object.entries(bootstrapLedger?.candidates || {})
+    .filter(([id, state]) => FROZEN_ACTIVE_15S_IDS.has(id) &&
+      state?.revoked === false && Number(state.samples) > 0)
+    .map(([id]) => id)
+);
 function durable15sSummary() {
   const summary = v3NoBase15sShadowSummary(rounds);
   const cutoff = Date.parse('2026-10-11T07:02:27.939Z');
@@ -5142,7 +5157,7 @@ function durable15sSummary() {
     }
     state.processed = Array.from(processed);
     candidate.oneTimeBootstrapRevoked = state.revoked;
-    candidate.oneTimeBootstrapEligible = !state.revoked;
+    candidate.oneTimeBootstrapEligible = !state.revoked && FROZEN_STARTUP_GRANTS.has(id);
     candidate.oneTimeBootstrapDurableSamples = state.samples;
     candidate.oneTimeBootstrapDurableAccuracy = state.samples ? state.hits/state.samples : null;
   }
@@ -5164,7 +5179,8 @@ function durable15sSummary() {
   const deleted = new Set(Object.entries(next.candidates)
     .filter(([,state]) => state?.revoked === true).map(([id]) => id));
   for (const id of deleted) delete lastResort15sFuses[id];
-  return {...summary,candidates:summary.candidates.filter(c=>!deleted.has(c.candidateId))};
+  return {...summary,candidates:summary.candidates.filter(c=>
+    FROZEN_STARTUP_GRANTS.has(c.candidateId) && !deleted.has(c.candidateId))};
 }
 
 function all15sCandidateRegistryStats() {
@@ -5172,7 +5188,8 @@ function all15sCandidateRegistryStats() {
   const byId = new Map(shadow.candidates.map(x => [x.candidateId, x]));
   const permanentlyDeleted = new Set(Object.entries(bootstrapLedger?.candidates || {})
     .filter(([,state]) => state?.revoked === true).map(([id])=>id));
-  const status = ALL_15S_IDS.filter(id => !permanentlyDeleted.has(id) && byId.has(id)).map(id => {
+  const status = ALL_15S_IDS.filter(id => FROZEN_STARTUP_GRANTS.has(id) &&
+    !permanentlyDeleted.has(id) && byId.has(id)).map(id => {
     const manual = id === PM_CURRENT25_SUPPORT08_MODEL || id === CURRENT03_PM_AGREE_MODEL;
     const source = candidateProductionSource(id);
     const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
@@ -5180,11 +5197,12 @@ function all15sCandidateRegistryStats() {
     const proof = byId.get(id);
     const isFirstLayer = FIRST_LAYER_15S_IDS.includes(id);
     const firstLayerEligible = isFirstLayer && userFirst15sProofPass(proof);
-    const eligible = isFirstLayer ? firstLayerEligible : oneTimeOrStrict15sProofPass(proof);
+    const eligible = FROZEN_STARTUP_GRANTS.has(id) && proof?.oneTimeBootstrapEligible === true &&
+      (isFirstLayer ? firstLayerEligible : oneTimeOrStrict15sProofPass(proof));
     return {
       candidateId:id,
       source,
-      entryPolicy:FIRST_LAYER_15S_IDS.includes(id) ? 'USER_FIRST_15S_FORWARD_80_MIN30_PRICE_GATED' : 'AUTO_PROMOTE_15S_FIRST_IF_STRICT_FORWARD_QUALIFIED',
+      entryPolicy:FIRST_LAYER_15S_IDS.includes(id) ? 'FROZEN_FIRST_LAYER_15S_RISK_GATED' : 'FROZEN_EXISTING_15S_NO_NEW_PROMOTION',
       firstLayerPriority:FIRST_LAYER_15S_IDS.indexOf(id) + 1 || null,
       firstLayerEligible,
       eligibleForProduction:eligible,
@@ -5205,7 +5223,9 @@ function all15sCandidateRegistryStats() {
     userOptInCandidates:0,
     forwardGatedCandidates:status.length,
     forwardQualifiedCandidates:status.filter(x=>x.forwardQualified).length,
-    productionRoute:'USER_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_EDGE_THEN_LATE_15S',
+    productionRoute:'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_EDGE_THEN_WAIT',
+    newPromotionsEnabled:false,
+    late15sFallbackEnabled:false,
     firstLayerCandidates:[...FIRST_LAYER_15S_IDS],
     firstLayerWindowMs:[15000,20000],
     firstLayerRiskPolicy:{minForwardSamples:30,minForwardAccuracy:0.80,
@@ -5219,9 +5239,10 @@ function all15sCandidateRegistryStats() {
 // Strictly qualified 15s signal paths are preferred at their original 15s freeze.
 // Their official-forward qualification, pricing proxy, and existing independent
 // 30-minute fuses are all checked at the moment of production lock.
-// If nothing qualifies by 20s, V2 + Edge Rescue retain their 22s path;
-// previously qualified 15s candidates can still rescue between 25-35s.
+// If nothing qualifies by 20s, V2 + Edge Rescue retain their 22s path.
+// The former 25-35s fourth-layer rescue is permanently disabled.
 function tryAutoPromoted15sLock(row, now, phase) {
+  if (phase !== 'early') return null; // No 25-35 second fourth layer.
   return tryPriorityAware15sLock(row, now, phase, false);
 }
 
@@ -5230,15 +5251,17 @@ function tryUserFirst15sLock(row, now) {
 }
 
 function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
-  if (!row || !productionUsesSelectiveV2()) return null;
+  if (!row || !productionUsesSelectiveV2() || phase !== 'early') return null;
   const elapsed = now-row.roundStartMs;
   const eligibleWindow = phase === 'early' ? elapsed >= 15000 && elapsed <= 20000 :
     phase === 'late' ? elapsed >= 25000 && elapsed <= 35000 : false;
   if (!eligibleWindow || !row.v3NoBase15sShadow) return null;
   const forwardStatus = durable15sSummary();
+  const currentOnly = {...forwardStatus,candidates:forwardStatus.candidates.filter(x =>
+    FROZEN_STARTUP_GRANTS.has(x.candidateId) && x.oneTimeBootstrapEligible === true)};
   const promoted = firstLayer
-    ? selectUserFirst15sCandidates(row, forwardStatus, now)
-    : selectForwardGated15sCandidates(row, forwardStatus, now, phase);
+    ? selectUserFirst15sCandidates(row, currentOnly, now)
+    : selectForwardGated15sCandidates(row, currentOnly, now, phase);
   // These two candidates belong exclusively to the new first layer at 15s.
   // Ordinary early fallback must not reintroduce a rejected/conflicting lock.
   const candidates = firstLayer || phase !== 'early'
@@ -5534,11 +5557,6 @@ function productionSignalPayload(now = Date.now()) {
       logProductionSignalState(live);
       return {ok:true,live};
     }
-
-    // Only independently auto-promoted 15s strategies may rescue at 25-35s.
-    // This is a second opportunity, not a way to bypass the 100-round gate.
-    const latePromoted = tryAutoPromoted15sLock(row, now, 'late');
-    if (latePromoted) return latePromoted;
 
     const reasons = !baseDirection
       ? ['WAITING_FOR_BASE_DIRECTION']

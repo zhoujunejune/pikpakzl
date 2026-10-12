@@ -70,7 +70,7 @@ function policyFixture(approved) {
       'PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03',
       'CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08',
       'PM_REGIME35_SUPPORT08','PM_CURRENT25_SUPPORT08',
-      'ABS_PM_CURRENT15','ABS_PM_REGIME35'].map((id,i)=>make(id,approved&&i===0))
+      'ABS_PM_CURRENT15'].map((id,i)=>make(id,approved&&i===0))
   }}};
 }
 async function renderPolicy(payload){
@@ -98,17 +98,17 @@ test('panel lists only active candidates instead of resurrecting deleted models'
   assert.match(policyHtml,/25—35秒/);
   assert.match(policyHtml,/Edge Rescue/);
   assert.match(dom.get('spTitle').innerHTML,/当前无已晋级15秒策略/);
-  assert.equal(dom.get('spQualified').textContent,'0/9');
-  assert.equal(dom.get('spObserve').textContent,'9/9');
+  assert.equal(dom.get('spQualified').textContent,'0/8');
+  assert.equal(dom.get('spObserve').textContent,'8/8');
   assert.doesNotMatch(dom.get('spRows').innerHTML,/BLENDED_04_PM_AGREE/);
-  assert.match(dom.get('spRows').innerHTML,/ABS_PM_REGIME35/);
+  assert.doesNotMatch(dom.get('spRows').innerHTML,/ABS_PM_REGIME35/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/PM_LEAN_03/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/zl_new_vip75/);
 });
 test('panel differentiates promoted candidate and observation-only model',async()=>{
   const {dom}=await renderPolicy(policyFixture(true));
-  assert.equal(dom.get('spQualified').textContent,'1/9');
-  assert.equal(dom.get('spObserve').textContent,'8/9');
+  assert.equal(dom.get('spQualified').textContent,'1/8');
+  assert.equal(dom.get('spObserve').textContent,'7/8');
   assert.match(dom.get('spTitle').innerHTML,/1种15秒策略具备晋级资格/);
   assert.match(dom.get('spRows').innerHTML,/资格已达标/);
   assert.match(dom.get('spRows').innerHTML,/观察训练中/);

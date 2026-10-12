@@ -24,16 +24,19 @@ test('passing prospective proof and a clean timely learned decision are required
   assert.equal(res.preview.direction,'UP');
   assert.equal(fast8ProductionReadiness(stats,latest,R+300000,now).eligible,false);
 });
-test('real 163-round 45.4% baseline cannot become an order signal',()=>{
+test('explicit FAST8-only route allows timely baseline direction before 65% proof',()=>{
   const {stats,latest}=mock();
   stats.validation={...stats.validation,passed:false,expectedRounds:163,
     onTimeRounds:163,labeledPredictions:163,endToEndAccuracy:74/163};
   stats.training.validTrainingSamples=163;
+  stats.modelVersion='ZL_FAST8_65-baseline-v2';
   latest.signal.modelVersion='ZL_FAST8_65-baseline-v2';
+  latest.signal.pUpRaw=null;
+  latest.signal.fallbackLevel='MOMENTUM60_BASELINE';
   const r=fast8ProductionReadiness(stats,latest,R,now);
-  assert.equal(r.eligible,false);
-  assert.equal(r.reason,'FAST8_FORWARD_65_GATE_NOT_MET');
-  assert.equal(r.preview.direction,'UP','direction is still visible for read-only monitoring');
+  assert.equal(r.eligible,true);
+  assert.equal(r.reason,null);
+  assert.equal(r.preview.direction,'UP');
 });
 test('reject late publication, wrong source, stale status, missing features and fallback',()=>{
   const {stats,latest}=mock();

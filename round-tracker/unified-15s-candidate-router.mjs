@@ -20,7 +20,7 @@ export const FIRST_LAYER_15S_IDS = Object.freeze([
 const isDirection = x => x === 'UP' || x === 'DOWN';
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const ratio = x => finite(x) && x >= 0 && x <= 1;
-const ABSORPTION = new Set(['ABS_PM_CURRENT15', 'ABS_PM_REGIME35']);
+const ABSORPTION = new Set(['ABS_PM_CURRENT15']);
 
 export function candidateProductionSource(id) {
   if (id === 'PM_CURRENT25_SUPPORT08') return 'PM_CURRENT25_SUPPORT08_15S_PRIMARY';

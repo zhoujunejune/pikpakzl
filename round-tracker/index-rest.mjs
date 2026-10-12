@@ -5099,6 +5099,8 @@ const BOOTSTRAP_LEDGER_FILE = process.env.BOOTSTRAP_LEDGER_FILE || '/data/15s-bo
 const PERMANENTLY_REMOVED_SIGNALS = new Set([
   'PM_TREND_045_CURRENT_03', 'CURRENT_04_TREND_055_PM05',
   'BLENDED_04_PM_AGREE', 'ABS_PM_REGIME35', 'PM_LEAN_03', 'zl_new_vip75',
+  // Official production: 27 HIT / 41 settled = 65.85%; permanently retired 2026-10-13.
+  'SELECTIVE_V2_EDGE_RESCUE_PRIMARY', 'SELECTIVE_V2_EDGE_RESCUE_V1',
 ]);
 let bootstrapLedger = null;
 function permanentlyRemovedSignalIds(ledger = bootstrapLedger) {
@@ -5113,7 +5115,7 @@ function isPermanentlyRetiredProductionSignal(source, model) {
   const origin = String(source || '');
   const match = /^LOW_PRIORITY_15S_(.+)_PRIMARY$/.exec(origin);
   return origin === 'ZL_NEW_VIP75_PRIMARY' ||
-    retired.has(String(model || '')) ||
+    retired.has(origin) || retired.has(String(model || '')) ||
     (match !== null && retired.has(match[1]));
 }
 try {
@@ -5264,7 +5266,7 @@ function all15sCandidateRegistryStats() {
     userOptInCandidates:0,
     forwardGatedCandidates:status.length,
     forwardQualifiedCandidates:status.filter(x=>x.forwardQualified).length,
-    productionRoute:'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_EDGE_THEN_WAIT',
+    productionRoute:'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT',
     newPromotionsEnabled:false,
     late15sFallbackEnabled:false,
     firstLayerCandidates:[...FIRST_LAYER_15S_IDS],
@@ -5559,9 +5561,10 @@ function productionSignalPayload(now = Date.now()) {
       }
     }
 
-    // Edge Rescue is independent of the Selective V2 direction fuse.
-    // Keep Edge's original eligibility and its own timed/official-result fuse.
-    const edgeRescue = baseDirection && q && !q.pass
+    // Edge Rescue was permanently retired after 27/41 official production hits (<70%).
+    // Keep its old evidence for audit but never evaluate or publish a new Edge signal.
+    const edgeRescue = !isPermanentlyRetiredProductionSignal('SELECTIVE_V2_EDGE_RESCUE_PRIMARY', SELECTIVE_V2_EDGE_RESCUE_VERSION) &&
+      baseDirection && q && !q.pass
       ? evaluateSelectiveV2EdgeRescueRow(row, q)
       : null;
     const edgeFuse = edgeRescue?.decision === baseDirection

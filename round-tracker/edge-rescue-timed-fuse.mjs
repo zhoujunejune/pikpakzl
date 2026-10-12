@@ -13,6 +13,9 @@ const fresh = () => ({
 export function createTimedEdgeRescueFuse({
   file, cooldownMs = 30 * 60 * 1000, now = () => Date.now(), log = () => {},
   productionSource = 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY',
+  // First-layer opt-in: cooldown ALWAYS requires two officially settled trial HITs.
+  // Existing Edge/V2/other candidates keep their original recovery behavior.
+  requireTwoHitRecovery = false,
 } = {}) {
   const scopes = Object.fromEntries(KEYS.map(k => [k, fresh()]));
   let rearmRevision = null;
@@ -114,7 +117,7 @@ export function createTimedEdgeRescueFuse({
     if (x.mode === 'OPEN' && rawFused) {
       startCooldown(key, at, 'ACCURACY_OR_MISS_STREAK');
     } else if (x.mode === 'COOLDOWN' && at >= x.until) {
-      if (rawFused) {
+      if (rawFused || requireTwoHitRecovery) {
         x.mode = 'HALF_OPEN';
         x.reason = 'COOLDOWN_EXPIRED_ONE_TRIAL';
         emit(key, x.reason);
@@ -122,7 +125,7 @@ export function createTimedEdgeRescueFuse({
       } else {
         open(key, 'COOLDOWN_EXPIRED_FORWARD_RECOVERED');
       }
-    } else if ((x.mode === 'HALF_OPEN' && x.pendingRound == null ||
+    } else if (((x.mode === 'HALF_OPEN' && x.pendingRound == null && !requireTwoHitRecovery) ||
                 x.mode === 'PROBATION_OPEN') && !rawFused) {
       open(key, 'FORWARD_ACCURACY_RECOVERED');
     }

@@ -49,9 +49,9 @@ const previewCard = `<div class="c" id="waitVisibilityCard">
 </div>`;
 
 const policyCard = `<div class="c" id="signalPolicyCard">
-<div class="k">生产策略 · 固定现役15秒信号（停止晋级）</div>
+<div class="k">生产信号来源 · 独占模式与候选风控</div>
 <div class="big" id="spTitle">正在读取现役信号状态...</div>
-<div class="muted" style="margin-top:6px">仅现役信号可进入生产；不再接受任何新晋级，仍按原风控决定是否放行。</div>
+<div class="muted" style="margin-top:6px">以当前生产信号源开关为准；被暂停的旧策略不参与锁定，历史统计继续保留。</div>
 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px">
   <span class="on" style="padding:6px 8px;border:1px solid #365b48;border-radius:7px">15—20秒 · 固定现役信号</span>
   <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">未锁定 → Selective V2</span>
@@ -89,6 +89,17 @@ async function load(){
   if(!r.ok||!j||j.ok!==true)throw Error(j&&j.error||'训练数据不可用');
   var registry=j.models&&j.models.all15sCandidateRegistry;
   if(!registry||!Array.isArray(registry.candidates))throw Error('现役信号注册表不存在');
+  if(String(registry.productionRoute||'').indexOf('EXCLUSIVE_ZL_FAST8_65')===0){
+    globalThis.__active15sCandidateIds=[];
+    e('spQualified').textContent='0';
+    e('spObserve').textContent=String(registry.candidates.length)+'条暂停';
+    e('spFreshness').textContent='已同步';
+    e('spTitle').innerHTML='<span class="warn">ZL_FAST8_65 唯一候选 · 旧信号源全部暂停</span>';
+    e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">15秒候选、Selective V2 与独立补救均暂停生产放行；模型、持久化淘汰记录及官方历史保留。</td></tr>';
+    e('spRule').textContent='8秒影子方向可查看；实盘信号必须通过1000轮前瞻65%与已训练模型质量门槛，未达标自动 WAIT。';
+    e('spNotice').textContent='当前路由：ZL_FAST8_65（只读预览） → 独立质量门槛 → 未达标 WAIT；其他生产来源不兜底。';
+    return;
+  }
   var by={};registry.candidates.forEach(function(x){if(x&&x.candidateId)by[x.candidateId]=x});
   var banned={'PM_TREND_045_CURRENT_03':true,'CURRENT_04_TREND_055_PM05':true,'BLENDED_04_PM_AGREE':true,'ABS_PM_REGIME35':true,'PM_LEAN_03':true,'zl_new_vip75':true};
   var ids=registry.candidates.filter(function(x){return x&&x.candidateId&&!banned[x.candidateId]}).map(function(x){return x.candidateId});
@@ -168,7 +179,7 @@ const statsScript = `<script>(function(){
 function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
-function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
+function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='ZL_FAST8_65_PRIMARY')return 'ZL_FAST8_65（8秒）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2（历史）';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
 var errMsg='';
@@ -208,7 +219,9 @@ e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedR
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent='当前路由：现役15秒(15—20秒) → Selective V2 → 硬熔断独立补救 → WAIT（Edge 已永久淘汰） · 只认 Binance Prediction 官方结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · Shadow 特征观察期 '+((h.shadowObserveMs||j.shadowObserveMs)?Number(h.shadowObserveMs||j.shadowObserveMs)/1000+'秒':'读取中')+' · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
+e('rsMeta').textContent=(j.productionSignalSourceMode==='FAST8_ONLY'
+ ? '当前唯一来源：ZL_FAST8_65（8秒）。旧信号全部暂停 · 8秒已结算 '+(j.fast8ProductionStatus?.settledSamples||0)+'轮 · 命中率 '+(j.fast8ProductionStatus?.accuracy==null?'-':(100*j.fast8ProductionStatus.accuracy).toFixed(2)+'%')+' · '+(j.fast8ProductionStatus?.preview?.direction||'等待本轮')+'（仅观察） · '+(j.fast8ProductionStatus?.gateEligible?'已通过质量门槛':'实盘门槛未通过，不下单')+' · '
+ : '当前路由：现役15秒(15—20秒) → Selective V2 → 硬熔断独立补救 → WAIT（Edge 已永久淘汰） · ')+'只认 Binance Prediction 官方结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · Shadow 特征观察期 '+((h.shadowObserveMs||j.shadowObserveMs)?Number(h.shadowObserveMs||j.shadowObserveMs)/1000+'秒':'读取中')+' · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
 var a=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)}).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();

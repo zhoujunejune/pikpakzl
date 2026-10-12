@@ -1,0 +1,27 @@
+name: Isolated FAST8 Adaptive Shadow Tests
+on:
+  push:
+    paths:
+      - 'fast8-adaptive-shadow/**'
+      - '.github/workflows/zl-fast8-adaptive.yml'
+  pull_request:
+    paths:
+      - 'fast8-adaptive-shadow/**'
+      - '.github/workflows/zl-fast8-adaptive.yml'
+permissions:
+  contents: read
+jobs:
+  shadow-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check (no services, no trades)
+        run: |
+          node --check fast8-adaptive-shadow/core.mjs
+          node --check fast8-adaptive-shadow/app.mjs
+          node --check fast8-adaptive-shadow/trainer.mjs
+      - name: Unit tests (synthetic offline only)
+        run: node --test fast8-adaptive-shadow/core.test.mjs

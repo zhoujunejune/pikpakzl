@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
- freezeNoBase15s,summarizeNoBase15s,V3_NO_BASE_15S_VERSION
+ freezeNoBase15s,summarizeNoBase15s,below15sPermanentDeleteThreshold,V3_NO_BASE_15S_VERSION
 } from './v3-no-base-15s-audit.mjs';
 const round=Date.parse('2026-10-10T11:00:00.000Z');
 const facts={
@@ -118,15 +118,15 @@ test('absorption-only pilots preserve original WAIT and never waive feed quality
  assert.equal(f.facts.absorptionRiskAtFreeze,true);
  assert.equal(f.candidates.CURRENT_03_PM_AGREE.decision,'WAIT');
  assert.equal(f.candidates.ABS_PM_CURRENT15.decision,'UP');
- assert.equal(f.candidates.ABS_PM_REGIME35.decision,'UP');
+ assert.equal(Object.hasOwn(f.candidates,'ABS_PM_REGIME35'),false);
  const stale=freezeNoBase15s(r,{...absorbed,depthAgeMs:8000},start+15500);
  assert.equal(stale.candidates.ABS_PM_CURRENT15.decision,'WAIT');
- assert.equal(stale.candidates.ABS_PM_REGIME35.decision,'WAIT');
+ assert.equal(Object.hasOwn(stale.candidates,'ABS_PM_REGIME35'),false);
  const weak=freezeNoBase15s(r,{...absorbed,predictionMarketUpMid:0.52},start+15500);
  assert.equal(weak.candidates.ABS_PM_CURRENT15.decision,'WAIT');
  const conflicting=freezeNoBase15s(r,{...absorbed,currentScore:-0.5,regimeScore:-0.5},start+15500);
  assert.equal(conflicting.candidates.ABS_PM_CURRENT15.decision,'WAIT');
- assert.equal(conflicting.candidates.ABS_PM_REGIME35.decision,'WAIT');
+ assert.equal(Object.hasOwn(conflicting.candidates,'ABS_PM_REGIME35'),false);
  const clean=freezeNoBase15s(r,{...absorbed,absorptionRisk:false},start+15500);
  assert.equal(clean.candidates.ABS_PM_CURRENT15.decision,'WAIT');
  assert.equal(clean.candidates.CURRENT_03_PM_AGREE.decision,'UP');
@@ -155,4 +155,13 @@ test('permanently deleted candidates never generate a future 15-second signal',(
    resolutionEvidence:'OFFICIAL_UP:STRICT_ROUND_ALIGNED_TOPIC',v3NoBase15sShadow:frozen
  }]]));
  assert.equal(summary.candidates.some(x=>x.candidateId==='BLENDED_04_PM_AGREE'),false);
+ assert.equal(summary.candidates.some(x=>x.candidateId==='ABS_PM_REGIME35'),false);
+});
+
+test('ordinary 15s candidates retire at 70% only after five strictly-forward official outcomes',()=>{
+ const candidate={strictForwardSamples:5,hits:2,misses:3};
+ assert.equal(below15sPermanentDeleteThreshold(candidate),true);
+ assert.equal(below15sPermanentDeleteThreshold({...candidate,hits:4,misses:1}),false);
+ assert.equal(below15sPermanentDeleteThreshold({...candidate,strictForwardSamples:4,hits:2,misses:2}),false);
+ assert.equal(below15sPermanentDeleteThreshold({...candidate,hits:2,misses:2}),false);
 });

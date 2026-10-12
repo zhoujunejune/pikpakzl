@@ -4165,8 +4165,7 @@ async function pollSignal() {
       row.prediction !== 'UP' && row.prediction !== 'DOWN'
     ) {
       // Permanently deleted candidates are not even evaluated for new snapshots.
-      const deleted = new Set(Object.entries(bootstrapLedger?.candidates || {})
-        .filter(([,state]) => state?.revoked === true).map(([id]) => id));
+      const deleted = permanentlyRemovedSignalIds();
       const early = evaluateV3NoBase15sShadow(row, liveFacts, Date.now(), deleted);
       if (early) {
         row.v3NoBase15sShadow = early;
@@ -4682,6 +4681,7 @@ function freezeProductionLock(row, live) {
   if (row.productionPrediction === 'UP' || row.productionPrediction === 'DOWN') return false;
   // Explicitly retired: never emit new locks for these historical signal sources.
   if (live.source === 'ZL_NEW_VIP75_PRIMARY' || live.source === 'LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY') return false;
+  if (isPermanentlyRetiredProductionSignal(live.source, live.model)) return false;
 
   row.productionPrediction = direction;
   row.productionConfidence = live?.signal?.confidence == null ? null : (Number.isFinite(Number(live.signal.confidence)) ? Number(live.signal.confidence) : null);
@@ -4707,6 +4707,17 @@ function freezeProductionLock(row, live) {
 }
 
 function productionRecordView(row) {
+  // Keep official settlement history intact; remove retired names from public views.
+  const removed = permanentlyRemovedSignalIds();
+  const isRetired = isPermanentlyRetiredProductionSignal(row?.productionSource, row?.productionModel);
+  const publicSource = isRetired ? 'RETIRED_SIGNAL_ARCHIVED' : (row?.productionSource || 'WAIT');
+  const publicModel = isRetired ? null : (row?.productionModel || null);
+  const frozen = row?.v3NoBase15sShadow;
+  const publicFrozen = frozen && typeof frozen === 'object' ? {
+    ...frozen,
+    candidates: Object.fromEntries(Object.entries(frozen.candidates || {})
+      .filter(([id]) => !removed.has(id))),
+  } : frozen;
   const direction = row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN'
     ? row.productionPrediction
     : 'WAIT';
@@ -4722,15 +4733,18 @@ function productionRecordView(row) {
 
   return {
     ...row,
+    v3NoBase15sShadow: publicFrozen,
+    productionModel: publicModel,
+    productionModelVersion: isRetired ? null : (row?.productionModelVersion ?? null),
     // Public/display fields are canonical production statistics only.
     // Prevent clients from rendering legacy V6 outcome as production Shadow outcome.
     prediction: direction,
     actual: official,
     result: productionResult,
-    predictionSource: row?.productionSource || 'WAIT',
-    predictionModel: row?.productionModel || null,
+    predictionSource: publicSource,
+    predictionModel: publicModel,
     productionPrediction: direction,
-    productionSource: row?.productionSource || 'WAIT',
+    productionSource: publicSource,
     productionActual: official,
     productionResult,
     resultRule: 'PRODUCTION_LOCKED_DIRECTION_VS_BINANCE_PREDICTION_OFFICIAL_DIRECTION',
@@ -5080,7 +5094,28 @@ function logProductionSignalState(live) {
 
 // Durable, monotonic bootstrap ledger. Missing/corrupt/unwritable storage fails closed.
 const BOOTSTRAP_LEDGER_FILE = process.env.BOOTSTRAP_LEDGER_FILE || '/data/15s-bootstrap-ledger.json';
+// Never re-admit these retired strategies, even when a persisted ledger is lost.
+// The dynamic tombstone ledger below covers future retirements.
+const PERMANENTLY_REMOVED_SIGNALS = new Set([
+  'PM_TREND_045_CURRENT_03', 'CURRENT_04_TREND_055_PM05',
+  'BLENDED_04_PM_AGREE', 'ABS_PM_REGIME35', 'PM_LEAN_03', 'zl_new_vip75',
+]);
 let bootstrapLedger = null;
+function permanentlyRemovedSignalIds(ledger = bootstrapLedger) {
+  const ids = new Set(PERMANENTLY_REMOVED_SIGNALS);
+  for (const [id, state] of Object.entries(ledger?.candidates || {})) {
+    if (state?.revoked === true) ids.add(id);
+  }
+  return ids;
+}
+function isPermanentlyRetiredProductionSignal(source, model) {
+  const retired = permanentlyRemovedSignalIds();
+  const origin = String(source || '');
+  const match = /^LOW_PRIORITY_15S_(.+)_PRIMARY$/.exec(origin);
+  return origin === 'ZL_NEW_VIP75_PRIMARY' ||
+    retired.has(String(model || '')) ||
+    (match !== null && retired.has(match[1]));
+}
 try {
   const parsed = JSON.parse(fs.readFileSync(BOOTSTRAP_LEDGER_FILE, 'utf8'));
   if (parsed?.version === 1 && parsed?.candidates && typeof parsed.candidates === 'object') bootstrapLedger = parsed;
@@ -5090,7 +5125,7 @@ try {
 // Startup also requires an existing, non-revoked durable grant so a lost
 // ledger cannot recreate a signal after restart or redeployment.
 const FROZEN_ACTIVE_15S_IDS = new Set([
-  'CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03',
+  'CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
   'CURRENT_03_TREND_045_PM08','PM_REGIME35_SUPPORT08',
   'PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15',
 ]);
@@ -5120,6 +5155,7 @@ function durable15sSummary() {
     .sort((a,b)=>a.roundStartMs-b.roundStartMs);
   for (const candidate of summary.candidates) {
     const id = candidate.candidateId;
+    if (PERMANENTLY_REMOVED_SIGNALS.has(id)) continue;
     if (!ids.has(id)) {
       // Retire non-bootstrap experimental models from official strict-forward
       // evidence, rather than keeping them visible indefinitely in the UI.
@@ -5183,8 +5219,7 @@ function durable15sSummary() {
   }
   // Historical official settlement stays archived; active routes and public model
   // registries never expose a deleted candidate again, even after normal re-qualification.
-  const deleted = new Set(Object.entries(next.candidates)
-    .filter(([,state]) => state?.revoked === true).map(([id]) => id));
+  const deleted = permanentlyRemovedSignalIds(next);
   for (const id of deleted) delete lastResort15sFuses[id];
   return {...summary,candidates:summary.candidates.filter(c=>
     FROZEN_STARTUP_GRANTS.has(c.candidateId) && !deleted.has(c.candidateId))};
@@ -5193,8 +5228,7 @@ function durable15sSummary() {
 function all15sCandidateRegistryStats() {
   const shadow = durable15sSummary();
   const byId = new Map(shadow.candidates.map(x => [x.candidateId, x]));
-  const permanentlyDeleted = new Set(Object.entries(bootstrapLedger?.candidates || {})
-    .filter(([,state]) => state?.revoked === true).map(([id])=>id));
+  const permanentlyDeleted = permanentlyRemovedSignalIds();
   const status = ALL_15S_IDS.filter(id => FROZEN_STARTUP_GRANTS.has(id) &&
     !permanentlyDeleted.has(id) && byId.has(id)).map(id => {
     const manual = id === PM_CURRENT25_SUPPORT08_MODEL || id === CURRENT03_PM_AGREE_MODEL;
@@ -5344,6 +5378,14 @@ function productionSignalPayload(now = Date.now()) {
   // A production direction is immutable for the entire 5-minute round.
   // If it has already been frozen, every subsequent request returns exactly that lock.
   if (row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN') {
+    if (isPermanentlyRetiredProductionSignal(row.productionSource, row.productionModel)) {
+      const blocked = {round:row.roundStartMs,status:'WAIT',signal:null,
+        input:{round:row.roundStartMs},source:'RETIRED_SIGNAL_SUPPRESSED',
+        model:null,generatedAt:null,waitReason:'PERMANENTLY_RETIRED_SIGNAL',
+        productionPolicy:productionPolicyName(),fallbackUsed:false};
+      logProductionSignalState(blocked);
+      return {ok:true,live:blocked};
+    }
     const frozenLive = {
       round: row.roundStartMs,
       status: 'LOCKED',

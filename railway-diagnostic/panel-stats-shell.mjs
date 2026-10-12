@@ -20,7 +20,7 @@ function log(event, extra = {}) {
 const statsCard = `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
-<div class="muted" id="rsMeta">生产信号：现役15秒优先 → Selective V2 → Edge Rescue → WAIT（不再有35秒兜底）。真实结果采用 Binance Prediction 官方结算。</div>
+<div class="muted" id="rsMeta">生产信号：现役15秒优先 → Selective V2 → 独立硬熔断补救 → WAIT；Edge Rescue 已永久淘汰。真实结果采用 Binance Prediction 官方结算。</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">已结算</div><div class="v" id="rsSettled">-</div></div>
 <div class="kv"><div class="k">有效判断</div><div class="v" id="rsDecided">-</div></div>
@@ -55,7 +55,7 @@ const policyCard = `<div class="c" id="signalPolicyCard">
 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px">
   <span class="on" style="padding:6px 8px;border:1px solid #365b48;border-radius:7px">15—20秒 · 固定现役信号</span>
   <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">未锁定 → Selective V2</span>
-  <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">未放行 → Edge Rescue</span>
+  <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">V2硬熔断 → 独立补救</span>
   <span class="warn" style="padding:6px 8px;border:1px solid #59492d;border-radius:7px">全部未通过 → WAIT</span>
 </div>
 <div class="grid" style="margin-top:12px">
@@ -69,7 +69,7 @@ const policyCard = `<div class="c" id="signalPolicyCard">
 <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:820px"><thead style="position:sticky;top:0;background:#151922;z-index:2">
 <tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">15秒现役模型</th><th style="padding:8px 6px">风控状态</th><th style="padding:8px 6px">前瞻样本</th><th style="padding:8px 6px">总准确率</th><th style="padding:8px 6px">近30次</th><th style="padding:8px 6px">UP / DOWN</th><th style="padding:8px 6px">30分钟熔断</th></tr>
 </thead><tbody id="spRows"><tr><td colspan="7" style="padding:12px 6px">读取现役记录中...</td></tr></tbody></table></div>
-<div class="muted" id="spNotice" style="margin-top:10px">仅现役信号参与前三层取信号，第三层失败直接 WAIT；已淘汰策略只保留历史官方结算证据。</div>
+<div class="muted" id="spNotice" style="margin-top:10px">仅现役15秒信号可优先出方向；主策略未放行时仅可尝试独立硬熔断补救；已淘汰 Edge Rescue 不再参与生产。</div>
 </div>`;
 
 const policyScript = `<script>(function(){
@@ -107,9 +107,9 @@ async function load(){
   }).join('');
   e('spQualified').textContent=approved+'/'+ids.length;
   e('spObserve').textContent=observing+'/'+ids.length;
-  e('spTitle').innerHTML=approved?'<span class="on">'+approved+'种现役15秒策略可放行</span>':'<span class="warn">当前无现役15秒策略可放行；继续 Selective V2 + Edge Rescue</span>';
+  e('spTitle').innerHTML=approved?'<span class="on">'+approved+'种现役15秒策略可放行</span>':'<span class="warn">当前无现役15秒策略可放行；继续 Selective V2</span>';
   e('spFreshness').textContent='已同步';
-  e('spNotice').textContent='生产路由：'+(registry.productionRoute||'现役15秒优先 → V2 → Edge → WAIT')+'；新晋级已关闭；现役仍需行情与独立熔断检查。每15秒同步一次。';
+  e('spNotice').textContent='生产路由：'+(registry.productionRoute||'现役15秒优先 → V2 → 硬熔断独立补救 → WAIT')+'；新晋级已关闭；现役仍需行情与独立熔断检查。每15秒同步一次。';
  }catch(err){
   e('spTitle').textContent='现役信号状态读取失败，不能判断当前可放行性';
   e('spFreshness').textContent='不可用';
@@ -168,7 +168,7 @@ const statsScript = `<script>(function(){
 function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
-function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return 'Edge Rescue';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
+function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
 var errMsg='';
@@ -208,7 +208,7 @@ e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedR
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent='当前路由：现役15秒(15—20秒) → Selective V2 → Edge Rescue → WAIT（无35秒兜底） · 只认 Binance Prediction 官方结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · Shadow 特征观察期 '+((h.shadowObserveMs||j.shadowObserveMs)?Number(h.shadowObserveMs||j.shadowObserveMs)/1000+'秒':'读取中')+' · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
+e('rsMeta').textContent='当前路由：现役15秒(15—20秒) → Selective V2 → 硬熔断独立补救 → WAIT（Edge 已永久淘汰） · 只认 Binance Prediction 官方结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · Shadow 特征观察期 '+((h.shadowObserveMs||j.shadowObserveMs)?Number(h.shadowObserveMs||j.shadowObserveMs)/1000+'秒':'读取中')+' · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
 var a=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)}).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();

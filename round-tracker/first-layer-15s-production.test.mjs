@@ -174,3 +174,21 @@ test('production has exactly three live signal layers and no future 15s promotio
   assert.match(source,/!deleted\.has\(c\.candidateId\)/);
   assert.ok(!source.includes("productionRoute:'USER_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_EDGE_THEN_LATE_15S'"));
 });
+
+test('retired Edge Rescue can neither lock a fresh round nor reappear from a frozen pre-retirement round',()=>{
+  const source=fs.readFileSync(fileURLToPath(new URL('./index-rest.mjs',import.meta.url)),'utf8');
+  assert.match(source,/27 HIT \/ 41 settled = 65\.85%/);
+  assert.match(source,/'SELECTIVE_V2_EDGE_RESCUE_PRIMARY', 'SELECTIVE_V2_EDGE_RESCUE_V1'/);
+  const guard=source.slice(source.indexOf('function isPermanentlyRetiredProductionSignal('),source.indexOf('function isPermanentlyRetiredProductionSignal(')+640);
+  assert.match(guard,/retired\.has\(origin\)/);
+  const immutable=source.slice(source.indexOf('function productionSignalPayload('),source.indexOf('function productionSignalPayload(')+1500);
+  assert.match(immutable,/isPermanentlyRetiredProductionSignal\(row\.productionSource, row\.productionModel\)/);
+  const freeze=source.slice(source.indexOf('function freezeProductionLock('),source.indexOf('function freezeProductionLock(')+900);
+  assert.match(freeze,/isPermanentlyRetiredProductionSignal\(live\.source, live\.model\)/);
+  const live=source.slice(source.indexOf('function productionSignalPayload('));
+  assert.match(live,/const edgeRescue = !isPermanentlyRetiredProductionSignal\('SELECTIVE_V2_EDGE_RESCUE_PRIMARY', SELECTIVE_V2_EDGE_RESCUE_VERSION\)/);
+  assert.match(source,/productionRoute:'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT'/);
+  assert.match(source,/const firstLayer15s = tryUserFirst15sLock\(row, now\)/);
+  assert.match(source,/if \(productionUsesSelectiveV2\(\)\)/);
+  assert.match(source,/source:V2_FUSE_RESCUE_SOURCE,model:V2_FUSE_RESCUE_VERSION/);
+});

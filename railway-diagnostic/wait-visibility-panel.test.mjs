@@ -65,7 +65,7 @@ function policyFixture(approved) {
     timedFuse:{scopes:{GLOBAL:{mode:'OPEN'},UP:{mode:'OPEN'},DOWN:{mode:'OPEN'}}}
   });
   return {ok:true,models:{all15sCandidateRegistry:{
-    productionRoute:'QUALIFIED_15S_15_TO_20S_THEN_SELECTIVE_V2_EDGE_THEN_QUALIFIED_15S_25_TO_35S',
+    productionRoute:'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT',
     candidates:['CURRENT_03_PM_AGREE',
       'PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03',
       'CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08',
@@ -147,4 +147,16 @@ test('permanently deleted strategies cannot return in the policy panel even from
   for(const id of ['PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','BLENDED_04_PM_AGREE','ABS_PM_REGIME35']){
     assert.equal(dom.get('spRows').innerHTML.includes(id),false,id);
   }
+});
+
+test('panel never advertises retired Edge Rescue as an active production layer',async()=>{
+  const {dom}=await renderPolicy(policyFixture(false));
+  assert.doesNotMatch(dom.get('spTitle').innerHTML,/Selective V2 \+ Edge Rescue/);
+  assert.doesNotMatch(dom.get('spNotice').textContent,/V2_EDGE_THEN_WAIT/);
+  assert.match(dom.get('spNotice').textContent,/HARD_FUSE_RESCUE_THEN_WAIT/);
+  const stats=source.slice(source.indexOf('const statsScript = '),source.indexOf('function injectStats('));
+  assert.ok(stats);
+  assert.match(source,/Edge Rescue 已永久淘汰/);
+  assert.match(source,/已删除策略（历史记录）/);
+  assert.match(stats,/当前路由：现役15秒\(15—20秒\) → Selective V2 → 硬熔断独立补救 → WAIT/);
 });

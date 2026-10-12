@@ -76,10 +76,12 @@ test('global deterioration does not stop a healthy opposite side',()=>{
   assert.equal(r.production.global10.accuracy,0);
   assert.equal(r.blocked,false);
 });
-test('Edge Rescue has its own unchanged routing and frozen lock path',()=>{
+test('sub-70% Edge Rescue is permanently disabled while Selective V2 fuse and independent recovery remain intact',()=>{
   const code=fs.readFileSync(new URL('../index-rest.mjs',import.meta.url),'utf8');
-  assert.match(code,/const edgeRescue = baseDirection && q && !q.pass\s*\? evaluateSelectiveV2EdgeRescueRow\(row, q\)/);
+  assert.match(code,/'SELECTIVE_V2_EDGE_RESCUE_PRIMARY', 'SELECTIVE_V2_EDGE_RESCUE_V1'/);
+  assert.match(code,/const edgeRescue = !isPermanentlyRetiredProductionSignal\('SELECTIVE_V2_EDGE_RESCUE_PRIMARY', SELECTIVE_V2_EDGE_RESCUE_VERSION\)/);
   assert.match(code,/const edgeFuse = edgeRescue\?\.decision === baseDirection\s*\? selectiveV2EdgeRescueFuseState\(baseDirection\)/);
   assert.match(code,/if \(\s*row.productionSource === 'LOCK_QUALITY_SELECTIVE_V2_PRIMARY' &&\s*selectiveV2LiveRisk/);
-  assert.doesNotMatch(code,/const edgeRescue = baseDirection && q && !q.pass && !liveRisk/);
+  assert.match(code,/const liveRisk = baseDirection \? selectiveV2LiveRisk\(baseDirection, row.roundStartMs\) : null/);
+  assert.match(code,/v2FuseRescue = evaluateV2HardFuseRescue\(row\)/);
 });

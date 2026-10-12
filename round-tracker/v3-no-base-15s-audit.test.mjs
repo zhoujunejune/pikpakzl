@@ -143,3 +143,16 @@ test('new absorption candidate histories cannot be backfilled or retrofitted',()
  const summary=summarizeNoBase15s(new Map([[oldStart,settled]]));
  assert.equal(summary.candidates.find(c=>c.candidateId==='ABS_PM_CURRENT15').strictForwardSamples,0);
 });
+
+test('permanently deleted candidates never generate a future 15-second signal',()=>{
+ const deleted=new Set(['CURRENT_03_PM_AGREE']);
+ const frozen=freezeNoBase15s(row(),facts,round+15500,deleted);
+ assert.equal(Object.hasOwn(frozen.candidates,'CURRENT_03_PM_AGREE'),false);
+ assert.equal(Object.hasOwn(frozen.candidates,'BLENDED_04_PM_AGREE'),false);
+ assert.ok(Object.hasOwn(frozen.candidates,'PM_FLOW15_CURRENT_03'));
+ const summary=summarizeNoBase15s(new Map([[String(round),{
+   ...row(), actual:'UP', officialDirection:'UP',
+   resolutionEvidence:'OFFICIAL_UP:STRICT_ROUND_ALIGNED_TOPIC',v3NoBase15sShadow:frozen
+ }]]));
+ assert.equal(summary.candidates.some(x=>x.candidateId==='BLENDED_04_PM_AGREE'),false);
+});

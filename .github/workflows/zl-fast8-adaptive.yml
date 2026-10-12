@@ -18,10 +18,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install isolated journal dependency
+        working-directory: fast8-adaptive-shadow
+        run: npm install --no-audit --no-fund
       - name: Syntax check (no services, no trades)
         run: |
           node --check fast8-adaptive-shadow/core.mjs
           node --check fast8-adaptive-shadow/app.mjs
+          node --check fast8-adaptive-shadow/app-northflank.mjs
+          node --check fast8-adaptive-shadow/pg-store.mjs
           node --check fast8-adaptive-shadow/trainer.mjs
-      - name: Unit tests (synthetic offline only)
-        run: node --test fast8-adaptive-shadow/core.test.mjs
+      - name: Offline unit tests
+        run: node --test fast8-adaptive-shadow/*.test.mjs
+      - name: Docker build of isolated shadow only
+        run: docker build -f fast8-adaptive-shadow/Dockerfile fast8-adaptive-shadow

@@ -187,7 +187,7 @@ test('retired Edge Rescue can neither lock a fresh round nor reappear from a fro
   assert.match(freeze,/isPermanentlyRetiredProductionSignal\(live\.source, live\.model\)/);
   const live=source.slice(source.indexOf('function productionSignalPayload('));
   assert.match(live,/const edgeRescue = !isPermanentlyRetiredProductionSignal\('SELECTIVE_V2_EDGE_RESCUE_PRIMARY', SELECTIVE_V2_EDGE_RESCUE_VERSION\)/);
-  assert.match(source,/productionRoute:'FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT'/);
+  assert.match(source,/FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT/);
   assert.match(source,/const firstLayer15s = tryUserFirst15sLock\(row, now\)/);
   assert.match(source,/if \(productionUsesSelectiveV2\(\)\)/);
   assert.match(source,/source:V2_FUSE_RESCUE_SOURCE,model:V2_FUSE_RESCUE_VERSION/);

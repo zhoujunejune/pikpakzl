@@ -346,6 +346,29 @@ async function ensureSignalRedisPublisher() {
   return signalRedisPublisher?.isReady ? signalRedisPublisher : null;
 }
 
+// Remove a cached legacy "latest" envelope during the source switch.
+// The append-only Redis settlement/order audit stream is deliberately preserved.
+async function clearPausedLegacyLatestSignal() {
+  if (PRODUCTION_SIGNAL_SOURCE_MODE !== FAST8_MODE) return;
+  const redis = await ensureSignalRedisPublisher();
+  if (!redis) {
+    log('fast8_legacy_cache_clear_deferred',{reason:'REDIS_NOT_READY'});
+    return;
+  }
+  try {
+    const cached = await redis.get(SIGNAL_REDIS_LATEST_KEY);
+    if (!cached) return;
+    let envelope;
+    try { envelope = JSON.parse(cached); } catch { envelope = null; }
+    if (envelope?.upstreamSource !== FAST8_SOURCE) {
+      await redis.del(SIGNAL_REDIS_LATEST_KEY);
+      log('fast8_paused_legacy_latest_cache_cleared',{source:envelope?.upstreamSource||'UNKNOWN'});
+    }
+  } catch(e) {
+    log('fast8_legacy_cache_clear_failed',{error:e?.message||String(e)});
+  }
+}
+
 async function persistAndPublishLockedSignal(envelope) {
   const client = await ensureSignalRedisPublisher();
   if (!client || !envelope) return false;
@@ -6012,6 +6035,7 @@ try {
   log('production_signal_background_error', { error: e?.message || String(e) });
 }
 void ensureSignalRedisPublisher();
+void clearPausedLegacyLatestSignal();
 log('locked_signal_transport_bootstrap', {
   model: SIGNAL_MODEL_NAME,
   redisConfigured: Boolean(SIGNAL_REDIS_URL),

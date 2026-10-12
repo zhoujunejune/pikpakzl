@@ -1,9 +1,10 @@
 // The complete policy is fixed before prospective collection starts. No abstention.
 export const VERSION = 'ZL_FAST8_65';
-export const POLICY = 'FAST8_FULL_COVERAGE_LOGISTIC_V1';
+export const POLICY = 'FAST8_FULL_COVERAGE_LOGISTIC_V2';
 export const ROUND_MS = 300000;
-export const CUTOFF_MS = 6500;
-export const LOCK_MS = 7000;
+// Leave six seconds for a slow durable volume and the parent publication queue.
+export const CUTOFF_MS = 1500;
+export const LOCK_MS = 2000;
 export const DEADLINE_MS = 8000;
 export const MIN_TRAINING = 300;
 export const FEATURES = [

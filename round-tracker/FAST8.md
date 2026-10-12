@@ -1,14 +1,21 @@
 # ZL_FAST8_65 (shadow only)
 
 This independent prospective policy always chooses UP or DOWN. It samples existing
-live feature snapshots only until T0+6500ms, freezes at about T0+7000ms in a worker,
+live feature snapshots only until T0+1500ms, freezes at about T0+2000ms in a worker,
 and measures persistence plus actual parent/server publication against T0+8000ms.
 It never calls the production router, Redis publisher or order APIs. Target accuracy
 is 65%; it is not a demonstrated result or a guarantee.
 
-The first collection round is the next complete five-minute round after initial
+The V2 collection round is the next complete five-minute round after initial
 startup, durably recorded in `/data/fast8-65/events.jsonl`. Restarting resumes that
-same experiment and never resets missed calendar rounds. Whole-service downtime,
+same experiment and never resets missed calendar rounds within a policy.
+V1 failed its first live timing check: computation 7024ms, durable decision 8355ms,
+parent publication 10788ms. V2 explicitly changes the feature cutoff and registers a
+new prospective policy window. The same journal retains all V1 events, late counts,
+outcomes and calendar gaps, exposed as `previousExperiments`; V1 is never reported
+as passing. V1 snapshots are excluded from V2 training and prospective accuracy.
+The decision is fsynced once before publication; diagnostic timestamp fsync follows
+publication so it cannot delay an already durable direction. Whole-service downtime,
 late publication and persistence failure remain visible as failures. Source snapshots
 received after the cutoff cannot backfill an earlier prediction.
 

@@ -8,7 +8,7 @@ import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
-import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
+import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, below15sPermanentDeleteThreshold, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
 import { createShadowV4Client } from './shadow-v4-client.mjs';
 import { createShadowV5Client } from './shadow-v5-client.mjs';
 import { createShadowV7Client } from './shadow-v7-client.mjs';
@@ -5097,8 +5097,23 @@ function durable15sSummary() {
     Number(r.v3NoBase15sShadow.observedAt)-Number(r.roundStartMs)<=17000)
     .sort((a,b)=>a.roundStartMs-b.roundStartMs);
   for (const candidate of summary.candidates) {
-    if (!ids.has(candidate.candidateId)) continue;
     const id = candidate.candidateId;
+    if (!ids.has(id)) {
+      // Retire non-bootstrap experimental models from official strict-forward
+      // evidence, rather than keeping them visible indefinitely in the UI.
+      if (!next.candidates[id]?.revoked && below15sPermanentDeleteThreshold(candidate)) {
+        next.candidates[id] = {
+          hits:candidate.hits,samples:candidate.strictForwardSamples,
+          revoked:true,processed:[],reason:'STRICT_FORWARD_BELOW_70_MIN_5',
+        };
+        changed = true;
+        log('15s_candidate_permanently_deleted', {
+          candidateId:id,reason:'STRICT_FORWARD_BELOW_70_MIN_5',
+          samples:candidate.strictForwardSamples,hits:candidate.hits,
+        });
+      }
+      continue;
+    }
     let state = next.candidates[id];
     if (!state) {
       // No historic pre-cutoff baseline means a fresh deployment cannot

@@ -2,9 +2,9 @@ import pg from 'pg';
 
 /** Append-only PostgreSQL journal. Committed rows, not container disk, are authoritative. */
 export class PgEventStore {
-  constructor({connectionString=process.env.DATABASE_URL||process.env.POSTGRES_URI}={}) {
-    if (!connectionString) throw new Error('POSTGRES_CONNECTION_REQUIRED');
-    this.client=new pg.Client({connectionString, connectionTimeoutMillis:3500,
+  constructor({connectionString=process.env.DATABASE_URL||process.env.POSTGRES_URI, client=null}={}) {
+    if (!connectionString&&!client) throw new Error('POSTGRES_CONNECTION_REQUIRED');
+    this.client=client??new pg.Client({connectionString, connectionTimeoutMillis:3500,
       query_timeout:3000, statement_timeout:3000,
       application_name:'zl-fast8-adaptive-shadow-v1'});
     this.failed=null;

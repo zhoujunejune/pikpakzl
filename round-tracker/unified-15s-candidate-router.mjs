@@ -4,7 +4,7 @@ import {
   V3_NO_BASE_15S_FORWARD_TARGET,
 } from './v3-no-base-15s-audit.mjs';
 
-// All ten candidates observe strictly prospective official outcomes.
+// Active (non-deleted) candidates observe strictly prospective official outcomes.
 // Only strategies with live strict-forward qualification may lock at 15-20s,
 // before Selective V2's 22s cutoff; a qualified 25-35s backup remains after V2.
 export const LIVE_OPT_IN_15S_IDS = Object.freeze([
@@ -57,14 +57,15 @@ export function forward15sProofPass(x) {
 }
 
 export function oneTimeOrStrict15sProofPass(x) {
+  if(x?.oneTimeBootstrapRevoked === true || x?.permanentlyDeleted === true)return false;
   return forward15sProofPass(x) || x?.oneTimeBootstrapEligible === true;
 }
 
 // Only the two designated first-layer routes use this stricter fast-track gate.
-// A permanently revoked bootstrap may return ONLY via the full strict-forward proof.
+// A permanently deleted bootstrap is never eligible for a fresh first-layer promotion.
 export function userFirst15sProofPass(x) {
   return FIRST_LAYER_15S_IDS.includes(x?.candidateId) &&
-    (x.oneTimeBootstrapRevoked !== true || forward15sProofPass(x)) &&
+    x.oneTimeBootstrapRevoked !== true && x.permanentlyDeleted !== true &&
     Number.isInteger(x.strictForwardSamples) && x.strictForwardSamples >= 30 &&
     Number.isInteger(x.hits) && Number.isInteger(x.misses) &&
     x.hits+x.misses === x.strictForwardSamples &&

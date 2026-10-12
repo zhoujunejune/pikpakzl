@@ -29,9 +29,15 @@ export const V3_NO_BASE_15S_CONFIGS = Object.freeze([
   // pass the strict-forward 75% + per-side accuracy gates.
   {id:'ABS_PM_CURRENT15',mode:'absorptionCurrent',pmMin:0.08,currentMin:0.15,
     introducedAtMs:Date.parse('2026-10-10T11:50:00.000Z')},
-  {id:'ABS_PM_REGIME35',mode:'absorptionRegime',pmMin:0.08,regimeMin:0.35,
-    introducedAtMs:Date.parse('2026-10-10T11:50:00.000Z')},
 ]);
+// Candidates outside the special bootstrap cohort also require a durable
+// permanent retirement once five official frozen predictions fall below 70%.
+export function below15sPermanentDeleteThreshold(candidate, minimumSamples=5) {
+ const n=candidate?.strictForwardSamples,hits=candidate?.hits,misses=candidate?.misses;
+ return Number.isInteger(n)&&n>=minimumSamples&&
+   Number.isInteger(hits)&&Number.isInteger(misses)&&
+   hits>=0&&misses>=0&&hits+misses===n&&hits/n<0.70;
+}
 const finite=v=>v===null||v===undefined||v===''?null:(Number.isFinite(Number(v))?Number(v):null);
 const dir=s=>s>0?'UP':s<0?'DOWN':'WAIT';
 const stats=(rows,id)=> {

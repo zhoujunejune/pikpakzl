@@ -3,7 +3,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { Worker } from 'node:worker_threads';
 import {createHash} from 'node:crypto';
-import {ROUND_MS, FEATURE_NAMES, ADAPTIVE_VERSION, observeCandles, featureVector,
+import {ROUND_MS, ADAPTIVE_VERSION, observeCandles, featureVector,
   adaptiveProbability, adaptiveDrift} from './core.mjs';
 
 // This process has no production Redis, routing, PIN, trading API or write clients.

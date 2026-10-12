@@ -44,7 +44,7 @@ test('deleted 15s strategies cannot re-enter the active candidate registry',()=>
   assert.deepEqual(ALL_15S_IDS,V3_NO_BASE_15S_CONFIGS.map(x=>x.id));
   assert.equal(new Set(ALL_15S_IDS).size,9);
   assert.equal(LIVE_OPT_IN_15S_IDS.length,2);
-  assert.equal(FORWARD_GATED_15S_IDS.length,8);
+  assert.equal(FORWARD_GATED_15S_IDS.length,7);
   assert.equal(candidateProductionSource('PM_LEAN_03'),null);
   assert.equal(candidateProductionSource('BLENDED_04_PM_AGREE'),null);
   assert.equal(ALL_15S_IDS.includes('BLENDED_04_PM_AGREE'),false);

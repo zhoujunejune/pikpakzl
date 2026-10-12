@@ -1,0 +1,16 @@
+{
+  "name": "zl-fast8-adaptive-shadow",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test *.test.mjs",
+    "start": "node app-northflank.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

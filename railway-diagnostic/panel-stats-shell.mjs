@@ -90,7 +90,8 @@ async function load(){
   var registry=j.models&&j.models.all15sCandidateRegistry;
   if(!registry||!Array.isArray(registry.candidates))throw Error('现役信号注册表不存在');
   var by={};registry.candidates.forEach(function(x){if(x&&x.candidateId)by[x.candidateId]=x});
-  var ids=registry.candidates.filter(function(x){return x&&x.candidateId}).map(function(x){return x.candidateId});
+  var banned={'PM_TREND_045_CURRENT_03':true,'CURRENT_04_TREND_055_PM05':true,'BLENDED_04_PM_AGREE':true,'ABS_PM_REGIME35':true,'PM_LEAN_03':true,'zl_new_vip75':true};
+  var ids=registry.candidates.filter(function(x){return x&&x.candidateId&&!banned[x.candidateId]}).map(function(x){return x.candidateId});
   globalThis.__active15sCandidateIds=ids.slice();
   var approved=0,observing=0;
   e('spRows').innerHTML=ids.map(function(id){
@@ -128,9 +129,9 @@ function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(c){retu
 function tm(ms){return Number.isFinite(Number(ms))?new Date(Number(ms)).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'-'}
 function dir(v){return v==='UP'?'UP ↑':v==='DOWN'?'DOWN ↓':'WAIT'}
 function frozen(r){var f=r&&r.v3NoBase15sShadow;return f&&f.baseAbsentAtObservation===true&&f.inputFrozenBeforeSettlement===true&&Number(f.round)===Number(r.roundStartMs)?f:null}
-var priority=['ABS_PM_CURRENT15','PM_CURRENT25_SUPPORT08','PM_REGIME35_SUPPORT08','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','CURRENT_03_PM_AGREE'];
+var priority=['ABS_PM_CURRENT15','PM_CURRENT25_SUPPORT08','PM_REGIME35_SUPPORT08','PM_FLOW15_CURRENT_03','CURRENT_03_TREND_045_PM08','CURRENT_03_PM_AGREE'];
 function candidate(f){if(!f||!f.candidates)return null;var active=globalThis.__active15sCandidateIds||[];for(var i=0;i<priority.length;i++){if(active.indexOf(priority[i])<0)continue;var q=f.candidates[priority[i]];if(q&&(q.decision==='UP'||q.decision==='DOWN')&&q.qualified===true&&Array.isArray(q.reasons)&&q.reasons.length===0)return {direction:q.decision,model:priority[i]}}return null}
-function reason(f){if(!f)return '15秒尚未冻结';var x=f.facts||{};var failures=x.gateFailures||[];if(failures.length)return failures.join('、');var reasons=[];Object.keys(f.candidates||{}).forEach(function(k){var a=f.candidates[k];if(a&&a.decision==='WAIT'&&Array.isArray(a.reasons))reasons=reasons.concat(a.reasons)});var uniq=Array.from(new Set(reasons));return uniq.length?uniq.slice(0,2).join('、'):'模型确认条件未满足'}
+function reason(f){if(!f)return '15秒尚未冻结';var x=f.facts||{};var failures=x.gateFailures||[];if(failures.length)return failures.join('、');var reasons=[];Object.keys(f.candidates||{}).forEach(function(k){if((globalThis.__active15sCandidateIds||[]).indexOf(k)<0)return;var a=f.candidates[k];if(a&&a.decision==='WAIT'&&Array.isArray(a.reasons))reasons=reasons.concat(a.reasons)});var uniq=Array.from(new Set(reasons));return uniq.length?uniq.slice(0,2).join('、'):'模型确认条件未满足'}
 function official(r){return r&&(r.productionActual==='UP'||r.productionActual==='DOWN')?r.productionActual:null}
 function prod(r){return r&&(r.productionPrediction==='UP'||r.productionPrediction==='DOWN')?r.productionPrediction:null}
 function pm(f){var facts=f&&f.facts||{};var v=facts.upMid;if(!facts.bookMappingReliable||!facts.bookRoundAligned||!Number.isFinite(Number(v)))return '不可用';v=Number(v);if(v<0||v>1)return '不可用';return (v>=0.5?'UP':'DOWN')+'（UP报价 '+(v*100).toFixed(1)+'%）'}
@@ -167,7 +168,7 @@ const statsScript = `<script>(function(){
 function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
-function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return 'Edge Rescue';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
+function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return 'Edge Rescue';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
 var errMsg='';

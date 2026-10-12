@@ -20,12 +20,13 @@ test('production view preserves immutable WAIT while rendering separate forward 
   const base={roundStartMs:start,productionPrediction:'WAIT',productionActual:'UP',
      v3NoBase15sShadow:{round:start,observedAt:start+15500,baseAbsentAtObservation:true,
        inputFrozenBeforeSettlement:true,facts:{upMid:0.60,bookMappingReliable:true,bookRoundAligned:true,gateFailures:[],dataFresh:true},
-       candidates:{BLENDED_04_PM_AGREE:{decision:'UP',qualified:true,reasons:[]}}}};
+       candidates:{CURRENT_03_PM_AGREE:{decision:'UP',qualified:true,reasons:[]}, BLENDED_04_PM_AGREE:{decision:'UP',qualified:true,reasons:[]}}}};
   const j={ok:true,records:[base]};
   const environment={
     document:{readyState:'complete',getElementById:id=>dom.get(id)||null},
     fetch:async()=>({ok:true,json:async()=>j}),
     setInterval:()=>0,
+    __active15sCandidateIds:['CURRENT_03_PM_AGREE'],
     Date,Math,Set,Array,Number,Error,Promise,String,Object
   };
   sandboxScript.runInNewContext(environment);
@@ -35,7 +36,8 @@ test('production view preserves immutable WAIT while rendering separate forward 
   assert.match(dom.get('wvPreview').innerHTML,/UP/);
   assert.match(dom.get('wvCoverage').textContent,/1\/1/);
   assert.match(dom.get('wvHitRate').textContent,/100.0%/);
-  assert.match(dom.get('wvRows').innerHTML,/BLENDED_04_PM_AGREE/);
+  assert.match(dom.get('wvRows').innerHTML,/CURRENT_03_PM_AGREE/);
+  assert.doesNotMatch(dom.get('wvRows').innerHTML,/BLENDED_04_PM_AGREE/);
   assert.doesNotMatch(dom.get('wvRows').innerHTML,/PM_LEAN_03/);
   assert.match(dom.get('wvPreview').innerHTML,/仅观察/);
 });
@@ -64,7 +66,7 @@ function policyFixture(approved) {
   });
   return {ok:true,models:{all15sCandidateRegistry:{
     productionRoute:'QUALIFIED_15S_15_TO_20S_THEN_SELECTIVE_V2_EDGE_THEN_QUALIFIED_15S_25_TO_35S',
-    candidates:['BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE',
+    candidates:['CURRENT_03_PM_AGREE',
       'PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03',
       'CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08',
       'PM_REGIME35_SUPPORT08','PM_CURRENT25_SUPPORT08',
@@ -89,24 +91,24 @@ async function renderPolicy(payload){
   await new Promise(resolve=>setImmediate(resolve));
   return {dom,readPath};
 }
-test('panel displays accurate 15s-first production policy and all ten candidates',async()=>{
+test('panel lists only active candidates instead of resurrecting deleted models',async()=>{
   const {dom,readPath}=await renderPolicy(policyFixture(false));
   assert.match(readPath,/api\/training-status/);
   assert.match(policyHtml,/15—20秒/);
   assert.match(policyHtml,/25—35秒/);
   assert.match(policyHtml,/Edge Rescue/);
   assert.match(dom.get('spTitle').innerHTML,/当前无已晋级15秒策略/);
-  assert.equal(dom.get('spQualified').textContent,'0/10');
-  assert.equal(dom.get('spObserve').textContent,'10/10');
-  assert.match(dom.get('spRows').innerHTML,/BLENDED_04_PM_AGREE/);
+  assert.equal(dom.get('spQualified').textContent,'0/9');
+  assert.equal(dom.get('spObserve').textContent,'9/9');
+  assert.doesNotMatch(dom.get('spRows').innerHTML,/BLENDED_04_PM_AGREE/);
   assert.match(dom.get('spRows').innerHTML,/ABS_PM_REGIME35/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/PM_LEAN_03/);
   assert.doesNotMatch(dom.get('spRows').innerHTML,/zl_new_vip75/);
 });
 test('panel differentiates promoted candidate and observation-only model',async()=>{
   const {dom}=await renderPolicy(policyFixture(true));
-  assert.equal(dom.get('spQualified').textContent,'1/10');
-  assert.equal(dom.get('spObserve').textContent,'9/10');
+  assert.equal(dom.get('spQualified').textContent,'1/9');
+  assert.equal(dom.get('spObserve').textContent,'8/9');
   assert.match(dom.get('spTitle').innerHTML,/1种15秒策略具备晋级资格/);
   assert.match(dom.get('spRows').innerHTML,/资格已达标/);
   assert.match(dom.get('spRows').innerHTML,/观察训练中/);

@@ -5,13 +5,12 @@ export const V3_NO_BASE_15S_FORWARD_TARGET = 100;
 // One-time user-authorized bootstrap. Normal re-promotion still requires the original strict proof.
 export const ONE_TIME_15S_BOOTSTRAP_AT_MS = Date.parse('2026-10-11T07:02:27.939Z');
 export const ONE_TIME_15S_BOOTSTRAP_IDS = Object.freeze(new Set([
-  'BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
+  'CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
   'PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05',
   'CURRENT_03_TREND_045_PM08','PM_REGIME35_SUPPORT08',
   'PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15',
 ]));
 export const V3_NO_BASE_15S_CONFIGS = Object.freeze([
-  {id:'BLENDED_04_PM_AGREE',mode:'blended'},
   {id:'CURRENT_03_PM_AGREE',mode:'current'},
   // New ex-ante independent confirmations, not relaxed production thresholds.
   {id:'PM_FLOW15_CURRENT_03',mode:'flow',currentMin:0.30,pmMin:0.03},
@@ -40,7 +39,7 @@ const stats=(rows,id)=> {
   return {samples:rows.length,hits:hit,misses:rows.length-hit,
     accuracy:rows.length?Number((hit/rows.length).toFixed(4)):null};
 };
-export function freezeNoBase15s(row,facts,now=Date.now()){
+export function freezeNoBase15s(row,facts,now=Date.now(),permanentlyDeletedIds=new Set()){
   const start=finite(row?.roundStartMs);
   if(start===null||start<V3_NO_BASE_15S_START_MS||!facts||typeof facts!=='object')return null;
   const delay=now-start;
@@ -69,6 +68,7 @@ export function freezeNoBase15s(row,facts,now=Date.now()){
   const pmSign=upMid!==null&&upMid>=0.53?1:upMid!==null&&upMid<=0.47?-1:0;
   const candidates={};
   for(const cfg of V3_NO_BASE_15S_CONFIGS){
+    if(permanentlyDeletedIds.has(cfg.id))continue;
     const absorptionPilot=cfg.mode==='absorptionCurrent'||cfg.mode==='absorptionRegime';
     // The original nine configurations retain their absorption gate.
     // Only these two independently scored pilots can exclude this ONE

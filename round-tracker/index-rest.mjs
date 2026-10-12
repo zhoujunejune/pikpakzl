@@ -4157,7 +4157,10 @@ async function pollSignal() {
       live?.status !== 'LOCKED' &&
       row.prediction !== 'UP' && row.prediction !== 'DOWN'
     ) {
-      const early = evaluateV3NoBase15sShadow(row, liveFacts);
+      // Permanently deleted candidates are not even evaluated for new snapshots.
+      const deleted = new Set(Object.entries(bootstrapLedger?.candidates || {})
+        .filter(([,state]) => state?.revoked === true).map(([id]) => id));
+      const early = evaluateV3NoBase15sShadow(row, liveFacts, Date.now(), deleted);
       if (early) {
         row.v3NoBase15sShadow = early;
         saveHistory();
@@ -5078,7 +5081,7 @@ try {
 function durable15sSummary() {
   const summary = v3NoBase15sShadowSummary(rounds);
   const cutoff = Date.parse('2026-10-11T07:02:27.939Z');
-  const ids = new Set(['BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
+  const ids = new Set(['CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03',
     'PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08',
     'PM_REGIME35_SUPPORT08','PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15']);
   const next = bootstrapLedger ? structuredClone(bootstrapLedger) : {version:1,candidates:{}};
@@ -5117,7 +5120,10 @@ function durable15sSummary() {
       if (processed.has(key)) continue;
       state.samples++; if (direction === row.actual) state.hits++;
       processed.add(key); changed = true;
-      if (state.hits/state.samples < 0.70) state.revoked = true;
+      if (state.hits/state.samples < 0.70 && !state.revoked) {
+        state.revoked = true;
+        log('15s_candidate_permanently_deleted', {candidateId:id, reason:'SPECIAL_QUALIFICATION_BELOW_70_PERCENT',samples:state.samples,hits:state.hits});
+      }
     }
     state.processed = Array.from(processed);
     candidate.oneTimeBootstrapRevoked = state.revoked;
@@ -5134,16 +5140,24 @@ function durable15sSummary() {
       bootstrapLedger=next;
     } catch(e) {
       log('bootstrap_ledger_persist_failed',{error:String(e)});
-      for(const c of summary.candidates) if(ids.has(c.candidateId)) c.oneTimeBootstrapEligible=false;
+      // A lost tombstone could resurrect deleted strategies. Fail closed on disk errors.
+      return {...summary,candidates:[]};
     }
   }
-  return summary;
+  // Historical official settlement stays archived; active routes and public model
+  // registries never expose a deleted candidate again, even after normal re-qualification.
+  const deleted = new Set(Object.entries(next.candidates)
+    .filter(([,state]) => state?.revoked === true).map(([id]) => id));
+  for (const id of deleted) delete lastResort15sFuses[id];
+  return {...summary,candidates:summary.candidates.filter(c=>!deleted.has(c.candidateId))};
 }
 
 function all15sCandidateRegistryStats() {
   const shadow = durable15sSummary();
   const byId = new Map(shadow.candidates.map(x => [x.candidateId, x]));
-  const status = ALL_15S_IDS.map(id => {
+  const permanentlyDeleted = new Set(Object.entries(bootstrapLedger?.candidates || {})
+    .filter(([,state]) => state?.revoked === true).map(([id])=>id));
+  const status = ALL_15S_IDS.filter(id => !permanentlyDeleted.has(id) && byId.has(id)).map(id => {
     const manual = id === PM_CURRENT25_SUPPORT08_MODEL || id === CURRENT03_PM_AGREE_MODEL;
     const source = candidateProductionSource(id);
     const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :

@@ -80,7 +80,8 @@ function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(c){retu
 function pct(v){return typeof v==='number'&&isFinite(v)?(100*v).toFixed(1)+'%':'-'}
 function age(v){return typeof v==='number'&&isFinite(v)?v:'-'}
 function circuit(x){var scopes=x&&x.scopes||{};var closed=Object.keys(scopes).filter(function(k){return scopes[k]&&scopes[k].mode==='COOLDOWN'});return closed.length?'冷却：'+closed.join('/'):Object.keys(scopes).some(function(k){return scopes[k]&&scopes[k].mode==='HALF_OPEN'})?'试运行中':'未冷却'}
-var ids=['BLENDED_04_PM_AGREE','CURRENT_03_PM_AGREE','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','PM_REGIME35_SUPPORT08','PM_CURRENT25_SUPPORT08','ABS_PM_CURRENT15','ABS_PM_REGIME35'];
+// The backend registry is authoritative: retired candidates are not shown.
+globalThis.__active15sCandidateIds=[];
 async function load(){
  if(!e('signalPolicyCard'))return;
  try{
@@ -90,6 +91,8 @@ async function load(){
   var registry=j.models&&j.models.all15sCandidateRegistry;
   if(!registry||!Array.isArray(registry.candidates))throw Error('晋级注册表不存在');
   var by={};registry.candidates.forEach(function(x){if(x&&x.candidateId)by[x.candidateId]=x});
+  var ids=registry.candidates.filter(function(x){return x&&x.candidateId}).map(function(x){return x.candidateId});
+  globalThis.__active15sCandidateIds=ids.slice();
   var approved=0,observing=0;
   e('spRows').innerHTML=ids.map(function(id){
    var x=by[id],proof=x&&x.candidateForward;
@@ -102,8 +105,8 @@ async function load(){
    var sides=proof?'UP '+age(proof.up&&proof.up.samples)+'次 '+pct(proof.up&&proof.up.accuracy)+' / DOWN '+age(proof.down&&proof.down.samples)+'次 '+pct(proof.down&&proof.down.accuracy):'-';
    return '<tr style="border-top:1px solid #2b313d"><td style="padding:8px 6px">'+esc(id)+'</td><td style="padding:8px 6px">'+status+'</td><td style="padding:8px 6px">'+esc(progress)+'</td><td style="padding:8px 6px">'+esc(pct(proof&&proof.forwardAccuracy))+'</td><td style="padding:8px 6px">'+esc(pct(proof&&proof.recent30&&proof.recent30.accuracy))+'</td><td style="padding:8px 6px">'+esc(sides)+'</td><td style="padding:8px 6px">'+esc(circuit(x.timedFuse))+'</td></tr>';
   }).join('');
-  e('spQualified').textContent=approved+'/10';
-  e('spObserve').textContent=observing+'/10';
+  e('spQualified').textContent=approved+'/'+ids.length;
+  e('spObserve').textContent=observing+'/'+ids.length;
   e('spTitle').innerHTML=approved?'<span class="on">'+approved+'种15秒策略具备晋级资格</span>':'<span class="warn">当前无已晋级15秒策略；生产按 Selective V2 + Edge Rescue 运行</span>';
   e('spFreshness').textContent='已同步';
   e('spNotice').textContent='生产路由：'+(registry.productionRoute||'已晋级15秒优先 → V2 → Edge → 已晋级15秒末级补救')+'；资格门槛只是生产准入，当前轮次仍需行情、价格与独立熔断检查。每15秒同步一次，不把影子预测计为实盘。';
@@ -126,8 +129,8 @@ function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(c){retu
 function tm(ms){return Number.isFinite(Number(ms))?new Date(Number(ms)).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'-'}
 function dir(v){return v==='UP'?'UP ↑':v==='DOWN'?'DOWN ↓':'WAIT'}
 function frozen(r){var f=r&&r.v3NoBase15sShadow;return f&&f.baseAbsentAtObservation===true&&f.inputFrozenBeforeSettlement===true&&Number(f.round)===Number(r.roundStartMs)?f:null}
-var priority=['ABS_PM_CURRENT15','ABS_PM_REGIME35','PM_CURRENT25_SUPPORT08','PM_REGIME35_SUPPORT08','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','CURRENT_03_PM_AGREE','BLENDED_04_PM_AGREE'];
-function candidate(f){if(!f||!f.candidates)return null;for(var i=0;i<priority.length;i++){var q=f.candidates[priority[i]];if(q&&(q.decision==='UP'||q.decision==='DOWN')&&q.qualified===true&&Array.isArray(q.reasons)&&q.reasons.length===0)return {direction:q.decision,model:priority[i]}}return null}
+var priority=['ABS_PM_CURRENT15','ABS_PM_REGIME35','PM_CURRENT25_SUPPORT08','PM_REGIME35_SUPPORT08','PM_FLOW15_CURRENT_03','PM_TREND_045_CURRENT_03','CURRENT_04_TREND_055_PM05','CURRENT_03_TREND_045_PM08','CURRENT_03_PM_AGREE'];
+function candidate(f){if(!f||!f.candidates)return null;var active=globalThis.__active15sCandidateIds||[];for(var i=0;i<priority.length;i++){if(active.indexOf(priority[i])<0)continue;var q=f.candidates[priority[i]];if(q&&(q.decision==='UP'||q.decision==='DOWN')&&q.qualified===true&&Array.isArray(q.reasons)&&q.reasons.length===0)return {direction:q.decision,model:priority[i]}}return null}
 function reason(f){if(!f)return '15秒尚未冻结';var x=f.facts||{};var failures=x.gateFailures||[];if(failures.length)return failures.join('、');var reasons=[];Object.keys(f.candidates||{}).forEach(function(k){var a=f.candidates[k];if(a&&a.decision==='WAIT'&&Array.isArray(a.reasons))reasons=reasons.concat(a.reasons)});var uniq=Array.from(new Set(reasons));return uniq.length?uniq.slice(0,2).join('、'):'模型确认条件未满足'}
 function official(r){return r&&(r.productionActual==='UP'||r.productionActual==='DOWN')?r.productionActual:null}
 function prod(r){return r&&(r.productionPrediction==='UP'||r.productionPrediction==='DOWN')?r.productionPrediction:null}
@@ -165,7 +168,7 @@ const statsScript = `<script>(function(){
 function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
-function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return 'Edge Rescue';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒已晋级 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
+function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return 'Edge Rescue';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒已晋级 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
 var errMsg='';

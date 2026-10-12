@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createFast8Engine } from './fast8-engine.mjs';
-import { featureVector, trainFast8, probability, MIN_TRAINING, ROUND_MS } from './fast8-model.mjs';
+import { featureVector, trainFast8, probability, MIN_TRAINING, ROUND_MS, CUTOFF_MS, LOCK_MS, POLICY } from './fast8-model.mjs';
 import { createFast8Client } from './fast8-client.mjs';
 
 const START = 1791800100000;
@@ -18,7 +18,7 @@ function fixture(t, at = START - 500) {
   return { get engine() { return engine; }, dir, published, time: value => { now = value; },
     reload() { engine.close(); engine = createFast8Engine({ dir, clock: () => now, publish: d => published.push(d) }); return engine.load(); } };
 }
-function live(round = START, at = round + 6400, momentum = 0.4) {
+function live(round = START, at = round + CUTOFF_MS - 100, momentum = 0.4) {
   return { round, factsCalculatedAt: at, facts: {
     currentScore: 0.6, currentTrendScore: 0.5, microScore: 0.3, regimeScore: 0.2,
     liveScore: 0.4, distanceFromOpenBps: 2, normalizedMomentum60s: momentum,
@@ -31,12 +31,12 @@ function settle(round = START, actual = 'UP') {
     resolutionEvidence: 'OFFICIAL_' + actual + ':STRICT_ROUND_ALIGNED_TOPIC', settledAt: round + ROUND_MS + 100 };
 }
 function freeze(f, round = START, momentum = 0.4) {
-  f.time(round + 6450);
-  f.engine.capture(live(round, round + 6400, momentum), round + 6440);
-  f.time(round + 7020);
+  f.time(round + CUTOFF_MS - 50);
+  f.engine.capture(live(round, round + CUTOFF_MS - 100, momentum), round + CUTOFF_MS - 60);
+  f.time(round + LOCK_MS + 20);
   const d = f.engine.tick();
-  f.time(round + 7030);
-  f.engine.acknowledge(round, round + 7025);
+  f.time(round + LOCK_MS + 30);
+  f.engine.acknowledge(round, round + LOCK_MS + 25);
   return d;
 }
 
@@ -61,7 +61,7 @@ test('every round freezes a single durable direction before 8s; never edits afte
 
 test('missing data still produces an explicitly uninformative direction', t => {
   const f = fixture(t);
-  f.time(START + 7010);
+  f.time(START + LOCK_MS + 10);
   const d = f.engine.tick();
   assert.ok(['UP', 'DOWN'].includes(d.direction));
   assert.equal(d.fallbackLevel, 'NO_INFORMATION_FALLBACK');
@@ -71,19 +71,19 @@ test('missing data still produces an explicitly uninformative direction', t => {
 
 test('rejects future, stale and cross-round data and never admits post-cutoff receipt', t => {
   const f = fixture(t);
-  f.time(START + 6400);
-  assert.equal(f.engine.capture(live(START, START + 6401), START + 6400), false);
-  assert.equal(f.engine.capture(live(START - ROUND_MS, START - 1), START + 6400), false);
-  assert.equal(f.engine.capture(live(START, START + 3000), START + 6400), false);
-  f.time(START + 6600);
-  f.engine.capture(live(START, START + 6400, 0.8), START + 6600);
-  f.time(START + 7000);
+  f.time(START + CUTOFF_MS - 100);
+  assert.equal(f.engine.capture(live(START, START + CUTOFF_MS - 99), START + CUTOFF_MS - 100), false);
+  assert.equal(f.engine.capture(live(START - ROUND_MS, START - 1), START + CUTOFF_MS - 100), false);
+  assert.equal(f.engine.capture(live(START, START - 1000), START + CUTOFF_MS - 100), false);
+  f.time(START + CUTOFF_MS + 100);
+  f.engine.capture(live(START, START + CUTOFF_MS - 100, 0.8), START + CUTOFF_MS + 100);
+  f.time(START + LOCK_MS);
   assert.equal(f.engine.tick().fallbackLevel, 'NO_INFORMATION_FALLBACK');
 });
 
 test('publication at 8000ms is timely but at 8001ms is a breach; pending is not a miss', t => {
   const f = fixture(t);
-  f.time(START + 7000);
+  f.time(START + LOCK_MS);
   f.engine.tick();
   f.time(START + 8001);
   f.engine.acknowledge(START, START + 8001);
@@ -93,7 +93,7 @@ test('publication at 8000ms is timely but at 8001ms is a breach; pending is not 
   assert.equal(s.pendingLabels, 1);
   assert.equal(s.misses, 0);
   assert.equal(s.predictionAccuracy, null);
-  f.time(START + ROUND_MS + 7000);
+  f.time(START + ROUND_MS + LOCK_MS);
   f.engine.tick();
   f.time(START + ROUND_MS + 8000);
   f.engine.acknowledge(START + ROUND_MS, START + ROUND_MS + 8000);
@@ -124,7 +124,7 @@ test('restart preserves identity, direction, experiment start and first publicat
   assert.equal(f.reload(), true);
   assert.equal(f.engine.tick().direction, d.direction);
   assert.equal(f.engine.acknowledge(START, START + 15000), false);
-  assert.equal(f.engine.stats().latest.publishedAtMs, START + 7025);
+  assert.equal(f.engine.stats().latest.publishedAtMs, START + LOCK_MS + 25);
   assert.equal(f.engine.stats().experimentStartRound, START);
 });
 
@@ -168,11 +168,63 @@ test('fallback and missing predictions cannot be excluded to claim 65 percent', 
   assert.equal(s.validation.passed, false);
 });
 
+test('a slow durable volume does not delay publication behind a second metadata flush', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fast8-slow-volume-'));
+  let now = START - 500, flushes = 0, publication = null;
+  const engine = createFast8Engine({ dir, clock: () => now, publish: decision => {
+    publication = { at: now, flushes, decision };
+    const events = fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(events.at(-1).type, 'decision');
+    assert.equal(events.at(-1).direction, decision.direction);
+  } });
+  assert.equal(engine.load(), true);
+  t.after(() => { engine.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const sync = fs.fsyncSync;
+  t.mock.method(fs, 'fsyncSync', fd => { sync(fd); flushes++; now += 1331; });
+  now = START + LOCK_MS + 20;
+  engine.tick();
+  assert.equal(publication.flushes, 1);
+  assert.equal(publication.decision.persistedAtMs, publication.at);
+  const received = publication.at + 2400; // observed production queue delay
+  now = Math.max(now, received);
+  assert.equal(engine.acknowledge(START, received), true);
+  now = START + ROUND_MS;
+  assert.equal(engine.stats().onTimeCoverage, 1);
+  assert.equal(engine.stats().publicationDelayMs.max, LOCK_MS + 20 + 1331 + 2400);
+});
+
+test('policy migration preserves failed V1 audit and registers V2 only once, without training leakage', t => {
+  const f = fixture(t);
+  freeze(f);
+  const journal = path.join(f.dir, 'events.jsonl');
+  const events = fs.readFileSync(journal, 'utf8').trim().split('\n').map(JSON.parse);
+  for (const event of events) {
+    event.policyVersion = 'FAST8_FULL_COVERAGE_LOGISTIC_V1';
+    if (event.type === 'published') event.at = START + 10788;
+  }
+  fs.writeFileSync(journal, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+  f.time(START + ROUND_MS + 200);
+  assert.equal(f.reload(), true);
+  assert.equal(f.engine.settle(settle()), true); // old outcomes still arrive
+  const s = f.engine.stats();
+  assert.equal(s.policyVersion, POLICY);
+  assert.equal(s.experimentStartRound, START + 2 * ROUND_MS);
+  assert.equal(s.expectedRounds, 0);
+  assert.equal(s.latest, null);
+  assert.equal(s.training.validTrainingSamples, 0);
+  assert.equal(s.previousExperiments[0].lateOrUnpublishedRounds, 1);
+  assert.equal(s.previousExperiments[0].hits, 1);
+  assert.equal(s.previousExperiments[0].endToEndAccuracy, 0);
+  assert.equal(f.reload(), true);
+  assert.equal(f.engine.stats().previousExperiments.length, 1);
+  assert.equal(f.engine.stats().experimentStartRound, s.experimentStartRound);
+});
+
 test('temporal L2 learner trains without abstention and rejects premature training', () => {
   assert.throws(() => trainFast8([]), /INVALID_TRAINING_ROWS/);
   const samples = Array.from({ length: MIN_TRAINING }, (_, i) => {
     const y = i % 2;
-    return { roundStartMs: START + i * ROUND_MS, decisionAt: START + i * ROUND_MS + 7000,
+    return { roundStartMs: START + i * ROUND_MS, decisionAt: START + i * ROUND_MS + LOCK_MS,
       labelReceivedAt: START + (i + 1) * ROUND_MS + 100, x: featureVector({ currentScore: y ? 0.8 : -0.8 }),
       baseline: y ? 'UP' : 'DOWN', y };
   });

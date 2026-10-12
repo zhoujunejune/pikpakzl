@@ -17,6 +17,8 @@ function wilson(h, n) {
 
 export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publish = () => {} }) {
   const rows = new Map(), snapshots = new Map();
+  const experiments = [];
+  let loadedPolicy = null;
   let start = null, journalReady = false, error = null, fd = null;
   let model = null, lastTraining = null, trainingBusy = false, lastTrainingCount = 0;
   let lastSourceAt = null, lastMarket = null, lastCaptureError = null;
@@ -26,7 +28,14 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     return rows.get(round);
   };
   function apply(e) {
-    if (e.type === 'started') start = e.start;
+    if (e.type === 'started') {
+      start = e.start;
+      loadedPolicy = e.policyVersion;
+      experiments.push({ policyVersion: e.policyVersion, startRound: e.start, reason: e.reason ?? null });
+      model = null;
+      lastTraining = null;
+      lastTrainingCount = 0;
+    }
     else if (e.type === 'model') model = e.model;
     else if (e.type === 'training') {
       lastTraining = e;
@@ -67,14 +76,17 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
         if (end !== body.length) fs.truncateSync(file, Buffer.byteLength(body.slice(0, end)));
         for (const line of body.slice(0, end).split('\n').filter(Boolean)) {
           const e = JSON.parse(line);
-          if (e.schemaVersion !== 1 || e.modelFamily !== VERSION || e.policyVersion !== POLICY) throw new Error('WRONG_JOURNAL_VERSION');
+          if (e.schemaVersion !== 1 || e.modelFamily !== VERSION ||
+            ![POLICY, 'FAST8_FULL_COVERAGE_LOGISTIC_V1'].includes(e.policyVersion)) throw new Error('WRONG_JOURNAL_VERSION');
           apply(e);
         }
       }
       fd = fs.openSync(file, 'a');
       journalReady = true;
-      if (start === null && !append({ type: 'started', start: Math.ceil(clock() / ROUND_MS) * ROUND_MS,
-        at: clock(), targets: { accuracy: 0.65, coverage: 1, deadlineMs: DEADLINE_MS } })) return false;
+      if (loadedPolicy !== POLICY && !append({ type: 'started', start: Math.ceil(clock() / ROUND_MS) * ROUND_MS,
+        at: clock(), reason: loadedPolicy ? 'V2_EARLIER_CUTOFF_AFTER_V1_LIVE_DEADLINE_BREACH' : 'INITIAL_START',
+        previousPolicy: loadedPolicy, targets: { accuracy: 0.65, coverage: 1, deadlineMs: DEADLINE_MS },
+        featureCutoffOffsetMs: CUTOFF_MS, lockOffsetMs: LOCK_MS })) return false;
       if (lastTraining?.status === 'TRAINING') lastTraining = { ...lastTraining, status: 'INTERRUPTED_RETRY_PENDING' };
       return true;
     } catch {
@@ -161,15 +173,19 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       fallbackLevel: learned && p !== 0.5 ? (snapshot.issues.length ? 'MODEL_WITH_MISSING_FEATURES' : 'NONE') : base.fallbackLevel,
       baselineDirection: base.direction, dataQuality: snapshot?.issues || ['NO_FRESH_SNAPSHOT'],
       presentFeatures: snapshot?.presentFeatures || 0,
-      modelVersion: learned ? model.modelVersion : VERSION + '-baseline-v1',
+      modelVersion: learned ? model.modelVersion : VERSION + '-baseline-v2',
       weightsHash: learned ? model.weightsHash : null, trainingLabelsReceivedThrough: learned ? model.trainingLabelsReceivedThrough : null,
       featuresHash: hash(features), features, x, productionEffect: 'NONE_SHADOW_ONLY' };
     if (!append(decision)) return null;
-    if (!append({ type: 'persisted', roundStartMs: round, at: clock() })) return null;
+    // The decision itself is already durable. Publish before another volume
+    // flush; diagnostic timestamp persistence must not delay the decision.
+    const persisted = { type: 'persisted', roundStartMs: round, at: clock() };
+    row.persistedAt = persisted.at;
     snapshots.delete(round);
     for (const key of snapshots.keys()) if (key < round) snapshots.delete(key);
     const view = decisionView(row);
     publish(view);
+    append(persisted);
     emit('fast8_direction_frozen', view);
     return view;
   }
@@ -182,7 +198,7 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
   }
   function settle(row) {
     const now = clock(), round = row?.roundStartMs;
-    if (!journalReady || !finite(round) || round % ROUND_MS || round < start ||
+    if (!journalReady || !finite(round) || round % ROUND_MS || round < (experiments[0]?.startRound ?? start) ||
       !isDirection(row.actual) || row.actualSource !== 'BINANCE_PREDICTION_OFFICIAL_RESOLUTION' ||
       !String(row.resolutionEvidence || '').startsWith('OFFICIAL_' + row.actual + ':') ||
       !String(row.resolutionEvidence).includes('STRICT_ROUND_ALIGNED_TOPIC') ||
@@ -209,7 +225,8 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
         d.maxReceivedAtMs <= d.capturedAtMs && d.capturedAtMs <= d.featureCutoffMs)));
   }
   function trainingRows() {
-    return [...rows.values()].filter(r => r.settlement && onTime(r) && r.decision.presentFeatures >= 5)
+    return [...rows.values()].filter(r => r.roundStartMs >= start && r.decision?.policyVersion === POLICY &&
+      r.settlement && onTime(r) && r.decision.presentFeatures >= 5)
       .sort((a, b) => a.roundStartMs - b.roundStartMs).map(r => ({
         roundStartMs: r.roundStartMs, x: r.decision.x, y: Number(r.settlement.actual === 'UP'),
         baseline: r.decision.baselineDirection, decisionAt: r.decision.decisionComputedAtMs,
@@ -280,7 +297,14 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       const validation = summarize(first, Math.min(1000, expected));
       const passed = validation.expectedRounds === 1000 && validation.officialRounds === 1000 &&
         validation.onTimeRounds === 1000 && validation.hits >= 650;
-      cachedStats = { revision, expected, data: { ...totals, windows,
+      const previousExperiments = experiments.slice(0, -1).map((experiment, i) => {
+        const end = Math.min(ended, experiments[i + 1].startRound);
+        return { ...experiment, endRoundExclusive: experiments[i + 1].startRound,
+          status: 'SUPERSEDED_RETAINED_IN_AUDIT', ...summarize([...rows.values()]
+            .filter(r => r.roundStartMs >= experiment.startRound && r.roundStartMs < end),
+            Math.max(0, (end - experiment.startRound) / ROUND_MS)) };
+      });
+      cachedStats = { revision, expected, data: { ...totals, windows, previousExperiments,
         validation: { ...validation, status: passed ? 'OBSERVED_1000_ROUND_TARGET_MET' : expected < 1000 ? 'COLLECTING' : 'TARGET_NOT_MET_OR_LABELS_PENDING',
           passed, fromRound: start, toRound: start === null ? null : start + 999 * ROUND_MS, independentOfficialVerification: false },
         training: { status: lastTraining?.status || 'COLLECTING', requiredSamples: MIN_TRAINING,
@@ -292,12 +316,14 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
           modelVersion: r.decision?.modelVersion ?? null, fallbackLevel: r.decision?.fallbackLevel ?? null,
           publishedDelayMs: r.publishedAt ? r.publishedAt - r.roundStartMs : null })) } };
     }
-    const latestRow = [...rows.values()].filter(r => r.decision).sort((a, b) => b.roundStartMs - a.roundStartMs)[0];
+    const latestRow = [...rows.values()].filter(r => r.roundStartMs >= start && r.decision?.policyVersion === POLICY)
+      .sort((a, b) => b.roundStartMs - a.roundStartMs)[0];
     return { ok: journalReady && !error, modelFamily: VERSION, policyVersion: POLICY,
       generatedAtMs: now, productionEffect: 'NONE_SHADOW_ONLY', autoPromotion: false, executionEligible: false,
       status: model ? (now >= model.effectiveFromRound ? 'MODEL_FORWARD_ACTIVE' : 'MODEL_REGISTERED_PENDING_NEXT_ROUND') : 'BASELINE_COLLECTING', deadlineMs: DEADLINE_MS,
       targets: { accuracy: 0.65, directionCoverage: 1, onTimeCoverage: 1 }, experimentStartRound: start,
-      modelVersion: model?.modelVersion || VERSION + '-baseline-v1', modelEffectiveFromRound: model?.effectiveFromRound ?? null,
+      featureCutoffOffsetMs: CUTOFF_MS, lockOffsetMs: LOCK_MS,
+      modelVersion: model?.modelVersion || VERSION + '-baseline-v2', modelEffectiveFromRound: model?.effectiveFromRound ?? null,
       health: { journalReady, lastError: error, lastSourceAt, lastSourceAgeMs: lastSourceAt === null ? null : now - lastSourceAt, lastCaptureError },
       ...cachedStats.data, latest: decisionView(latestRow),
       evidence: 'STRICT_FORWARD_WITH_INTERNAL_OFFICIAL_SETTLEMENT; NOT_INDEPENDENTLY_CERTIFIED',

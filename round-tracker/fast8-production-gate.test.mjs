@@ -17,7 +17,7 @@ const mock=()=>{
   return {stats,latest:{signal}};
 };
 
-test('passing prospective proof and a clean timely learned decision are required',()=>{
+test('current-round and timing checks allow a clean learned signal',()=>{
   const {stats,latest}=mock();
   const res=fast8ProductionReadiness(stats,latest,R,now);
   assert.equal(res.eligible,true);
@@ -38,16 +38,16 @@ test('explicit FAST8-only route allows timely baseline direction before 65% proo
   assert.equal(r.reason,null);
   assert.equal(r.preview.direction,'UP');
 });
-test('reject late publication, wrong source, stale status, missing features and fallback',()=>{
+test('reject late publication, stale status and bad features but allow non-trained fallback',()=>{
   const {stats,latest}=mock();
   latest.signal.serverAvailableAtMs=R+8001;
   assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_SIGNAL_LATE_OR_UNVERIFIED');
   latest.signal.serverAvailableAtMs=R+2050;
   latest.signal.fallbackLevel='NO_INFORMATION_FALLBACK';
-  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_TRAINED_CLEAN_MODEL_REQUIRED');
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).eligible,true);
   latest.signal.fallbackLevel='NONE';
   latest.signal.dataQuality=['PM_MISSING_OR_UNALIGNED'];
-  assert.equal(fast8ProductionReadiness(stats,latest,R,now).eligible,false);
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_MODEL_OR_FEATURES_NOT_READY');
   latest.signal.dataQuality=[];
   stats.statusAgeMs=65000;
   assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_WORKER_OR_JOURNAL_NOT_READY');

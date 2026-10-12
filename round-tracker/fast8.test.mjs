@@ -200,10 +200,14 @@ test('real worker starts independently and exposes a fresh read-only shadow stat
   const client = createFast8Client({ dir, onReady: ready });
   t.after(async () => { await client.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
   client.start();
-  await Promise.race([booted, new Promise((_, reject) => {
-    const timeout = setTimeout(() => reject(new Error('WORKER_BOOT_TIMEOUT')), 5000);
-    timeout.unref();
-  })]);
+  let timeout;
+  try {
+    // The production HTTP server keeps the event loop alive; this isolated test
+    // needs its own referenced timer on Node 22 while the background worker boots.
+    await Promise.race([booted, new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('WORKER_BOOT_TIMEOUT')), 5000);
+    })]);
+  } finally { clearTimeout(timeout); }
   assert.equal(client.stats().ok, true);
   assert.equal(client.stats().modelFamily, 'ZL_FAST8_65');
   assert.equal(client.stats().autoPromotion, false);

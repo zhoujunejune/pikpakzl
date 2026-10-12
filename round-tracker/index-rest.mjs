@@ -17,6 +17,7 @@ import { createAdaptiveGateShadow } from './adaptive-gate-shadow.mjs';
 import { createPreLockAdaptiveShadow } from './prelock-adaptive-shadow.mjs';
 import { createEdgeRescueExpansion } from './edge-rescue-expansion.mjs';
 import { createTimedEdgeRescueFuse } from './edge-rescue-timed-fuse.mjs';
+import { firstLayer15sProductionFuseSummary } from './first-layer-15s-risk.mjs';
 import { SOURCE as V2_FUSE_RESCUE_SOURCE, VERSION as V2_FUSE_RESCUE_VERSION, evaluateV2HardFuseRescue, summarizeV2HardFuseRescue } from './v2-hard-fuse-rescue.mjs';
 import { selectiveV2HardFuseSummary } from './selective-v2-hard-fuse.mjs';
 import { CURRENT03_PM_AGREE_SOURCE, CURRENT03_PM_AGREE_MODEL, current03PmAgreeProductionFuseSummary } from './current03-pm-agree-production.mjs';
@@ -182,6 +183,7 @@ const timedPmCurrent25Fuse = createTimedEdgeRescueFuse({
   file: HISTORY_FILE + '.pm-current25-support08-15s-fuse.json',
   cooldownMs: 30 * 60 * 1000,
   productionSource: PM_CURRENT25_SUPPORT08_SOURCE,
+  requireTwoHitRecovery:true,
   log,
 });
 // Every additional forward-qualified candidate has independent 30-minute
@@ -192,6 +194,7 @@ const lastResort15sFuses = Object.fromEntries(FORWARD_GATED_15S_IDS.map(id => [
     file: HISTORY_FILE + '.last-resort-15s-' + id.toLowerCase() + '-fuse.json',
     cooldownMs: 30 * 60 * 1000,
     productionSource: lastResortSource(id),
+    requireTwoHitRecovery:FIRST_LAYER_15S_IDS.includes(id),
     log,
   }),
 ]));
@@ -5146,8 +5149,9 @@ function all15sCandidateRegistryStats() {
     const fuse = id === PM_CURRENT25_SUPPORT08_MODEL ? timedPmCurrent25Fuse :
       id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse : lastResort15sFuses[id];
     const proof = byId.get(id);
-    const firstLayerEligible = userFirst15sProofPass(proof);
-    const eligible = firstLayerEligible || oneTimeOrStrict15sProofPass(proof);
+    const isFirstLayer = FIRST_LAYER_15S_IDS.includes(id);
+    const firstLayerEligible = isFirstLayer && userFirst15sProofPass(proof);
+    const eligible = isFirstLayer ? firstLayerEligible : oneTimeOrStrict15sProofPass(proof);
     return {
       candidateId:id,
       source,
@@ -5159,7 +5163,10 @@ function all15sCandidateRegistryStats() {
       oneTimeBootstrapEligible:proof?.oneTimeBootstrapEligible === true,
       oneTimeBootstrapRevoked:proof?.oneTimeBootstrapRevoked === true,
       candidateForward:proof || null,
-      production:current03PmAgreeProductionFuseSummary(rounds, source).production,
+      production:(isFirstLayer
+        ? firstLayer15sProductionFuseSummary(rounds, source)
+        : current03PmAgreeProductionFuseSummary(rounds, source)).production,
+      productionFuse:isFirstLayer ? firstLayer15sProductionFuseSummary(rounds, source).fuse : null,
       timedFuse:fuse.status(),
     };
   });
@@ -5172,6 +5179,10 @@ function all15sCandidateRegistryStats() {
     productionRoute:'USER_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_EDGE_THEN_LATE_15S',
     firstLayerCandidates:[...FIRST_LAYER_15S_IDS],
     firstLayerWindowMs:[15000,20000],
+    firstLayerRiskPolicy:{minForwardSamples:30,minForwardAccuracy:0.80,
+      minRecent10Accuracy:0.80,minDirectionalAccuracy:0.75,
+      productionMissStreakFuse:2,productionRolling10FuseBelow:0.70,
+      cooldownMs:1800000,trialOfficialHitsForRecovery:2,wilsonPriceGate:true},
     candidates:status,
   };
 }
@@ -5210,7 +5221,9 @@ function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
       chosen.id === CURRENT03_PM_AGREE_MODEL ? timedCurrent03PmFuse :
       lastResort15sFuses[chosen.id];
     if (!fuse || chosen.source !== candidateProductionSource(chosen.id)) continue;
-    const stats = current03PmAgreeProductionFuseSummary(rounds, chosen.source);
+    const stats = FIRST_LAYER_15S_IDS.includes(chosen.id)
+      ? firstLayer15sProductionFuseSummary(rounds, chosen.source)
+      : current03PmAgreeProductionFuseSummary(rounds, chosen.source);
     const circuit = fuse.check(chosen.direction, stats, now);
     if (!circuit.allowed) continue;
     allowed.push({chosen,fuse,circuit});

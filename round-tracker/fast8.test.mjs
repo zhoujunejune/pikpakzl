@@ -230,6 +230,9 @@ test('temporal L2 learner trains without abstention and rejects premature traini
   });
   const result = trainFast8(samples);
   assert.equal(result.accepted, true);
+  assert.ok([0.02, 0.1, 0.3, 1].includes(result.selectedLambda));
+  assert.equal(result.holdout.selectedLambda, result.selectedLambda);
+  assert.equal(result.holdout.innerValidation.length, 4);
   assert.equal(result.holdout.coverage, 1);
   assert.ok(probability(result.weights, samples[1].x) > 0.5);
   assert.ok(probability(result.weights, samples[0].x) < 0.5);

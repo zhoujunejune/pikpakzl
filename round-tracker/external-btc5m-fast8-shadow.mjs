@@ -33,7 +33,7 @@ function side(score,baselineDirection) {
 // VWAP are unavailable, so no "replication" of third-party results is claimed.
 export function externalResearchDirections(facts={},{
   baselineDirection='UP',snapshotAvailable=false,
-  dataQuality=[],sourceAt=null
+  dataQuality=[],sourceAt=null,roundStartMs=null
 }={}) {
   const current = normalized(facts,'currentScore');
   const trend = normalized(facts,'currentTrendScore');
@@ -69,7 +69,13 @@ export function externalResearchDirections(facts={},{
     trend * regime > 0;
   const mixed = trending ? flow : revert;
   const dataProblems = Array.isArray(dataQuality) ? [...dataQuality] : ['UNKNOWN_DATA_QUALITY'];
-  const validInput = snapshotAvailable === true && Number.isFinite(sourceAt) &&
+  // The base FAST8 worker may reuse a sub-5s pre-round observation. This is
+  // causally available, but NOT independently verified as current-round data.
+  const reusedPreRound = Number.isFinite(roundStartMs) && Number.isFinite(sourceAt) &&
+    sourceAt < roundStartMs;
+  if (reusedPreRound && !dataProblems.includes('PRE_ROUND_SNAPSHOT_REUSED'))
+    dataProblems.push('PRE_ROUND_SNAPSHOT_REUSED');
+  const validInput = !reusedPreRound && snapshotAvailable === true && Number.isFinite(sourceAt) &&
     !dataProblems.some(x => x === 'NO_FRESH_SNAPSHOT' ||
       x === 'DEPTH_MISSING_OR_STALE' || x === 'TRADES_MISSING_OR_STALE');
   const insufficient = flow.available < 4 || revert.available < 4;
@@ -92,7 +98,7 @@ export function externalResearchDirections(facts={},{
     productionEffect:'NONE_SHADOW_ONLY',executionEligible:false,autoPromotion:false,
     predictedHorizonMs:300000,nominalDeadlineMs:8000,
     sourceAt:Number.isFinite(sourceAt)?sourceAt:null,
-    fullQuality:validInput && !insufficient,
+    reusedPreRound,fullQuality:validInput && !insufficient,
     regime:mode,dataQuality:dataProblems,
     predictions};
 }

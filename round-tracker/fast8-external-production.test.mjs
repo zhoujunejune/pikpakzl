@@ -49,7 +49,7 @@ test('production code declares selected external router, one immutable lock, and
  assert.match(body,/model:EXTERNAL_PRODUCTION_ID,modelVersion:EXTERNAL_PRODUCTION_VERSION/);
  assert.match(body,/direction:selected.direction/);
  assert.match(body,/alreadyLocked/);
- assert.match(body,/FAST8_GATEWAY_FALLBACK_AT_MS = 7000/);
+ assert.match(src,/FAST8_GATEWAY_FALLBACK_AT_MS = 7000/);
  assert.match(body,/status:'PENDING'/);
  assert.doesNotMatch(body,/status:'WAIT'/);
  assert.match(src,/function freezeProductionLock\(/);

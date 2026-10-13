@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {FAST8_SOURCE,FAST8_MODE,fast8ProductionReadiness} from './fast8-production-gate.mjs';
+import {LOCK_MS} from './fast8-model.mjs';
 
 const R=1791828000000, now=R+2100;
 const mock=()=>{
@@ -108,9 +109,9 @@ test('fresh pre-round market snapshot matches worker and is flagged as unverifie
 
 test('pre-round snapshots older than the worker window and post-cutoff samples are rejected',()=>{
   const {stats,latest}=mock();
-  latest.signal.maxEventTimeMs=R-3001;
-  latest.signal.maxReceivedAtMs=R-3000;
-  latest.signal.capturedAtMs=R-2999;
+  latest.signal.maxEventTimeMs=R-(5000-LOCK_MS)-1;
+  latest.signal.maxReceivedAtMs=R-(5000-LOCK_MS);
+  latest.signal.capturedAtMs=R-(5000-LOCK_MS)+1;
   assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_SIGNAL_LATE_OR_UNVERIFIED');
 
   latest.signal.maxEventTimeMs=R+1440;

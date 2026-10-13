@@ -63,6 +63,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     console.log(JSON.stringify({
       event: 'auto_submit_triggered',
       round: p.round,
+      productionSignal: p.productionSignal,
+      orderSignal: p.orderSignal,
       direction: p.signal,
       action: p.action,
       amount: p.amount,
@@ -80,7 +82,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   const [current, freshQuote] = await Promise.all([
     getSignal({ forceHttp: true }), getFreshQuote(p._internal),
   ]);
-  if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || current.direction !== p.signal) {
+  if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current)) {
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',
@@ -101,6 +103,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     console.log(JSON.stringify({
       event: 'fresh_quote_failed',
       round: p.round,
+      productionSignal: p.productionSignal,
+      orderSignal: p.orderSignal,
       direction: p.signal,
       action: p.action,
       amount: p.amount,
@@ -256,6 +260,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       status: p.state,
       orderId: null,
       action: p.action,
+      productionSignal: p.productionSignal,
+      orderSignal: p.orderSignal,
+      orderDirectionPolicy: p.orderDirectionPolicy,
       amount: p.amount,
       round: p.round,
       error: err.error,
@@ -265,6 +272,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     console.log(JSON.stringify({
       event: 'api_order_failed',
       round: p.round,
+      productionSignal: p.productionSignal,
+      orderSignal: p.orderSignal,
       direction: p.signal,
       action: p.action,
       amount: p.amount,
@@ -308,6 +317,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     console.log(JSON.stringify({
       event: 'submission_unknown',
       round: p.round,
+      productionSignal: p.productionSignal,
+      orderSignal: p.orderSignal,
       direction: p.signal,
       action: p.action,
       amount: p.amount,
@@ -324,6 +335,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       status: 'SUBMISSION_UNKNOWN',
       orderId: null,
       action: p.action,
+      productionSignal: p.productionSignal,
+      orderSignal: p.orderSignal,
+      orderDirectionPolicy: p.orderDirectionPolicy,
       amount: p.amount,
       round: p.round,
       error: p.error,
@@ -341,6 +355,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     status: 'PLACED_UNVERIFIED',
     orderId: String(orderId),
     action: p.action,
+    productionSignal: p.productionSignal,
+    orderSignal: p.orderSignal,
+    orderDirectionPolicy: p.orderDirectionPolicy,
     amount: p.amount,
     round: p.round,
     walletAddress: intent.wallet.walletAddress,
@@ -478,6 +495,7 @@ const clientJs = String.raw`(function(){
       text('round',s.round==null?'-':s.round);
       text('status',s.status==null?'-':s.status);
       text('direction',s.direction==null?'-':s.direction);
+      text('orderDirection',j.orderSignal==null?'-':j.orderSignal);
       text('score',s.score==null?'-':Number(s.score).toFixed(2));
       text('amountView',j.amount==null?'-':j.amount);
       var amount=el('amount');
@@ -502,8 +520,8 @@ const clientJs = String.raw`(function(){
         text('pendingMeta',j.enabled?'正在等待下一轮 LOCKED，并准备市场/方向...':'开启后等待下一轮 LOCKED 信号。');
         if(btn) btn.classList.add('hidden');
       }else if(currentPending.state==='READY'){
-        text('pendingTitle',(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT');
-        text('pendingMeta','市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+(autoMode?' · 后端自动确认已启用':' · 点击按钮即直接提交真实订单'));
+        text('pendingTitle','生产 '+(currentPending.productionSignal||'-')+' → 下单 '+(currentPending.action||'-')+' · '+currentPending.amount+' USDT');
+        text('pendingMeta','反向规则 '+(currentPending.orderDirectionPolicy||'-')+' · 市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+(autoMode?' · 后端自动确认已启用':' · 点击按钮即直接提交真实订单'));
         if(btn){
           if(autoMode){ btn.classList.add('hidden'); }
           else{
@@ -553,7 +571,7 @@ const clientJs = String.raw`(function(){
         var failed=o.state==='CONFIRMED_FAILED'||o.state==='PLACE_ERROR';
         var unknown=o.state==='SUBMISSION_UNKNOWN';
         html('orderTitle',filled?'<span class="ok">已成交</span>':(failed?'<span class="bad">下单失败</span>':(unknown?'<span class="warn">状态未知，禁止重发</span>':'<span class="warn">已提交，核验中</span>')));
-        text('orderMeta','orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:''));
+        text('orderMeta','orderId '+(o.orderId||'-')+' · 生产 '+(o.productionSignal||'-')+' → '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:''));
       }else{
         text('orderTitle','暂无'); text('orderMeta','-');
       }

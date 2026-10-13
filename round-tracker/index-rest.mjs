@@ -5977,6 +5977,31 @@ function payload() {
     productionSummary: productionSummary(),
     productionPolicy: productionPolicyName(),
     productionSignalSourceMode:PRODUCTION_SIGNAL_SOURCE_MODE,
+    // Canonical single-model UI view. This is read-only: a shadow candidate is
+    // NEVER presented as an order-producing model until a real persisted
+    // production lock identifies it. Do not backfill older rounds as live.
+    selectedExternalSignal:(()=>{
+      const model='FLOW_BOOK_PROXY_V1',st=fast8.stats();
+      const p=st.externalResearch?.models?.[model] || null;
+      const active=[...rounds.values()].filter(r=>r.productionModel===model &&
+        (r.productionPrediction==='UP'||r.productionPrediction==='DOWN'))
+        .sort((a,b)=>Number(b.roundStartMs)-Number(a.roundStartMs))[0] || null;
+      const current=Math.floor(Date.now()/300000)*300000;
+      return {model,displayName:'BTC 5分钟订单流 · 8秒方向',version:st.externalResearch?.version||null,
+        selected:true,productionActive:Number(active?.roundStartMs)===current,
+        currentProductionModel:rounds.get(String(current))?.productionModel || FAST8_MODEL,
+        researchDirection:st.latest?.externalResearch?.predictions?.[model]?.direction ?? null,
+        researchRound:st.latest?.roundStartMs ?? null,
+        researchGeneratedAt:st.latest?.decisionComputedAtMs ?? null,
+        trainingStatus:st.training?.status||null,
+        samples:p?.labeledPredictions??0,hits:p?.hits??0,misses:p?.misses??0,
+        accuracy:p?.accuracy??null,onTimeAccuracy:p?.onTimeAccuracy??null,
+        verifiedSamples:p?.verifiedSamples??0,verifiedAccuracy:p?.verifiedAccuracy??null,
+        coverage:p?.fullCoverage??null,
+        confidenceWilson95:p?.confidenceWilson95??[null,null],
+        source:'FORWARD_SHADOW_COMPARE_UNTIL_PRODUCTION_LOCK_MATCHES',
+        settlementSource:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'};
+    })(),
     fast8ProductionStatus:{model:FAST8_MODEL,source:FAST8_SOURCE,otherSourcesPaused:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE,
       ...(()=>{const st=fast8.stats(), current=Math.floor(Date.now()/300000)*300000,
         r=fast8ProductionReadiness(st,fast8.latest(),current);return {gateEligible:r.eligible,

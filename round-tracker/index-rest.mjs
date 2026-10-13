@@ -5434,41 +5434,103 @@ function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
   return null;
 }
 
-// In this mode all previous production branches are suspended, NOT deleted.
-// A valid 8-second shadow direction remains visible during qualification, but
-// will never become a Redis/WS order signal while the 65% gate is unmet.
+// FAST8 exclusive: one immutable direction per round, including honest,
+// explicitly tagged no-information contingency when the worker misses deadline.
+// Do not label contingency as a model prediction or fabricated confidence.
+const FAST8_GATEWAY_FALLBACK_AT_MS = 7000;
+function fast8GatewayFallback(round) {
+  const previous = [...rounds.values()]
+    .filter(r => Number(r.roundStartMs) < round &&
+      r.productionSource === FAST8_SOURCE &&
+      (r.productionPrediction === 'UP' || r.productionPrediction === 'DOWN'))
+    .sort((a, b) => Number(b.roundStartMs) - Number(a.roundStartMs))[0];
+  const lastWorker = fast8.latest()?.signal;
+  if (previous) return {direction:previous.productionPrediction,
+    reason:'FAST8_GATEWAY_PREVIOUS_FROZEN_DIRECTION_REUSED'};
+  if (Number(lastWorker?.roundStartMs) < round &&
+      (lastWorker?.direction === 'UP' || lastWorker?.direction === 'DOWN'))
+    return {direction:lastWorker.direction,reason:'FAST8_GATEWAY_PREVIOUS_WORKER_DIRECTION_REUSED'};
+  return {direction:(Math.floor(round / 300000) % 2 === 0 ? 'UP' : 'DOWN'),
+    reason:'FAST8_GATEWAY_NO_INFORMATION_DETERMINISTIC_FALLBACK'};
+}
 function fast8ExclusiveSignalPayload(row, expectedRound, now) {
+  const activeRow = row || ensureRound(expectedRound);
   const stats = fast8.stats();
   const readiness = fast8ProductionReadiness(stats, fast8.latest(), expectedRound, now);
-  if (readiness.eligible && row && !['UP','DOWN'].includes(row.productionPrediction)) {
+  const alreadyLocked = ['UP','DOWN'].includes(activeRow?.productionPrediction);
+  if (readiness.eligible && !alreadyLocked) {
     const prediction = readiness.preview;
     const live = {
       round: expectedRound, status: 'LOCKED',
       signal: {direction:prediction.direction, score:null,confidence:null,modelProbability:null},
       input: {round:expectedRound}, generatedAt:prediction.persistedAtMs,
       source:FAST8_SOURCE,model:FAST8_MODEL,modelVersion:prediction.modelVersion,
-      productionPolicy:productionPolicyName(),fallbackUsed:false,
-      fast8Qualification:{validationSamples:stats.validation.labeledPredictions,
-        accuracy:stats.validation.endToEndAccuracy,verifiedAt:stats.generatedAtMs},
+      productionPolicy:productionPolicyName(),
+      fallbackUsed:prediction.fallbackUsed === true,
+      fallbackReason:prediction.fallbackUsed ? (prediction.fallbackLevel || 'FAST8_FEATURE_QUALITY_FALLBACK') : null,
+      fast8Quality: {status:prediction.qualityStatus,
+        issues:prediction.dataQuality, presentFeatures:prediction.presentFeatures},
+      fast8Qualification:{validationSamples:stats.validation?.labeledPredictions ?? 0,
+        accuracy:stats.validation?.endToEndAccuracy ?? null,
+        verifiedAt:stats.generatedAtMs ?? null},
     };
-    if (freezeProductionLock(row, live)) {
+    if (freezeProductionLock(activeRow, live)) {
       log('fast8_exclusive_production_lock',{round:expectedRound,
-        direction:prediction.direction,modelVersion:prediction.modelVersion});
+        direction:prediction.direction,modelVersion:prediction.modelVersion,
+        fallbackUsed:live.fallbackUsed,quality:live.fast8Quality});
       logProductionSignalState(live);
       return {ok:true,live};
     }
   }
-  const reason = row && ['UP','DOWN'].includes(row.productionPrediction)
-    ? 'PAUSED_LEGACY_LOCK_UNTIL_NEXT_ROUND' : readiness.reason;
+  // Prevent contradictory orders in a round that was already locked
+  // before FAST8-only was enabled. Such a lock is immutable.
+  if (alreadyLocked) {
+    const frozen = {round:expectedRound, status:'LOCKED',
+      signal:{direction:activeRow.productionPrediction,score:null,confidence:null,modelProbability:null},
+      input:{round:expectedRound},generatedAt:activeRow.productionGeneratedAt ?? null,
+      source:activeRow.productionSource,model:activeRow.productionModel,
+      modelVersion:activeRow.productionModelVersion,
+      productionPolicy:productionPolicyName(),frozen:true,
+      fallbackUsed:Boolean(activeRow.productionFallbackUsed),
+      fallbackReason:activeRow.productionFallbackReason ?? null,
+      transitionExistingLock:activeRow.productionSource !== FAST8_SOURCE};
+    logProductionSignalState(frozen);
+    return {ok:true,live:frozen};
+  }
+  // The original model engine itself also has full-coverage baselines;
+  // this independent deadline guard covers worker crashes, startup and
+  // unforeseen missing / low-quality inputs without backdating a prediction.
+  if (now >= expectedRound + FAST8_GATEWAY_FALLBACK_AT_MS) {
+    const fallback = fast8GatewayFallback(expectedRound);
+    const live = {
+      round:expectedRound,status:'LOCKED',
+      signal:{direction:fallback.direction,score:null,confidence:null,modelProbability:null},
+      input:{round:expectedRound},generatedAt:now,
+      source:FAST8_SOURCE,model:FAST8_MODEL,
+      modelVersion:'ZL_FAST8_65-GATEWAY_CONTINGENCY_V1',
+      productionPolicy:productionPolicyName(),
+      fallbackUsed:true,fallbackReason:fallback.reason,
+      fast8Quality:{status:'NO_VERIFIED_CURRENT_ROUND_MODEL_SIGNAL',
+        issues:[readiness.reason || 'FAST8_DIRECTION_NOT_AVAILABLE'],presentFeatures:0},
+      fast8Qualification:{validationSamples:stats.validation?.labeledPredictions ?? 0,
+        accuracy:stats.validation?.endToEndAccuracy ?? null,
+        verifiedAt:stats.generatedAtMs ?? null},
+    };
+    if (freezeProductionLock(activeRow, live)) {
+      log('fast8_gateway_contingency_lock',{round:expectedRound,
+        direction:fallback.direction,reason:fallback.reason,
+        generatedDelayMs:now-expectedRound,trigger:readiness.reason});
+      logProductionSignalState(live);
+      return {ok:true,live};
+    }
+  }
   const live = {
-    round:expectedRound,status:'WAIT',signal:null,input:{round:expectedRound},
+    round:expectedRound,status:'PENDING',signal:null,input:{round:expectedRound},
     generatedAt:null,source:FAST8_SOURCE,model:FAST8_MODEL,
     productionPolicy:productionPolicyName(),fallbackUsed:false,
-    waitReason: reason || 'FAST8_NOT_READY',
+    pendingReason:readiness.reason || 'FAST8_DIRECTION_PENDING_BEFORE_DEADLINE',
+    deadlineMs:8000,contingencyAtMs:FAST8_GATEWAY_FALLBACK_AT_MS,
     fast8Preview:readiness.preview,
-    fast8Gate:{eligible:readiness.eligible,
-      accuracy:stats.predictionAccuracy??null,samples:stats.labeledPredictions??0,
-      validationPassed:stats.validation?.passed === true},
     otherProductionSourcesPaused:true,
   };
   logProductionSignalState(live);

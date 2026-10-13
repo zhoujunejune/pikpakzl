@@ -32,6 +32,11 @@ import { WebSocketServer } from 'ws';
 // Reversible signal-source switch: only FAST8 can enter the production router.
 // Legacy code and model artifacts remain intact for a later explicit rollback.
 const PRODUCTION_SIGNAL_SOURCE_MODE = String(process.env.PRODUCTION_SIGNAL_SOURCE_MODE || FAST8_MODE).trim().toUpperCase() === LEGACY_MODE ? LEGACY_MODE : FAST8_MODE;
+// Temporarily pause all NON-PRODUCTION shadows in FAST8-only mode to fit the
+// existing Railway free-memory ceiling. Set PAUSE_NONPROD_SHADOWS=0 to restore.
+// FAST8 worker, market polling, official settlements, orders and archives remain active.
+const PAUSE_NONPROD_SHADOWS = PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
+  String(process.env.PAUSE_NONPROD_SHADOWS || '1') !== '0';
 const PORT = Number(process.env.PORT || 3000);
 const SYMBOL = String(process.env.SYMBOL || 'BTCUSDT').toUpperCase();
 const SIGNAL_ORIGIN = String(process.env.SIGNAL_ORIGIN || 'https://signal-diagnostic-v3-production.up.railway.app').replace(/\/+$/, '');
@@ -4113,7 +4118,7 @@ async function pollSignal() {
     const live = json?.live;
     fast8.observe(live, Date.now());
     if (!live?.round) {
-      shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, live, Date.now());
+      if (!PAUSE_NONPROD_SHADOWS) shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, live, Date.now());
       return;
     }
     if (Number(live.round) < STATS_START_MS) return;
@@ -4121,6 +4126,16 @@ async function pollSignal() {
     lastSignalError = null;
 
     const row = ensureRound(Number(live.round));
+    if (PAUSE_NONPROD_SHADOWS) {
+      // Retain topic hints for official settlement without running paused
+      // shadow predictions or writing their model artifacts.
+      const topicId = live?.facts?.predictionMarketTopicId || null;
+      if (topicId && !row.predictionMarketTopicId) {
+        row.predictionMarketTopicId = topicId;
+        saveHistory();
+      }
+      return;
+    }
     // Isolated prospective journal: never mutates the production round or emits a lock.
     shadow35.observe(row, live, Date.now());
     const liveFacts = live?.facts && typeof live.facts === 'object' ? live.facts : null;
@@ -4385,7 +4400,7 @@ async function pollSignal() {
     }
   } catch (e) {
     lastSignalError = e?.message || String(e);
-    shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, null, Date.now());
+    if (!PAUSE_NONPROD_SHADOWS) shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, null, Date.now());
   } finally {
     signalPollBusy = false;
   }
@@ -4505,6 +4520,7 @@ async function settlePendingRounds() {
             evidence,
           });
         }
+        if (!PAUSE_NONPROD_SHADOWS) {
         settleShadowForwardRegistry(row);
         shadowV2.settle(row);
         shadowV3.settle(row);
@@ -4631,6 +4647,7 @@ async function settlePendingRounds() {
             log('v3_trend_band_forward_progress',forward);
           }
         }
+        } // end paused non-production settlement + shadow metrics
         lastSettlementOkAt = Date.now();
         lastSettlementError = null;
         saveHistory();
@@ -4643,6 +4660,7 @@ async function settlePendingRounds() {
         }
 
         maybeFinalizeLegacyOfficialRevalidation();
+        if (!PAUSE_NONPROD_SHADOWS) {
         maybeTrainShadowModel();
         shadowV2.maybeTrain(shadowTrainingRows());
         if (!VIP75_RETIRED) {
@@ -4682,6 +4700,7 @@ async function settlePendingRounds() {
           });
         }
 
+        } // end paused non-production training
         log('round_settled', {
           round: row.roundStartMs,
           prediction: row.prediction,
@@ -5926,9 +5945,10 @@ function payload() {
 }
 
 loadHistory();
-independentDirectionShadow.load();
+if (!PAUSE_NONPROD_SHADOWS) independentDirectionShadow.load();
 loadArchiveIndex();
 backfillArchiveFromActiveHistory();
+if (!PAUSE_NONPROD_SHADOWS) {
 loadShadowModelArtifact();
 loadShadowForwardRegistry();
 adaptiveGateShadow.load();
@@ -5963,6 +5983,7 @@ const sweepShadowOrphans = () => cleanupOrphanedShadowArtifacts({
 });
 sweepShadowOrphans();
 setInterval(sweepShadowOrphans, 30 * 60 * 1000).unref();
+}
 applyAuthoritativeSettledHistoryOverrides();
 invalidateLegacyWinnerFlagSettlements();
 // One-time manual clearing of the existing Tier-1 rescue circuit. Persisted
@@ -5980,6 +6001,7 @@ timedV2FuseRescue.reconcile(rounds.values());
 timedCurrent03PmFuse.reconcile(rounds.values());
 timedPmCurrent25Fuse.reconcile(rounds.values());
 for (const circuit of Object.values(lastResort15sFuses)) circuit.reconcile(rounds.values());
+if (!PAUSE_NONPROD_SHADOWS) {
 loadShadowCandidateArtifact();
 adaptiveGateShadow.ensureModel(Array.from(rounds.values()));
 preLockAdaptiveShadow.ensureModel(Array.from(rounds.values()));
@@ -6012,13 +6034,17 @@ log('v3_trend_band_forward_status', summarizeV3TrendBand(rounds));
 log('selective_v2_no_base_contest_status', selectiveV2NoBaseContestSummary());
 log('wait_rescue_backtest_snapshot', waitRescueBacktest());
 log('wait_rescue_shadow_status', waitRescueShadowSummary());
+}
+log('nonproduction_shadow_pause_status', {paused:PAUSE_NONPROD_SHADOWS, activeProduction:PRODUCTION_SIGNAL_SOURCE_MODE, modelArtifactsPreserved:true, fast8TrainingActive:true});
 ensureCurrentRound();
 fast8.start();
 setInterval(pollSignal, POLL_MS).unref();
 // A fresh, safe report is also available through Railway logs when a scheduled
 // notification cannot reach the public read-only HTTP endpoint.
-log('shadow35_training_status', shadow35.stats());
-setInterval(() => log('shadow35_training_status', shadow35.stats()), 60000).unref();
+if (!PAUSE_NONPROD_SHADOWS) {
+  log('shadow35_training_status', shadow35.stats());
+  setInterval(() => log('shadow35_training_status', shadow35.stats()), 60000).unref();
+}
 // Freeze the production direction in the background even when no browser is open
 // and trading is disabled. This keeps every 5-minute round auditable and ensures
 // the stats direction is exactly the same immutable direction consumers will see.
@@ -6059,6 +6085,12 @@ const signalHttpServer = http.createServer((req, res) => {
   res.setHeader('access-control-allow-origin', '*');
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
+    if (PAUSE_NONPROD_SHADOWS) {
+      // Avoid calculating legacy shadow backtests for the frequent health probe.
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ok:true,health:{signalPollMs:POLL_MS,settlePollMs:SETTLE_POLL_MS,
+        lastSignalPollAt,lastSignalOkAt,lastSignalError,lastSettlementOkAt,lastSettlementError}}));
+    }
     const p = payload();
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ ok: true, health: p.health }));

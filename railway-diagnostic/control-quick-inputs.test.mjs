@@ -58,6 +58,8 @@ test('actual two-stage page injection keeps trade inputs near wallet and risk pa
   policyCard:'<section id="policyMock"></section>',
   previewCard:'<section id="previewMock"></section>',
   statsCard:'<section id="statsMock"></section>',
+  singleSignalCard:'<section id="singleSignalMock"></section>',
+  singleSignalScript:'<script id="singleSignalScriptMock"></script>',
   statsScript:'<script id="statsScriptMock"></script>',
   previewScript:'<script id="previewScriptMock"></script>',
   policyScript:'<script id="policyScriptMock"></script>'

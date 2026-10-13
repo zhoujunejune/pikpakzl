@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { VERSION, POLICY, ROUND_MS, CUTOFF_MS, LOCK_MS, DEADLINE_MS, MIN_TRAINING,
   FEATURES, finite, isDirection, featureVector, probability } from './fast8-model.mjs';
+import { EXTERNAL_RESEARCH_IDS, EXTERNAL_RESEARCH_VERSION, externalResearchDirections } from './external-btc5m-fast8-shadow.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const ratio = (a, b) => b ? a / b : null;
@@ -165,6 +166,13 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     const p = active && snapshot?.presentFeatures >= 5 ? probability(model.weights, x) : null;
     const learned = finite(p);
     const direction = learned && p !== 0.5 ? (p > 0.5 ? 'UP' : 'DOWN') : base.direction;
+    // Compute all independent counterfactual directions on EXACTLY the same
+    // immutable pre-cutoff features. Never route them into production.
+    const externalResearch = externalResearchDirections(features,{
+      baselineDirection:base.direction,snapshotAvailable:Boolean(snapshot),
+      dataQuality:snapshot?.issues || ['NO_FRESH_SNAPSHOT'],
+      sourceAt:snapshot?.sourceAt ?? null,
+    });
     const decision = { type: 'decision', roundStartMs: round, officialRoundStartMs: round,
       decisionComputedAtMs: now, featureCutoffMs: round + CUTOFF_MS,
       maxEventTimeMs: snapshot?.sourceAt ?? null, maxReceivedAtMs: snapshot?.receivedAt ?? null,
@@ -175,7 +183,8 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       presentFeatures: snapshot?.presentFeatures || 0,
       modelVersion: learned ? model.modelVersion : VERSION + '-baseline-v2',
       weightsHash: learned ? model.weightsHash : null, trainingLabelsReceivedThrough: learned ? model.trainingLabelsReceivedThrough : null,
-      featuresHash: hash(features), features, x, productionEffect: 'NONE_SHADOW_ONLY' };
+      featuresHash: hash(features), features, x, externalResearch,
+      productionEffect: 'NONE_SHADOW_ONLY' };
     if (!append(decision)) return null;
     // The decision itself is already durable. Publish before another volume
     // flush; diagnostic timestamp persistence must not delay the decision.
@@ -215,6 +224,17 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     emit('fast8_round_settled', { roundStartMs: round, actual: row.actual,
       direction: prediction ?? null, result: prediction ? (prediction === row.actual ? 'HIT' : 'MISS') : 'MISSING_PREDICTION',
       evidenceHash: event.evidenceHash, verification: event.verification, productionEffect: 'NONE_SHADOW_ONLY' });
+    const candidates = rows.get(round)?.decision?.externalResearch;
+    if(candidates?.version === EXTERNAL_RESEARCH_VERSION)
+      emit('fast8_external_research_settled',{
+        roundStartMs:round,actual:row.actual,version:candidates.version,
+        results:Object.fromEntries(EXTERNAL_RESEARCH_IDS.map(id => [id,{
+          direction:candidates.predictions?.[id]?.direction ?? null,
+          result:candidates.predictions?.[id]?.direction === row.actual ? 'HIT' : 'MISS',
+          evidence:candidates.predictions?.[id]?.evidence ?? null,
+        }])),
+        evidenceHash:event.evidenceHash,productionEffect:'NONE_SHADOW_ONLY'
+      });
     return true;
   }
   function onTime(row) {
@@ -255,6 +275,48 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       holdout: valid ? result.holdout : null, reason: failure ? 'TRAINER_FAILED' : null });
     emit('fast8_training_result', lastTraining);
   }
+  function externalResearchScoreboard(list,expected) {
+    const candidateRows = list.filter(r => r.decision?.externalResearch?.version === EXTERNAL_RESEARCH_VERSION);
+    const candidateLabeled = candidateRows.filter(r => r.settlement);
+    const timely = candidateRows.filter(onTime);
+    const models = Object.fromEntries(EXTERNAL_RESEARCH_IDS.map(id => {
+      const records = candidateRows.filter(r =>
+        isDirection(r.decision.externalResearch.predictions?.[id]?.direction));
+      const labeled = records.filter(r => r.settlement);
+      const onTimeLabeled = labeled.filter(onTime);
+      const hits = labeled.filter(r =>
+        r.decision.externalResearch.predictions[id].direction === r.settlement.actual).length;
+      const timelyHits = onTimeLabeled.filter(r =>
+        r.decision.externalResearch.predictions[id].direction === r.settlement.actual).length;
+      const verifiedLabeled = onTimeLabeled.filter(r => r.decision.externalResearch.fullQuality === true);
+      const verifiedHits = verifiedLabeled.filter(r =>
+        r.decision.externalResearch.predictions[id].direction === r.settlement.actual).length;
+      const baselineHits = labeled.filter(r =>
+        r.decision.direction === r.settlement.actual).length;
+      return [id,{
+        directionRounds:records.length,labeledPredictions:labeled.length,
+        hits,misses:labeled.length-hits,
+        accuracy:ratio(hits,labeled.length),
+        onTimeLabeled:onTimeLabeled.length,onTimeHits:timelyHits,
+        onTimeAccuracy:ratio(timelyHits,onTimeLabeled.length),
+        verifiedSamples:verifiedLabeled.length,verifiedHits,
+        verifiedAccuracy:ratio(verifiedHits,verifiedLabeled.length),
+        matchedFast8BaselineAccuracy:ratio(baselineHits,labeled.length),
+        fullCoverage:ratio(records.length,expected),
+        confidenceWilson95:wilson(hits,labeled.length),
+      }];
+    }));
+    return {
+      version:EXTERNAL_RESEARCH_VERSION,productionEffect:'NONE_SHADOW_ONLY',
+      executionEligible:false,autoPromotion:false,
+      scope:'STRICT_ROUND_ALIGNED_OFFICIAL_FORWARD_ONLY_NO_LEAKAGE',
+      expectedRounds:expected,candidateRounds:candidateRows.length,
+      missingOrPreExperimentRounds:Math.max(0,expected-candidateRows.length),
+      timelyRounds:timely.length,labeledCandidateRounds:candidateLabeled.length,
+      // Unqualified/no-data fallback predictions are INCLUDED in full-coverage accuracy.
+      models,
+    };
+  }
   function summarize(list, expected) {
     const predictions = list.filter(r => r.decision), official = list.filter(r => r.settlement);
     const labeled = official.filter(r => r.decision), hits = labeled.filter(r => r.decision.direction === r.settlement.actual).length;
@@ -283,7 +345,7 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       byDirection: Object.fromEntries(['UP', 'DOWN'].map(d => {
         const rs = labeled.filter(r => r.decision.direction === d), h = rs.filter(r => r.settlement.actual === d).length;
         return [d, { samples: rs.length, hits: h, misses: rs.length - h, accuracy: ratio(h, rs.length) }];
-      })) };
+      })), externalResearch:externalResearchScoreboard(list,expected) };
   }
   function stats() {
     const now = clock(), ended = Math.floor(now / ROUND_MS) * ROUND_MS;

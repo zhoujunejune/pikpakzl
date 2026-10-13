@@ -9,6 +9,7 @@ function predBookUsableForBand(side, meta, book, now) {
 import http from 'node:http';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
+import {marketRoundClock,minuteOpenAligned} from './market-round-clock.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SYMBOL = String(process.env.SYMBOL || 'BTCUSDT').toUpperCase();
@@ -116,6 +117,7 @@ let currentKlineOpen = null;
 let currentKlineStart = null;
 let currentKlineEnd = null;
 let currentKline1mOpen = null;
+let currentKline1mStart = null;
 let currentKline15mOpen = null;
 
 let prevDepthBid = null;
@@ -252,9 +254,9 @@ function priceRangePosition(windowMs, now) {
 }
 
 function roundInfo(now) {
-  const start = Number.isFinite(currentKlineStart) ? currentKlineStart : Math.floor(now / 300000) * 300000;
-  const end = Number.isFinite(currentKlineEnd) ? currentKlineEnd : start + 300000 - 1;
-  return { start, end };
+  // The kline may be late by seconds. It MUST NOT assign current trades and
+  // depth updates to the preceding five-minute Prediction contract.
+  return marketRoundClock(now, currentKlineStart);
 }
 
 function pushOfiEvent(now, bid, bidQty, ask, askQty) {
@@ -763,8 +765,14 @@ function calculate(now = Date.now()) {
   const micropriceBps = Number.isFinite(microprice) && Number.isFinite(mid) ? bps(microprice, mid) : 0;
   const spreadBps = hasBook && Number.isFinite(mid) ? ((bestAsk - bestBid) / mid) * 10000 : null;
 
-  const distanceFromOpenBps = hasPrice && Number.isFinite(currentKlineOpen) ? bps(lastPrice, currentKlineOpen) : 0;
-  const distanceFrom1mOpenBps = hasPrice && Number.isFinite(currentKline1mOpen) ? bps(lastPrice, currentKline1mOpen) : 0;
+  const liveRound = roundInfo(marketNow);
+  // Before the new 5m / 1m kline arrives, the previous candle's open is
+  // NOT the new contract's opening price. Use zero contribution instead.
+  const distanceFromOpenBps = liveRound.roundOpenAligned && hasPrice &&
+    Number.isFinite(currentKlineOpen) ? bps(lastPrice, currentKlineOpen) : 0;
+  const minuteOpenReady = minuteOpenAligned(marketNow, currentKline1mStart);
+  const distanceFrom1mOpenBps = minuteOpenReady && hasPrice &&
+    Number.isFinite(currentKline1mOpen) ? bps(lastPrice, currentKline1mOpen) : 0;
   const distanceFrom15mOpenBps = hasPrice && Number.isFinite(currentKline15mOpen) ? bps(lastPrice, currentKline15mOpen) : 0;
 
   const vol5sRms60 = sampledRealizedVolBps(60000, marketNow, 5000);
@@ -846,7 +854,7 @@ function calculate(now = Date.now()) {
     ? Math.min(5, Math.abs(n30) / Math.abs(flow15.pressure))
     : null;
 
-  const round = roundInfo(marketNow);
+  const round = liveRound;
   const elapsedMs = Math.max(0, marketNow - round.start);
   if (frozenRoundStart !== round.start) {
     frozenRoundStart = round.start;
@@ -1251,7 +1259,11 @@ function calculate(now = Date.now()) {
     facts: {
       lastPrice,
       roundOpenPrice: currentKlineOpen,
-      distanceFromOpenBps: Number(distanceFromOpenBps.toFixed(4)),
+      distanceFromOpenBps: liveRound.roundOpenAligned
+        ? Number(distanceFromOpenBps.toFixed(4)) : null,
+      roundOpenAligned: liveRound.roundOpenAligned,
+      roundClockSource: 'MARKET_EVENT_TIME_UTC_5M',
+      currentKlineStartMs: Number.isFinite(currentKlineStart) ? currentKlineStart : null,
       distanceFrom1mOpenBps: Number(distanceFrom1mOpenBps.toFixed(4)),
       distanceFrom15mOpenBps: Number(distanceFrom15mOpenBps.toFixed(4)),
       normalizedDistanceFromOpen: Number(nRound.toFixed(6)),
@@ -1418,7 +1430,13 @@ function handleMessage(raw) {
     const eventTs = Number(d.E || now);
     if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
-    if (Number.isFinite(open)) currentKline1mOpen = open;
+    const start = Number(k.t);
+    // Late/out-of-order candles must never roll back the open price.
+    if (Number.isFinite(start) && (!Number.isFinite(currentKline1mStart) ||
+        start >= currentKline1mStart)) {
+      currentKline1mStart = start;
+      currentKline1mOpen = Number.isFinite(open) ? open : null;
+    }
     return;
   }
 
@@ -1429,9 +1447,12 @@ function handleMessage(raw) {
     const open = Number(k.o);
     const start = Number(k.t);
     const end = Number(k.T);
-    if (Number.isFinite(open)) currentKlineOpen = open;
-    if (Number.isFinite(start)) currentKlineStart = start;
-    if (Number.isFinite(end)) currentKlineEnd = end;
+    if (Number.isFinite(start) && (!Number.isFinite(currentKlineStart) ||
+        start >= currentKlineStart)) {
+      currentKlineStart = start;
+      currentKlineOpen = Number.isFinite(open) ? open : null;
+      currentKlineEnd = Number.isFinite(end) ? end : start + 300000 - 1;
+    }
     return;
   }
 

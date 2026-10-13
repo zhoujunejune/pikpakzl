@@ -172,10 +172,14 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     // or prior round-open metrics into the new contract prediction.
     if(snapshot && snapshot.sourceAt < round){
       const featureCopy={...snapshot.features,
-        predictionMarketUpMid:null,distanceFromOpenBps:null};
+        predictionMarketUpMid:null,distanceFromOpenBps:null,
+        // These two upstream scores include previous round's open deviation.
+        // Keep genuinely continuous OFI/trades/momentum/regime instead.
+        currentScore:null,currentTrendScore:null};
       const quality=[...new Set([
         ...(snapshot.issues||[]),'PRE_ROUND_SNAPSHOT_REUSED',
-        'PREVIOUS_CONTRACT_AND_ROUND_OPEN_EXCLUDED'])];
+        'PREVIOUS_CONTRACT_AND_ROUND_OPEN_EXCLUDED',
+        'PREVIOUS_ROUND_OPEN_DERIVED_SCORES_EXCLUDED'])];
       snapshot={...snapshot,features:featureCopy,issues:quality,
         presentFeatures:Object.values(featureCopy).filter(finite).length};
     }

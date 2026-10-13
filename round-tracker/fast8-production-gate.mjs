@@ -38,7 +38,6 @@ export function fast8ProductionReadiness(stats, latest, expectedRound, now = Dat
       s.serverAvailableAtMs < s.persistedAtMs ||
       s.serverAvailableAtMs > expectedRound + FAST8_DEADLINE_MS ||
       now < s.serverAvailableAtMs ||
-      now > expectedRound + FAST8_DEADLINE_MS ||
       s.decisionComputedAtMs > expectedRound + FAST8_DEADLINE_MS)
     return reject('FAST8_SIGNAL_LATE_OR_UNVERIFIED');
   // Explicit production opt-in: performance evidence does not suppress a timely

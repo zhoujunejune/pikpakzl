@@ -100,6 +100,8 @@ test('upcoming model receives a real ready prep one minute ahead, not prior-roun
  const journal=events.find(e=>e.type==='decision'&&e.roundStartMs===R);
  assert.equal(journal.features.predictionMarketUpMid,null);
  assert.equal(journal.features.distanceFromOpenBps,null);
+ assert.equal(journal.features.currentScore,null);
+ assert.equal(journal.features.currentTrendScore,null);
  assert.equal(journal.externalResearch.predictions.FLOW_BOOK_PROXY_V1.preparedSampleCount>=40,true);
  assert.equal(f.published.length,1);
  f.time(R+LOCK_MS+60);assert.equal(f.engine.acknowledge(R,R+LOCK_MS+40),true);

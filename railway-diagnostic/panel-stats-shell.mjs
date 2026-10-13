@@ -275,8 +275,8 @@ function updateOrderSignal(){
    var live=j.signal||{};
    var ready=live.status==='LOCKED'&&Number(live.round)===expected&&
      j.orderDirectionPolicy==='INVERT_PRODUCTION_UP_DOWN_V1';
-   e('activeFast8OrderDirection').textContent=ready?(j.orderSignal+'（反向）'):'未锁定或未激活';
- }).catch(function(){e('activeFast8OrderDirection').textContent='下单方向状态不可用'});
+   var target=e('activeFast8OrderDirection');if(target)target.textContent=ready?(j.orderSignal+'（反向）'):'未锁定或未激活';
+ }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'});
 }
 function boot(){load();updateOrderSignal();setInterval(load,3000);setInterval(updateOrderSignal,3000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();

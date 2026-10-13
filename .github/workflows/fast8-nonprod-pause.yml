@@ -1,0 +1,25 @@
+name: FAST8 only pause nonproduction shadows
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/index-rest.mjs'
+      - 'round-tracker/fast8-nonprod-pause.test.mjs'
+      - '.github/workflows/fast8-nonprod-pause.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'round-tracker/index-rest.mjs'
+      - 'round-tracker/fast8-nonprod-pause.test.mjs'
+      - '.github/workflows/fast8-nonprod-pause.yml'
+jobs:
+  preserve-fast8-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check program syntax
+        run: node --check round-tracker/index-rest.mjs
+      - name: Check FAST8-only pause and active production invariants
+        run: node --test round-tracker/fast8-nonprod-pause.test.mjs round-tracker/fast8-production-gate.test.mjs

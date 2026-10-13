@@ -207,7 +207,8 @@ throw new Error(errMsg||'统计服务暂不可用')
 }
 async function load(){try{
 var j=await getStats();var h=j.health||{};
-var all=(j.records||[]).filter(function(x){return x.productionModel==='FLOW_BOOK_PROXY_V1'});
+var all=(j.records||[]).filter(function(x){return x.productionModel==='FLOW_BOOK_PROXY_V1'&&
+  j.activeProductionModel&&x.productionModelVersion===j.activeProductionModel.version});
 function official(x){return x.productionActual==='UP'||x.productionActual==='DOWN'?x.productionActual:null}
 function pred(x){return x.productionPrediction==='UP'||x.productionPrediction==='DOWN'?x.productionPrediction:null}
 function derived(x){var p=pred(x),a=official(x);return !a?'PENDING':(!p?'NO_DECISION':(p===a?'HIT':'MISS'))}
@@ -252,7 +253,7 @@ fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  if(!j||!j.ok)throw Error('生产统计不可用');
  var model=j.activeProductionModel;
  if(!model||model.id!=='FLOW_BOOK_PROXY_V1')throw Error('当前服务尚未切换到订单流生产模型');
- var m=model.metrics||{}, records=(j.records||[]).filter(function(z){return z.productionModel===model.id});
+ var m=model.metrics||{}, records=(j.records||[]).filter(function(z){return z.productionModel===model.id&&z.productionModelVersion===model.version});
  var now=Math.floor(Date.now()/300000)*300000;
  var current=records.find(function(z){return Number(z.roundStartMs)===now});
  var dir=current&&(current.productionPrediction==='UP'||current.productionPrediction==='DOWN')?current.productionPrediction:'待本轮锁定';

@@ -69,12 +69,16 @@ test('poll duplicates, late arrivals, poor depth and future source cannot fabric
  assert.equal(prep.observe({roundStartMs:PREV,sourceAt:x,receivedAt:x+120,features:spot}),false);
  assert.equal(prep.observe({roundStartMs:PREV,sourceAt:x+60,receivedAt:x+2050,features:spot}),false);
  assert.equal(prep.observe({roundStartMs:PREV,sourceAt:x+100,receivedAt:x+130,
+   issues:['DEPTH_MISSING_OR_STALE','TRADES_MISSING_OR_STALE'],features:spot}),false);
+ // At >=500ms a fresh degraded sample is recorded, never merged into the
+ // previous genuine good-depth observation.
+ assert.equal(prep.observe({roundStartMs:PREV,sourceAt:x+600,receivedAt:x+630,
    issues:['DEPTH_MISSING_OR_STALE','TRADES_MISSING_OR_STALE'],features:spot}),true);
  const prepared=prep.preparedFor(R);
  assert.equal(prepared.ready,false);
- assert.equal(prepared.sampleCount,1); // <500ms replaces latest, no duplicate inflation
- assert.equal(prepared.avgFeatures.ofiNormalized5s,null);
- assert.equal(prepared.avgFeatures.tradePressure15s,null);
+ assert.equal(prepared.sampleCount,2);
+ assert.equal(prepared.featureSamples.ofiNormalized5s,1);
+ assert.equal(prepared.featureSamples.tradePressure15s,1);
 });
 test('upcoming model receives a real ready prep one minute ahead, not prior-round PM',t=>{
  const f=fx(t);
@@ -156,4 +160,23 @@ test('not enough 60s history never pretends prepared or changes the prior fallba
  assert.equal(d.externalResearch.predictions.FLOW_BOOK_PROXY_V1.preparationUsed,false);
  assert.ok(['UP','DOWN'].includes(d.externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction));
  assert.equal(d.externalResearch.predictions.FLOW_BOOK_PROXY_V1.preparedSampleCount,0);
+});
+
+test('200ms real market polling builds many INDEPENDENT snapshots over 60s',()=>{
+ const prep=createNextRoundPreparation();
+ let polls=0,accepted=0;
+ for(let t=R-59500;t<=R-100;t+=200){
+  polls++;
+  if(prep.observe({roundStartMs:PREV,sourceAt:t,receivedAt:t+40,
+    features:goodSpot(t<R-30000?-1:1)}))accepted++;
+ }
+ const snapshot=prep.preparedFor(R);
+ assert.ok(polls>=290);
+ assert.ok(accepted>=90&&accepted<=120,'should retain 100ish not one');
+ assert.equal(snapshot.sampleCount,accepted);
+ assert.ok(snapshot.spanMs>=55000);
+ assert.ok(snapshot.lastAgeMs<=1500);
+ assert.equal(snapshot.ready,true);
+ assert.equal(snapshot.predictionMarketContractIncluded,false);
+ assert.ok(['UP','DOWN'].includes(snapshot.directionPreview));
 });

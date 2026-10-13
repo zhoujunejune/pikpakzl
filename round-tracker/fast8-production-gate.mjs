@@ -29,29 +29,36 @@ export function fast8ProductionReadiness(stats, latest, expectedRound, now = Dat
   if (s.modelFamily !== FAST8_MODEL || stats.modelFamily !== FAST8_MODEL ||
       s.policyVersion !== stats.policyVersion)
     return reject('FAST8_POLICY_MISMATCH');
+  // Missing market data is an explicit fallback produced by the FAST8 worker.
+  // It has no market-event timestamp; do not invent one or label it validated.
+  const issues = Array.isArray(s.dataQuality) ? [...s.dataQuality] : ['DATA_QUALITY_UNKNOWN'];
+  const missingSnapshot = s.maxEventTimeMs == null &&
+    issues.includes('NO_FRESH_SNAPSHOT') && s.presentFeatures === 0;
+  const eventTimeValid = missingSnapshot ||
+    (Number.isFinite(s.maxEventTimeMs) &&
+      s.maxEventTimeMs >= expectedRound &&
+      s.maxEventTimeMs <= expectedRound + 1500);
   if (!Number.isFinite(s.persistedAtMs) ||
       !Number.isFinite(s.serverAvailableAtMs) ||
       !Number.isFinite(s.decisionComputedAtMs) ||
-      !Number.isFinite(s.maxEventTimeMs) ||
-      s.maxEventTimeMs > expectedRound + 1500 ||
+      !eventTimeValid ||
       s.persistedAtMs < expectedRound ||
+      s.decisionComputedAtMs < expectedRound ||
       s.serverAvailableAtMs < s.persistedAtMs ||
       s.serverAvailableAtMs > expectedRound + FAST8_DEADLINE_MS ||
       now < s.serverAvailableAtMs ||
       s.decisionComputedAtMs > expectedRound + FAST8_DEADLINE_MS)
     return reject('FAST8_SIGNAL_LATE_OR_UNVERIFIED');
-  // Explicit production opt-in: performance evidence does not suppress a timely
-  // observed signal. Keep policy/timing/source and feature-integrity checks.
-  // The PM book is an optional input: its absence is encoded as missing
-  // rather than incorporated into the locked prediction. A validated FAST8
-  // direction can still be used with all 16 non-PM features present. Never
-  // make stale depth, trades, or any other quality failure optional.
-  const pmOnlyGap = Array.isArray(s.dataQuality) &&
-    s.dataQuality.length === 1 && s.dataQuality[0] === 'PM_MISSING_OR_UNALIGNED' &&
-    s.presentFeatures >= 16;
-  if (!stats.modelVersion || s.modelVersion !== stats.modelVersion ||
-      s.presentFeatures < 5 || !Array.isArray(s.dataQuality) ||
-      (s.dataQuality.length !== 0 && !pmOnlyGap))
-    return reject('FAST8_MODEL_OR_FEATURES_NOT_READY');
-  return { eligible:true, reason:null, preview };
+  // Never suppress an immutable, timely FAST8 direction for accuracy,
+  // model-registration or feature-quality gates. Surface those as diagnostics.
+  // Missing/stale features and no-information fallbacks are NOT verified edges.
+  if (s.modelVersion && stats.modelVersion && s.modelVersion !== stats.modelVersion)
+    issues.push('MODEL_VERSION_CHANGED_AFTER_DECISION');
+  if (!Number.isFinite(s.presentFeatures) || s.presentFeatures < 5)
+    issues.push('LOW_FEATURE_COVERAGE');
+  const fallbackUsed = s.fallbackLevel !== 'NONE' || issues.length > 0;
+  return { eligible:true, reason:null,
+    preview:{...preview, fallbackLevel:s.fallbackLevel || null,
+      dataQuality:issues, presentFeatures:s.presentFeatures ?? 0,
+      fallbackUsed, qualityStatus: fallbackUsed ? 'UNVERIFIED_DIRECTION_FALLBACK' : 'FEATURES_AVAILABLE' } };
 }

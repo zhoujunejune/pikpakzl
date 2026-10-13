@@ -49,6 +49,10 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       if (e.type === 'persisted' && !row.persistedAt) row.persistedAt = e.at;
       if (e.type === 'published' && !row.publishedAt) row.publishedAt = e.at;
       if (e.type === 'settlement') row.settlement = e;
+      if (e.type === 'checkpoint' && [4000,6000].includes(e.checkpointMs)) {
+        row.checkpoints ||= {};
+        row.checkpoints[e.checkpointMs] ||= e;
+      }
     }
     revision++;
   }
@@ -146,6 +150,13 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       finite(f.predictionMarketUpMid) && f.predictionMarketUpMid >= 0 && f.predictionMarketUpMid <= 1 &&
       (!finite(f.predictionMarketUpdateTimestampMs) || f.predictionMarketUpdateTimestampMs <= receivedAt);
     if (!pmValid) { features.predictionMarketUpMid = null; issues.push('PM_MISSING_OR_UNALIGNED'); }
+    // The upstream round clock is event-based, whereas the new 5m opening
+    // price may arrive later. Its old open must never cross the boundary.
+    // The upstream composite scores explicitly zero out missing opens.
+    if (f.roundOpenAligned === false) {
+      features.distanceFromOpenBps = null;
+      issues.push('CURRENT_ROUND_OPEN_NOT_YET_ALIGNED');
+    }
     const snapshot = { features, sourceAt: source, receivedAt, capturedAt: now, issues,
       bridge, presentFeatures: Object.values(features).filter(finite).length };
     // From T-minus-60s prepare a bounded BTC SPOT summary for NEXT round.
@@ -163,6 +174,31 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       if (!previous || (!bridge && previous.bridge) ||
           (bridge === previous.bridge && source >= previous.sourceAt))
         snapshots.set(round, snapshot);
+    }
+    // Two isolated post-lock measurements. They are NOT eligible for live
+    // signal routing; compare their eventual official-forward results with
+    // the immutable T+1.8s decision before considering any timing change.
+    const saved = rows.get(round);
+    if (saved?.decision && source >= round && !bridge) {
+      for (const checkpointMs of [4000,6000]) {
+        if (now < round + checkpointMs || now > round + checkpointMs + 750 ||
+            saved.checkpoints?.[checkpointMs]) continue;
+        const candidate = externalResearchDirections(features,{
+          baselineDirection:saved.decision.baselineDirection,
+          snapshotAvailable:true,dataQuality:issues,
+          sourceAt:source,roundStartMs:round,
+          preparation:nextMinutePrep.preparedFor(round),
+        });
+        const prediction = candidate.predictions.FLOW_BOOK_PROXY_V1;
+        const event = {type:'checkpoint',roundStartMs:round,checkpointMs,
+          observedAtMs:now,sourceAt:source,receivedAt,
+          modelVersion:EXTERNAL_RESEARCH_VERSION,
+          direction:prediction.direction,strength:prediction.strength,
+          featureCount:prediction.featureCount,issues:candidate.dataQuality,
+          evidence:prediction.evidence,fullQuality:candidate.fullQuality,
+          executionEligible:false,productionEffect:'TIMING_SHADOW_ONLY'};
+        if (append(event)) emit('fast8_timing_shadow_checkpoint',event);
+      }
     }
     return true;
   }
@@ -341,6 +377,23 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     const candidateRows = list.filter(r => r.decision?.externalResearch?.version === EXTERNAL_RESEARCH_VERSION);
     const candidateLabeled = candidateRows.filter(r => r.settlement);
     const timely = candidateRows.filter(onTime);
+    const comparison = Object.fromEntries([4000,6000].map(delay => {
+      const rowsAtDelay=candidateRows.filter(r =>
+        r.checkpoints?.[delay]?.modelVersion===EXTERNAL_RESEARCH_VERSION);
+      const labeled=rowsAtDelay.filter(r=>r.settlement);
+      const hits=labeled.filter(r=>r.checkpoints[delay].direction===r.settlement.actual).length;
+      const earlyHits=labeled.filter(r=>
+        r.decision.externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction===r.settlement.actual).length;
+      const fullyVerified=labeled.filter(r=>r.checkpoints[delay].fullQuality===true);
+      return [String(delay),{
+        delayMs:delay,shadowOnly:true,decisions:rowsAtDelay.length,
+        labeled:labeled.length,hits,misses:labeled.length-hits,
+        accuracy:ratio(hits,labeled.length),
+        matchedEarlyHits:earlyHits,matchedEarlyAccuracy:ratio(earlyHits,labeled.length),
+        fullyVerifiedSamples:fullyVerified.length,
+        confidenceWilson95:wilson(hits,labeled.length)
+      }];
+    }));
     const models = Object.fromEntries(EXTERNAL_RESEARCH_IDS.map(id => {
       const records = candidateRows.filter(r =>
         isDirection(r.decision.externalResearch.predictions?.[id]?.direction));
@@ -355,6 +408,16 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
         r.decision.externalResearch.predictions[id].direction === r.settlement.actual).length;
       const baselineHits = labeled.filter(r =>
         r.decision.direction === r.settlement.actual).length;
+      const signalBands=Object.fromEntries([
+        ['NEAR_ZERO',strength=>strength<0.05],
+        ['WEAK',strength=>strength>=0.05&&strength<0.20],
+        ['STRONG_UNCALIBRATED',strength=>strength>=0.20],
+        ['NO_STRENGTH',strength=>!finite(strength)],
+      ].map(([band,condition])=>{
+        const selected=labeled.filter(r=>condition(r.decision.externalResearch.predictions[id].strength));
+        const bh=selected.filter(r=>r.decision.externalResearch.predictions[id].direction===r.settlement.actual).length;
+        return [band,{samples:selected.length,hits:bh,accuracy:ratio(bh,selected.length)}];
+      }));
       return [id,{
         directionRounds:records.length,labeledPredictions:labeled.length,
         hits,misses:labeled.length-hits,
@@ -366,6 +429,7 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
         matchedFast8BaselineAccuracy:ratio(baselineHits,labeled.length),
         fullCoverage:ratio(records.length,expected),
         confidenceWilson95:wilson(hits,labeled.length),
+        strengthBreakdown:signalBands,
       }];
     }));
     return {
@@ -375,6 +439,9 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       expectedRounds:expected,candidateRounds:candidateRows.length,
       missingOrPreExperimentRounds:Math.max(0,expected-candidateRows.length),
       timelyRounds:timely.length,labeledCandidateRounds:candidateLabeled.length,
+      // Every late comparison uses its own eligible forward rows and matching
+      // frozen early predictions; neither influences the live order router.
+      timingShadowComparison:comparison,
       // Unqualified/no-data fallback predictions are INCLUDED in full-coverage accuracy.
       models,
     };

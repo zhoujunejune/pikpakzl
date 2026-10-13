@@ -5,6 +5,7 @@ import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadow35Client } from './shadow35-client.mjs';
 import { createFast8Client } from './fast8-client.mjs';
 import { FAST8_SOURCE, FAST8_MODEL, FAST8_MODE, LEGACY_MODE, fast8ProductionReadiness } from './fast8-production-gate.mjs';
+import { EXTERNAL_PRODUCTION_ID, EXTERNAL_PRODUCTION_VERSION, chooseExternalFast8WorkerDirection } from './fast8-external-production.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
@@ -5448,42 +5449,47 @@ const FAST8_GATEWAY_FALLBACK_AT_MS = 7000;
 function fast8GatewayFallback(round) {
   const previous = [...rounds.values()]
     .filter(r => Number(r.roundStartMs) < round &&
-      r.productionSource === FAST8_SOURCE &&
+      r.productionSource === FAST8_SOURCE && r.productionModel === EXTERNAL_PRODUCTION_ID &&
       (r.productionPrediction === 'UP' || r.productionPrediction === 'DOWN'))
     .sort((a, b) => Number(b.roundStartMs) - Number(a.roundStartMs))[0];
   const lastWorker = fast8.latest()?.signal;
   if (previous) return {direction:previous.productionPrediction,
-    reason:'FAST8_GATEWAY_PREVIOUS_FROZEN_DIRECTION_REUSED'};
-  if (Number(lastWorker?.roundStartMs) < round &&
-      (lastWorker?.direction === 'UP' || lastWorker?.direction === 'DOWN'))
-    return {direction:lastWorker.direction,reason:'FAST8_GATEWAY_PREVIOUS_WORKER_DIRECTION_REUSED'};
+    reason:'EXTERNAL_FLOW_GATEWAY_PREVIOUS_FROZEN_DIRECTION_REUSED'};
+  const previousSelected=lastWorker && chooseExternalFast8WorkerDirection(lastWorker,lastWorker.roundStartMs);
+  if (Number(lastWorker?.roundStartMs) < round && previousSelected)
+    return {direction:previousSelected.direction,reason:'EXTERNAL_FLOW_GATEWAY_PREVIOUS_WORKER_DIRECTION_REUSED'};
   return {direction:(Math.floor(round / 300000) % 2 === 0 ? 'UP' : 'DOWN'),
     reason:'FAST8_GATEWAY_NO_INFORMATION_DETERMINISTIC_FALLBACK'};
 }
 function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   const activeRow = row || ensureRound(expectedRound);
   const stats = fast8.stats();
-  const readiness = fast8ProductionReadiness(stats, fast8.latest(), expectedRound, now);
+  const workerSnapshot=fast8.latest();
+  const readiness = fast8ProductionReadiness(stats, workerSnapshot, expectedRound, now);
+  const selected = chooseExternalFast8WorkerDirection(workerSnapshot?.signal,expectedRound);
   const alreadyLocked = ['UP','DOWN'].includes(activeRow?.productionPrediction);
-  if (readiness.eligible && !alreadyLocked) {
+  if (readiness.eligible && selected && !alreadyLocked) {
     const prediction = readiness.preview;
+    const usedFallback=selected.fallbackUsed || prediction.fallbackUsed;
     const live = {
       round: expectedRound, status: 'LOCKED',
-      signal: {direction:prediction.direction, score:null,confidence:null,modelProbability:null},
+      signal: {direction:selected.direction, score:null,confidence:null,modelProbability:null},
       input: {round:expectedRound}, generatedAt:prediction.persistedAtMs,
-      source:FAST8_SOURCE,model:FAST8_MODEL,modelVersion:prediction.modelVersion,
+      source:FAST8_SOURCE,model:EXTERNAL_PRODUCTION_ID,modelVersion:EXTERNAL_PRODUCTION_VERSION,
       productionPolicy:productionPolicyName(),
-      fallbackUsed:prediction.fallbackUsed === true,
-      fallbackReason:prediction.fallbackUsed ? (prediction.fallbackLevel || 'FAST8_FEATURE_QUALITY_FALLBACK') : null,
-      fast8Quality: {status:prediction.qualityStatus,
-        issues:prediction.dataQuality, presentFeatures:prediction.presentFeatures},
+      fallbackUsed:usedFallback,
+      fallbackReason:usedFallback ? (selected.fallbackReason || prediction.fallbackLevel || 'EXTERNAL_FLOW_QUALITY_UNVERIFIED') : null,
+      fast8Quality: {status:selected.qualityStatus,
+        issues:[...new Set([...(prediction.dataQuality||[]),...(selected.dataQuality||[])])],
+        presentFeatures:selected.featureCount},
       fast8Qualification:{validationSamples:stats.validation?.labeledPredictions ?? 0,
         accuracy:stats.validation?.endToEndAccuracy ?? null,
         verifiedAt:stats.generatedAtMs ?? null},
     };
     if (freezeProductionLock(activeRow, live)) {
       log('fast8_exclusive_production_lock',{round:expectedRound,
-        direction:prediction.direction,modelVersion:prediction.modelVersion,
+        direction:selected.direction,modelVersion:EXTERNAL_PRODUCTION_VERSION,
+        model:EXTERNAL_PRODUCTION_ID,
         fallbackUsed:live.fallbackUsed,quality:live.fast8Quality});
       logProductionSignalState(live);
       return {ok:true,live};
@@ -5513,8 +5519,8 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
       round:expectedRound,status:'LOCKED',
       signal:{direction:fallback.direction,score:null,confidence:null,modelProbability:null},
       input:{round:expectedRound},generatedAt:now,
-      source:FAST8_SOURCE,model:FAST8_MODEL,
-      modelVersion:'ZL_FAST8_65-GATEWAY_CONTINGENCY_V1',
+      source:FAST8_SOURCE,model:EXTERNAL_PRODUCTION_ID,
+      modelVersion:EXTERNAL_PRODUCTION_VERSION+'-GATEWAY_CONTINGENCY_V1',
       productionPolicy:productionPolicyName(),
       fallbackUsed:true,fallbackReason:fallback.reason,
       fast8Quality:{status:'NO_VERIFIED_CURRENT_ROUND_MODEL_SIGNAL',
@@ -5533,7 +5539,7 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   }
   const live = {
     round:expectedRound,status:'PENDING',signal:null,input:{round:expectedRound},
-    generatedAt:null,source:FAST8_SOURCE,model:FAST8_MODEL,
+    generatedAt:null,source:FAST8_SOURCE,model:EXTERNAL_PRODUCTION_ID,
     productionPolicy:productionPolicyName(),fallbackUsed:false,
     pendingReason:readiness.reason || 'FAST8_DIRECTION_PENDING_BEFORE_DEADLINE',
     deadlineMs:8000,contingencyAtMs:FAST8_GATEWAY_FALLBACK_AT_MS,

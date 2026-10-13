@@ -46,9 +46,20 @@ test('reject late publication, stale status and bad features but allow non-train
   latest.signal.fallbackLevel='NO_INFORMATION_FALLBACK';
   assert.equal(fast8ProductionReadiness(stats,latest,R,now).eligible,true);
   latest.signal.fallbackLevel='NONE';
+  // PM book is optional when all 16 remaining fields are present.
+  latest.signal.presentFeatures=16;
   latest.signal.dataQuality=['PM_MISSING_OR_UNALIGNED'];
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).eligible,true);
+  // A degraded order book, trade feed, or additional missing field must not bypass the gate.
+  latest.signal.dataQuality=['PM_MISSING_OR_UNALIGNED','DEPTH_MISSING_OR_STALE'];
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_MODEL_OR_FEATURES_NOT_READY');
+  latest.signal.dataQuality=['TRADES_MISSING_OR_STALE'];
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_MODEL_OR_FEATURES_NOT_READY');
+  latest.signal.dataQuality=['PM_MISSING_OR_UNALIGNED'];
+  latest.signal.presentFeatures=15;
   assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_MODEL_OR_FEATURES_NOT_READY');
   latest.signal.dataQuality=[];
+  latest.signal.presentFeatures=17;
   stats.statusAgeMs=65000;
   assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_WORKER_OR_JOURNAL_NOT_READY');
 });
@@ -62,4 +73,17 @@ test('exclusive production disables all legacy locks and cannot replay their fro
   assert.match(src,/otherProductionSourcesPaused:true/);
   assert.equal(FAST8_SOURCE,'ZL_FAST8_65_PRIMARY');
   assert.equal(FAST8_MODE,'FAST8_ONLY');
+});
+
+test('production accepts the exact degraded-PM baseline case but does not accept late/invalid signals',()=>{
+  const {stats,latest}=mock();
+  stats.modelVersion=latest.signal.modelVersion='ZL_FAST8_65-baseline-v2';
+  latest.signal.direction='DOWN';
+  latest.signal.fallbackLevel='MOMENTUM60_BASELINE';
+  latest.signal.presentFeatures=16;
+  latest.signal.dataQuality=['PM_MISSING_OR_UNALIGNED'];
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).eligible,true);
+  assert.equal(fast8ProductionReadiness(stats,latest,R,R+8001).reason,'FAST8_SIGNAL_LATE_OR_UNVERIFIED');
+  latest.signal.modelVersion='OUTDATED_VERSION';
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_MODEL_OR_FEATURES_NOT_READY');
 });

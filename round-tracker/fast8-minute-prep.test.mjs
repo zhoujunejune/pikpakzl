@@ -132,7 +132,7 @@ test('fresh current-round snapshot confirms (or contradicts) prior-minute previe
 });
 test('no current snapshot but a full prepared minute still yields a tagged binary direction',t=>{
  const f=fx(t);
- prewarm(f,1,{endAt:R-3100});
+ prewarm(f,1,{endAt:R-4000});
  f.time(R+LOCK_MS+10);
  const d=f.engine.tick();
  const q=d.externalResearch.predictions.FLOW_BOOK_PROXY_V1;

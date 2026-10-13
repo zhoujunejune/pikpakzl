@@ -60,7 +60,8 @@ export function createFast8Client({ dir = '/data/fast8-65', log = () => {}, onRe
   }
   const fields = [...FEATURES.map(([key]) => key), 'depthAgeMs', 'lastAggTradeAgeMs', 'tradeStreamStalled',
     'predictionMarketMappingReliable', 'predictionMarketRoundAligned', 'predictionMarketRound',
-    'predictionMarketBookAgeMs', 'predictionMarketUpdateTimestampMs'];
+    'predictionMarketBookAgeMs', 'predictionMarketUpdateTimestampMs',
+    'roundOpenAligned', 'roundClockSource', 'currentKlineStartMs'];
   return {
     start,
     observe(live, receivedAt = Date.now()) {

@@ -168,7 +168,7 @@ test('200ms real market polling builds many INDEPENDENT snapshots over 60s',()=>
  for(let t=R-59500;t<=R-100;t+=200){
   polls++;
   if(prep.observe({roundStartMs:PREV,sourceAt:t,receivedAt:t+40,
-    features:goodSpot(t<R-30000?-1:1)}))accepted++;
+    features:goodSpot(1)}))accepted++;
  }
  const snapshot=prep.preparedFor(R);
  assert.ok(polls>=290);

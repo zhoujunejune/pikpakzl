@@ -35,7 +35,7 @@ test('risk and model statistics panels inject using stable anchor, not moved amo
  assert.ok(control.includes("const marker = '<div id=\"riskControlsAnchor\"></div>';"));
  assert.ok(stats.includes("const marker = '<div id=\"riskControlsAnchor\"></div>';"));
  assert.ok(control.includes('$'+'{riskCards}'+'$'+'{marker}'));
- assert.ok(stats.includes('));+'{primaryCard}'+'));+'{statsCard}'+'));+'{marker}'));
+ assert.ok(stats.includes('${primaryCard}${statsCard}${marker}'));
  assert.ok(!control.includes("const marker = '<div class=\"c\"><input id=\"amount\"'"));
  assert.ok(!stats.includes("const marker = '<div class=\"c\"><input id=\"amount\"'"));
 });

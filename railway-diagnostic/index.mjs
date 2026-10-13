@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { createClient } from 'redis';
 import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
+import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction} from './order-direction-policy.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
@@ -568,12 +569,17 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   prepareInFlight = true;
   lastPrepareAttemptAt = Date.now();
   try {
-    const intent = await prepareIntent(signal);
+    const mapping=mappedOrderSignal(signal);
+    if (!mapping.orderSignal) return;
+    const intent = await prepareIntent({...signal,direction:mapping.orderSignal});
     if (!intent.ok) {
       pendingAction = {
         state: 'PREPARE_ERROR',
         round: signal.round,
-        signal: signal.direction,
+        signal: mapping.orderSignal,
+        productionSignal: mapping.productionSignal,
+        orderSignal: mapping.orderSignal,
+        orderDirectionPolicy: ORDER_DIRECTION_POLICY,
         score: signal.score,
         signalId: signal.signalId ?? null,
         model: signal.model ?? SIGNAL_MODEL_NAME,
@@ -593,14 +599,17 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       state: 'READY',
       at: new Date().toISOString(),
       round: signal.round,
-      signal: signal.direction,
+      signal: mapping.orderSignal,
+      productionSignal: mapping.productionSignal,
+      orderSignal: mapping.orderSignal,
+      orderDirectionPolicy: ORDER_DIRECTION_POLICY,
       score: signal.score,
       signalId: signal.signalId ?? null,
       model: signal.model ?? SIGNAL_MODEL_NAME,
       upstreamModel: signal.upstreamModel ?? null,
       signalTransport: signal.transport ?? trigger,
       signalGeneratedAt: signal.generatedAt ?? null,
-      action: signal.direction === 'UP' ? 'BUY_UP' : 'BUY_DOWN',
+      action: mapping.action,
       amount: tradeAmountText,
       marketTopicId: intent.topic.marketTopicId,
       marketTitle: intent.market?.title || signal.direction,
@@ -802,7 +811,7 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
     <div class="muted" id="dailyLossAuditErrors" style="margin-top:10px">独立结算对账和正式交易熔断尚未验收完成。</div>
   </div>
 </div>
-<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">方向</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
+<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>
 <div id="riskControlsAnchor"></div>
@@ -854,6 +863,9 @@ http.createServer(async (req, res) => {
       mode: 'API_CONFIRM_LIVE',
       quoteMode: 'FRESH_ON_CONFIRM',
       signal,
+      productionSignal: signal?.status==='LOCKED'?signal.direction:null,
+      orderSignal: mappedOrderSignal(signal).orderSignal,
+      orderDirectionPolicy: ORDER_DIRECTION_POLICY,
       signalModel: SIGNAL_MODEL_NAME,
       signalTransport: { ...signalTransport },
       balance,
@@ -915,7 +927,7 @@ http.createServer(async (req, res) => {
       getFreshQuote(p._internal),
     ]);
 
-    if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || current.direction !== p.signal) {
+    if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current)) {
       pendingAction = null;
       return send(res, 409, { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' });
     }

@@ -55,9 +55,13 @@ export function createNextRoundPreparation(){
     // A duplicate or reordered HTTP poll must not create fake observations.
     const last=samples.at(-1);
     if(last && (sourceAt<=last.sourceAt||receivedAt<last.receivedAt))return false;
+    // IMPORTANT: do not replace the latest retained sample at every 200ms
+    // upstream poll; sliding replacement would keep resetting the 500ms
+    // interval and leave only ONE sample in the whole 60-second window.
+    // Keep the original timestamp as a stable downsample anchor.
+    if(last && sourceAt-last.sourceAt<MIN_INTERVAL_MS)return false;
     const entry={sourceAt,receivedAt,features:clean};
-    if(last && sourceAt-last.sourceAt<MIN_INTERVAL_MS)samples[samples.length-1]=entry;
-    else samples.push(entry);
+    samples.push(entry);
     if(samples.length>MAX_SAMPLES)samples.shift();
     for(const key of data.keys())if(key<nextRoundStartMs)data.delete(key);
     return true;

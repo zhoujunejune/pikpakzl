@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const source=fs.readFileSync(new URL('./panel-stats-shell.mjs',import.meta.url),'utf8');
-const primary=source.match(/const primaryCard = \`([\\s\\S]*?)\`;/)?.[1];
-const mainScript=source.match(/const primaryScript = \`<script>([\\s\\S]*?)<\\/script>\`;/)?.[1];
-const stats=source.match(/const statsScript = \`<script>([\\s\\S]*?)<\\/script>\`;/)?.[1];
+const primary=source.match(/const primaryCard = `([\s\S]*?)`;/)?.[1];
+const mainScript=source.match(/const primaryScript = `<script>([\s\S]*?)<\/script>`;/)?.[1];
+const stats=source.match(/const statsScript = `<script>([\s\S]*?)<\/script>`;/)?.[1];
 
 function mounted(){const ids=['activeFast8Name','activeFast8Direction','activeFast8Accuracy',
  'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','rsMeta','rsAccuracy',

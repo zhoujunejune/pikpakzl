@@ -36,6 +36,6 @@ test('FAST8 remains locked at existing cutoff and execution uses parallel read-o
   assert.match(f8,/LOCK_MS = 2000/);
   assert.match(worker,/onDecision\(latest\)/);
   assert.match(main,/onDecision: decision =>/);
-  assert.match(wrapper,/Promise\.all\(\[getSignal\(\{ forceHttp: true \}\), getFreshQuote\(p\._internal\)\]\)/);
+  assert.match(wrapper,/Promise\.all\(\[\s*getSignal\(\{ forceHttp: true \}\),\s*getFreshQuote\(p\._internal\),?\s*\]\)/);
   assert.match(wrapper,/submitPendingOrder\(pendingAction, \{ source: 'auto' \}\)/);
 });

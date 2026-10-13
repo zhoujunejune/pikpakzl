@@ -1,0 +1,25 @@
+name: FAST8 production signal gate regression
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/fast8-production-gate.mjs'
+      - 'round-tracker/fast8-production-gate.test.mjs'
+      - '.github/workflows/fast8-production-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'round-tracker/fast8-production-gate.mjs'
+      - 'round-tracker/fast8-production-gate.test.mjs'
+      - '.github/workflows/fast8-production-gate.yml'
+jobs:
+  fast8-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check gate syntax
+        run: node --check round-tracker/fast8-production-gate.mjs
+      - name: Check FAST8 production gate and timing invariants
+        run: node --test round-tracker/fast8-production-gate.test.mjs

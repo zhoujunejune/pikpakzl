@@ -43,9 +43,16 @@ export function fast8ProductionReadiness(stats, latest, expectedRound, now = Dat
     return reject('FAST8_SIGNAL_LATE_OR_UNVERIFIED');
   // Explicit production opt-in: performance evidence does not suppress a timely
   // observed signal. Keep policy/timing/source and feature-integrity checks.
+  // The PM book is an optional input: its absence is encoded as missing
+  // rather than incorporated into the locked prediction. A validated FAST8
+  // direction can still be used with all 16 non-PM features present. Never
+  // make stale depth, trades, or any other quality failure optional.
+  const pmOnlyGap = Array.isArray(s.dataQuality) &&
+    s.dataQuality.length === 1 && s.dataQuality[0] === 'PM_MISSING_OR_UNALIGNED' &&
+    s.presentFeatures >= 16;
   if (!stats.modelVersion || s.modelVersion !== stats.modelVersion ||
       s.presentFeatures < 5 || !Array.isArray(s.dataQuality) ||
-      s.dataQuality.length !== 0)
+      (s.dataQuality.length !== 0 && !pmOnlyGap))
     return reject('FAST8_MODEL_OR_FEATURES_NOT_READY');
   return { eligible:true, reason:null, preview };
 }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import './order-direction-policy.test.mjs';
 
 const source=fs.readFileSync(new URL('./panel-stats-shell.mjs',import.meta.url),'utf8');
 const primary=source.match(/const primaryCard = `([\s\S]*?)`;/)?.[1];
@@ -9,7 +10,7 @@ const mainScript=source.match(/const primaryScript = `<script>([\s\S]*?)<\/scrip
 const stats=source.match(/const statsScript = `<script>([\s\S]*?)<\/script>`;/)?.[1];
 
 function mounted(){const ids=['activeFast8Name','activeFast8Direction','activeFast8Accuracy',
- 'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','rsMeta','rsAccuracy',
+ 'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection','rsMeta','rsAccuracy',
  'rsSettled','rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows'];
  const dom=new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
  return dom;
@@ -75,4 +76,11 @@ test('missing upstream switch does not pretend that production has changed',asyn
  const d=await execute(mainScript,{ok:true,records:[],activeProductionModel:null});
  assert.equal(d.get('activeFast8Direction').textContent,'状态未确认');
  assert.match(d.get('activeFast8Note').textContent,/尚未切换/);
+});
+
+test('model card includes separate actual order direction and never confuses raw model accuracy',()=>{
+ assert.ok(primary.includes('id="activeFast8Direction"'));
+ assert.ok(primary.includes('id="activeFast8OrderDirection"'));
+ assert.match(mainScript,/j\.orderSignal/);
+ assert.match(stats,/原模型命中率/);
 });

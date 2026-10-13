@@ -5470,7 +5470,7 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   const alreadyLocked = ['UP','DOWN'].includes(activeRow?.productionPrediction);
   if (readiness.eligible && selected && !alreadyLocked) {
     const prediction = readiness.preview;
-    const usedFallback=selected.fallbackUsed || prediction.fallbackUsed;
+    const usedFallback=selected.fallbackUsed;
     const live = {
       round: expectedRound, status: 'LOCKED',
       signal: {direction:selected.direction, score:null,confidence:null,modelProbability:null},

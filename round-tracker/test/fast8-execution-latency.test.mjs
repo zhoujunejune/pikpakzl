@@ -33,7 +33,7 @@ test('FAST8 remains locked at existing cutoff and execution uses parallel read-o
   const main = fs.readFileSync(new URL('../index-rest.mjs',import.meta.url),'utf8');
   const wrapper = fs.readFileSync(new URL('../../railway-diagnostic/wrapper.mjs',import.meta.url),'utf8');
   assert.match(f8,/CUTOFF_MS = 1500/);
-  assert.match(f8,/LOCK_MS = 2000/);
+  assert.match(f8,/LOCK_MS = 1800/);
   assert.match(worker,/onDecision\(latest\)/);
   assert.match(main,/onDecision: decision =>/);
   assert.match(wrapper,/Promise\.all\(\[\s*getSignal\(\{ forceHttp: true \}\),\s*getFreshQuote\(p\._internal\),?\s*\]\)/);

@@ -1,3 +1,4 @@
+import {LOCK_MS} from './fast8-model.mjs';
 // Single-source, reversible production gate for the independent ZL_FAST8_65 worker.
 // In exclusive mode legacy source locks are paused. A timely, verified-current-round
 // FAST8 UP/DOWN can enter the live router even before prospective 65% validation.
@@ -35,8 +36,8 @@ export function fast8ProductionReadiness(stats, latest, expectedRound, now = Dat
   const missingSnapshot = s.maxEventTimeMs == null &&
     issues.includes('NO_FRESH_SNAPSHOT') && s.presentFeatures === 0;
   // The worker can freeze the latest pre-round market snapshot if it was
-  // actually received before the 1.5s cutoff and remains <=5s old at T+2s.
-  // Match the worker's max-age check (T+2000 - source <= 5000) instead of
+  // actually received before the 1.5s cutoff and remains <=5s old at lock.
+  // Match the worker's max-age check (LOCK_MS - sourceOffset <= 5000) instead of
   // rejecting all event timestamps before the round boundary.
   const preRoundSnapshot = Number.isFinite(s.maxEventTimeMs) &&
     s.maxEventTimeMs < expectedRound;
@@ -44,7 +45,7 @@ export function fast8ProductionReadiness(stats, latest, expectedRound, now = Dat
     (Number.isFinite(s.maxEventTimeMs) &&
       Number.isFinite(s.maxReceivedAtMs) &&
       Number.isFinite(s.capturedAtMs) &&
-      s.maxEventTimeMs >= expectedRound - 3000 &&
+      s.maxEventTimeMs >= expectedRound - (5000 - LOCK_MS) &&
       s.maxEventTimeMs <= expectedRound + 1500 &&
       s.maxEventTimeMs <= s.maxReceivedAtMs &&
       s.maxReceivedAtMs <= s.capturedAtMs &&

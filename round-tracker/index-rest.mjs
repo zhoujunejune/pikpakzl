@@ -4844,7 +4844,8 @@ function productionSummary() {
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     activeFast8Primary: (() => {
-      const chosen=records.filter(r=>r.productionModel===SINGLE_EXTERNAL_PRIMARY_ID);
+      const chosen=records.filter(r=>r.productionModel===SINGLE_EXTERNAL_PRIMARY_ID &&
+        r.productionModelVersion===SINGLE_EXTERNAL_PRIMARY_VERSION);
       const labels=chosen.filter(r=>r.productionActual==='UP'||r.productionActual==='DOWN');
       const successes=labels.filter(r=>r.productionResult==='HIT').length;
       const start=chosen.length?chosen[0].roundStartMs:null;

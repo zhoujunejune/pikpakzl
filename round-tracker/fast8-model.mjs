@@ -4,7 +4,8 @@ export const POLICY = 'FAST8_FULL_COVERAGE_LOGISTIC_V2';
 export const ROUND_MS = 300000;
 // Leave six seconds for a slow durable volume and the parent publication queue.
 export const CUTOFF_MS = 1500;
-export const LOCK_MS = 2000;
+// Pre-warmed at T-60s, freeze 300ms after the 1.5s fresh-data cutoff.
+export const LOCK_MS = 1800;
 export const DEADLINE_MS = 8000;
 export const MIN_TRAINING = 300;
 export const FEATURES = [

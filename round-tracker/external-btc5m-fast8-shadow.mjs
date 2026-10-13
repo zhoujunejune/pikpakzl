@@ -3,7 +3,7 @@
 // pretrained strategy, and does not have established >50% forward accuracy.
 // Two previously experimental proxy strategies have been retired from current
 // calculations; their historical journal records remain auditable.
-export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V1';
+export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V2_PREP60';
 export const EXTERNAL_RESEARCH_IDS = Object.freeze(['FLOW_BOOK_PROXY_V1']);
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const clamp = (x,min=-1,max=1) => Math.min(max,Math.max(min,x));
@@ -12,7 +12,7 @@ const side = (score,prior) => score>0?'UP':score<0?'DOWN':prior==='DOWN'?'DOWN':
 
 export function externalResearchDirections(facts={},{
   baselineDirection='UP',snapshotAvailable=false,
-  dataQuality=[],sourceAt=null,roundStartMs=null
+  dataQuality=[],sourceAt=null,roundStartMs=null,preparation=null
 }={}) {
   const items = [
     [normalized(facts,'ofiNormalized5s'),0.27],
@@ -39,14 +39,33 @@ export function externalResearchDirections(facts={},{
     !reusedPreRound&&eligible.length>=4&&!issues.some(x=>
       x==='NO_FRESH_SNAPSHOT'||x==='DEPTH_MISSING_OR_STALE'||
       x==='TRADES_MISSING_OR_STALE'||x==='PM_MISSING_OR_UNALIGNED');
-  const fallback=!snapshotAvailable||eligible.length<4||score===0;
+  // The prior-minute preview is causal BTC SPOT context, not a previous
+  // prediction-contract price. Combine it with the first fresh ~2s of this
+  // round only when enough distinct pre-round samples really existed.
+  // The untrained 70/30 blend is a fixed exploratory rule, NOT a
+  // calibrated probability or demonstrated improvement.
+  const prepared=preparation?.ready===true &&
+    preparation.nextRoundStartMs===roundStartMs &&
+    preparation.predictionMarketContractIncluded===false &&
+    Number.isFinite(preparation.previewScore);
+  const preWeight=prepared?(snapshotAvailable&&eligible.length>=4?0.30:1):0;
+  const finalScore=preWeight===1?preparation.previewScore:
+    preWeight>0 ? (1-preWeight)*score+preWeight*preparation.previewScore : score;
+  const fallback=(!snapshotAvailable||eligible.length<4)&&!prepared||finalScore===0;
+  const prepOnly=preWeight===1;
   const prediction={
-    direction:side(score,baselineDirection),
+    direction:side(finalScore,baselineDirection),
     // This is a bounded absolute score, NOT a probability/win-rate.
-    strength:eligible.length>=4?Number(Math.abs(score).toFixed(6)):null,
+    strength:(!fallback&&(eligible.length>=4||prepared))?
+      Number(Math.abs(finalScore).toFixed(6)):null,
     evidence:fallback?'BASELINE_OR_NO_INFO_FALLBACK':
+      prepOnly?'PREPARED_60S_CONTEXT_ONLY':
       quality?'FROZEN_MICROSTRUCTURE_INPUT':'DEGRADED_MICROSTRUCTURE_INPUT',
     featureCount:eligible.length,fallback,
+    preparationUsed:prepared,preparationOnly:prepOnly,
+    preparedDirection:prepared?preparation.directionPreview:null,
+    preparedSampleCount:prepared?preparation.sampleCount:0,
+    preWeight,
   };
   return {
     version:EXTERNAL_RESEARCH_VERSION,
@@ -55,7 +74,17 @@ export function externalResearchDirections(facts={},{
     predictedHorizonMs:300000,nominalDeadlineMs:8000,
     sourceAt:Number.isFinite(sourceAt)?sourceAt:null,
     reusedPreRound,fullQuality:quality,
-    regime:'ORDER_FLOW_ONLY',dataQuality:issues,
+    regime:'ORDER_FLOW_ONLY_PREP60',dataQuality:issues,
+    preparation:preparation?{
+      version:preparation.version,ready:preparation.ready,
+      sampleCount:preparation.sampleCount,spanMs:preparation.spanMs,
+      lastAgeMs:preparation.lastAgeMs,
+      firstSourceAt:preparation.firstSourceAt,
+      lastSourceAt:preparation.lastSourceAt,
+      directionPreview:preparation.directionPreview,
+      dataType:preparation.dataType,
+      predictionMarketContractIncluded:false
+    }:null,
     predictions:{FLOW_BOOK_PROXY_V1:prediction}
   };
 }

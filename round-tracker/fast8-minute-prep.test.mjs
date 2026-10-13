@@ -7,6 +7,7 @@ import {createNextRoundPreparation,PREP_WINDOW_MS,NEXT_ROUND_PREP_VERSION} from 
 import {createFast8Engine} from './fast8-engine.mjs';
 import {externalResearchDirections,EXTERNAL_RESEARCH_VERSION} from './external-btc5m-fast8-shadow.mjs';
 import {LOCK_MS,ROUND_MS,CUTOFF_MS} from './fast8-model.mjs';
+import {marketRoundClock,minuteOpenAligned} from '../fast-signal-engine/market-round-clock.mjs';
 const R=1791800100000;
 const PREV=R-ROUND_MS;
 const goodSpot=(sign=1)=>({
@@ -234,4 +235,80 @@ test('aligned current-round facts replace a bridge; a later delayed label cannot
  assert.equal(d.maxEventTimeMs,R+900);
  assert.equal(d.externalResearch.fullQuality,true);
  assert.ok(!d.dataQuality.includes('CROSS_ROUND_FRESH_SPOT_BRIDGE'));
+});
+
+test('UTC 5m event clock advances while previous kline open is still pending',()=>{
+ const old=R-ROUND_MS;
+ const before=marketRoundClock(R-1,old);
+ assert.equal(before.start,old);
+ assert.equal(before.roundOpenAligned,true);
+ const crossed=marketRoundClock(R+200,old);
+ assert.equal(crossed.start,R);
+ assert.equal(crossed.end,R+ROUND_MS-1);
+ assert.equal(crossed.roundOpenAligned,false);
+ assert.equal(marketRoundClock(R+1200,R).roundOpenAligned,true);
+ assert.equal(minuteOpenAligned(R+300,R-60000),false);
+ assert.equal(minuteOpenAligned(R+300,R),true);
+});
+test('aligned market round retains safe micro/trend while refusing previous 5m opening price',t=>{
+ const f=fx(t);
+ prewarm(f,-1);
+ f.time(R+1040);
+ const facts={...sample(1),roundOpenAligned:false,
+   distanceFromOpenBps:99,
+   predictionMarketRound:PREV,predictionMarketUpdateTimestampMs:R-100};
+ assert.equal(f.engine.capture({round:R,factsCalculatedAt:R+940,facts},R+1000),true);
+ f.time(R+LOCK_MS+10);
+ const d=f.engine.tick();
+ assert.equal(d.inputProvenance,'ALIGNED_CURRENT_ROUND');
+ assert.ok(d.dataQuality.includes('CURRENT_ROUND_OPEN_NOT_YET_ALIGNED'));
+ const events=fs.readFileSync(path.join(f.dir,'events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ const captured=events.find(e=>e.type==='decision'&&e.roundStartMs===R).features;
+ assert.equal(captured.distanceFromOpenBps,null);
+ assert.equal(captured.currentTrendScore,facts.currentTrendScore);
+ assert.equal(captured.currentScore,facts.currentScore);
+ assert.equal(captured.predictionMarketUpMid,null);
+});
+test('4s and 6s snapshots are durable shadow-only comparisons; cannot edit 1.8s production direction',t=>{
+ const f=fx(t);
+ prewarm(f,-1);
+ f.time(R+1000);
+ const early={...sample(-1),roundOpenAligned:false,
+   predictionMarketRound:PREV,predictionMarketUpdateTimestampMs:R-100};
+ assert.equal(f.engine.capture({round:R,factsCalculatedAt:R+920,facts:early},R+970),true);
+ f.time(R+LOCK_MS+20);
+ const frozen=f.engine.tick();
+ assert.equal(frozen.externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction,'DOWN');
+ f.time(R+LOCK_MS+45);
+ assert.equal(f.engine.acknowledge(R,R+LOCK_MS+40),true);
+ const later={...sample(1),roundOpenAligned:true,
+   predictionMarketRound:R,predictionMarketUpMid:.90,
+   predictionMarketUpdateTimestampMs:R+3850,
+   ofiNormalized5s:1,tradePressure15s:1,tradePressure60s:1,
+   microScore:1,currentScore:1,currentTrendScore:1,regimeScore:1,
+   normalizedMomentum60s:1};
+ f.time(R+4120);
+ assert.equal(f.engine.capture({round:R,factsCalculatedAt:R+4000,facts:later},R+4070),true);
+ later.predictionMarketUpdateTimestampMs=R+5850;
+ f.time(R+6130);
+ assert.equal(f.engine.capture({round:R,factsCalculatedAt:R+6020,facts:later},R+6070),true);
+ assert.equal(f.engine.tick().externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction,'DOWN');
+ f.time(R+8000);
+ assert.equal(f.engine.capture({round:R,factsCalculatedAt:R+7900,facts:later},R+7950),true);
+ const journal=fs.readFileSync(path.join(f.dir,'events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ const shadows=journal.filter(e=>e.type==='checkpoint'&&e.roundStartMs===R);
+ assert.deepEqual(shadows.map(e=>e.checkpointMs),[4000,6000]);
+ assert.deepEqual(shadows.map(e=>e.direction),['UP','UP']);
+ assert.ok(shadows.every(e=>e.productionEffect==='TIMING_SHADOW_ONLY'&&!e.executionEligible));
+ assert.equal(journal.filter(e=>e.type==='decision'&&e.roundStartMs===R).length,1);
+ f.time(R+ROUND_MS+150);
+ assert.equal(f.engine.settle({roundStartMs:R,actual:'UP',
+   actualSource:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION',
+   resolutionEvidence:'OFFICIAL_UP:STRICT_ROUND_ALIGNED_TOPIC',
+   settledAt:R+ROUND_MS+100}),true);
+ const timing=f.engine.stats().externalResearch.timingShadowComparison;
+ assert.equal(timing['4000'].accuracy,1);
+ assert.equal(timing['6000'].accuracy,1);
+ assert.equal(timing['4000'].matchedEarlyAccuracy,0);
+ assert.equal(f.published.length,1);
 });

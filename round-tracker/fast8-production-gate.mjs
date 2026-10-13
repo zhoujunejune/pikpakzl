@@ -34,10 +34,27 @@ export function fast8ProductionReadiness(stats, latest, expectedRound, now = Dat
   const issues = Array.isArray(s.dataQuality) ? [...s.dataQuality] : ['DATA_QUALITY_UNKNOWN'];
   const missingSnapshot = s.maxEventTimeMs == null &&
     issues.includes('NO_FRESH_SNAPSHOT') && s.presentFeatures === 0;
+  // The worker can freeze the latest pre-round market snapshot if it was
+  // actually received before the 1.5s cutoff and remains <=5s old at T+2s.
+  // Match the worker's max-age check (T+2000 - source <= 5000) instead of
+  // rejecting all event timestamps before the round boundary.
+  const preRoundSnapshot = Number.isFinite(s.maxEventTimeMs) &&
+    s.maxEventTimeMs < expectedRound;
   const eventTimeValid = missingSnapshot ||
     (Number.isFinite(s.maxEventTimeMs) &&
-      s.maxEventTimeMs >= expectedRound &&
-      s.maxEventTimeMs <= expectedRound + 1500);
+      Number.isFinite(s.maxReceivedAtMs) &&
+      Number.isFinite(s.capturedAtMs) &&
+      s.maxEventTimeMs >= expectedRound - 3000 &&
+      s.maxEventTimeMs <= expectedRound + 1500 &&
+      s.maxEventTimeMs <= s.maxReceivedAtMs &&
+      s.maxReceivedAtMs <= s.capturedAtMs &&
+      s.capturedAtMs <= expectedRound + 1500);
+  if (preRoundSnapshot && eventTimeValid) {
+    // A pre-round source can carry the PREVIOUS prediction-market topic;
+    // surface this explicitly, never call it a verified current-round edge.
+    issues.push('PRE_ROUND_SNAPSHOT_REUSED');
+    issues.push('PM_ROUND_ALIGNMENT_UNVERIFIED_FOR_REUSED_SNAPSHOT');
+  }
   if (!Number.isFinite(s.persistedAtMs) ||
       !Number.isFinite(s.serverAvailableAtMs) ||
       !Number.isFinite(s.decisionComputedAtMs) ||

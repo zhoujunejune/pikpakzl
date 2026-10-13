@@ -12,7 +12,8 @@ const mock=()=>{
     validation:{passed:false,expectedRounds:1000,onTimeRounds:1000,labeledPredictions:1000,endToEndAccuracy:.48}};
   const signal={modelFamily:'ZL_FAST8_65',policyVersion:stats.policyVersion,roundStartMs:R,
     direction:'UP',decisionComputedAtMs:R+2002,persistedAtMs:R+2012,
-    serverAvailableAtMs:R+2050,maxEventTimeMs:R+1440,modelVersion:stats.modelVersion,
+    serverAvailableAtMs:R+2050,maxEventTimeMs:R+1440,
+    maxReceivedAtMs:R+1460,capturedAtMs:R+1465,modelVersion:stats.modelVersion,
     pUpRaw:.61,fallbackLevel:'NONE',presentFeatures:17,dataQuality:[]};
   return {stats,latest:{signal}};
 };
@@ -51,6 +52,8 @@ test('degraded depth and trade feeds become explicitly tagged fallback, not WAIT
 test('no market snapshot is accurately tagged instead of fabricated',()=>{
   const {stats,latest}=mock();
   latest.signal.maxEventTimeMs=null;
+  latest.signal.maxReceivedAtMs=null;
+  latest.signal.capturedAtMs=null;
   latest.signal.presentFeatures=0;
   latest.signal.dataQuality=['NO_FRESH_SNAPSHOT'];
   latest.signal.fallbackLevel='NO_INFORMATION_FALLBACK';
@@ -87,4 +90,40 @@ test('FAST8-only provides deadline contingency and removes WAIT from exclusive r
   assert.doesNotMatch(exclusive,/status:'WAIT'/);
   assert.equal(FAST8_SOURCE,'ZL_FAST8_65_PRIMARY');
   assert.equal(FAST8_MODE,'FAST8_ONLY');
+});
+
+test('fresh pre-round market snapshot matches worker and is flagged as unverified cross-round PM',()=>{
+  const {stats,latest}=mock();
+  latest.signal.maxEventTimeMs=R-248;
+  latest.signal.maxReceivedAtMs=R-155;
+  latest.signal.capturedAtMs=R-154;
+  latest.signal.fallbackLevel='MOMENTUM60_BASELINE';
+  const ready=fast8ProductionReadiness(stats,latest,R,now);
+  assert.equal(ready.eligible,true);
+  assert.equal(ready.preview.direction,'UP');
+  assert.equal(ready.preview.fallbackUsed,true);
+  assert.ok(ready.preview.dataQuality.includes('PRE_ROUND_SNAPSHOT_REUSED'));
+  assert.ok(ready.preview.dataQuality.includes('PM_ROUND_ALIGNMENT_UNVERIFIED_FOR_REUSED_SNAPSHOT'));
+});
+
+test('pre-round snapshots older than the worker window and post-cutoff samples are rejected',()=>{
+  const {stats,latest}=mock();
+  latest.signal.maxEventTimeMs=R-3001;
+  latest.signal.maxReceivedAtMs=R-3000;
+  latest.signal.capturedAtMs=R-2999;
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_SIGNAL_LATE_OR_UNVERIFIED');
+
+  latest.signal.maxEventTimeMs=R+1440;
+  latest.signal.maxReceivedAtMs=R+1530;
+  latest.signal.capturedAtMs=R+1540;
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_SIGNAL_LATE_OR_UNVERIFIED');
+
+  latest.signal.maxEventTimeMs=R+1440;
+  latest.signal.maxReceivedAtMs=R+1450;
+  latest.signal.capturedAtMs=R+1490;
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).eligible,true);
+
+  latest.signal.maxEventTimeMs=R+1460;
+  latest.signal.maxReceivedAtMs=R+1440;
+  assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_SIGNAL_LATE_OR_UNVERIFIED');
 });

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { VERSION, POLICY, ROUND_MS, CUTOFF_MS, LOCK_MS, DEADLINE_MS, MIN_TRAINING,
   FEATURES, finite, isDirection, featureVector, probability } from './fast8-model.mjs';
 import { EXTERNAL_RESEARCH_IDS, EXTERNAL_RESEARCH_VERSION, externalResearchDirections } from './external-btc5m-fast8-shadow.mjs';
+import { createNextRoundPreparation } from './fast8-minute-prep.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const ratio = (a, b) => b ? a / b : null;
@@ -18,6 +19,7 @@ function wilson(h, n) {
 
 export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publish = () => {} }) {
   const rows = new Map(), snapshots = new Map();
+  const nextMinutePrep=createNextRoundPreparation();
   const experiments = [];
   let loadedPolicy = null;
   let start = null, journalReady = false, error = null, fd = null;
@@ -124,6 +126,11 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     if (!pmValid) { features.predictionMarketUpMid = null; issues.push('PM_MISSING_OR_UNALIGNED'); }
     const snapshot = { features, sourceAt: source, receivedAt, capturedAt: now, issues,
       presentFeatures: Object.values(features).filter(finite).length };
+    // From T-minus-60s prepare a bounded BTC SPOT summary for NEXT round.
+    // The next Prediction contract price and previous round opening deviation
+    // are deliberately excluded from the preparation buffer.
+    nextMinutePrep.observe({roundStartMs:round,sourceAt:source,
+      receivedAt,features,issues});
     lastMarket = snapshot;
     lastSourceAt = source;
     lastCaptureError = null;
@@ -159,6 +166,20 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     if (snapshot && round + LOCK_MS - snapshot.sourceAt > 2500) snapshot = null;
     if (!snapshot && lastMarket && lastMarket.capturedAt <= round + CUTOFF_MS &&
         lastMarket.receivedAt <= round + CUTOFF_MS && round + LOCK_MS - lastMarket.sourceAt <= 5000) snapshot = lastMarket;
+    // BTC SPOT history crosses round boundaries. Binance Prediction topic
+    // prices and the old round-open deviation do not. A valid pre-boundary
+    // spot snapshot may remain informative, but must NOT carry prior contract
+    // or prior round-open metrics into the new contract prediction.
+    if(snapshot && snapshot.sourceAt < round){
+      const featureCopy={...snapshot.features,
+        predictionMarketUpMid:null,distanceFromOpenBps:null};
+      const quality=[...new Set([
+        ...(snapshot.issues||[]),'PRE_ROUND_SNAPSHOT_REUSED',
+        'PREVIOUS_CONTRACT_AND_ROUND_OPEN_EXCLUDED'])];
+      snapshot={...snapshot,features:featureCopy,issues:quality,
+        presentFeatures:Object.values(featureCopy).filter(finite).length};
+    }
+    const preparation=nextMinutePrep.preparedFor(round);
     const base = baseline(round, snapshot);
     const features = snapshot?.features || {};
     const x = featureVector(features);
@@ -172,6 +193,7 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       baselineDirection:base.direction,snapshotAvailable:Boolean(snapshot),
       dataQuality:snapshot?.issues || ['NO_FRESH_SNAPSHOT'],
       sourceAt:snapshot?.sourceAt ?? null,roundStartMs:round,
+      preparation,
     });
     const decision = { type: 'decision', roundStartMs: round, officialRoundStartMs: round,
       decisionComputedAtMs: now, featureCutoffMs: round + CUTOFF_MS,
@@ -184,6 +206,8 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       modelVersion: learned ? model.modelVersion : VERSION + '-baseline-v2',
       weightsHash: learned ? model.weightsHash : null, trainingLabelsReceivedThrough: learned ? model.trainingLabelsReceivedThrough : null,
       featuresHash: hash(features), features, x, externalResearch,
+      preparationUsed:externalResearch.predictions.FLOW_BOOK_PROXY_V1.preparationUsed,
+      preparationSampleCount:preparation?.sampleCount??0,
       productionEffect: 'NONE_SHADOW_ONLY' };
     if (!append(decision)) return null;
     // The decision itself is already durable. Publish before another volume
@@ -387,6 +411,10 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       featureCutoffOffsetMs: CUTOFF_MS, lockOffsetMs: LOCK_MS,
       modelVersion: model?.modelVersion || VERSION + '-baseline-v2', modelEffectiveFromRound: model?.effectiveFromRound ?? null,
       health: { journalReady, lastError: error, lastSourceAt, lastSourceAgeMs: lastSourceAt === null ? null : now - lastSourceAt, lastCaptureError },
+      nextRoundPreparation: (() => {
+        const status=nextMinutePrep.status(now);
+        return status.secondsUntilRound<=60?status:null;
+      })(),
       ...cachedStats.data, latest: decisionView(latestRow),
       evidence: 'STRICT_FORWARD_WITH_INTERNAL_OFFICIAL_SETTLEMENT; NOT_INDEPENDENTLY_CERTIFIED',
       noGuarantee: '65% is a target. Baseline and fallback outcomes are included; future performance is not guaranteed.' };

@@ -49,3 +49,15 @@ The previous production FAST8 main-branch commit is preserved for
 rollback. The previous durable prediction journals remain untouched.
 `node --test round-tracker/external-fast8-primary.test.mjs
 round-tracker/external-btc5m-fast8-shadow.test.mjs`
+
+## 2026-10-13 live feed rollover optimization (V3_BRIDGE)
+The upstream spot engine can briefly retain the previous five-minute round
+label while its trade/depth streams have already advanced past the boundary.
+Before T+1.5s, the FAST8 worker now admits these observations **only** when
+fresh depth or trade activity proves a post-boundary event; it strips all old
+contract price and prior-round-open-dependent inputs. The signal is explicitly
+tagged as degraded and never counted as a fully verified current-round input.
+An aligned current-round observation always replaces a bridge and cannot be
+overwritten by a delayed previous-round label. Existing T+1.8s lock, T+8s
+deadline, fallbacks, and order/TP-SL paths are unchanged. Forward performance
+is tracked under a distinct model version and cannot be assumed improved.

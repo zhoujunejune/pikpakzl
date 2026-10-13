@@ -102,14 +102,36 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
   function capture(live, receivedAt = clock()) {
     const now = clock(), round = Math.floor(now / ROUND_MS) * ROUND_MS;
     const source = live?.factsCalculatedAt;
-    if (!finite(receivedAt) || receivedAt > now || live?.round !== round || !finite(source) ||
+    const f = live?.facts || {};
+    // The upstream spot engine derives its round from the last trade event.
+    // At rollover it can still label fresh BTC spot/depth observations with
+    // the *previous* prediction round. Bridge only if the clock and a genuine
+    // post-boundary depth or trade observation both prove the data is causal.
+    const elapsed = finite(source) ? source - round : -1;
+    const recentDepth = finite(f.depthAgeMs) && f.depthAgeMs >= 0 &&
+      f.depthAgeMs <= Math.min(1500, elapsed);
+    const recentTrade = finite(f.lastAggTradeAgeMs) && f.lastAggTradeAgeMs >= 0 &&
+      f.lastAggTradeAgeMs <= Math.min(12000, elapsed) && !f.tradeStreamStalled;
+    const bridge = live?.round === round - ROUND_MS &&
+      finite(source) && source >= round && source <= round + CUTOFF_MS &&
+      (recentDepth || recentTrade);
+    if (!finite(receivedAt) || receivedAt > now ||
+        (live?.round !== round && !bridge) || !finite(source) ||
         source > receivedAt || source < round || now - source > 2000 || now - receivedAt > 1000) {
       lastCaptureError = 'STALE_FUTURE_OR_WRONG_ROUND_SNAPSHOT';
       return false;
     }
-    const f = live.facts || {};
     const features = Object.fromEntries(FEATURES.map(([key]) => [key, finite(f[key]) ? f[key] : null]));
     const issues = [];
+    if (bridge) {
+      // Never carry the previous contract's mid-price, open deviation, or
+      // upstream composite scores derived partly from that open into this round.
+      for (const key of ['predictionMarketUpMid','distanceFromOpenBps',
+        'currentScore','currentTrendScore','liveScore']) features[key] = null;
+      issues.push('CROSS_ROUND_FRESH_SPOT_BRIDGE',
+        'PREVIOUS_CONTRACT_AND_ROUND_OPEN_EXCLUDED',
+        'PREVIOUS_ROUND_OPEN_DERIVED_SCORES_EXCLUDED');
+    }
     if (!finite(f.depthAgeMs) || f.depthAgeMs < 0 || f.depthAgeMs > 1500) {
       features.ofiNormalized5s = null;
       issues.push('DEPTH_MISSING_OR_STALE');
@@ -118,14 +140,14 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
       features.tradePressure15s = features.tradePressure60s = null;
       issues.push('TRADES_MISSING_OR_STALE');
     }
-    const pmValid = f.predictionMarketMappingReliable === true && f.predictionMarketRoundAligned === true &&
+    const pmValid = !bridge && f.predictionMarketMappingReliable === true && f.predictionMarketRoundAligned === true &&
       f.predictionMarketRound === round && finite(f.predictionMarketBookAgeMs) &&
       f.predictionMarketBookAgeMs >= 0 && f.predictionMarketBookAgeMs <= 5000 &&
       finite(f.predictionMarketUpMid) && f.predictionMarketUpMid >= 0 && f.predictionMarketUpMid <= 1 &&
       (!finite(f.predictionMarketUpdateTimestampMs) || f.predictionMarketUpdateTimestampMs <= receivedAt);
     if (!pmValid) { features.predictionMarketUpMid = null; issues.push('PM_MISSING_OR_UNALIGNED'); }
     const snapshot = { features, sourceAt: source, receivedAt, capturedAt: now, issues,
-      presentFeatures: Object.values(features).filter(finite).length };
+      bridge, presentFeatures: Object.values(features).filter(finite).length };
     // From T-minus-60s prepare a bounded BTC SPOT summary for NEXT round.
     // The next Prediction contract price and previous round opening deviation
     // are deliberately excluded from the preparation buffer.
@@ -134,7 +156,14 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     lastMarket = snapshot;
     lastSourceAt = source;
     lastCaptureError = null;
-    if (round >= start && !rows.get(round)?.decision && now <= round + CUTOFF_MS) snapshots.set(round, snapshot);
+    if (round >= start && !rows.get(round)?.decision && now <= round + CUTOFF_MS) {
+      const previous = snapshots.get(round);
+      // An aligned current-round snapshot always wins over a provisional
+      // bridge; a later bridge must never overwrite a verified round identity.
+      if (!previous || (!bridge && previous.bridge) ||
+          (bridge === previous.bridge && source >= previous.sourceAt))
+        snapshots.set(round, snapshot);
+    }
     return true;
   }
   function prior(round, cutoff) {
@@ -170,14 +199,15 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     // prices and the old round-open deviation do not. A valid pre-boundary
     // spot snapshot may remain informative, but must NOT carry prior contract
     // or prior round-open metrics into the new contract prediction.
-    if(snapshot && snapshot.sourceAt < round){
+    if(snapshot && (snapshot.sourceAt < round || snapshot.bridge)){
       const featureCopy={...snapshot.features,
         predictionMarketUpMid:null,distanceFromOpenBps:null,
-        // These two upstream scores include previous round's open deviation.
-        // Keep genuinely continuous OFI/trades/momentum/regime instead.
-        currentScore:null,currentTrendScore:null};
+        // Upstream composite scores include the prior round's open deviation.
+        // Preserve only genuinely continuous BTC spot features.
+        currentScore:null,currentTrendScore:null,liveScore:null};
       const quality=[...new Set([
-        ...(snapshot.issues||[]),'PRE_ROUND_SNAPSHOT_REUSED',
+        ...(snapshot.issues||[]),
+        ...(snapshot.sourceAt < round ? ['PRE_ROUND_SNAPSHOT_REUSED'] : []),
         'PREVIOUS_CONTRACT_AND_ROUND_OPEN_EXCLUDED',
         'PREVIOUS_ROUND_OPEN_DERIVED_SCORES_EXCLUDED'])];
       snapshot={...snapshot,features:featureCopy,issues:quality,
@@ -202,7 +232,11 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     const decision = { type: 'decision', roundStartMs: round, officialRoundStartMs: round,
       decisionComputedAtMs: now, featureCutoffMs: round + CUTOFF_MS,
       maxEventTimeMs: snapshot?.sourceAt ?? null, maxReceivedAtMs: snapshot?.receivedAt ?? null,
-      capturedAtMs: snapshot?.capturedAt ?? null, direction, pUpRaw: learned ? p : null,
+      capturedAtMs: snapshot?.capturedAt ?? null,
+      inputProvenance: !snapshot ? 'NO_SNAPSHOT' : snapshot.bridge
+        ? 'FRESH_SPOT_PRIOR_ROUND_METADATA' : snapshot.sourceAt < round
+        ? 'PRE_BOUNDARY_SPOT_FALLBACK' : 'ALIGNED_CURRENT_ROUND',
+      direction, pUpRaw: learned ? p : null,
       confidenceStatus: learned ? 'UNCALIBRATED_MODEL_SCORE' : 'BASELINE_NOT_CALIBRATED',
       fallbackLevel: learned && p !== 0.5 ? (snapshot.issues.length ? 'MODEL_WITH_MISSING_FEATURES' : 'NONE') : base.fallbackLevel,
       baselineDirection: base.direction, dataQuality: snapshot?.issues || ['NO_FRESH_SNAPSHOT'],

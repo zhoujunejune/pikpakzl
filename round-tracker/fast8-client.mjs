@@ -3,7 +3,7 @@ import { VERSION, POLICY, FEATURES } from './fast8-model.mjs';
 
 // This adapter only publishes into its private read-only cache and logs.
 // It has no callback or reference to production locks, trading, or Redis.
-export function createFast8Client({ dir = '/data/fast8-65', log = () => {}, onReady = () => {} } = {}) {
+export function createFast8Client({ dir = '/data/fast8-65', log = () => {}, onReady = () => {}, onDecision = () => {} } = {}) {
   let worker = null, latest = null, stopped = false, timer = null, generation = 0;
   let workerError = null;
   let status = { ok: false, status: 'STARTING', modelFamily: VERSION, policyVersion: POLICY,
@@ -39,6 +39,8 @@ export function createFast8Client({ dir = '/data/fast8-65', log = () => {}, onRe
         // publication into a timely one or alter a direction.
         worker.postMessage({ type: 'published', roundStartMs: latest.roundStartMs, at: received });
         log('fast8_direction_locked', { ...latest, productionEffect: 'NONE_SHADOW_ONLY' });
+        // Optional event notification; production polling remains a fallback.
+        try { onDecision(latest); } catch { log('fast8_error', { reason: 'FAST8_DECISION_CALLBACK_FAILED' }); }
       }
       if (m.type === 'ready') {
         try { onReady(); } catch { log('fast8_error', { reason: 'SETTLEMENT_REPLAY_FAILED' }); }

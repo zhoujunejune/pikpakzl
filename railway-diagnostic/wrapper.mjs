@@ -74,7 +74,12 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   p.error = null;
   p.code = null;
 
-  const current = await getSignal({ forceHttp: true });
+  // Overlap independent signal revalidation and fresh quote retrieval.
+  // A changed/expired signal still rejects the order before any placement call.
+  const quoteRequestStartedAt = Date.now();
+  const [current, freshQuote] = await Promise.all([
+    getSignal({ forceHttp: true }), getFreshQuote(p._internal),
+  ]);
   if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || current.direction !== p.signal) {
     pendingAction = null;
     console.log(JSON.stringify({
@@ -89,8 +94,6 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     return { status: 409, body: { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' } };
   }
 
-  const quoteRequestStartedAt = Date.now();
-  const freshQuote = await getFreshQuote(p._internal);
   if (!freshQuote.ok) {
     p.state = isAuto ? 'AUTO_FAILED' : 'READY';
     p.error = freshQuote.error;

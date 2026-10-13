@@ -2,6 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { createClient } from 'redis';
 import WebSocket from 'ws';
+import { reconcileOrderUpdate } from './order-status-state.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
@@ -27,6 +28,7 @@ let lastBalanceAt = 0;
 let balanceRefreshPromise = null;
 const UI_BALANCE_CACHE_MS = Math.max(3000, Number(process.env.UI_BALANCE_CACHE_MS || 10000));
 let lastOrder = null;
+let orderStatusRefreshPromise = null;
 let prepareInFlight = false;
 let lastPrepareAttemptAt = 0;
 const submittedRounds = new Set();
@@ -493,17 +495,18 @@ function chooseToken(topic, direction) {
 }
 
 async function prepareIntent(signal) {
-  const wallet = await resolveWallet();
+  // Independent authenticated reads can run concurrently. Keep all checks before quote and order placement.
+  const [wallet, marketResult, balance] = await Promise.all([
+    resolveWallet(), discoverTopic(signal.round),
+    lastBalance?.ok ? Promise.resolve(lastBalance) : getPaymentBalances(),
+  ]);
   if (!wallet.ok) return wallet;
-
-  const marketResult = await discoverTopic(signal.round);
   if (!marketResult.ok) return marketResult;
 
   const token = chooseToken(marketResult.topic, signal.direction);
   if (!token.ok) return token;
 
   const amountIn = amountToWei(tradeAmountText);
-  const balance = lastBalance?.ok ? lastBalance : await getPaymentBalances();
   lastBalance = balance;
   const payment = paymentRoute(balance);
   const slippageBps = Number(marketResult.topic?.slippageBps || 1200);
@@ -701,32 +704,39 @@ function terminalSuccessStatus(status) {
 }
 
 async function refreshLastOrderStatus(force = false) {
-  if (!lastOrder?.orderId || !lastOrder?.walletAddress) return;
-  if (!force && Date.now() - Number(lastOrder.lastCheckedAt || 0) < 2500) return;
-  lastOrder.lastCheckedAt = Date.now();
-  const found = await lookupOrder(lastOrder.orderId, lastOrder.walletAddress);
-  if (!found.ok) return;
-
-  const before = lastOrder.status;
-  lastOrder.status = found.order.status ?? lastOrder.status;
-  lastOrder.fillPercentage = found.order.fillPercentage ?? lastOrder.fillPercentage;
-  lastOrder.filledUsdtAmount = found.order.filledUsdtAmount ?? lastOrder.filledUsdtAmount;
-  lastOrder.price = found.order.price ?? lastOrder.price;
-  lastOrder.checkedAt = new Date().toISOString();
-  const filled = terminalSuccessStatus(lastOrder.status) || Number(lastOrder.fillPercentage || 0) >= 1 || Number(lastOrder.filledUsdtAmount || 0) > 0;
-  const failed = terminalFailureStatus(lastOrder.status);
-  lastOrder.state = filled ? 'CONFIRMED_FILLED' : failed ? 'CONFIRMED_FAILED' : 'SUBMITTED_PENDING_CONFIRMATION';
-
-  if (before !== lastOrder.status || filled || failed) {
-    console.log(JSON.stringify({
-      event: 'order_status_updated',
-      orderId: lastOrder.orderId,
-      status: lastOrder.status,
-      state: lastOrder.state,
-      fillPercentage: lastOrder.fillPercentage,
-      filledUsdtAmount: lastOrder.filledUsdtAmount,
-    }));
-  }
+  const target = lastOrder;
+  if (!target?.orderId || !target?.walletAddress) return;
+  if (orderStatusRefreshPromise) return orderStatusRefreshPromise;
+  if (!force && Date.now() - Number(target.lastCheckedAt || 0) < 2500) return;
+  target.lastCheckedAt = Date.now();
+  orderStatusRefreshPromise = (async () => {
+    const found = await lookupOrder(target.orderId, target.walletAddress);
+    // An older asynchronous response must never overwrite a newer order.
+    if (!found.ok || lastOrder !== target) return;
+    const beforeStatus = target.status;
+    const beforeState = target.state;
+    Object.assign(target, reconcileOrderUpdate(target, found.order));
+    target.checkedAt = new Date().toISOString();
+    if (target.state !== beforeState || target.status !== beforeStatus) {
+      console.log(JSON.stringify({
+        event: 'order_status_updated', orderId: target.orderId, status: target.status,
+        state: target.state, lastObservedStatus: target.lastObservedStatus,
+        fillPercentage: target.fillPercentage, filledUsdtAmount: target.filledUsdtAmount,
+      }));
+    }
+    if (target.state === 'RECONCILIATION_REQUIRED' && beforeState !== 'RECONCILIATION_REQUIRED') {
+      // FILL -> FAILED contradictions cannot establish whether Binance filled the trade.
+      // Prevent further orders until reconciliation, without declaring a false failure.
+      enabled = false;
+      if (typeof autoConfirmHalted !== 'undefined') autoConfirmHalted = true;
+      console.error(JSON.stringify({
+        event: 'order_status_conflict_auto_halted', orderId: target.orderId,
+        previousState: beforeState, previousStatus: beforeStatus,
+        conflictingStatus: target.conflictingStatus, requiresIndependentReconciliation: true,
+      }));
+    }
+  })().finally(() => { orderStatusRefreshPromise = null; });
+  return orderStatusRefreshPromise;
 }
 
 void startSignalRedisSubscriber();
@@ -864,6 +874,8 @@ http.createServer(async (req, res) => {
     if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
     const nextEnabled = Boolean(body.enabled);
     if (nextEnabled) {
+      if (lastOrder?.state === 'RECONCILIATION_REQUIRED')
+        return send(res, 409, { ok:false, error:'上一笔订单的成交与失败状态矛盾，请先核对交易所原始成交记录，禁止继续自动下单' });
       const amount = cleanAmount(body.amount);
       if (!amount || Number(amount) < 1) {
         return send(res, 400, { ok: false, error: 'MARKET 市价单金额请至少填写 1 USDT，实际最低值以 Binance 为准' });

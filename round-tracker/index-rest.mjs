@@ -480,6 +480,14 @@ const shadow35 = createShadow35Client({ dir: SHADOW35_DIR, log });
 const fast8 = createFast8Client({
   dir: '/data/fast8-65', log,
   onReady: () => { for (const row of rounds.values()) fast8.settle(row); },
+  onDecision: decision => {
+    const now = Date.now();
+    if (PRODUCTION_SIGNAL_SOURCE_MODE !== FAST8_MODE ||
+        Number(decision?.roundStartMs) !== Math.floor(now / 300000) * 300000) return;
+    // First attempt immediately on worker publication; original 200ms timer remains a recovery path.
+    try { productionSignalPayload(now); }
+    catch (error) { log('fast8_decision_trigger_error', {error: error?.message || String(error)}); }
+  },
 });
 
 const shadowV2 = createShadowV2Engine({

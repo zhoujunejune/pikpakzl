@@ -61,3 +61,19 @@ An aligned current-round observation always replaces a bridge and cannot be
 overwritten by a delayed previous-round label. Existing T+1.8s lock, T+8s
 deadline, fallbacks, and order/TP-SL paths are unchanged. Forward performance
 is tracked under a distinct model version and cannot be assumed improved.
+
+## 2026-10-13 round-clock, opening-price safety and timing shadow (V4)
+A new BTC five-minute candle can lag the market event clock. The upstream
+engine now assigns UTC five-minute round identity using market timestamps,
+independently verifies the arriving five-minute/one-minute kline open, and
+zeroes prior-candle-derived price contributions until matching opens arrive.
+The FAST8 worker explicitly marks new-round opening-price absence, while
+preserving safe spot order-flow, directional microstructure and momentum.
+The original T+1.8s production freeze and T+8s hard deadline do not change.
+It also journals immutable T+4s/T+6s SHADOW-ONLY directions after that freeze,
+and compares them against the **same** officially settled rounds; these late
+signals never route to production orders. Results are split by weak fixed-score
+strength bands; these strength values are uncalibrated, not win probabilities.
+The new V4 version resets the research-forward comparison window. None of this
+establishes a 65% real trading edge; future activation of later timings or
+retraining requires sufficient uncontaminated forward evidence.

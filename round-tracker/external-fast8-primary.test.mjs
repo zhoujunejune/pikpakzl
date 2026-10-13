@@ -14,7 +14,7 @@ function sample(){
     publishedAtMs:R+2030,serverAvailableAtMs:R+2021,
     maxEventTimeMs:R-240,maxReceivedAtMs:R-150,
     capturedAtMs:R-145,presentFeatures:17,
-    externalResearch:{version:'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V1',
+    externalResearch:{version:'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V2_PREP60',
       predictedHorizonMs:300000,fullQuality:false,
       dataQuality:['PRE_ROUND_SNAPSHOT_REUSED'],
       predictions:{FLOW_BOOK_PROXY_V1:{direction:'DOWN',fallback:false,

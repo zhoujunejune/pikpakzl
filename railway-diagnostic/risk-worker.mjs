@@ -488,7 +488,9 @@ async function tick() {
     }
     health.lastSuccessfulPositionsAt = new Date().toISOString();
     health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;
-    const payment = await getPaymentRoute();
+    // Warm the existing payment lookup while unchanged position/quote checks run.
+    // No extra API request, cached route and SELL parameters remain identical.
+    const paymentReady = getPaymentRoute();
     const activeTokens = new Set();
 
     for (const position of positionsResult.positions) {
@@ -558,9 +560,13 @@ async function tick() {
       if (!evaluation.triggered) continue;
       const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;
       log('risk_triggered', { tokenId, reason: evaluation.reason, currentSellAmount: evaluation.currentSellAmount, targetAmount });
+      // Payment routing is needed only at the original SELL submission point.
+      const payment = await paymentReady;
       await sellPosition(wallet, payment, position, topic, targets, quoteResult, evaluation);
     }
 
+    // Preserve the original one-payment-lookup-per-tick error/refresh behavior.
+    await paymentReady;
     cleanupSellState(activeTokens);
   } catch (e) {
     log('risk_tick_exception', { error: e?.message || String(e) });

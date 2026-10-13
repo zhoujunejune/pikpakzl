@@ -215,12 +215,12 @@ function derived(x){var p=pred(x),a=official(x);return !a?'PENDING':(!p?'NO_DECI
 var settled=all.filter(function(x){return !!official(x)}),decided=settled.filter(function(x){return !!pred(x)});
 var correct=decided.filter(function(x){return derived(x)==='HIT'}).length,wrong=decided.filter(function(x){return derived(x)==='MISS'}).length;
 var s={settledRounds:settled.length,decidedRounds:decided.length,correct:correct,wrong:wrong,noDecision:settled.length-decided.length,accuracyPct:decided.length?correct*100/decided.length:null,coveragePct:settled.length?decided.length*100/settled.length:null};
-e('rsAccuracy').innerHTML=s.accuracyPct==null?'准确率：-':'准确率：<span class="on">'+Number(s.accuracyPct).toFixed(2)+'%</span>';
+e('rsAccuracy').innerHTML=s.accuracyPct==null?'原模型命中率：-':'原模型命中率：<span class="on">'+Number(s.accuracyPct).toFixed(2)+'%</span>';
 e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedRounds;e('rsCorrect').innerHTML='<span class="on">'+s.correct+'</span>';e('rsWrong').innerHTML='<span class="bad">'+s.wrong+'</span>';e('rsWait').textContent=s.noDecision;e('rsCoverage').textContent=s.coveragePct==null?'-':Number(s.coveragePct).toFixed(2)+'%';
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent='唯一现役：FLOW_BOOK_PROXY_V1 · 8秒内锁定 UP/DOWN · '+settlement+' · 只按本模型切换后的前瞻实测计分'+status+stale;
+e('rsMeta').textContent='唯一现役：FLOW_BOOK_PROXY_V1 · 8秒内锁定 UP/DOWN · '+settlement+' · 本表按原生产信号计分，不代表反向订单实际盈利率'+status+stale;
 var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
@@ -235,7 +235,8 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="big" id="activeFast8Name">FLOW_BOOK_PROXY_V1</div>
 <div class="muted" id="activeFast8Desc">BTC 5分钟 · 订单流/盘口失衡 · 开盘8秒内锁定 UP/DOWN</div>
 <div class="grid" style="margin-top:12px">
-<div class="kv"><div class="k">最新生产方向</div><div class="v" id="activeFast8Direction">读取中</div></div>
+<div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
+<div class="kv"><div class="k">下单信号（反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
@@ -266,7 +267,18 @@ fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
 })
 .catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }
-function boot(){load();setInterval(load,3000)}
+function updateOrderSignal(){
+ fetch('/api/status?ts='+Date.now(),{cache:'no-store'})
+ .then(function(r){if(!r.ok)throw Error('交易控制状态 HTTP '+r.status);return r.json()})
+ .then(function(j){
+   var expected=Math.floor(Date.now()/300000)*300000;
+   var live=j.signal||{};
+   var ready=live.status==='LOCKED'&&Number(live.round)===expected&&
+     j.orderDirectionPolicy==='INVERT_PRODUCTION_UP_DOWN_V1';
+   e('activeFast8OrderDirection').textContent=ready?(j.orderSignal+'（反向）'):'未锁定或未激活';
+ }).catch(function(){e('activeFast8OrderDirection').textContent='下单方向状态不可用'});
+}
+function boot(){load();updateOrderSignal();setInterval(load,3000);setInterval(updateOrderSignal,3000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;
 

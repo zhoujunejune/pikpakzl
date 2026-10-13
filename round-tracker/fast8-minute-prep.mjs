@@ -43,7 +43,9 @@ export function createNextRoundPreparation(){
       k,finite(features?.[k])?clamp(features[k]):null
     ]));
     const reason=Array.isArray(issues)?issues:[];
-    if(reason.includes('DEPTH_MISSING_OR_STALE'))clean.ofiNormalized5s=null;
+    if(reason.includes('DEPTH_MISSING_OR_STALE')){
+      clean.ofiNormalized5s=null;clean.microScore=null;
+    }
     if(reason.includes('TRADES_MISSING_OR_STALE')){
       clean.tradePressure15s=null;clean.tradePressure60s=null;
     }
@@ -80,6 +82,8 @@ export function createNextRoundPreparation(){
     const ready=samples.length>=12 && spanMs>=20000 &&
       lastAgeMs!==null && lastAgeMs<=5000 &&
       Object.values(featureSamples).filter(n=>n>=8).length>=4 &&
+      featureSamples.ofiNormalized5s>=8 &&
+      featureSamples.tradePressure15s>=8 &&
       directionPreview!==null;
     return {
       version:NEXT_ROUND_PREP_VERSION,nextRoundStartMs,

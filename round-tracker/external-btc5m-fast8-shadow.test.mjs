@@ -52,42 +52,28 @@ function official(round=ROUND,actual='UP') {
     resolutionEvidence:'OFFICIAL_'+actual+':STRICT_ROUND_ALIGNED_TOPIC',
     settledAt:round+ROUND_MS+120};
 }
-test('external adaptation produces 3 binary 5m directions without WAIT or fake probabilities',()=>{
+test('only the frozen external FLOW candidate emits a binary 5-minute direction',()=>{
   const d=externalResearchDirections(fields,quality);
   assert.equal(d.version,EXTERNAL_RESEARCH_VERSION);
   assert.deepEqual(Object.keys(d.predictions),[...EXTERNAL_RESEARCH_IDS]);
-  assert.equal(d.regime,'TREND');
+  assert.deepEqual([...EXTERNAL_RESEARCH_IDS],['FLOW_BOOK_PROXY_V1']);
+  assert.equal(d.regime,'FLOW_ONLY');
   assert.equal(d.fullQuality,true);
   assert.equal(d.predictions.FLOW_BOOK_PROXY_V1.direction,'UP');
-  assert.equal(d.predictions.REGIME_SWITCH_PROXY_V1.direction,'UP');
-  for(const v of Object.values(d.predictions)){
-    assert.ok(v.direction==='UP'||v.direction==='DOWN');
-    assert.equal(v.fallback,false);
-    assert.ok(v.strength>=0 && v.strength<=1);
-    assert.equal('probability' in v,false);
-  }
+  assert.equal(d.predictions.FLOW_BOOK_PROXY_V1.fallback,false);
+  assert.ok(d.predictions.FLOW_BOOK_PROXY_V1.strength>=0);
+  assert.equal('probability' in d.predictions.FLOW_BOOK_PROXY_V1,false);
   assert.equal(d.executionEligible,false);
   assert.equal(d.autoPromotion,false);
-  assert.equal(d.productionEffect,'NONE_SHADOW_ONLY');
 });
-test('downward order flow and non-trend mean reversion affect directional output',()=>{
- const neg=Object.fromEntries(Object.entries(fields).map(([k,v])=>
+test('reversing order flow reverses the selected direction without a WAIT',()=>{
+  const neg=Object.fromEntries(Object.entries(fields).map(([k,v])=>
    [k,['currentScore','currentTrendScore','microScore','regimeScore',
-    'normalizedMomentum60s','normalizedMomentum180s','normalizedMomentum300s',
-    'tradePressure15s','tradePressure60s','ofiNormalized5s',
-    'distanceFromOpenBps'].includes(k)?-v:v]));
- neg.predictionMarketUpMid=0.43;neg.rangePosition180=0.35;
- const a=externalResearchDirections(neg,quality);
- assert.equal(a.predictions.FLOW_BOOK_PROXY_V1.direction,'DOWN');
- const nonTrend={...fields,currentTrendScore:0.1,regimeScore:-0.1,
-  tradePressure15s:0,tradePressure60s:0,ofiNormalized5s:0,microScore:0,
-  normalizedMomentum60s:0.9,normalizedMomentum180s:0.8,
-  normalizedMomentum300s:0.7,distanceFromOpenBps:9,rangePosition180:0.9,
-  predictionMarketUpMid:0.5};
- const b=externalResearchDirections(nonTrend,quality);
- assert.equal(b.regime,'NON_TREND');
- assert.equal(b.predictions.MEAN_REVERSION_FLOW_PROXY_V1.direction,'DOWN');
- assert.equal(b.predictions.REGIME_SWITCH_PROXY_V1.direction,'DOWN');
+    'normalizedMomentum60s','tradePressure15s','tradePressure60s',
+    'ofiNormalized5s'].includes(k)?-v:v]));
+  neg.predictionMarketUpMid=0.43;
+  const d=externalResearchDirections(neg,quality);
+  assert.equal(d.predictions.FLOW_BOOK_PROXY_V1.direction,'DOWN');
 });
 test('no-data still gives baseline directions but marks unusable input',()=>{
  const d=externalResearchDirections({},{
@@ -183,5 +169,5 @@ test('worker pre-round fallback keeps research but does not classify stale-topic
  assert.equal(d.externalResearch.reusedPreRound,true);
  assert.equal(d.externalResearch.fullQuality,false);
  assert.ok(d.externalResearch.dataQuality.includes('PRE_ROUND_SNAPSHOT_REUSED'));
- assert.ok(['UP','DOWN'].includes(d.externalResearch.predictions.REGIME_SWITCH_PROXY_V1.direction));
+ assert.ok(['UP','DOWN'].includes(d.externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction));
 });

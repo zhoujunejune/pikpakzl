@@ -155,3 +155,33 @@ test('no future snapshot can backfill after worker lock',t=>{
    facts:{...fields}},ROUND+4940);
  assert.deepEqual(f.engine.tick().externalResearch,d.externalResearch);
 });
+
+test('pre-round market observations are valid causal candidates, never full-quality round evidence',()=>{
+ const d=externalResearchDirections(fields,{
+   ...quality,roundStartMs:ROUND,sourceAt:ROUND-2200
+ });
+ assert.equal(d.reusedPreRound,true);
+ assert.equal(d.fullQuality,false);
+ assert.ok(d.dataQuality.includes('PRE_ROUND_SNAPSHOT_REUSED'));
+ assert.equal(d.predictions.FLOW_BOOK_PROXY_V1.evidence,'DEGRADED_MICROSTRUCTURE_INPUT');
+ assert.ok(['UP','DOWN'].includes(d.predictions.FLOW_BOOK_PROXY_V1.direction));
+});
+
+test('worker pre-round fallback keeps research but does not classify stale-topic input as verified',t=>{
+ const f=fx(t);
+ f.time(ROUND-400);
+ const earlier=ROUND-ROUND_MS;
+ const ok=f.engine.capture({round:earlier,factsCalculatedAt:ROUND-650,
+   facts:{...fields,depthAgeMs:50,lastAggTradeAgeMs:50,
+     predictionMarketMappingReliable:true,predictionMarketRoundAligned:true,
+     predictionMarketRound:earlier,predictionMarketBookAgeMs:150,
+     predictionMarketUpdateTimestampMs:ROUND-660}
+ },ROUND-600);
+ assert.equal(ok,true);
+ f.time(ROUND+2020);
+ const d=f.engine.tick();
+ assert.equal(d.externalResearch.reusedPreRound,true);
+ assert.equal(d.externalResearch.fullQuality,false);
+ assert.ok(d.externalResearch.dataQuality.includes('PRE_ROUND_SNAPSHOT_REUSED'));
+ assert.ok(['UP','DOWN'].includes(d.externalResearch.predictions.REGIME_SWITCH_PROXY_V1.direction));
+});

@@ -171,7 +171,7 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     const externalResearch = externalResearchDirections(features,{
       baselineDirection:base.direction,snapshotAvailable:Boolean(snapshot),
       dataQuality:snapshot?.issues || ['NO_FRESH_SNAPSHOT'],
-      sourceAt:snapshot?.sourceAt ?? null,
+      sourceAt:snapshot?.sourceAt ?? null,roundStartMs:round,
     });
     const decision = { type: 'decision', roundStartMs: round, officialRoundStartMs: round,
       decisionComputedAtMs: now, featureCutoffMs: round + CUTOFF_MS,

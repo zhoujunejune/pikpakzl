@@ -180,3 +180,58 @@ test('200ms real market polling builds many INDEPENDENT snapshots over 60s',()=>
  assert.equal(snapshot.predictionMarketContractIncluded,false);
  assert.ok(['UP','DOWN'].includes(snapshot.directionPreview));
 });
+
+
+test('fresh spot from a delayed upstream round label is bridged without old PM or open scores',t=>{
+ const f=fx(t);
+ prewarm(f,-1);
+ f.time(R+800);
+ const freshSpot={...sample(1),depthAgeMs:80,lastAggTradeAgeMs:60,
+   currentScore:-1,currentTrendScore:-1,liveScore:-1,
+   distanceFromOpenBps:-100,predictionMarketUpMid:0.01,
+   predictionMarketRound:PREV,predictionMarketUpdateTimestampMs:R-1000};
+ assert.equal(f.engine.capture({round:PREV,factsCalculatedAt:R+700,facts:freshSpot},R+750),true);
+ f.time(R+LOCK_MS+10);
+ const d=f.engine.tick();
+ const prediction=d.externalResearch.predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(d.maxEventTimeMs,R+700);
+ assert.equal(d.inputProvenance,'FRESH_SPOT_PRIOR_ROUND_METADATA');
+ assert.ok(d.dataQuality.includes('CROSS_ROUND_FRESH_SPOT_BRIDGE'));
+ assert.equal(d.externalResearch.fullQuality,false);
+ assert.equal(prediction.preparationUsed,true);
+ assert.equal(prediction.evidence,'DEGRADED_MICROSTRUCTURE_INPUT');
+ const events=fs.readFileSync(path.join(f.dir,'events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ const features=events.find(e=>e.type==='decision'&&e.roundStartMs===R).features;
+ for(const key of ['predictionMarketUpMid','distanceFromOpenBps',
+   'currentScore','currentTrendScore','liveScore'])assert.equal(features[key],null);
+});
+test('a delayed old round without any post-boundary depth or trades cannot fabricate fresh input',t=>{
+ const f=fx(t);
+ prewarm(f,-1);
+ f.time(R+1000);
+ const stale={...sample(1),depthAgeMs:1600,lastAggTradeAgeMs:2600};
+ assert.equal(f.engine.capture({round:PREV,factsCalculatedAt:R+850,facts:stale},R+900),false);
+ f.time(R+LOCK_MS+10);
+ const d=f.engine.tick();
+ assert.notEqual(d.inputProvenance,'FRESH_SPOT_PRIOR_ROUND_METADATA');
+ assert.ok(d.maxEventTimeMs===null || d.maxEventTimeMs<R);
+});
+test('aligned current-round facts replace a bridge; a later delayed label cannot overwrite them',t=>{
+ const f=fx(t);
+ f.time(R+550);
+ assert.equal(f.engine.capture({round:PREV,factsCalculatedAt:R+450,
+   facts:{...sample(-1),depthAgeMs:70,lastAggTradeAgeMs:70}},R+500),true);
+ f.time(R+1020);
+ assert.equal(f.engine.capture({round:R,factsCalculatedAt:R+900,
+   facts:{...sample(1),predictionMarketRound:R,
+     predictionMarketUpdateTimestampMs:R+820}},R+1000),true);
+ f.time(R+1320);
+ assert.equal(f.engine.capture({round:PREV,factsCalculatedAt:R+1150,
+   facts:{...sample(-1),depthAgeMs:90,lastAggTradeAgeMs:90}},R+1200),true);
+ f.time(R+LOCK_MS+10);
+ const d=f.engine.tick();
+ assert.equal(d.inputProvenance,'ALIGNED_CURRENT_ROUND');
+ assert.equal(d.maxEventTimeMs,R+900);
+ assert.equal(d.externalResearch.fullQuality,true);
+ assert.ok(!d.dataQuality.includes('CROSS_ROUND_FRESH_SPOT_BRIDGE'));
+});

@@ -17,6 +17,54 @@ function log(event, extra = {}) {
   console.log(JSON.stringify({ event, shell: 'panel-stats', at: new Date().toISOString(), ...extra }));
 }
 
+const singleSignalCard = `<div class="c" id="singleSignalCard">
+<div class="k">唯一显示 · BTC 5分钟 · 8秒 UP / DOWN</div>
+<div class="big" id="ssModel">FLOW_BOOK_PROXY_V1</div>
+<div class="muted" id="ssStatus">正在核对生产真实状态...</div>
+<div class="grid" style="margin-top:12px">
+ <div class="kv"><div class="k">前瞻命中率</div><div class="v" id="ssAccuracy">-</div></div>
+ <div class="kv"><div class="k">已结算</div><div class="v" id="ssLabeled">-</div></div>
+ <div class="kv"><div class="k">命中 / 失败</div><div class="v" id="ssResults">-</div></div>
+ <div class="kv"><div class="k">最新候选方向</div><div class="v" id="ssDirection">-</div></div>
+</div>
+<div class="muted" id="ssEvidence" style="margin-top:10px">只统计该策略按时冻结的未来轮次；未验证的策略不能冒充生产。</div>
+<div class="muted" id="ssCurrent" style="margin-top:8px">当前生产模型正在读取中...</div>
+</div>`;
+
+const singleSignalScript = `<script>(function(){
+'use strict';
+function e(id){return document.getElementById(id)}
+function pct(n){return typeof n==='number' && isFinite(n)?(n*100).toFixed(2)+'%':'-'}
+function roundTime(ms){if(!Number.isFinite(Number(ms)))return '-';return new Date(Number(ms)).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+async function refresh(){
+try{
+ const response=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});
+ if(!response.ok)throw new Error('STATS_HTTP_'+response.status);
+ const j=await response.json(),m=j&&j.selectedExternalSignal;
+ if(!j||!j.ok||!m||m.model!=='FLOW_BOOK_PROXY_V1')throw new Error('SELECTED_MODEL_STATS_UNAVAILABLE');
+ e('ssModel').textContent='FLOW_BOOK_PROXY_V1 · 订单流方向';
+ e('ssAccuracy').textContent=pct(m.accuracy);
+ e('ssLabeled').textContent=Number(m.samples||0)+' 轮';
+ e('ssResults').textContent=Number(m.hits||0)+' / '+Number(m.misses||0);
+ e('ssDirection').textContent=(m.researchDirection==='UP'||m.researchDirection==='DOWN'?m.researchDirection:'未锁定')+' · '+roundTime(m.researchRound);
+ e('ssStatus').textContent=m.productionActive?'生产已启用 · 每轮8秒内锁定':'仅候选观察 · 当前尚未接管真实下单';
+ e('ssCurrent').textContent='生产实际模型：'+String(m.currentProductionModel||'-')+' · 数据：Binance Prediction官方结算';
+ e('ssEvidence').textContent='仅显示这一条候选；胜率 '+pct(m.accuracy)+'（'+Number(m.hits||0)+'/'+Number(m.samples||0)+'），'+
+  '有效高质量样本 '+Number(m.verifiedSamples||0)+'；数据不足时不能宣称长期65%。历史结算独立保留。';
+ // FAST8 exclusive mode only: hide outdated legacy 15s/WAIT policy and
+ // multiple-source comparison cards, leaving trade and risk inputs intact.
+ if(j.productionSignalSourceMode==='FAST8_ONLY'){
+  ['signalPolicyCard','waitVisibilityCard','roundStatsCard'].forEach(function(id){
+   var n=e(id);if(n)n.style.display='none';
+  });
+ }
+}catch(err){
+ if(e('ssStatus'))e('ssStatus').textContent='状态不可核实：'+(err&&err.message?err.message:String(err));
+}}
+function boot(){refresh();setInterval(refresh,3000)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();</script>`;
+
 const statsCard = `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
@@ -231,7 +279,8 @@ function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${policyCard}${previewCard}${statsCard}${marker}`) : html.replace('</body>', `${policyCard}${previewCard}${statsCard}</body>`);
-  return out.replace('</body>', `${statsScript}${previewScript}${policyScript}</body>`);
+  out=out.replace('</body>', `${singleSignalCard}</body>`);
+  return out.replace('</body>', `${statsScript}${previewScript}${policyScript}${singleSignalScript}</body>`);
 }
 
 let child = null;

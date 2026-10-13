@@ -35,7 +35,7 @@ test('risk-worker has exactly one asynchronous payment prefetch and awaits at SE
 test('risk formulas, thresholds, quote rules, SELL and retry code are byte-for-byte unchanged', () => {
   const baseline = source.replace(newPrepare, oldPrepare).replace(newSell, oldSell);
   const gitObject = crypto.createHash('sha1')
-    .update('blob ' + Buffer.byteLength(baseline) + '\\0')
+    .update('blob ' + Buffer.byteLength(baseline) + String.fromCharCode(0))
     .update(baseline).digest('hex');
   assert.equal(gitObject, originalBlobSha);
 });

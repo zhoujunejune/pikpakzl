@@ -3,7 +3,7 @@
 // pretrained strategy, and does not have established >50% forward accuracy.
 // Two previously experimental proxy strategies have been retired from current
 // calculations; their historical journal records remain auditable.
-export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V3_BRIDGE';
+export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V4_ROUND_CLOCK';
 export const EXTERNAL_RESEARCH_IDS = Object.freeze(['FLOW_BOOK_PROXY_V1']);
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const clamp = (x,min=-1,max=1) => Math.min(max,Math.max(min,x));

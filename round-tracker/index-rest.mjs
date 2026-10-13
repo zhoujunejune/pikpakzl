@@ -5,6 +5,7 @@ import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadow35Client } from './shadow35-client.mjs';
 import { createFast8Client } from './fast8-client.mjs';
 import { FAST8_SOURCE, FAST8_MODEL, FAST8_MODE, LEGACY_MODE, fast8ProductionReadiness } from './fast8-production-gate.mjs';
+import { SINGLE_EXTERNAL_PRIMARY_ID, SINGLE_EXTERNAL_PRIMARY_VERSION, selectExternalFast8Production } from './external-fast8-primary.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
@@ -4842,6 +4843,21 @@ function productionSummary() {
     edgeRescueRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY').length,
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
+    activeFast8Primary: (() => {
+      const chosen=records.filter(r=>r.productionModel===SINGLE_EXTERNAL_PRIMARY_ID);
+      const labels=chosen.filter(r=>r.productionActual==='UP'||r.productionActual==='DOWN');
+      const successes=labels.filter(r=>r.productionResult==='HIT').length;
+      const start=chosen.length?chosen[0].roundStartMs:null;
+      const eligibleCalendar= start==null?[]:records.filter(r=>Number(r.roundStartMs)>=Number(start));
+      return {id:SINGLE_EXTERNAL_PRIMARY_ID,version:SINGLE_EXTERNAL_PRIMARY_VERSION,
+        startRound:start,signalRounds:chosen.length,settledRounds:labels.length,
+        hits:successes,misses:labels.length-successes,
+        accuracyPct:labels.length?Number((100*successes/labels.length).toFixed(2)):null,
+        coveragePct:eligibleCalendar.length?Number((100*chosen.length/eligibleCalendar.length).toFixed(2)):null,
+        fallbackRounds:chosen.filter(r=>r.productionFallbackUsed===true).length,
+        winRateNote:'FORWARD_ONLY_OFFICIAL_SETTLEMENT_NOT_INDEPENDENTLY_CERTIFIED',
+        eligibleForAutoTrading:true,accuracyGuaranteed:false};
+    })(),
     currentQualifiedModel: productionUsesSelectiveV2()
       ? LOCK_QUALITY_V2_VERSION
       : productionUsesShadowV3()
@@ -5463,27 +5479,30 @@ function fast8GatewayFallback(round) {
 function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   const activeRow = row || ensureRound(expectedRound);
   const stats = fast8.stats();
-  const readiness = fast8ProductionReadiness(stats, fast8.latest(), expectedRound, now);
+  const current = fast8.latest();
+  const readiness = fast8ProductionReadiness(stats, current, expectedRound, now);
+  const prediction = selectExternalFast8Production(stats,current,expectedRound,readiness);
   const alreadyLocked = ['UP','DOWN'].includes(activeRow?.productionPrediction);
-  if (readiness.eligible && !alreadyLocked) {
-    const prediction = readiness.preview;
+  if (prediction.eligible && !alreadyLocked) {
     const live = {
       round: expectedRound, status: 'LOCKED',
       signal: {direction:prediction.direction, score:null,confidence:null,modelProbability:null},
-      input: {round:expectedRound}, generatedAt:prediction.persistedAtMs,
-      source:FAST8_SOURCE,model:FAST8_MODEL,modelVersion:prediction.modelVersion,
+      input: {round:expectedRound}, generatedAt:prediction.generatedAt,
+      source:FAST8_SOURCE,model:SINGLE_EXTERNAL_PRIMARY_ID,modelVersion:SINGLE_EXTERNAL_PRIMARY_VERSION,
       productionPolicy:productionPolicyName(),
       fallbackUsed:prediction.fallbackUsed === true,
-      fallbackReason:prediction.fallbackUsed ? (prediction.fallbackLevel || 'FAST8_FEATURE_QUALITY_FALLBACK') : null,
+      fallbackReason:prediction.fallbackReason,
       fast8Quality: {status:prediction.qualityStatus,
-        issues:prediction.dataQuality, presentFeatures:prediction.presentFeatures},
+        issues:prediction.issues,presentFeatures:prediction.presentFeatures,
+        evidence:prediction.evidence,uncalibratedStrength:prediction.strength}, 
       fast8Qualification:{validationSamples:stats.validation?.labeledPredictions ?? 0,
         accuracy:stats.validation?.endToEndAccuracy ?? null,
         verifiedAt:stats.generatedAtMs ?? null},
     };
     if (freezeProductionLock(activeRow, live)) {
-      log('fast8_exclusive_production_lock',{round:expectedRound,
-        direction:prediction.direction,modelVersion:prediction.modelVersion,
+      log('external_fast8_primary_production_lock',{round:expectedRound,
+        direction:prediction.direction,model:SINGLE_EXTERNAL_PRIMARY_ID,
+        modelVersion:SINGLE_EXTERNAL_PRIMARY_VERSION,
         fallbackUsed:live.fallbackUsed,quality:live.fast8Quality});
       logProductionSignalState(live);
       return {ok:true,live};
@@ -5513,29 +5532,30 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
       round:expectedRound,status:'LOCKED',
       signal:{direction:fallback.direction,score:null,confidence:null,modelProbability:null},
       input:{round:expectedRound},generatedAt:now,
-      source:FAST8_SOURCE,model:FAST8_MODEL,
-      modelVersion:'ZL_FAST8_65-GATEWAY_CONTINGENCY_V1',
+      source:FAST8_SOURCE,model:SINGLE_EXTERNAL_PRIMARY_ID,
+      modelVersion:SINGLE_EXTERNAL_PRIMARY_VERSION + ':GATEWAY_NO_INFORMATION',
       productionPolicy:productionPolicyName(),
       fallbackUsed:true,fallbackReason:fallback.reason,
       fast8Quality:{status:'NO_VERIFIED_CURRENT_ROUND_MODEL_SIGNAL',
-        issues:[readiness.reason || 'FAST8_DIRECTION_NOT_AVAILABLE'],presentFeatures:0},
+        issues:[prediction.reason || readiness.reason || 'EXTERNAL_PRIMARY_DIRECTION_NOT_AVAILABLE'],presentFeatures:0}, 
       fast8Qualification:{validationSamples:stats.validation?.labeledPredictions ?? 0,
         accuracy:stats.validation?.endToEndAccuracy ?? null,
         verifiedAt:stats.generatedAtMs ?? null},
     };
     if (freezeProductionLock(activeRow, live)) {
       log('fast8_gateway_contingency_lock',{round:expectedRound,
-        direction:fallback.direction,reason:fallback.reason,
-        generatedDelayMs:now-expectedRound,trigger:readiness.reason});
+        direction:fallback.direction,model:SINGLE_EXTERNAL_PRIMARY_ID,
+        generatedDelayMs:now-expectedRound,reason:fallback.reason,
+        trigger:prediction.reason || readiness.reason});
       logProductionSignalState(live);
       return {ok:true,live};
     }
   }
   const live = {
     round:expectedRound,status:'PENDING',signal:null,input:{round:expectedRound},
-    generatedAt:null,source:FAST8_SOURCE,model:FAST8_MODEL,
+    generatedAt:null,source:FAST8_SOURCE,model:SINGLE_EXTERNAL_PRIMARY_ID,
     productionPolicy:productionPolicyName(),fallbackUsed:false,
-    pendingReason:readiness.reason || 'FAST8_DIRECTION_PENDING_BEFORE_DEADLINE',
+    pendingReason:prediction.reason || readiness.reason || 'EXTERNAL_DIRECTION_PENDING_BEFORE_DEADLINE',
     deadlineMs:8000,contingencyAtMs:FAST8_GATEWAY_FALLBACK_AT_MS,
     fast8Preview:readiness.preview,
     otherProductionSourcesPaused:true,
@@ -5977,6 +5997,12 @@ function payload() {
     productionSummary: productionSummary(),
     productionPolicy: productionPolicyName(),
     productionSignalSourceMode:PRODUCTION_SIGNAL_SOURCE_MODE,
+    activeProductionModel:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
+      ? {id:SINGLE_EXTERNAL_PRIMARY_ID,version:SINGLE_EXTERNAL_PRIMARY_VERSION,
+         source:FAST8_SOURCE,onlyOneActive:true,noWait:true,deadlineMs:8000,
+         estimatedAccuracyGuaranteed:false,
+         metrics:productionSummary().activeFast8Primary}
+      : null,
     fast8ProductionStatus:{model:FAST8_MODEL,source:FAST8_SOURCE,otherSourcesPaused:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE,
       ...(()=>{const st=fast8.stats(), current=Math.floor(Date.now()/300000)*300000,
         r=fast8ProductionReadiness(st,fast8.latest(),current);return {gateEligible:r.eligible,

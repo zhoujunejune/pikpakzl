@@ -1,78 +1,51 @@
-# External BTC 5-minute FAST8 microstructure research
+# FAST8 sole active external BTC5m strategy
 
-This implementation is **inspired by public research projects**; it is an
-original, lightweight JavaScript *research proxy*, **not** a copy of their
-trained model weights and **not** a 62%, 65%, 75%, or 85% proven win-rate
-strategy. No unverified probabilities are presented as calibrated.
+## Live routing
+From this deployment forward, the single **active** model is
+`FLOW_BOOK_PROXY_V1`. Its one UP/DOWN prediction is computed in the
+existing FAST8 worker at ~T+2s and enters the production lock through
+`selectExternalFast8Production()`. This uses the user's existing
+Binance Prediction 5-minute round IDs and the original frozen market
+snapshot, without network calls or separate paid infrastructure.
 
-## Public source comparison
+The FLOW_BOOK score combines order book OFI, 15s/60s trade pressure
+(proxy for cumulative volume delta), short-term micro/current/trend
+scores, normalized momentum and PM midprice, with fixed published
+weights. The signal does **not** contain a fitted third-party model.
+Original inspiration: [HorseDev77/bitcoin_price_up_down_prediction_5minute]
+(https://github.com/HorseDev77/bitcoin_price_up_down_prediction_5minute)
+and [yashvaidya42/BTC-microstructure-signal-detection]
+(https://github.com/yashvaidya42/BTC-microstructure-signal-detection).
 
-- [Yash Vaidya/BTC-microstructure-signal-detection](https://github.com/yashvaidya42/BTC-microstructure-signal-detection)
-  (MIT license) reports 54/87 independent non-overlapping live samples
-  (62.07%) during one 7.43-hour session; its actual XGBoost training
-  features, fitted scaler, and 15-minute startup history cannot be
-  reproduced from this repo's frozen FAST8 17-feature payload as-is.
-- [HorseDev77/bitcoin_price_up_down_prediction_5minute](https://github.com/HorseDev77/bitcoin_price_up_down_prediction_5minute)
-  (package metadata: ISC) provides a TypeScript microstructure workflow
-  using CVD, order-book imbalance, regime and VWAP/OI; its original
-  decision includes NO_TRADE and it has **no independently documented 5m
-  full-coverage win rate**.
-- [sfeirc/Short-Horizon-Price-Direction-5-min-from-LOB-Microstructure](https://github.com/sfeirc/Short-Horizon-Price-Direction-5-min-from-LOB-Microstructure)
-  (MIT license) reports 85% after selecting only 12.7% of raw rows
-  based on future-horizon labels, and negative PnL after transaction
-  costs; this statistic **cannot** be transplanted into mandatory
-  binary decisions at T+8s. No model weights from that source are used.
-- [FreqAI](https://github.com/freqtrade/freqtrade/blob/develop/docs/freqai.md)
-  provides retraining infrastructure, not a 65% accuracy guarantee;
-  loading the entire Python stack into the existing Railway 1 GB
-  service is not appropriate.
+At the last pre-deployment forward audit, FLOW_BOOK was 3 hits in
+6 independent resolved rounds (50%). The original FAST8 had 4/6
+on those same rounds; **there is no evidence the chosen candidate
+outperforms the existing system**, much less meets 65%, 75% or 85%.
+The user explicitly elected to switch despite these limitations.
 
-## What is implemented
+## Guarantee boundaries
+- The running worker freezes one UP/DOWN at approximately T+2s.
+- If worker fails / primary candidate is unavailable at T+7s,
+  the existing gateway makes a separately tagged no-information
+  contingency UP/DOWN; this is not a verified prediction.
+- Network outages, Railway restarts or insufficient clock resources
+  mean the <=8s target is not physically guaranteed on every round.
+- This implementation DOES NOT change order preparation, purchase
+  API, take-profit, stop-loss, order sizing, account permissions or
+  settlement logic.
+- Alternative experimental flow/reversion/regime candidates were
+  removed from *new calculations* and hidden on the trade panel.
+  Older journal/settlement history remains immutable.
+- The dashboard shows only the selected model's **post-switch**
+  `productionModel === 'FLOW_BOOK_PROXY_V1'` predictions and the
+  Binance Prediction official-aligned settlement results. No
+  historical WIN/LOSS from other models is mixed in.
+- `GET /api/round-stats.activeProductionModel.metrics` exposes
+  signalRounds, settledRounds, hits, misses, accuracyPct,
+  coveragePct, fallbackRounds. No validated probability/EV claim.
 
-`external-btc5m-fast8-shadow.mjs` outputs **three immutable
-UP/DOWN directions**, all on the FAST8 worker's **same frozen 1.5s
-feature snapshot**, published in the existing worker's ~T+2s decision:
-
-- `FLOW_BOOK_PROXY_V1`: momentum + trade-flow + orderbook imbalance
-- `MEAN_REVERSION_FLOW_PROXY_V1`: round-open deviation + mean reversion
-  with flow confirmation
-- `REGIME_SWITCH_PROXY_V1`: switch by the *pre-lock* trend/regime signs
-
-Flow uses the existing spot trade pressure as a **CVD proxy** and depth
-OFI as an **order-book imbalance proxy**. Open interest and VWAP are
-not present in current FAST8 features and are **not fabricated**.
-Likewise this pipeline uses Binance spot observations against the
-user's Binance Prediction binary settlement, not another provider's
-market label.
-
-**Always UP/DOWN while worker is healthy**; no extra training process,
-network call or separate Railway instance. Missing data forces a
-marked baseline/no-information fallback. Every decision is journaled
-with the existing immutable round record before settlement.
-
-The existing worker's published direction, Redis lock, order routing,
-stop-loss, take-profit, prediction-market settlement and all production
-risk controls remain **unchanged**. External research predictions
-are always `productionEffect=NONE_SHADOW_ONLY`,
-`executionEligible=false`, `autoPromotion=false`.
-
-Statistics: `GET /api/fast8-stats` adds
-`externalResearch.models.<id>` and `windows[100].externalResearch`.
-This reports raw accuracy including fallback, timely accuracy, complete
-calendar coverage, current-quality-only subgroup and matched-sample
-production baseline. All percentages start with **new prospective
-rounds after this deployment**, never retroactively backfill the
-existing 350+ historical predictions. No claim of independent Binance
-settlement certification is made.
-
-No change to the model's current ~49% hit rate should be expected
-on deployment; measured improvement needs frozen official future
-outcomes and independent evaluation.
-
-## Test / rollback
-
-`node --test round-tracker/external-btc5m-fast8-shadow.test.mjs round-tracker/fast8.test.mjs`
-
-Rolling back the importing commit removes computation; old immutable
-journal fields remain valid and only archival. No new Railway service
-or paid resource is required.
+## Rollback & regression
+The previous production FAST8 main-branch commit is preserved for
+rollback. The previous durable prediction journals remain untouched.
+`node --test round-tracker/external-fast8-primary.test.mjs
+round-tracker/external-btc5m-fast8-shadow.test.mjs`

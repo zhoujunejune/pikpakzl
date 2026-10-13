@@ -20,7 +20,7 @@ function log(event, extra = {}) {
 const statsCard = `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
-<div class="muted" id="rsMeta">生产信号：现役15秒优先 → Selective V2 → 独立硬熔断补救 → WAIT；Edge Rescue 已永久淘汰。真实结果采用 Binance Prediction 官方结算。</div>
+<div class="muted" id="rsMeta">仅统计当前生产订单流模型的 Binance Prediction 官方结算，旧信号不参与本栏计算。</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">已结算</div><div class="v" id="rsSettled">-</div></div>
 <div class="kv"><div class="k">有效判断</div><div class="v" id="rsDecided">-</div></div>
@@ -179,7 +179,7 @@ const statsScript = `<script>(function(){
 function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
-function sourceName(x){var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='ZL_FAST8_65_PRIMARY')return 'ZL_FAST8_65（8秒）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2（历史）';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
+function sourceName(x){if(x&&x.productionModel==='FLOW_BOOK_PROXY_V1')return '外部订单流 FAST8';var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='ZL_FAST8_65_PRIMARY')return 'ZL_FAST8_65（8秒）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2（历史）';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
 var errMsg='';
@@ -207,7 +207,7 @@ throw new Error(errMsg||'统计服务暂不可用')
 }
 async function load(){try{
 var j=await getStats();var h=j.health||{};
-var all=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)});
+var all=(j.records||[]).filter(function(x){return x.productionModel==='FLOW_BOOK_PROXY_V1'});
 function official(x){return x.productionActual==='UP'||x.productionActual==='DOWN'?x.productionActual:null}
 function pred(x){return x.productionPrediction==='UP'||x.productionPrediction==='DOWN'?x.productionPrediction:null}
 function derived(x){var p=pred(x),a=official(x);return !a?'PENDING':(!p?'NO_DECISION':(p===a?'HIT':'MISS'))}
@@ -219,19 +219,61 @@ e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedR
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent=(j.productionSignalSourceMode==='FAST8_ONLY'
- ? '当前唯一来源：ZL_FAST8_65（8秒）。旧信号全部暂停 · 8秒已结算 '+(j.fast8ProductionStatus?.settledSamples||0)+'轮 · 命中率 '+(j.fast8ProductionStatus?.accuracy==null?'-':(100*j.fast8ProductionStatus.accuracy).toFixed(2)+'%')+' · '+(j.fast8ProductionStatus?.preview?.direction||'等待本轮')+'（仅观察） · '+(j.fast8ProductionStatus?.gateEligible?'已通过质量门槛':'实盘门槛未通过，不下单')+' · '
- : '当前路由：现役15秒(15—20秒) → Selective V2 → 硬熔断独立补救 → WAIT（Edge 已永久淘汰） · ')+'只认 Binance Prediction 官方结算 · 信号检查 '+(h.signalPollMs||'-')+'ms · Shadow 特征观察期 '+((h.shadowObserveMs||j.shadowObserveMs)?Number(h.shadowObserveMs||j.shadowObserveMs)/1000+'秒':'读取中')+' · '+settlement+' · Shadow轮次 '+(s.primaryShadowRounds??0)+' · V6回退 '+(s.v6FallbackRounds??0)+status+stale;
-var a=(j.records||[]).filter(function(x){return !j.productionStartMs||Number(x.roundStartMs)>=Number(j.productionStartMs)}).slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
+e('rsMeta').textContent='唯一现役：FLOW_BOOK_PROXY_V1 · 8秒内锁定 UP/DOWN · '+settlement+' · 只按本模型切换后的前瞻实测计分'+status+stale;
+var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();</script>`;
+
+
+// One active production model. Retired and previously experimental signals are
+// excluded from the current dashboard; immutable historical evidence stays in
+// the tracker archive and is never rewritten or attributed to the new model.
+const primaryCard = `<div class="c" id="activeFast8ModelCard">
+<div class="k">唯一现役信号模型 · 外部开源思路适配</div>
+<div class="big" id="activeFast8Name">FLOW_BOOK_PROXY_V1</div>
+<div class="muted" id="activeFast8Desc">BTC 5分钟 · 订单流/盘口失衡 · 开盘8秒内锁定 UP/DOWN</div>
+<div class="grid" style="margin-top:12px">
+<div class="kv"><div class="k">最新生产方向</div><div class="v" id="activeFast8Direction">读取中</div></div>
+<div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
+<div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
+<div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
+</div>
+<div class="muted" id="activeFast8Note" style="margin-top:10px">显示从切换上线开始的真实官方结算；历史其他策略不混算。数据质量不足时方向会标记兜底，不表示已验证65%胜率。</div>
+</div>`;
+const primaryScript = `<script>(function(){
+'use strict';
+function e(x){return document.getElementById(x)}
+function x(v){return v==null?'-':String(v)}
+function load(){
+fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
+.then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
+.then(function(j){
+ if(!j||!j.ok)throw Error('生产统计不可用');
+ var model=j.activeProductionModel;
+ if(!model||model.id!=='FLOW_BOOK_PROXY_V1')throw Error('当前服务尚未切换到订单流生产模型');
+ var m=model.metrics||{}, records=(j.records||[]).filter(function(z){return z.productionModel===model.id});
+ var now=Math.floor(Date.now()/300000)*300000;
+ var current=records.find(function(z){return Number(z.roundStartMs)===now});
+ var dir=current&&(current.productionPrediction==='UP'||current.productionPrediction==='DOWN')?current.productionPrediction:'待本轮锁定';
+ e('activeFast8Name').textContent=model.id+' · 唯一现役';
+ e('activeFast8Direction').textContent=dir;
+ e('activeFast8Accuracy').textContent=m.accuracyPct==null?'尚无新结算':Number(m.accuracyPct).toFixed(2)+'%';
+ e('activeFast8HitMiss').textContent=x(m.hits)+' / '+x(m.misses);
+ e('activeFast8Coverage').textContent=x(m.signalRounds)+' 轮'+(m.coveragePct==null?'':' · '+Number(m.coveragePct).toFixed(1)+'%');
+ e('activeFast8Note').textContent='第8秒前冻结 UP/DOWN · 官方结算 '+x(m.settledRounds)+' 轮 · 兜底 '+x(m.fallbackRounds)+' 轮 · 数据量不足不能保证长期胜率'+(j.stale?' · ⚠ 统计缓存已过期':'');
+})
+.catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
+}
+function boot(){load();setInterval(load,3000)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;
 
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
-  let out = html.includes(marker) ? html.replace(marker, `${policyCard}${previewCard}${statsCard}${marker}`) : html.replace('</body>', `${policyCard}${previewCard}${statsCard}</body>`);
-  return out.replace('</body>', `${statsScript}${previewScript}${policyScript}</body>`);
+  let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}</body>`);
+  return out.replace('</body>', `${primaryScript}${statsScript}</body>`);
 }
 
 let child = null;

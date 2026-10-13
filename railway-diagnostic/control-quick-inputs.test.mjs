@@ -35,7 +35,7 @@ test('risk and model statistics panels inject using stable anchor, not moved amo
  assert.ok(control.includes("const marker = '<div id=\"riskControlsAnchor\"></div>';"));
  assert.ok(stats.includes("const marker = '<div id=\"riskControlsAnchor\"></div>';"));
  assert.ok(control.includes('$'+'{riskCards}'+'$'+'{marker}'));
- assert.ok(stats.includes('$'+'{policyCard}'+'$'+'{previewCard}'+'$'+'{statsCard}'+'$'+'{marker}'));
+ assert.ok(stats.includes('${primaryCard}${statsCard}${marker}'));
  assert.ok(!control.includes("const marker = '<div class=\"c\"><input id=\"amount\"'"));
  assert.ok(!stats.includes("const marker = '<div class=\"c\"><input id=\"amount\"'"));
 });
@@ -55,20 +55,18 @@ test('actual two-stage page injection keeps trade inputs near wallet and risk pa
   riskCards:'<section id="riskCardsMock"></section>',riskScript:'<script id="riskScriptMock"></script>'
  });
  const injectStats=vm.runInNewContext(stats.slice(statsBegin,statsEnd)+'\ninjectStats',{
-  policyCard:'<section id="policyMock"></section>',
-  previewCard:'<section id="previewMock"></section>',
+  primaryCard:'<section id="primaryMock"></section>',
   statsCard:'<section id="statsMock"></section>',
   statsScript:'<script id="statsScriptMock"></script>',
-  previewScript:'<script id="previewScriptMock"></script>',
-  policyScript:'<script id="policyScriptMock"></script>'
+  primaryScript:'<script id="primaryScriptMock"></script>'
  });
  const result=injectStats(injectRisk(html));
  const at=x=>result.indexOf(x);
  assert.ok(at('walletBalance')<at('tradeInputsCard'));
  assert.ok(at('tradeInputsCard')<at('pendingTitle'));
  assert.ok(at('pendingTitle')<at('riskCardsMock'));
- assert.ok(at('riskCardsMock')<at('policyMock'));
- assert.ok(at('policyMock')<at('riskControlsAnchor'));
+ assert.ok(at('riskCardsMock')<at('primaryMock'));
+ assert.ok(at('primaryMock')<at('riskControlsAnchor'));
  assert.equal(each(result,'tradeInputsCard'),1);
  assert.equal(each(result,'riskCardsMock'),1);
  assert.equal(each(result,'statsMock'),1);

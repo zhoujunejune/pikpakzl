@@ -1,20 +1,19 @@
-name: External BTC5m FAST8 shadow research tests
+name: Single FAST8 external model production regression
 on:
   pull_request:
     paths:
-      - 'round-tracker/external-btc5m-fast8-shadow.mjs'
-      - 'round-tracker/external-btc5m-fast8-shadow.test.mjs'
-      - 'round-tracker/fast8-engine.mjs'
-      - 'round-tracker/EXTERNAL_FAST8_RESEARCH.md'
+      - 'round-tracker/**'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'railway-diagnostic/control-quick-inputs.test.mjs'
       - '.github/workflows/external-btc5m-fast8-shadow.yml'
   push:
     branches: [main]
     paths:
-      - 'round-tracker/external-btc5m-fast8-shadow.mjs'
-      - 'round-tracker/external-btc5m-fast8-shadow.test.mjs'
-      - 'round-tracker/fast8-engine.mjs'
+      - 'round-tracker/**'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'railway-diagnostic/control-quick-inputs.test.mjs'
 jobs:
-  shadow-regression:
+  fast8-production-single-model:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,7 +25,9 @@ jobs:
       - name: Syntax checks
         run: |
           node --check round-tracker/external-btc5m-fast8-shadow.mjs
-          node --check round-tracker/fast8-engine.mjs
-      - name: Offline regression (no trades, no API)
+          node --check round-tracker/external-fast8-primary.mjs
+          node --check round-tracker/index-rest.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+      - name: Offline single-model regression without orders
         run: |
-          node --test round-tracker/external-btc5m-fast8-shadow.test.mjs round-tracker/fast8.test.mjs round-tracker/fast8-production-gate.test.mjs
+          node --test round-tracker/external-btc5m-fast8-shadow.test.mjs round-tracker/external-fast8-primary.test.mjs round-tracker/fast8.test.mjs round-tracker/fast8-production-gate.test.mjs railway-diagnostic/control-quick-inputs.test.mjs

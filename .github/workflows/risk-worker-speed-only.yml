@@ -1,0 +1,25 @@
+name: Risk worker speed-only invariants
+on:
+  pull_request:
+    paths:
+      - 'railway-diagnostic/risk-worker.mjs'
+      - 'railway-diagnostic/risk-worker-speed.test.mjs'
+      - '.github/workflows/risk-worker-speed-only.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'railway-diagnostic/risk-worker.mjs'
+      - 'railway-diagnostic/risk-worker-speed.test.mjs'
+      - '.github/workflows/risk-worker-speed-only.yml'
+jobs:
+  risk-worker-invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify syntax
+        run: node --check railway-diagnostic/risk-worker.mjs
+      - name: Verify the prefetch-only diff and preserved safety rules
+        run: node --test railway-diagnostic/risk-worker-speed.test.mjs

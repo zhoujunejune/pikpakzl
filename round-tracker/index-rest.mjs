@@ -294,6 +294,13 @@ function buildLockedSignalEnvelope(row, live) {
     source: 'SITE_PRODUCTION_LOCK',
     upstreamSource: row?.productionSource ?? live?.source ?? null,
     upstreamModel: row?.productionModel ?? live?.model ?? null,
+    upstreamModelVersion: row?.productionModelVersion ?? live?.modelVersion ?? null,
+    // Backward-compatible additive audit markers: NEVER present deterministic
+    // or missing-data fallback as trained probability or verified confidence.
+    fallbackUsed: row?.productionFallbackUsed === true || live?.fallbackUsed === true,
+    fallbackReason: row?.productionFallbackReason ?? live?.fallbackReason ?? null,
+    directionEvidence: (row?.productionFallbackUsed === true || live?.fallbackUsed === true)
+      ? 'FALLBACK_UNVERIFIED' : 'FAST8_WORKER_DIRECTION',
     productionPolicy: live?.productionPolicy || productionPolicyName(),
     immutable: true,
   };

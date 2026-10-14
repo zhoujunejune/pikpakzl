@@ -9,6 +9,7 @@ import { SINGLE_EXTERNAL_PRIMARY_ID, SINGLE_EXTERNAL_PRIMARY_VERSION, selectExte
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
+import { createFrozenVip75Fast8Probe } from './vip75-frozen8-probe.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, below15sPermanentDeleteThreshold, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
@@ -543,6 +544,11 @@ const independentDirectionShadow = createIndependentDirectionShadow({
   minTrainingSamples:320,
   log,
 });
+// Pinned 2026-10-10 model: read-only verification, no production signal changes.
+const vip75Frozen8Probe = createFrozenVip75Fast8Probe({
+  file:HISTORY_FILE+'.independent-direction-v3.json', log,
+});
+let vip75Frozen8ReportedRound = 0;
 
 // Read-only retired-model telemetry: do not report the old training capability
 // as an active learning loop after the user's explicit retirement.
@@ -4134,6 +4140,14 @@ async function pollSignal() {
     lastSignalError = null;
 
     const row = ensureRound(Number(live.round));
+    // Probe exact old weights on the live <=8s snapshot. Never alter the locked signal.
+    vip75Frozen8Probe.observe(live, Date.now());
+    if (Date.now() >= row.roundStartMs + 7000 &&
+        Date.now() < row.roundStartMs + 30000 &&
+        vip75Frozen8ReportedRound !== row.roundStartMs) {
+      vip75Frozen8ReportedRound = row.roundStartMs;
+      log('vip75_frozen8_probe_status', vip75Frozen8Probe.report());
+    }
     if (PAUSE_NONPROD_SHADOWS) {
       // Retain topic hints for official settlement without running paused
       // shadow predictions or writing their model artifacts.
@@ -6041,6 +6055,7 @@ function payload() {
 }
 
 loadHistory();
+vip75Frozen8Probe.load();
 if (!PAUSE_NONPROD_SHADOWS) independentDirectionShadow.load();
 loadArchiveIndex();
 backfillArchiveFromActiveHistory();

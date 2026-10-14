@@ -39,8 +39,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (!p || p !== pendingAction || p.state !== 'READY') {
     return { status: 409, body: { ok: false, error: '当前没有可提交的 API 订单' } };
   }
-  if (!enabled) {
-    return { status: 409, body: { ok: false, error: '跟随已经停止，已阻止订单提交' } };
+  if (!enabled || !directionSettingsSnapshot().ready) {
+    return {status:409,body:{ok:false,error:'跟随已停止或方向配置未就绪'}};
   }
   if (submittedRounds.has(String(p.round))) {
     return { status: 409, body: { ok: false, error: '本轮已经提交过订单' } };
@@ -229,6 +229,14 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     return { status: 409, body: { ok: false, error: p.error } };
   }
 
+  // Re-check immediately before the irreversible POST. A mode change during
+  // quote retrieval invalidates the original direction and quote.
+  if (p !== pendingAction || !enabled || !directionSettingsSnapshot().ready ||
+      p.orderDirectionPolicy !== directionSettingsSnapshot().policy ||
+      !pendingOrderMatchesProduction(p,current)) {
+    pendingAction=null;
+    return {status:409,body:{ok:false,error:'方向配置已经变化，已取消旧订单'}};
+  }
   p.state = 'SUBMITTING';
   const intent = p._internal;
   const placeBody = {

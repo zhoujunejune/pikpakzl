@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {orderDirectionForProduction,mappedOrderSignal,pendingOrderMatchesProduction,
+import {applyDirectionMode,orderDirectionForProduction,mappedOrderSignal,pendingOrderMatchesProduction,
   ORDER_DIRECTION_POLICY,LOW_CONFIDENCE_SOURCE,PRIMARY_SOURCE,RESCUE_SOURCE}
   from './order-direction-policy.mjs';
 
@@ -59,9 +59,9 @@ test('old global-inverse pending tokens cannot be confirmed under new source-awa
  const old={...ready('UP',PRIMARY_SOURCE),signal:'DOWN',orderSignal:'DOWN',
   action:'BUY_DOWN',mappingMode:'INVERSE',orderDirectionPolicy:'INVERT_PRODUCTION_UP_DOWN_V2'};
  assert.equal(pendingOrderMatchesProduction(old,locked('UP',PRIMARY_SOURCE)),false);
- assert.equal(ORDER_DIRECTION_POLICY,'FORWARD_ONLY_SELECTIVE8_V2');
+ assert.equal(ORDER_DIRECTION_POLICY,'SOURCE_SWITCH_SELECTIVE8_V3');
 });
-test('other valid sources also use forward direction',()=>{
+test('unknown sources default to forward direction',()=>{
  assert.equal(mappedOrderSignal(locked('UP','OTHER_LOCKED_SOURCE')).orderSignal,'UP');
 });
 test('both prepare and confirm use mapping and source-aware policy; UI presents mode',()=>{
@@ -85,4 +85,36 @@ test('old low-confidence inverse pending token is rejected after forward-only sw
  assert.equal(pendingOrderMatchesProduction(stale,live),false);
  assert.equal(mappedOrderSignal(live).orderSignal,'UP');
  assert.equal(mappedOrderSignal(live).mappingMode,'FORWARD');
+});
+
+for(const source of [PRIMARY_SOURCE,RESCUE_SOURCE,LOW_CONFIDENCE_SOURCE]){
+ for(const direction of ['UP','DOWN']){
+  test(source+' can independently map '+direction+' forward or inverse',()=>{
+   assert.equal(applyDirectionMode(direction,'FORWARD'),direction);
+   assert.equal(applyDirectionMode(direction,'INVERSE'),direction==='UP'?'DOWN':'UP');
+   assert.equal(applyDirectionMode(direction,'WAIT'),null);
+  });
+ }
+}
+test('PIN-protected Redis switch, revision invalidation, and frontend selectors are wired',()=>{
+ const index=fs.readFileSync(new URL('./index.mjs',import.meta.url),'utf8');
+ const wrapper=fs.readFileSync(new URL('./wrapper.mjs',import.meta.url),'utf8');
+ const storage=fs.readFileSync(new URL('./order-direction-config.mjs',import.meta.url),'utf8');
+ const shell=fs.readFileSync(new URL('./panel-stats-shell.mjs',import.meta.url),'utf8');
+ assert.match(index,/POST' && url.pathname === '\/api\/order-direction-config'/);
+ assert.match(index,/pinOK\(body.pin\)/);
+ assert.match(index,/mapping.mappingPolicy !== activeOrderDirectionPolicy\(\)/);
+ assert.match(index,/directionPolicyWriteInFlight/);
+ assert.match(index,/pendingAction=null; \/\/ Invalidate all earlier/);
+ assert.match(wrapper,/directionPolicyWriteInFlight/);
+ assert.match(storage,/await db.set\(DIRECTION_REDIS_KEY/);
+ assert.match(storage,/revision:current.revision\+1/);
+ assert.match(shell,/id="directionModeControls"/);
+ assert.match(shell,/data-direction-source/);
+ assert.match(shell,/cfg.policyVersion/);
+});
+test('an earlier pending order with another direction policy revision is rejected',()=>{
+ const p=ready('UP',PRIMARY_SOURCE);
+ assert.equal(pendingOrderMatchesProduction({...p,orderDirectionPolicy:p.orderDirectionPolicy+':old'},
+   locked('UP',PRIMARY_SOURCE)),false);
 });

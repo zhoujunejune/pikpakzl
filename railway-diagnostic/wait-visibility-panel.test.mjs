@@ -2,27 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import './order-direction-policy.test.mjs';
 
 const source=fs.readFileSync(new URL('./panel-stats-shell.mjs',import.meta.url),'utf8');
 const primary=source.match(/const primaryCard = `([\s\S]*?)`;/)?.[1];
 const mainScript=source.match(/const primaryScript = `<script>([\s\S]*?)<\/script>`;/)?.[1];
 const stats=source.match(/const statsScript = `<script>([\s\S]*?)<\/script>`;/)?.[1];
+const modelVersion='SELECTIVE_V2_FAST8_PREWARM_V1';
 
-function mounted(){const ids=['activeFast8Name','activeFast8Direction','activeFast8Accuracy',
- 'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection','rsMeta','rsAccuracy',
- 'rsSettled','rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows'];
- ids.push('activeFast8InverseAccuracy','activeFast8InverseHitMiss');
- const dom=new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
- return dom;
+function mounted(){
+ const ids=['activeFast8Name','activeFast8Desc','activeFast8Direction','activeFast8Accuracy',
+ 'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection',
+ 'activeFast8InverseAccuracy','activeFast8InverseHitMiss','rsMeta','rsAccuracy','rsSettled',
+ 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows'];
+ return new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
 }
 async function execute(script,payload){
  const dom=mounted();
  const env={document:{readyState:'complete',getElementById:id=>dom.get(id)||null},
    fetch:async()=>({ok:true,json:async()=>payload}),
    localStorage:{setItem:()=>{},getItem:()=>null},
-   setInterval:()=>0,Date,Math,Set,Array,Number,Error,Promise,String,Object,isFinite,
- };
+   setInterval:()=>0,Date,Math,Set,Array,Number,Error,Promise,String,Object,isFinite};
  new vm.Script(script).runInNewContext(env);
  await new Promise(resolve=>setImmediate(resolve));
  await new Promise(resolve=>setImmediate(resolve));
@@ -30,81 +29,76 @@ async function execute(script,payload){
 }
 function fixture(){
  const past=Math.floor(Date.now()/300000)*300000;
- return {ok:true,settlementSource:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
-   activeProductionModel:{id:'zl_new_vip75',version:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',onlyOneActive:true,deadlineMs:8000,
-     metrics:{signalRounds:3,settledRounds:2,hits:1,misses:1,accuracyPct:50,coveragePct:100,fallbackRounds:0,noInformationRounds:0}},
+ const row=(n,source,pred,actual)=>({
+   roundStartMs:past-n*300000,productionModel:modelVersion,productionModelVersion:modelVersion,
+   productionSource:source,productionPrediction:pred,productionActual:actual,
+   productionResult:actual==null?'PENDING':pred===actual?'HIT':'MISS'
+ });
+ return {ok:true,productionSignalSourceMode:'SELECTIVE_V2_FAST8',
+   settlementSource:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
+   activeProductionModel:null,
    records:[
-     {roundStartMs:past,productionModel:'zl_new_vip75',productionModelVersion:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',productionPrediction:'DOWN',productionActual:null},
-     {roundStartMs:past-300000,productionModel:'zl_new_vip75',productionModelVersion:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
-     {roundStartMs:past-600000,productionModel:'zl_new_vip75',productionModelVersion:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',productionPrediction:'DOWN',productionActual:'UP',productionResult:'MISS'},
-     {roundStartMs:past-900000,productionModel:'ZL_FAST8_65',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
-     {roundStartMs:past-1200000,productionModel:'SELECTIVE_V2',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
+     row(0,'EDGE_RESCUE_FAST8_PRIMARY','DOWN',null),
+     row(1,'SELECTIVE_V2_FAST8_PRIMARY','UP','UP'),
+     row(2,'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION','DOWN','UP'),
+     {roundStartMs:past-900000,productionModel:'zl_new_vip75',productionModelVersion:'OLD',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
+     {roundStartMs:past-1200000,productionModel:'ZL_FAST8_65',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
    ]};
 }
-test('the injected frontend shows only frozen VIP75 and official stats',()=>{
- assert.ok(primary?.includes('id="activeFast8ModelCard"'));
- assert.ok(primary?.includes('zl_new_vip75'));
- assert.ok(stats);
- assert.ok(mainScript);
- assert.ok(source.includes('${primaryCard}${statsCard}${marker}'));
- assert.ok(source.includes('${primaryScript}${statsScript}</body>'));
- assert.ok(!source.includes('${policyCard}${previewCard}${statsCard}'));
- assert.ok(!source.includes('${statsScript}${previewScript}${policyScript}'));
- assert.ok(!primary.includes('PM_CURRENT25'));
- assert.ok(!primary.includes('Selective V2'));
- new vm.Script(mainScript);
- new vm.Script(stats);
+test('production dashboard identifies 8s Selective V2 + Edge Rescue, not retired VIP75',()=>{
+ assert.match(primary,/Selective V2 \+ Edge Rescue/);
+ assert.doesNotMatch(primary,/2026-10-10 固定训练版本/);
+ assert.match(source,/SELECTIVE_V2_FAST8_THEN_EDGE_RESCUE_FAST8/);
+ assert.match(source,/SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION/);
+ assert.ok(source.includes('$'+'{primaryCard}'+'$'+'{statsCard}'+'$'+'{marker}'));
+ assert.ok(source.includes('$'+'{primaryScript}'+'$'+'{statsScript}</body>'));
+ assert.ok(!source.includes('$'+'{policyCard}'+'$'+'{previewCard}'+'$'+'{statsCard}'));
+ new vm.Script(mainScript);new vm.Script(stats);
 });
-test('current model card reports live direction and only model-specific hit count',async()=>{
+test('main card uses current 8s version with correct model and inverse results',async()=>{
  const d=await execute(mainScript,fixture());
- assert.match(d.get('activeFast8Name').textContent,/zl_new_vip75/);
+ assert.match(d.get('activeFast8Name').textContent,/Selective V2/);
+ assert.match(d.get('activeFast8Name').textContent,/Edge Rescue/);
  assert.equal(d.get('activeFast8Direction').textContent,'DOWN');
  assert.equal(d.get('activeFast8Accuracy').textContent,'50.00%');
  assert.equal(d.get('activeFast8InverseAccuracy').textContent,'50.00%');
  assert.equal(d.get('activeFast8InverseHitMiss').textContent,'1 / 1（2轮）');
  assert.equal(d.get('activeFast8HitMiss').textContent,'1 / 1');
- assert.match(d.get('activeFast8Note').textContent,/有效预测已结算 2 轮/);
+ assert.match(d.get('activeFast8Note').textContent,/低置信度行情方向 1 轮/);
 });
-test('the settled history table excludes retired signal performance',async()=>{
+test('current stats exclude historical VIP75 and label each new production layer',async()=>{
  const d=await execute(stats,fixture());
  assert.match(d.get('rsAccuracy').innerHTML,/50.00%/);
  assert.equal(d.get('rsSettled').textContent,2);
  assert.equal(d.get('rsDecided').textContent,2);
- assert.match(d.get('rsMeta').textContent,/唯一现役：zl_new_vip75/);
- assert.match(d.get('rsRows').innerHTML,/zl_new_vip75 原版固定权重/);
- assert.doesNotMatch(d.get('rsRows').innerHTML,/Selective V2/);
- assert.doesNotMatch(d.get('rsRows').innerHTML,/ZL_FAST8_65/);
+ assert.match(d.get('rsMeta').textContent,/Selective V2（8秒）/);
+ const rows=d.get('rsRows').innerHTML;
+ assert.match(rows,/Selective V2（8秒主策略）/);
+ assert.match(rows,/Edge Rescue（8秒兜底）/);
+ assert.match(rows,/低置信度行情方向（允许下单）/);
+ assert.doesNotMatch(rows,/zl_new_vip75/);
+ assert.doesNotMatch(rows,/ZL_FAST8_65/);
 });
-test('missing upstream switch does not pretend that production has changed',async()=>{
+test('without production-mode confirmation frontend does not pretend restored mode is active',async()=>{
  const d=await execute(mainScript,{ok:true,records:[],activeProductionModel:null});
- assert.equal(d.get('activeFast8Direction').textContent,'状态未确认');
- assert.match(d.get('activeFast8Note').textContent,/尚未切换/);
+ assert.equal(d.get('activeFast8Name').textContent,'生产模式待确认');
+ assert.equal(d.get('activeFast8Accuracy').textContent,'尚无新结算');
 });
-
-test('model card includes separate actual order direction and never confuses raw model accuracy',()=>{
+test('low-confidence direction is distinctly labeled but not suppressed',async()=>{
+ const j=fixture(),cur=j.records[0];cur.productionSource='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';
+ const d=await execute(mainScript,j);
+ assert.match(d.get('activeFast8Direction').textContent,/DOWN（低置信度 · 可下单）/);
+});
+test('the card keeps separate model prediction vs inverse order direction',()=>{
  assert.ok(primary.includes('id="activeFast8Direction"'));
  assert.ok(primary.includes('id="activeFast8OrderDirection"'));
  assert.match(mainScript,/j\.orderSignal/);
- assert.match(stats,/原模型命中率/);
+ assert.match(stats,/新版模型命中率/);
 });
-
-test('inverse direction is opposite to valid original outcomes; no-information is excluded',async()=>{
+test('missing settled current-version predictions shows no synthetic accuracy',async()=>{
  const j=fixture();
- j.activeProductionModel.metrics={signalRounds:4,settledRounds:3,hits:1,misses:2,accuracyPct:33.33,coveragePct:100,noInformationRounds:1};
- j.records.push({roundStartMs:j.records[0].roundStartMs-1500000,productionModel:'zl_new_vip75',
-   productionModelVersion:j.activeProductionModel.version,productionPrediction:'DOWN',
-   productionActual:'UP',productionResult:'MISS'});
- j.records.push({roundStartMs:j.records[0].roundStartMs-1800000,productionModel:'zl_new_vip75',
-   productionModelVersion:j.activeProductionModel.version+':NO_INFORMATION',productionFallbackUsed:true,
-   productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'});
- const card=await execute(mainScript,j),detail=await execute(stats,j);
- assert.equal(card.get('activeFast8Accuracy').textContent,'33.33%');
- assert.equal(card.get('activeFast8InverseAccuracy').textContent,'66.67%');
- assert.equal(card.get('activeFast8InverseHitMiss').textContent,'2 / 1（3轮）');
- assert.equal(detail.get('rsSettled').textContent,3);
-});
-test('inverse rate displays no result without settled original samples',async()=>{
- const j=fixture();j.activeProductionModel.metrics={settledRounds:0,hits:0,misses:0};
- const el=await execute(mainScript,j);
- assert.equal(el.get('activeFast8InverseAccuracy').textContent,'尚无新结算');
+ j.records=j.records.filter(z=>z.productionModel==='zl_new_vip75'||z.productionActual==null);
+ const d=await execute(mainScript,j);
+ assert.equal(d.get('activeFast8Accuracy').textContent,'尚无新结算');
+ assert.equal(d.get('activeFast8InverseAccuracy').textContent,'尚无新结算');
 });

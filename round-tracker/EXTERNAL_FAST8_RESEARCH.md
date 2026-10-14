@@ -8,15 +8,14 @@ existing FAST8 worker at ~T+2s and enters the production lock through
 Binance Prediction 5-minute round IDs and the original frozen market
 snapshot, without network calls or separate paid infrastructure.
 
-FLOW_BOOK V7 directly scores ONLY regimeScore (weight 0.05) and
-predictionMarketUpMid (weight 0.03), normalized across available valid
-inputs (62.5%/37.5% when both are present). No other feature directly
-contributes to the live candidate score. PREP60 uses ONLY the previous
-round's final 60s regimeScore samples; prior-contract PM price is NEVER
-prewarmed. With one fresh valid input, the model may blend 70% live/30%
-prewarm; with prewarm and no fresh input, it uses prep only. Full quality
-requires BOTH live inputs and current-round aligned PM. No valid inputs
-and no ready prewarm produces a tagged NO_INFORMATION fallback.
+FLOW_BOOK V8 directly scores ONLY current-round regimeScore (weight 0.05)
+and aligned predictionMarketUpMid (weight 0.03), normalized across present
+valid inputs (62.5%/37.5% when both are present). Previous-round PREP60
+collection and blending are REMOVED. A current-round snapshot with one
+valid input is scored from that input only; two valid aligned inputs
+are needed for full quality. With no current-round snapshot or no valid
+input, the existing NO_INFORMATION fallback is visibly tagged and still
+returns a binary direction (not a market forecast).
 Retained upstream regimeScore may still contain INDIRECT OFI, trend, and
 trade-pressure components: excluding them from the final score does not
 eliminate their causal influence inside regimeScore. The signal does **not** contain a fitted third-party model.
@@ -69,6 +68,20 @@ An aligned current-round observation always replaces a bridge and cannot be
 overwritten by a delayed previous-round label. Existing T+1.8s lock, T+8s
 deadline, fallbacks, and order/TP-SL paths are unchanged. Forward performance
 is tracked under a distinct model version and cannot be assumed improved.
+
+## 2026-10-14 remove previous-round 60s preparation entirely (V8)
+User-directed deletion of the live prewarm mechanism, including its
+in-memory buffer, 70/30 blend, PREP60 status, old-snapshot fallback, and
+associated obsolete files. Live prediction and timing shadows now score
+only data whose event/source timestamp is in the current round. Current
+BTC spot events reported with a delayed previous-round label remain
+admissible only when their event timestamp and freshness prove they
+occurred AFTER the current round opened. The old PM contract quote is
+never accepted. Legacy prewarm fields report false/zero/null for schema
+compatibility; V8 results are isolated from past version results.
+The signal still uses the existing historical/no-information direction
+fallback if no current inputs are available; such directions are not
+predictive evidence. Inversion and order/TP-SL handling are untouched.
 
 ## 2026-10-14 score only regime and current-round PM midprice (V7)
 User-directed removal of microScore, currentTrendScore, and

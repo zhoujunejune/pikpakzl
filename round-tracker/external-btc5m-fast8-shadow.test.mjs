@@ -81,18 +81,19 @@ test('15s aggressive flow and currentScore do not directly influence V7 directio
  assert.equal(a.featureCount,b.featureCount);
  assert.equal(a.featureCount,2);
 });
-test('V7 blends available regime with causal prewarm when PM has not yet aligned',()=>{
- const p={ready:true,nextRoundStartMs:ROUND,predictionMarketContractIncluded:false,
-  previewScore:-0.8,directionPreview:'DOWN',sampleCount:50,version:'TEST'};
- const snapshot={regimeScore:1,tradePressure15s:-1,currentScore:-1,
-  microScore:-1,currentTrendScore:-1,normalizedMomentum60s:-1,
-  ofiNormalized5s:-1,tradePressure60s:-1};
- const d=externalResearchDirections(snapshot,{...current,preparation:p}).predictions.FLOW_BOOK_PROXY_V1;
- assert.equal(d.preparationUsed,true);
- assert.equal(d.preparationOnly,false);
- assert.equal(d.preWeight,0.30);
- assert.equal(d.featureCount,1);
+test('V8 ignores any supplied legacy prewarm and uses current-round regime only',()=>{
+ const legacy={ready:true,nextRoundStartMs:ROUND,predictionMarketContractIncluded:false,
+  previewScore:-1,directionPreview:'DOWN',sampleCount:120};
+ const only={regimeScore:0.6};
+ const a=externalResearchDirections(only,current);
+ const b=externalResearchDirections(only,{...current,preparation:legacy});
+ assert.deepEqual(a,b);
+ const d=b.predictions.FLOW_BOOK_PROXY_V1;
  assert.equal(d.direction,'UP');
+ assert.equal(d.featureCount,1);
+ assert.equal(d.preparationUsed,false);
+ assert.equal(d.preWeight,0);
+ assert.equal(b.preparation,null);
 });
 test('regime and current-round PM mid are the only direct scoring inputs',()=>{
  const base=externalResearchDirections(features,current).predictions.FLOW_BOOK_PROXY_V1;
@@ -125,12 +126,14 @@ test('missing snapshots still produce UP/DOWN and honestly mark no-information f
   assert.equal(v.predictions.FLOW_BOOK_PROXY_V1.strength,null);
   assert.equal(v.fullQuality,false);
 });
-test('pre-round snapshots are causal but not current-round verified',()=>{
+test('pre-round observations are rejected as prediction inputs, not reused',()=>{
   const v=externalResearchDirections(features,{...current,sourceAt:ROUND-248});
   assert.equal(v.reusedPreRound,true);
   assert.equal(v.fullQuality,false);
   assert.ok(v.dataQuality.includes('PRE_ROUND_SNAPSHOT_REUSED'));
-  assert.equal(v.predictions.FLOW_BOOK_PROXY_V1.evidence,'DEGRADED_MICROSTRUCTURE_INPUT');
+  assert.equal(v.predictions.FLOW_BOOK_PROXY_V1.evidence,'BASELINE_OR_NO_INFO_FALLBACK');
+  assert.equal(v.predictions.FLOW_BOOK_PROXY_V1.featureCount,0);
+  assert.equal(v.predictions.FLOW_BOOK_PROXY_V1.fallback,true);
 });
 test('worker keeps one immutable external candidate and strictly-forward official score',t=>{
   const f=fixture(t);

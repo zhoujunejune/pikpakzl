@@ -1,11 +1,12 @@
 // Single external-inspired BTC 5m order-flow production feature, evaluated on
 // the immutable worker snapshot at ~T+2s. It is NOT the original author's
 // pretrained strategy, and does not have established >50% forward accuracy.
-// V7 scores ONLY regimeScore and the current-round Prediction Market UP mid.
-// Upstream regimeScore may itself depend on other market indicators.
+// V8 scores ONLY CURRENT-round regimeScore and the aligned Prediction Market UP mid.
+// Previous-round 60s preparation, blending and old-snapshot fallback are removed.
+// Upstream regimeScore may itself depend on historical market observations.
 // Two previously experimental proxy strategies have been retired from current
 // calculations; their historical journal records remain auditable.
-export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V7_REGIME_PM_ONLY';
+export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V8_CURRENT_ONLY_REGIME_PM';
 export const EXTERNAL_RESEARCH_IDS = Object.freeze(['FLOW_BOOK_PROXY_V1']);
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const clamp = (x,min=-1,max=1) => Math.min(max,Math.max(min,x));
@@ -14,11 +15,14 @@ const side = (score,prior) => score>0?'UP':score<0?'DOWN':prior==='DOWN'?'DOWN':
 
 export function externalResearchDirections(facts={},{
   baselineDirection='UP',snapshotAvailable=false,
-  dataQuality=[],sourceAt=null,roundStartMs=null,preparation=null
+  dataQuality=[],sourceAt=null,roundStartMs=null
 }={}) {
+  // Previous-round observations must not enter a CURRENT-round prediction.
+  const reusedPreRound=Number.isFinite(roundStartMs) &&
+    Number.isFinite(sourceAt) && sourceAt < roundStartMs;
   const items = [
-    [normalized(facts,'regimeScore'),0.05],
-    [finite(facts.predictionMarketUpMid)
+    [reusedPreRound?null:normalized(facts,'regimeScore'),0.05],
+    [!reusedPreRound&&finite(facts.predictionMarketUpMid)
       ?clamp((facts.predictionMarketUpMid-0.5)*2):null,0.03],
   ];
   const eligible=items.filter(([value])=>value!==null);
@@ -26,8 +30,6 @@ export function externalResearchDirections(facts={},{
   const score=weight
     ?eligible.reduce((sum,[value,w])=>sum+value*w,0)/weight:0;
   const issues=Array.isArray(dataQuality)?[...dataQuality]:['UNKNOWN_DATA_QUALITY'];
-  const reusedPreRound=Number.isFinite(roundStartMs) &&
-    Number.isFinite(sourceAt) && sourceAt < roundStartMs;
   if(reusedPreRound&&!issues.includes('PRE_ROUND_SNAPSHOT_REUSED'))
     issues.push('PRE_ROUND_SNAPSHOT_REUSED');
   const quality=snapshotAvailable===true&&Number.isFinite(sourceAt)&&
@@ -35,33 +37,19 @@ export function externalResearchDirections(facts={},{
       x==='NO_FRESH_SNAPSHOT'||x==='DEPTH_MISSING_OR_STALE'||
       x==='TRADES_MISSING_OR_STALE'||x==='PM_MISSING_OR_UNALIGNED'||
       x==='CROSS_ROUND_FRESH_SPOT_BRIDGE');
-  // The prior-minute preview is causal BTC SPOT context, not a previous
-  // prediction-contract price. Combine it with the first fresh ~2s of this
-  // round only when enough distinct pre-round samples really existed.
-  // The untrained 70/30 blend is a fixed exploratory rule, NOT a
-  // calibrated probability or demonstrated improvement.
-  const prepared=preparation?.ready===true &&
-    preparation.nextRoundStartMs===roundStartMs &&
-    preparation.predictionMarketContractIncluded===false &&
-    Number.isFinite(preparation.previewScore);
-  const preWeight=prepared?(snapshotAvailable&&eligible.length>=1?0.30:1):0;
-  const finalScore=preWeight===1?preparation.previewScore:
-    preWeight>0 ? (1-preWeight)*score+preWeight*preparation.previewScore : score;
-  const fallback=((!snapshotAvailable||eligible.length===0)&&!prepared)||finalScore===0;
-  const prepOnly=preWeight===1;
+  // Only current-round data contributes to the score. When it is absent or
+  // balanced at zero, retain the separately labeled no-information fallback.
+  const fallback=!snapshotAvailable||eligible.length===0||score===0;
   const prediction={
-    direction:side(finalScore,baselineDirection),
+    direction:side(score,baselineDirection),
     // This is a bounded absolute score, NOT a probability/win-rate.
-    strength:(!fallback&&(eligible.length>=1||prepared))?
-      Number(Math.abs(finalScore).toFixed(6)):null,
+    strength:!fallback?Number(Math.abs(score).toFixed(6)):null,
     evidence:fallback?'BASELINE_OR_NO_INFO_FALLBACK':
-      prepOnly?'PREPARED_60S_CONTEXT_ONLY':
       quality?'FROZEN_MICROSTRUCTURE_INPUT':'DEGRADED_MICROSTRUCTURE_INPUT',
     featureCount:eligible.length,fallback,
-    preparationUsed:prepared,preparationOnly:prepOnly,
-    preparedDirection:prepared?preparation.directionPreview:null,
-    preparedSampleCount:prepared?preparation.sampleCount:0,
-    preWeight,
+    // Schema-compatible explicit zeroes for retired prewarm fields.
+    preparationUsed:false,preparationOnly:false,
+    preparedDirection:null,preparedSampleCount:0,preWeight:0,
   };
   return {
     version:EXTERNAL_RESEARCH_VERSION,
@@ -70,17 +58,8 @@ export function externalResearchDirections(facts={},{
     predictedHorizonMs:300000,nominalDeadlineMs:8000,
     sourceAt:Number.isFinite(sourceAt)?sourceAt:null,
     reusedPreRound,fullQuality:quality,
-    regime:'REGIME_PM_ONLY_PREP60',dataQuality:issues,
-    preparation:preparation?{
-      version:preparation.version,ready:preparation.ready,
-      sampleCount:preparation.sampleCount,spanMs:preparation.spanMs,
-      lastAgeMs:preparation.lastAgeMs,
-      firstSourceAt:preparation.firstSourceAt,
-      lastSourceAt:preparation.lastSourceAt,
-      directionPreview:preparation.directionPreview,
-      dataType:preparation.dataType,
-      predictionMarketContractIncluded:false
-    }:null,
+    regime:'REGIME_PM_ONLY_CURRENT_ROUND',dataQuality:issues,
+    preparation:null,
     predictions:{FLOW_BOOK_PROXY_V1:prediction}
   };
 }

@@ -281,7 +281,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="k" style="margin-top:14px">三类信号 · 分别统计胜率（仅当前8秒版本）</div>
 <div style="overflow:auto;margin-top:8px;border:1px solid #2b313d;border-radius:10px">
 <table style="width:100%;border-collapse:collapse;min-width:630px;font-size:12px">
-<thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>当前下单方向推算胜率</th></tr></thead>
+<thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>按当前下单规则推算命中率</th></tr></thead>
 <tbody id="sourceRateRows"><tr><td colspan="6" style="padding:10px 6px">统计读取中...</td></tr></tbody>
 </table></div>
 <div class="muted" style="margin-top:7px">按 Binance Prediction 官方结算、当前方向映射规则分别回算。含规则切换前的历史方向时，不代表当时实际订单。不是成交胜率或收益率。</div>

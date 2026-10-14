@@ -33,29 +33,43 @@ function sigmoid(z) {return z >= 0 ? 1/(1+Math.exp(-z)) : Math.exp(z)/(1+Math.ex
 export function independentMarketRegime(f) {
   const current=finite(f?.currentScore),trend=finite(f?.currentTrendScore);
   if(current===null||trend===null) return 'UNKNOWN';
-  const momentum=finite(f?.normalizedMomentum60s)??0;
+  const momentum=finite(f?.normalizedMomentum60s);
+  if(momentum===null) return 'UNKNOWN';
   return Math.abs(trend)>=0.55 && Math.sign(trend)===Math.sign(current) &&
     Math.abs(current)>=0.45 && Math.sign(momentum)===Math.sign(trend)
       ? 'TREND' : 'RANGE';
 }
+// Every frozen model coefficient must receive its real matching input.
+// The prior-round snapshot assembler backfills valid readings before calling
+// this function. Outside that path, incomplete facts are rejected, NOT zeroed.
 export function independentFeatures(f) {
-  if (!f || typeof f !== 'object' || REQUIRES.some(k => finite(f[k]) === null)) return null;
-  const v = k => clip(finite(f[k]) ?? 0);
-  const upMid = finite(f.predictionMarketUpMid);
-  const current = v('currentScore'), trend = v('currentTrendScore'), micro = v('microScore');
-  const mom15 = v('normalizedMomentum15s'), mom300 = v('normalizedMomentum300s');
+  if (!f || typeof f !== 'object') return null;
+  const rawKeys=FEATURE_KEYS.slice(0,18);
+  for (const key of rawKeys) {
+    const value=f[key];
+    if(key==='absorptionRisk') {
+      if(typeof value!=='boolean') return null;
+    } else if(value===null || value===undefined ||
+        typeof value==='boolean' || (typeof value==='string' && !value.trim()) ||
+        finite(value)===null) return null;
+  }
+  const upMid=finite(f.predictionMarketUpMid);
+  if(upMid<0 || upMid>1) return null;
+  const v=k=>clip(finite(f[k]));
+  const current=v('currentScore'),trend=v('currentTrendScore'),micro=v('microScore');
+  const mom15=v('normalizedMomentum15s'),mom300=v('normalizedMomentum300s');
   return [
-    v('regimeScore'), current, micro, trend,
+    v('regimeScore'),current,micro,trend,
     mom15,v('normalizedMomentum30s'),v('normalizedMomentum60s'),
     v('normalizedMomentum180s'),mom300,
     v('tradePressure15s'),v('tradePressure60s'),
     v('ofiNormalized5s'),v('ofiNormalized60s'),
     v('rangePosition180'),
-    upMid === null ? 0 : clip((upMid - 0.5)*2),
-    f.absorptionRisk === true ? 1 : 0,
-    v('liveScore'),clip((finite(f.distanceFromOpenBps)??0)/10),
+    clip((upMid-0.5)*2),
+    f.absorptionRisk===true?1:0,
+    v('liveScore'),clip(finite(f.distanceFromOpenBps)/10),
     clip(current*trend),clip(micro*trend),clip(mom15-mom300),
-    upMid === null ? 0 : clip(current*(upMid-0.5)*2),
+    clip(current*(upMid-0.5)*2),
   ];
 }
 export function validLiveObservation(row) {

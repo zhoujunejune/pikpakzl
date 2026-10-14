@@ -74,7 +74,7 @@ test('an immutable prediction survives next-model registration without rewriting
   stats.statusAgeMs=65000;
   assert.equal(fast8ProductionReadiness(stats,latest,R,now).reason,'FAST8_WORKER_OR_JOURNAL_NOT_READY');
 });
-test('VIP75-only preserves 8s lock and explicit no-information contingency without worker fallback',()=>{
+test('VIP75-only preserves 8s lock and refuses parity fallback or any untrained order',()=>{
   const src=fs.readFileSync(fileURLToPath(new URL('./index-rest.mjs',import.meta.url)),'utf8');
   const start=src.indexOf('function fast8ExclusiveSignalPayload(');
   const end=src.indexOf('function productionSignalPayload(',start);
@@ -85,12 +85,16 @@ test('VIP75-only preserves 8s lock and explicit no-information contingency witho
   assert.match(src,/return fast8ExclusiveSignalPayload\(row, expectedRound, now\)/);
   assert.match(src,/function buildLockedSignalEnvelope\(row, live\) \{\s*if \(PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE/);
   assert.match(src,/productionSignalSourceMode:PRODUCTION_SIGNAL_SOURCE_MODE/);
-  assert.match(exclusive,/FAST8_GATEWAY_FALLBACK_AT_MS/);
-  assert.match(exclusive,/vip75_no_information_direction_locked/);
+  assert.match(exclusive,/VIP75_DATA_GAP_DIAGNOSTIC_MS/);
+  assert.match(exclusive,/vip75_data_unavailable_no_trade/);
+  assert.match(exclusive,/vip75DataGapResponse/);
+  assert.doesNotMatch(exclusive,/vip75NoInformationDirection/);
+  assert.doesNotMatch(exclusive,/productionFallbackUsed.*true/);
   assert.match(exclusive,/vip75Frozen8Probe\.decision\(expectedRound\)/);
   assert.doesNotMatch(exclusive,/selectExternalFast8Production/);
   assert.doesNotMatch(exclusive,/SINGLE_EXTERNAL_PRIMARY_ID/);
-  assert.match(exclusive,/NO_INFORMATION_NOT_A_VIP75_PREDICTION/);
+  assert.match(exclusive,/logProductionSignalState\(live\)/);
+  assert.doesNotMatch(exclusive,/NO_INFORMATION_NOT_A_VIP75_PREDICTION/);
   assert.match(exclusive,/status:'PENDING'/);
   assert.doesNotMatch(exclusive,/status:'WAIT'/);
   assert.equal(FAST8_SOURCE,'ZL_FAST8_65_PRIMARY');

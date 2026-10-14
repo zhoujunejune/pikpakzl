@@ -13,7 +13,7 @@ function mounted(){
  const ids=['activeFast8Name','activeFast8Desc','activeFast8Direction','activeFast8Accuracy',
  'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection',
  'activeFast8InverseAccuracy','activeFast8InverseHitMiss','rsMeta','rsAccuracy','rsSettled',
- 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows'];
+ 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows','sourceRateRows'];
  return new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
 }
 async function execute(script,payload){
@@ -61,10 +61,10 @@ test('main card uses current 8s version with correct model and inverse results',
  assert.match(d.get('activeFast8Name').textContent,/Edge Rescue/);
  assert.equal(d.get('activeFast8Direction').textContent,'DOWN');
  assert.equal(d.get('activeFast8Accuracy').textContent,'50.00%');
- assert.equal(d.get('activeFast8InverseAccuracy').textContent,'50.00%');
- assert.equal(d.get('activeFast8InverseHitMiss').textContent,'1 / 1（2轮）');
+ assert.equal(d.get('activeFast8InverseAccuracy').textContent,'100.00%');
+ assert.equal(d.get('activeFast8InverseHitMiss').textContent,'2 / 0（2轮）');
  assert.equal(d.get('activeFast8HitMiss').textContent,'1 / 1');
- assert.match(d.get('activeFast8Note').textContent,/低置信度行情方向 1 轮/);
+ assert.match(d.get('activeFast8Note').textContent,/低置信度方向 1 轮/);
 });
 test('current stats exclude historical VIP75 and label each new production layer',async()=>{
  const d=await execute(stats,fixture());
@@ -87,13 +87,36 @@ test('without production-mode confirmation frontend does not pretend restored mo
 test('low-confidence direction is distinctly labeled but not suppressed',async()=>{
  const j=fixture(),cur=j.records[0];cur.productionSource='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';
  const d=await execute(mainScript,j);
- assert.match(d.get('activeFast8Direction').textContent,/DOWN（低置信度 · 可下单）/);
+ assert.match(d.get('activeFast8Direction').textContent,/DOWN（低置信度 · 反向下单）/);
 });
-test('the card keeps separate model prediction vs inverse order direction',()=>{
+test('the card keeps separate model prediction vs source-aware order direction',()=>{
  assert.ok(primary.includes('id="activeFast8Direction"'));
  assert.ok(primary.includes('id="activeFast8OrderDirection"'));
  assert.match(mainScript,/j\.orderSignal/);
  assert.match(stats,/新版模型命中率/);
+ assert.match(primary,/sourceRateRows/);
+ assert.match(primary,/按当前下单规则推算命中率/);
+});
+test('three independent strategy rows preserve sample counts and direction mapping',async()=>{
+ const j=fixture();
+ const past=Math.floor(Date.now()/300000)*300000;
+ j.records.push({roundStartMs:past-1500000,
+   productionModel:'SELECTIVE_V2_FAST8_PREWARM_V1',
+   productionModelVersion:'SELECTIVE_V2_FAST8_PREWARM_V1',
+   productionSource:'EDGE_RESCUE_FAST8_PRIMARY',
+   productionPrediction:'DOWN',productionActual:'DOWN',productionResult:'HIT'});
+ const d=await execute(mainScript,j);
+ const rows=d.get('sourceRateRows').innerHTML;
+ assert.match(rows,/Selective V2（主策略）/);
+ assert.match(rows,/Edge Rescue（兜底）/);
+ assert.match(rows,/低置信度行情兜底/);
+ assert.match(rows,/正向/);
+ assert.match(rows,/反向/);
+ assert.equal((rows.match(/1\/1 · 100\.00%/g)||[]).length,5);
+ assert.match(rows,/0\/1 · 0\.00%/);
+ assert.equal(d.get('activeFast8Accuracy').textContent,'66.67%');
+ assert.equal(d.get('activeFast8InverseAccuracy').textContent,'100.00%');
+ assert.doesNotMatch(rows,/zl_new_vip75/);
 });
 test('missing settled current-version predictions shows no synthetic accuracy',async()=>{
  const j=fixture();

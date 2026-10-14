@@ -591,7 +591,9 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
         round: signal.round,
         signal: mapping.orderSignal,
         productionSignal: mapping.productionSignal,
+        productionSource: mapping.productionSource,
         orderSignal: mapping.orderSignal,
+        mappingMode: mapping.mappingMode,
         orderDirectionPolicy: ORDER_DIRECTION_POLICY,
         score: signal.score,
         signalId: signal.signalId ?? null,
@@ -614,7 +616,9 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       round: signal.round,
       signal: mapping.orderSignal,
       productionSignal: mapping.productionSignal,
+      productionSource: mapping.productionSource,
       orderSignal: mapping.orderSignal,
+      mappingMode: mapping.mappingMode,
       orderDirectionPolicy: ORDER_DIRECTION_POLICY,
       score: signal.score,
       signalId: signal.signalId ?? null,
@@ -639,6 +643,8 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       model: pendingAction.model,
       upstreamModel: pendingAction.upstreamModel,
       signalId: pendingAction.signalId,
+      productionSource: pendingAction.productionSource,
+      mappingMode: pendingAction.mappingMode,
       signalTransport: pendingAction.signalTransport,
       signalGeneratedAt: pendingAction.signalGeneratedAt,
       amount: pendingAction.amount,
@@ -785,7 +791,7 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
   <div class="muted" id="realRiskDetails" style="margin-top:12px">尚未确认最近一次扫描或卖出报价；系统运行不保证卖单一定成交。</div>
   <div class="muted" id="realRiskUpdated" style="margin-top:5px">状态更新时间：等待响应</div>
 </div>
-<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（反向下单）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
+<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>
 <div id="riskControlsAnchor"></div>
@@ -851,6 +857,8 @@ http.createServer(async (req, res) => {
       signal:displaySignal,
       productionSignal: signal?.status==='LOCKED'?signal.direction:null,
       orderSignal: displayOnly?null:mappedOrderSignal(signal).orderSignal,
+      orderMappingMode: mappedOrderSignal(signal).mappingMode,
+      orderProductionSource: mappedOrderSignal(signal).productionSource,
       orderDirectionPolicy: ORDER_DIRECTION_POLICY,
       signalModel: SIGNAL_MODEL_NAME,
       signalTransport: { ...signalTransport },

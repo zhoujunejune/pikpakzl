@@ -1,16 +1,15 @@
 // Keep the immutable production prediction distinct from the actual order.
 // The source-aware order policy is versioned, so an old pending quote/token
 // cannot be submitted after changing from the globally inverted policy.
-export const ORDER_DIRECTION_POLICY = 'SOURCE_AWARE_SELECTIVE8_V1';
+export const ORDER_DIRECTION_POLICY = 'FORWARD_ONLY_SELECTIVE8_V2';
 export const LOW_CONFIDENCE_SOURCE = 'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';
 export const PRIMARY_SOURCE = 'SELECTIVE_V2_FAST8_PRIMARY';
 export const RESCUE_SOURCE = 'EDGE_RESCUE_FAST8_PRIMARY';
 
 export function orderDirectionForProduction(productionDirection, productionSource = null) {
   if (productionDirection !== 'UP' && productionDirection !== 'DOWN') return null;
-  return productionSource === LOW_CONFIDENCE_SOURCE
-    ? (productionDirection === 'UP' ? 'DOWN' : 'UP')
-    : productionDirection;
+  // Reverse order mapping is suspended for every production signal source.
+  return productionDirection;
 }
 
 export function mappedOrderSignal(signal) {
@@ -22,7 +21,7 @@ export function mappedOrderSignal(signal) {
     productionSource,
     orderSignal,
     action: orderSignal === null ? null : 'BUY_' + orderSignal,
-    mappingMode: productionSource === LOW_CONFIDENCE_SOURCE ? 'INVERSE' : 'FORWARD',
+    mappingMode: 'FORWARD',
     mappingPolicy: ORDER_DIRECTION_POLICY,
   };
 }

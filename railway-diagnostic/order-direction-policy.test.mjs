@@ -26,12 +26,11 @@ for(const source of [PRIMARY_SOURCE,RESCUE_SOURCE]){
  }
 }
 for(const dir of ['UP','DOWN']){
- test('low-confidence '+dir+' remains inverse (not globally forward)',()=>{
-   const inverse=dir==='UP'?'DOWN':'UP';
+ test('low-confidence '+dir+' uses forward direction; reverse trading suspended',()=>{
    const m=mappedOrderSignal(locked(dir,LOW_CONFIDENCE_SOURCE));
-   assert.equal(m.orderSignal,inverse);
-   assert.equal(m.action,'BUY_'+inverse);
-   assert.equal(m.mappingMode,'INVERSE');
+   assert.equal(m.orderSignal,dir);
+   assert.equal(m.action,'BUY_'+dir);
+   assert.equal(m.mappingMode,'FORWARD');
    assert.equal(pendingOrderMatchesProduction(ready(dir,LOW_CONFIDENCE_SOURCE),
       locked(dir,LOW_CONFIDENCE_SOURCE)),true);
  });
@@ -60,9 +59,9 @@ test('old global-inverse pending tokens cannot be confirmed under new source-awa
  const old={...ready('UP',PRIMARY_SOURCE),signal:'DOWN',orderSignal:'DOWN',
   action:'BUY_DOWN',mappingMode:'INVERSE',orderDirectionPolicy:'INVERT_PRODUCTION_UP_DOWN_V2'};
  assert.equal(pendingOrderMatchesProduction(old,locked('UP',PRIMARY_SOURCE)),false);
- assert.equal(ORDER_DIRECTION_POLICY,'SOURCE_AWARE_SELECTIVE8_V1');
+ assert.equal(ORDER_DIRECTION_POLICY,'FORWARD_ONLY_SELECTIVE8_V2');
 });
-test('other valid sources default to forward, not low-confidence inverse',()=>{
+test('other valid sources also use forward direction',()=>{
  assert.equal(mappedOrderSignal(locked('UP','OTHER_LOCKED_SOURCE')).orderSignal,'UP');
 });
 test('both prepare and confirm use mapping and source-aware policy; UI presents mode',()=>{
@@ -77,4 +76,13 @@ test('both prepare and confirm use mapping and source-aware policy; UI presents 
  assert.match(wrapper,/!pendingOrderMatchesProduction\(p,current\)/);
  assert.match(index,/id="orderDirection"/);
  assert.match(shell,/id="activeFast8OrderDirection"/);
+});
+
+test('old low-confidence inverse pending token is rejected after forward-only switch',()=>{
+ const live=locked('UP',LOW_CONFIDENCE_SOURCE);
+ const stale={...ready('UP',LOW_CONFIDENCE_SOURCE), signal:'DOWN',orderSignal:'DOWN',
+  action:'BUY_DOWN',mappingMode:'INVERSE',orderDirectionPolicy:'SOURCE_AWARE_SELECTIVE8_V1'};
+ assert.equal(pendingOrderMatchesProduction(stale,live),false);
+ assert.equal(mappedOrderSignal(live).orderSignal,'UP');
+ assert.equal(mappedOrderSignal(live).mappingMode,'FORWARD');
 });

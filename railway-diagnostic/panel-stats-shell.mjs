@@ -267,7 +267,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="muted" id="activeFast8Desc">BTC 5分钟 · 上一轮行情预热 · 8秒内锁定 · 新版独立统计</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
-<div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
+<div class="kv"><div class="k">下单信号（全部正向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
 <div class="kv"><div class="k">下单方向推算命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
 <div class="kv"><div class="k">下单方向推算命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
@@ -288,14 +288,14 @@ const primaryScript = `<script>(function(){
 function e(x){return document.getElementById(x)}
 function x(v){return v==null?'-':String(v)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
-var policy='SOURCE_AWARE_SELECTIVE8_V1';
+var policy='FORWARD_ONLY_SELECTIVE8_V2';
 var sources=[
  {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',mode:'正向'},
  {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',mode:'正向'},
- {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',mode:'反向'}
+ {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',mode:'正向'}
 ];
 function bySource(z){return sources.find(function(x){return x.id===z.productionSource})||null}
-function orderSide(z){var pred=z.productionPrediction;if(pred!=='UP'&&pred!=='DOWN')return null;var src=bySource(z);return src&&src.mode==='反向'?(pred==='UP'?'DOWN':'UP'):pred}
+function orderSide(z){var pred=z.productionPrediction;return pred==='UP'||pred==='DOWN'?pred:null}
 function load(){
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
@@ -312,10 +312,10 @@ function load(){
    var now=Math.floor(Date.now()/300000)*300000;
    var current=records.find(function(z){return Number(z.roundStartMs)===now});
    var dir=current&&(current.productionPrediction==='UP'||current.productionPrediction==='DOWN')?current.productionPrediction:'待本轮锁定';
-   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · 反向下单）';
+   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · 正向下单）';
    e('activeFast8Name').textContent=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
    e('activeFast8Desc').textContent=currentMode
-     ? 'BTC 5分钟 · 8秒截止 · Selective V2 / Edge 正向；低置信度兜底反向'
+     ? 'BTC 5分钟 · 8秒截止 · 所有来源正向下单（反向已暂停）'
      : 'BTC 5分钟 · 历史模型统计';
    e('activeFast8Direction').textContent=dir;
    var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
@@ -345,7 +345,7 @@ function load(){
        '<td style="text-align:center">'+(total?orderHits+'/'+total+' · '+pct(orderHits*100/total):'样本不足')+'</td></tr>'
    }).join(''):'<tr><td colspan="5" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
    e('activeFast8Note').textContent=currentMode
-     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · Selective V2与Edge正向，低置信度反向 · 所有下单方向胜率均按当前规则推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
+     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 所有来源均正向下单（反向已暂停） · 所有下单方向胜率均按当前规则推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
      : '当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
  })
  .catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})

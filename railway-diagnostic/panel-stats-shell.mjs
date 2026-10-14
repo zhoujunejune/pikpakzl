@@ -1,6 +1,23 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 
+// RAILWAY_EGRESS_IP_READONLY_DIAG_20261014
+// One-shot startup diagnostic: no credentials, no trading API writes, no order changes.
+void (async () => {
+  for (const [target, url] of [
+    ['public_egress_ip', 'https://checkip.amazonaws.com/'],
+    ['binance_public_ping', 'https://api.binance.com/api/v3/ping'],
+  ]) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(6500), cache: 'no-store' });
+      const publicIp = target === 'public_egress_ip' && response.ok ? (await response.text()).trim().slice(0, 64) : null;
+      console.log(JSON.stringify({ event: 'railway_egress_ip_readonly_diagnostic', target, httpStatus: response.status, publicIp, at: new Date().toISOString() }));
+    } catch (error) {
+      console.log(JSON.stringify({ event: 'railway_egress_ip_readonly_diagnostic', target, error: error?.name || 'NETWORK_ERROR', at: new Date().toISOString() }));
+    }
+  }
+})();
+
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PANEL_PORT = Number(process.env.INNER_PANEL_PORT || 3002);
 const ROUND_STATS_ORIGIN = String(process.env.ROUND_STATS_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');

@@ -4866,19 +4866,23 @@ function productionSummary() {
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
     activeFast8Primary: (() => {
-      const chosen=records.filter(r=>r.productionModel===SINGLE_EXTERNAL_PRIMARY_ID &&
-        r.productionModelVersion===SINGLE_EXTERNAL_PRIMARY_VERSION);
-      const labels=chosen.filter(r=>r.productionActual==='UP'||r.productionActual==='DOWN');
+      const chosen=records.filter(r=>r.productionModel==='zl_new_vip75' &&
+        (r.productionModelVersion===FROZEN_VIP75_VERSION ||
+         r.productionModelVersion===FROZEN_VIP75_VERSION+':NO_INFORMATION'));
+      const authentic=chosen.filter(r=>r.productionModelVersion===FROZEN_VIP75_VERSION &&
+        r.productionFallbackUsed!==true);
+      const labels=authentic.filter(r=>r.productionActual==='UP'||r.productionActual==='DOWN');
       const successes=labels.filter(r=>r.productionResult==='HIT').length;
       const start=chosen.length?chosen[0].roundStartMs:null;
-      const eligibleCalendar= start==null?[]:records.filter(r=>Number(r.roundStartMs)>=Number(start));
-      return {id:SINGLE_EXTERNAL_PRIMARY_ID,version:SINGLE_EXTERNAL_PRIMARY_VERSION,
+      const eligibleCalendar=start==null?[]:records.filter(r=>Number(r.roundStartMs)>=Number(start));
+      return {id:'zl_new_vip75',version:FROZEN_VIP75_VERSION,
         startRound:start,signalRounds:chosen.length,settledRounds:labels.length,
         hits:successes,misses:labels.length-successes,
         accuracyPct:labels.length?Number((100*successes/labels.length).toFixed(2)):null,
         coveragePct:eligibleCalendar.length?Number((100*chosen.length/eligibleCalendar.length).toFixed(2)):null,
         fallbackRounds:chosen.filter(r=>r.productionFallbackUsed===true).length,
-        winRateNote:'FORWARD_ONLY_OFFICIAL_SETTLEMENT_NOT_INDEPENDENTLY_CERTIFIED',
+        noInformationRounds:chosen.filter(r=>r.productionFallbackUsed===true).length,
+        winRateNote:'EXCLUDES_NO_INFORMATION_DIRECTIONS_NOT_INDEPENDENTLY_CERTIFIED',
         eligibleForAutoTrading:true,accuracyGuaranteed:false};
     })(),
     currentQualifiedModel: productionUsesSelectiveV2()
@@ -5219,7 +5223,8 @@ function isPermanentlyRetiredProductionSignal(source, model, modelVersion=null) 
   // the FAST8 router and ONLY when its exact read-only trained weights passed
   // verification. Legacy retired VIP75 route remains blocked permanently.
   if (source === FAST8_SOURCE && model === 'zl_new_vip75' &&
-      modelVersion === FROZEN_VIP75_VERSION && vip75Frozen8Probe.report().ready)
+      ((modelVersion === FROZEN_VIP75_VERSION && vip75Frozen8Probe.report().ready) ||
+       modelVersion === FROZEN_VIP75_VERSION+':NO_INFORMATION'))
     return false;
   const retired = permanentlyRemovedSignalIds();
   const origin = String(source || '');
@@ -5493,55 +5498,54 @@ const FAST8_GATEWAY_FALLBACK_AT_MS = 7000;
 // Reserve a bounded causal-observation window for the restored original VIP75;
 // never change the 8000ms hard lock deadline or the 7000ms existing fallback.
 const VIP75_PINNED_PREFERENCE_END_MS = 6500;
-function fast8GatewayFallback(round) {
-  const previous = [...rounds.values()]
-    .filter(r => Number(r.roundStartMs) < round &&
-      r.productionSource === FAST8_SOURCE &&
-      (r.productionPrediction === 'UP' || r.productionPrediction === 'DOWN'))
-    .sort((a, b) => Number(b.roundStartMs) - Number(a.roundStartMs))[0];
-  const lastWorker = fast8.latest()?.signal;
-  if (previous) return {direction:previous.productionPrediction,
-    reason:'FAST8_GATEWAY_PREVIOUS_FROZEN_DIRECTION_REUSED'};
-  if (Number(lastWorker?.roundStartMs) < round &&
-      (lastWorker?.direction === 'UP' || lastWorker?.direction === 'DOWN'))
-    return {direction:lastWorker.direction,reason:'FAST8_GATEWAY_PREVIOUS_WORKER_DIRECTION_REUSED'};
-  return {direction:(Math.floor(round / 300000) % 2 === 0 ? 'UP' : 'DOWN'),
-    reason:'FAST8_GATEWAY_NO_INFORMATION_DETERMINISTIC_FALLBACK'};
+function vip75NoInformationDirection(round) {
+  // This is NOT an ML prediction and must never be shown as one.
+  // Only used when the pinned VIP75 has no valid current-round observation
+  // at the fixed 7s contingency time. No old FAST8/flow predictions are used.
+  return Math.floor(round / 300000) % 2 === 0 ? 'UP' : 'DOWN';
 }
 function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   const activeRow = row || ensureRound(expectedRound);
-  const stats = fast8.stats();
-  const current = fast8.latest();
-  const readiness = fast8ProductionReadiness(stats, current, expectedRound, now);
-  const prediction = selectExternalFast8Production(stats,current,expectedRound,readiness);
+  // Keep any previously locked direction immutable, including a transition
+  // round that was frozen before this version was deployed.
   const alreadyLocked = ['UP','DOWN'].includes(activeRow?.productionPrediction);
-  // Reuse the EXACT 2026-10-10 trained 22-feature model, not an approximation.
-  // Its original 10-22s observation is replaced ONLY by a live, causal <=8s
-  // snapshot. Original trained weights, inference, and parameter values stay fixed.
-  const pinnedAvailable = vip75Frozen8Probe.report().ready;
+  if (alreadyLocked) {
+    const frozen = {round:expectedRound, status:'LOCKED',
+      signal:{direction:activeRow.productionPrediction,
+        score:activeRow.productionScore ?? null,
+        confidence:activeRow.productionConfidence ?? null,
+        modelProbability:null},
+      input:{round:expectedRound},generatedAt:activeRow.productionGeneratedAt??null,
+      source:activeRow.productionSource,model:activeRow.productionModel,
+      modelVersion:activeRow.productionModelVersion,
+      productionPolicy:productionPolicyName(),frozen:true,
+      fallbackUsed:Boolean(activeRow.productionFallbackUsed),
+      fallbackReason:activeRow.productionFallbackReason??null};
+    logProductionSignalState(frozen);
+    return {ok:true,live:frozen};
+  }
   const pinned = vip75Frozen8Probe.decision(expectedRound);
-  if (pinnedAvailable && !alreadyLocked && pinned &&
-      pinned.observedAt >= expectedRound &&
-      pinned.observedAt <= expectedRound + FAST8_DEADLINE_MS &&
-      now <= expectedRound + FAST8_DEADLINE_MS) {
+  const status = vip75Frozen8Probe.report();
+  if (status.ready && pinned &&
+      pinned.observedAt>=expectedRound &&
+      pinned.observedAt<=expectedRound+FAST8_DEADLINE_MS &&
+      now<=expectedRound+FAST8_DEADLINE_MS) {
     const probability=pinned.probability;
-    const confidence=pinned.direction === 'UP' ? probability : 1-probability;
+    const confidence=pinned.direction==='UP'?probability:1-probability;
     const live={
       round:expectedRound,status:'LOCKED',
-      signal:{direction:pinned.direction,
-        score:Number((probability*2-1).toFixed(6)),
-        confidence:Number(confidence.toFixed(6)),
-        modelProbability:probability},
+      signal:{direction:pinned.direction,score:Number((probability*2-1).toFixed(6)),
+        confidence:Number(confidence.toFixed(6)),modelProbability:probability},
       input:{round:expectedRound},generatedAt:pinned.observedAt,
-      source:FAST8_SOURCE,model:'zl_new_vip75',
-      modelVersion:FROZEN_VIP75_VERSION,
+      // FAST8_SOURCE is the existing transport channel, not a predictive input.
+      source:FAST8_SOURCE,model:'zl_new_vip75',modelVersion:FROZEN_VIP75_VERSION,
       productionPolicy:productionPolicyName(),
       fallbackUsed:false,fallbackReason:null,
       fast8Quality:{status:'PINNED_VIP75_VALID_CAUSAL_SNAPSHOT',
         pinnedWeightFingerprint:pinned.weightFingerprint,
         selectedTrainingWindow:320,halfLife:180,l2:0.12,regimeBlend:0.3},
     };
-    if (freezeProductionLock(activeRow,live)) {
+    if(freezeProductionLock(activeRow,live)){
       log('vip75_frozen8_production_lock',{round:expectedRound,
         direction:pinned.direction,generatedDelayMs:pinned.observedAt-expectedRound,
         modelVersion:FROZEN_VIP75_VERSION,weightFingerprint:pinned.weightFingerprint});
@@ -5549,96 +5553,39 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
       return {ok:true,live};
     }
   }
-  if (pinnedAvailable && !alreadyLocked && now < expectedRound + VIP75_PINNED_PREFERENCE_END_MS) {
-    const live={round:expectedRound,status:'PENDING',signal:null,
-      input:{round:expectedRound},generatedAt:null,source:FAST8_SOURCE,
-      model:'zl_new_vip75',modelVersion:FROZEN_VIP75_VERSION,
-      productionPolicy:productionPolicyName(),
-      pendingReason:'PINNED_VIP75_WAITING_FOR_VALID_EARLY_SNAPSHOT',
-      deadlineMs:FAST8_DEADLINE_MS,otherProductionSourcesPaused:true};
-    logProductionSignalState(live);
-    return {ok:true,live};
-  }
-  // If no eligible original snapshot arrived in time, preserve the unchanged
-  // existing FAST8 worker / 7s no-information contingency. Never fabricate
-  // a VIP75 signal, never move the lock deadline and never retrain.
-  if (prediction.eligible && !alreadyLocked) {
-    const live = {
-      round: expectedRound, status: 'LOCKED',
-      signal: {direction:prediction.direction, score:null,confidence:null,modelProbability:null},
-      input: {round:expectedRound}, generatedAt:prediction.generatedAt,
-      source:FAST8_SOURCE,model:SINGLE_EXTERNAL_PRIMARY_ID,modelVersion:SINGLE_EXTERNAL_PRIMARY_VERSION,
-      productionPolicy:productionPolicyName(),
-      fallbackUsed:prediction.fallbackUsed === true,
-      fallbackReason:prediction.fallbackReason,
-      fast8Quality: {status:prediction.qualityStatus,
-        issues:prediction.issues,presentFeatures:prediction.presentFeatures,
-        evidence:prediction.evidence,uncalibratedStrength:prediction.strength}, 
-      fast8Qualification:{validationSamples:stats.validation?.labeledPredictions ?? 0,
-        accuracy:stats.validation?.endToEndAccuracy ?? null,
-        verifiedAt:stats.generatedAtMs ?? null},
-    };
-    if (freezeProductionLock(activeRow, live)) {
-      log('external_fast8_primary_production_lock',{round:expectedRound,
-        direction:prediction.direction,model:SINGLE_EXTERNAL_PRIMARY_ID,
-        modelVersion:SINGLE_EXTERNAL_PRIMARY_VERSION,
-        fallbackUsed:live.fallbackUsed,quality:live.fast8Quality});
-      logProductionSignalState(live);
-      return {ok:true,live};
-    }
-  }
-  // Prevent contradictory orders in a round that was already locked
-  // before FAST8-only was enabled. Such a lock is immutable.
-  if (alreadyLocked) {
-    const frozen = {round:expectedRound, status:'LOCKED',
-      signal:{direction:activeRow.productionPrediction,score:null,confidence:null,modelProbability:null},
-      input:{round:expectedRound},generatedAt:activeRow.productionGeneratedAt ?? null,
-      source:activeRow.productionSource,model:activeRow.productionModel,
-      modelVersion:activeRow.productionModelVersion,
-      productionPolicy:productionPolicyName(),frozen:true,
-      fallbackUsed:Boolean(activeRow.productionFallbackUsed),
-      fallbackReason:activeRow.productionFallbackReason ?? null,
-      transitionExistingLock:activeRow.productionSource !== FAST8_SOURCE};
-    logProductionSignalState(frozen);
-    return {ok:true,live:frozen};
-  }
-  // The original model engine itself also has full-coverage baselines;
-  // this independent deadline guard covers worker crashes, startup and
-  // unforeseen missing / low-quality inputs without backdating a prediction.
-  if (now >= expectedRound + FAST8_GATEWAY_FALLBACK_AT_MS) {
-    const fallback = fast8GatewayFallback(expectedRound);
-    const live = {
+  // Do not substitute ANY FAST8 worker/external/previous prediction if VIP75 is missing.
+  // A direction by the deadline requires a separate, clearly untrained contingency.
+  if(now>=expectedRound+FAST8_GATEWAY_FALLBACK_AT_MS) {
+    const reason=status.ready
+      ? 'VIP75_NO_VALID_EARLY_SNAPSHOT_DETERMINISTIC_DIRECTION'
+      : 'VIP75_ORIGINAL_ARTIFACT_NOT_READY_DETERMINISTIC_DIRECTION';
+    const direction=vip75NoInformationDirection(expectedRound);
+    const live={
       round:expectedRound,status:'LOCKED',
-      signal:{direction:fallback.direction,score:null,confidence:null,modelProbability:null},
+      signal:{direction,score:null,confidence:null,modelProbability:null},
       input:{round:expectedRound},generatedAt:now,
-      source:FAST8_SOURCE,model:SINGLE_EXTERNAL_PRIMARY_ID,
-      modelVersion:SINGLE_EXTERNAL_PRIMARY_VERSION + ':GATEWAY_NO_INFORMATION',
+      source:FAST8_SOURCE,model:'zl_new_vip75',
+      modelVersion:FROZEN_VIP75_VERSION+':NO_INFORMATION',
       productionPolicy:productionPolicyName(),
-      fallbackUsed:true,fallbackReason:fallback.reason,
-      fast8Quality:{status:'NO_VERIFIED_CURRENT_ROUND_MODEL_SIGNAL',
-        issues:[prediction.reason || readiness.reason || 'EXTERNAL_PRIMARY_DIRECTION_NOT_AVAILABLE'],presentFeatures:0}, 
-      fast8Qualification:{validationSamples:stats.validation?.labeledPredictions ?? 0,
-        accuracy:stats.validation?.endToEndAccuracy ?? null,
-        verifiedAt:stats.generatedAtMs ?? null},
+      fallbackUsed:true,fallbackReason:reason,
+      fast8Quality:{status:'NO_INFORMATION_NOT_A_VIP75_PREDICTION',
+        issues:[reason],presentFeatures:0},
     };
-    if (freezeProductionLock(activeRow, live)) {
-      log('fast8_gateway_contingency_lock',{round:expectedRound,
-        direction:fallback.direction,model:SINGLE_EXTERNAL_PRIMARY_ID,
-        generatedDelayMs:now-expectedRound,reason:fallback.reason,
-        trigger:prediction.reason || readiness.reason});
+    if(freezeProductionLock(activeRow,live)){
+      log('vip75_no_information_direction_locked',{
+        round:expectedRound,direction,generatedDelayMs:now-expectedRound,reason,
+        trainedPrediction:false,modelVersion:live.modelVersion});
       logProductionSignalState(live);
       return {ok:true,live};
     }
   }
-  const live = {
-    round:expectedRound,status:'PENDING',signal:null,input:{round:expectedRound},
-    generatedAt:null,source:FAST8_SOURCE,model:SINGLE_EXTERNAL_PRIMARY_ID,
-    productionPolicy:productionPolicyName(),fallbackUsed:false,
-    pendingReason:prediction.reason || readiness.reason || 'EXTERNAL_DIRECTION_PENDING_BEFORE_DEADLINE',
-    deadlineMs:8000,contingencyAtMs:FAST8_GATEWAY_FALLBACK_AT_MS,
-    fast8Preview:readiness.preview,
-    otherProductionSourcesPaused:true,
-  };
+  const live={round:expectedRound,status:'PENDING',signal:null,
+    input:{round:expectedRound},generatedAt:null,
+    source:FAST8_SOURCE,model:'zl_new_vip75',modelVersion:FROZEN_VIP75_VERSION,
+    productionPolicy:productionPolicyName(),
+    pendingReason:'VIP75_AWAITING_EARLY_SIGNAL_BEFORE_7S_CONTINGENCY',
+    deadlineMs:FAST8_DEADLINE_MS,contingencyAtMs:FAST8_GATEWAY_FALLBACK_AT_MS,
+    otherProductionSourcesPaused:true};
   logProductionSignalState(live);
   return {ok:true,live};
 }
@@ -6077,7 +6024,7 @@ function payload() {
     productionPolicy: productionPolicyName(),
     productionSignalSourceMode:PRODUCTION_SIGNAL_SOURCE_MODE,
     activeProductionModel:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
-      ? {id:SINGLE_EXTERNAL_PRIMARY_ID,version:SINGLE_EXTERNAL_PRIMARY_VERSION,
+      ? {id:'zl_new_vip75',version:FROZEN_VIP75_VERSION,
          source:FAST8_SOURCE,onlyOneActive:true,noWait:true,deadlineMs:8000,
          estimatedAccuracyGuaranteed:false,
          metrics:productionSummary().activeFast8Primary}

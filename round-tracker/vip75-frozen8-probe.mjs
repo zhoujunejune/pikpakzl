@@ -99,5 +99,8 @@ export function createFrozenVip75Fast8Probe({file,log=()=>{}}) {
     inputVersion:lastInput?.inputVersion??null,
     productionEffect:'NONE_READ_ONLY_PROBE'};}
   function decision(start){return model && earliestValid?.roundStartMs===start?{...earliestValid}:null;}
-  return {load,capturePreRound,observe,report,decision};
+  // Read-only causal prewarm facts for a separate Selective V2 fast8 router.
+  // This does not modify, retrain or invoke the pinned VIP75 model weights.
+  function prepareFeatures(round, currentFacts){ return previousRoundInputs.prepare(round,currentFacts); }
+  return {load,capturePreRound,prepareFeatures,observe,report,decision};
 }

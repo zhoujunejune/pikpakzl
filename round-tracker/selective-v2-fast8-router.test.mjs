@@ -29,6 +29,14 @@ test('low-confidence direction is labeled and eligible before the deadline',()=>
  assert.equal(a.executionEligible,true);assert.equal(a.fallbackUsed,true);
  assert.equal(a.confidence,null);assert.equal(a.direction,'UP');
 });
+test('the low-confidence signal can be committed at T+7.2s, leaving transport margin',()=>{
+ const a=route({...opts,now:round+7200,facts:base,
+   quality:()=>({pass:false,reasons:['FILTER']}),
+   edge:()=>({pass:false,reasons:['FILTER']})});
+ assert.equal(a.status,'LOCKED');assert.equal(a.executionEligible,true);
+ assert.equal(a.source,UNVERIFIED_SOURCE);
+ assert.ok(a.elapsedMs<LOCK_DEADLINE_MS);
+});
 test('missing contract quote cannot qualify the filters',()=>{
  const f={...base,predictionMarketUpMid:null};
  const a=route({...opts,now:round+7900,facts:f,currentRoundFeatureCount:0,

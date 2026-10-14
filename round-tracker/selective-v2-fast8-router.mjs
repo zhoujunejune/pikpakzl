@@ -3,7 +3,8 @@
 // Not comparable with the original 20-22s strategy's measured accuracy.
 export const POLICY_VERSION='SELECTIVE_V2_FAST8_PREWARM_V1';
 export const LOCK_DEADLINE_MS=8000;
-export const FALLBACK_COMMIT_MS=7800;
+// Reserve ~1 second for signal transport and panel receipt before T+8s.
+export const FALLBACK_COMMIT_MS=7000;
 export const PRIMARY_SOURCE='SELECTIVE_V2_FAST8_PRIMARY';
 export const RESCUE_SOURCE='EDGE_RESCUE_FAST8_PRIMARY';
 export const UNVERIFIED_SOURCE='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';

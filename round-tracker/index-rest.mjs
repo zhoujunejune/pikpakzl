@@ -10,6 +10,7 @@ import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
 import { createFrozenVip75Fast8Probe, FROZEN_VIP75_VERSION } from './vip75-frozen8-probe.mjs';
+import { vip75DataGapResponse, VIP75_DATA_GAP_DIAGNOSTIC_MS, VIP75_DATA_GAP_POLICY_VERSION } from './vip75-data-gap-policy.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, below15sPermanentDeleteThreshold, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
@@ -5496,19 +5497,12 @@ function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
   return null;
 }
 
-// FAST8 exclusive: one immutable direction per round, including honest,
-// explicitly tagged no-information contingency when the worker misses deadline.
-// Do not label contingency as a model prediction or fabricated confidence.
-const FAST8_GATEWAY_FALLBACK_AT_MS = 7000;
-// Reserve a bounded causal-observation window for the restored original VIP75;
-// never change the 8000ms hard lock deadline or the 7000ms existing fallback.
+// FAST8 exclusive: freeze ONLY an authenticated, on-time VIP75 prediction.
+// At 7s log the data gap; keep listening through the full 8s deadline.
+// Without genuine data by 8s the round is untradeable, never guessed.
 const VIP75_PINNED_PREFERENCE_END_MS = 6500;
-function vip75NoInformationDirection(round) {
-  // This is NOT an ML prediction and must never be shown as one.
-  // Only used when the pinned VIP75 has no valid current-round observation
-  // at the fixed 7s contingency time. No old FAST8/flow predictions are used.
-  return Math.floor(round / 300000) % 2 === 0 ? 'UP' : 'DOWN';
-}
+let vip75DataGapDiagnosticRound = null;
+let vip75DataGapExpiredRound = null;
 function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   const activeRow = row || ensureRound(expectedRound);
   // Keep any previously locked direction immutable, including a transition
@@ -5567,39 +5561,32 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
       return {ok:true,live};
     }
   }
-  // Do not substitute ANY FAST8 worker/external/previous prediction if VIP75 is missing.
-  // A direction by the deadline requires a separate, clearly untrained contingency.
-  if(now>=expectedRound+FAST8_GATEWAY_FALLBACK_AT_MS) {
-    const reason=status.ready
-      ? 'VIP75_NO_VALID_EARLY_SNAPSHOT_DETERMINISTIC_DIRECTION'
-      : 'VIP75_ORIGINAL_ARTIFACT_NOT_READY_DETERMINISTIC_DIRECTION';
-    const direction=vip75NoInformationDirection(expectedRound);
-    const live={
-      round:expectedRound,status:'LOCKED',
-      signal:{direction,score:null,confidence:null,modelProbability:null},
-      input:{round:expectedRound},generatedAt:now,
-      source:FAST8_SOURCE,model:'zl_new_vip75',
-      modelVersion:FROZEN_VIP75_VERSION+':NO_INFORMATION',
-      productionPolicy:productionPolicyName(),
-      fallbackUsed:true,fallbackReason:reason,
-      fast8Quality:{status:'NO_INFORMATION_NOT_A_VIP75_PREDICTION',
-        issues:[reason],presentFeatures:0},
-    };
-    if(freezeProductionLock(activeRow,live)){
-      log('vip75_no_information_direction_locked',{
-        round:expectedRound,direction,generatedDelayMs:now-expectedRound,reason,
-        trainedPrediction:false,modelVersion:live.modelVersion});
-      logProductionSignalState(live);
-      return {ok:true,live};
-    }
+  // The only permitted UP/DOWN lock is the frozen VIP75 above.
+  // A data gap is not an order direction: never use clock parity, a stale
+  // previous lock, a paused external model or an implicit-zero feature.
+  const live=vip75DataGapResponse({round:expectedRound,now,
+    artifactReady:status.ready,probe:status,
+    source:FAST8_SOURCE,modelVersion:FROZEN_VIP75_VERSION,
+    productionPolicy:productionPolicyName()});
+  if(now>=expectedRound+VIP75_DATA_GAP_DIAGNOSTIC_MS &&
+      vip75DataGapDiagnosticRound!==expectedRound){
+    vip75DataGapDiagnosticRound=expectedRound;
+    log('vip75_data_gap_diagnostic',{round:expectedRound,
+      elapsedMs:now-expectedRound,reason:live.dataGapReason,
+      missingFeatures:live.fast8Quality.missingFeatures,
+      inputVersion:live.fast8Quality.inputVersion,
+      policyVersion:VIP75_DATA_GAP_POLICY_VERSION,
+      orderEmitted:false});
   }
-  const live={round:expectedRound,status:'PENDING',signal:null,
-    input:{round:expectedRound},generatedAt:null,
-    source:FAST8_SOURCE,model:'zl_new_vip75',modelVersion:FROZEN_VIP75_VERSION,
-    productionPolicy:productionPolicyName(),
-    pendingReason:'VIP75_AWAITING_EARLY_SIGNAL_BEFORE_7S_CONTINGENCY',
-    deadlineMs:FAST8_DEADLINE_MS,contingencyAtMs:FAST8_GATEWAY_FALLBACK_AT_MS,
-    otherProductionSourcesPaused:true};
+  if(now>=expectedRound+FAST8_DEADLINE_MS &&
+      vip75DataGapExpiredRound!==expectedRound){
+    vip75DataGapExpiredRound=expectedRound;
+    log('vip75_data_unavailable_no_trade',{round:expectedRound,
+      elapsedMs:now-expectedRound,reason:live.dataGapReason,
+      missingFeatures:live.fast8Quality.missingFeatures,
+      policyVersion:VIP75_DATA_GAP_POLICY_VERSION,
+      orderEmitted:false,trainedPrediction:false});
+  }
   logProductionSignalState(live);
   return {ok:true,live};
 }

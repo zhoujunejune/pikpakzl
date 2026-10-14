@@ -326,6 +326,8 @@ async function loadDirectionModes(){
   directionModeReady=true;policy=state.policy;
   sources.forEach(function(src){src.mode=state.modes[src.id]==='INVERSE'?'反向':'正向'});
   renderDirectionModes();
+  // Recompute theoretical mapped hit rate after asynchronous settings arrive.
+  load();
  }catch(err){
   directionModeReady=false;renderDirectionModes();
   e('directionModeMessage').textContent='方向配置读取失败：'+(err.message||err);

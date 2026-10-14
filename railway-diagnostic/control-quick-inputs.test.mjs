@@ -29,6 +29,8 @@ test('amount and PIN are directly beneath wallet, before round/status and order 
  assert.equal(each(page,anchor),1);
  assert.ok(page.includes('onclick="setV(true)"'));
  assert.ok(page.includes('onclick="setV(false)"'));
+ assert.ok(page.includes('onclick="checkEgressIp()"'));
+ assert.ok(page.includes('id="egressProbeResult"'));
 });
 
 test('risk and model statistics panels inject using stable anchor, not moved amount field',()=>{

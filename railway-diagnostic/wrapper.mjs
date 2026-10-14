@@ -578,6 +578,26 @@ const clientJs = String.raw`(function(){
     });
   }
 
+
+  window.checkEgressIp=function(){
+    var pinEl=el('pin'),button=el('egressProbeBtn');
+    if(!pinEl||!pinEl.value){text('egressProbeResult','请先填写上方控制 PIN');return;}
+    if(button){button.disabled=true;button.textContent='检测中...';}
+    text('egressProbeResult','正在查询 Railway 服务器公网出口...');
+    request('POST','/api/egress-ip',{pin:pinEl.value},function(code,j){
+      if(button){button.disabled=false;button.textContent='检测 Railway 出口 IP（只读）';}
+      if(code!==200||!j.ok){text('egressProbeResult',(j&&j.error)||'检测失败');return;}
+      var consistency=j.consistency==='MATCH'?'两个来源一致':
+        j.consistency==='DIFFERENT_EGRESS_IPS'?'注意：两个来源的IP不同':'仅一个来源成功';
+      var result='IP：'+(j.ip||'-')+' | 国家：'+(j.country||'-')+
+        ' | 地区：'+(j.region||'-')+' | 运营商：'+(j.org||'-')+
+        ' | '+consistency;
+      if(j.secondProviderIp&&j.secondProviderIp!==j.ip)
+        result+=' | 第二来源：'+j.secondProviderIp+' / '+(j.secondProviderCountry||'-');
+      text('egressProbeResult',result+'。仅代表检测服务所见的出口，非币安资格认定。');
+    });
+  };
+
   window.setV=function(v){
     var amountEl=el('amount'),pinEl=el('pin');
     var a=Number(amountEl&&amountEl.value);

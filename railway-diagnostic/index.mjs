@@ -4,6 +4,7 @@ import { createClient } from 'redis';
 import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
 import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction} from './order-direction-policy.mjs';
+import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
@@ -758,7 +759,7 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
 <h2>5分钟 API 实盘确认控制台</h2>
 <div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：新一轮 LOCKED → 后端先准备市场/方向（不提前拿 Quote）→ 你点一次“确认下单” → 后端即时获取最新 Quote → 立刻调用 Binance Prediction 下单 API → 再核验真实订单状态。</div></div>
 <div class="c"><div class="k">Prediction 可用余额</div><div class="wallet" id="walletBalance">读取中...</div><div class="muted" id="walletMeta">正在连接 Binance Prediction...</div></div>
-<div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随新信号</button><button class="stop" onclick="setV(false)">停止跟随</button><div class="muted" id="quickRiskState" role="status" aria-live="polite" style="margin-top:12px">风控进程状态：读取中…</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
+<div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随新信号</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted" id="quickRiskState" role="status" aria-live="polite" style="margin-top:12px">风控进程状态：读取中…</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
 <div class="c" id="realRiskStatusCard" style="border:1px solid #435069">
   <div class="k">交易风控 · 真实运行状态</div>
   <div class="big" id="realRiskHeadline" role="status" aria-live="polite" style="font-size:21px;margin:8px 0">正在连接风控监控...</div>
@@ -835,6 +836,13 @@ async function readBody(req) {
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+
+  if (req.method === 'POST' && url.pathname === '/api/egress-ip') {
+    const body = await readBody(req);
+    if (!pinOK(body.pin)) return send(res, 401, {ok:false,error:'控制 PIN 错误'});
+    const result = await probeRailwayEgress();
+    return send(res, result.ok ? 200 : 502, result);
+  }
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
     return send(res, 200, {

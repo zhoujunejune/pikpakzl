@@ -11,7 +11,7 @@ export const ORDER_MODE_REDIS_KEY='trade-control:direction-mode:v4';
 export const LEGACY_ORDER_MODE_REDIS_KEY='trade-control:direction-mode:v3';
 const SIDES=['UP','DOWN'];
 const MODE_VALUES=['FORWARD','INVERSE','OFF'];
-let state={ready:false,modes:{},revision:null,updatedAt:null};
+let state={ready:false,modes:{},revision:null,updatedAt:null,effectiveAfterRound:null};
 let redis=null,opening=null,writing=false;
 
 export function validateDirectionModes(modes){
@@ -50,11 +50,13 @@ export function applyDirectionSettings(saved){
   if(!/^[a-zA-Z0-9-]{1,80}$/.test(revision))throw Error('INVALID_REVISION');
   const updatedAt=saved.updatedAt??null;
   if(updatedAt!==null&&(typeof updatedAt!=='string'||!Number.isFinite(Date.parse(updatedAt))))throw Error('INVALID_DATE');
-  state={ready:true,modes,revision,updatedAt};
+  const effectiveAfterRound=saved.effectiveAfterRound??null;
+  if(effectiveAfterRound!==null&&(!Number.isSafeInteger(effectiveAfterRound)||effectiveAfterRound<0))throw Error('INVALID_EFFECTIVE_ROUND');
+  state={ready:true,modes,revision,updatedAt,effectiveAfterRound};
   return directionSettingsSnapshot();
 }
 export function invalidateDirectionSettings(){
-  state={ready:false,modes:{},revision:null,updatedAt:null};
+  state={ready:false,modes:{},revision:null,updatedAt:null,effectiveAfterRound:null};
 }
 
 async function client(){
@@ -99,11 +101,12 @@ export async function refreshDirectionSettings(){return hydrateDirectionSettings
 
 // Redis Lua CAS prevents simultaneous writes from losing another client's edits.
 const CAS_SCRIPT="local cur=redis.call('GET',KEYS[1]); if not cur then return 'MISSING' end; if cur~=ARGV[1] then return 'CONFLICT' end; redis.call('SET',KEYS[1],ARGV[2]); return 'OK'";
-export async function setDirectionMode(source,direction,mode,expectedRevision){
+export async function setDirectionMode(source,direction,mode,expectedRevision,effectiveAfterRound=null){
   if(!ORDER_SOURCES.includes(source))throw Error('INVALID_SOURCE');
   if(!SIDES.includes(direction))throw Error('INVALID_DIRECTION');
   if(!MODE_VALUES.includes(mode))throw Error('INVALID_MODE');
   if(typeof expectedRevision!=='string'||!expectedRevision)throw Error('INVALID_EXPECTED_REVISION');
+  if(effectiveAfterRound!==null&&(!Number.isSafeInteger(effectiveAfterRound)||effectiveAfterRound<0))throw Error('INVALID_EFFECTIVE_ROUND');
   if(writing)throw Error('DIRECTION_UPDATE_IN_PROGRESS');
   writing=true;
   try{
@@ -115,7 +118,7 @@ export async function setDirectionMode(source,direction,mode,expectedRevision){
     if(saved.revision!==expectedRevision)throw Error('DIRECTION_REVISION_CONFLICT');
     if(saved.modes[source][direction]===mode)return {changed:false,...directionSettingsSnapshot()};
     const updated={modes:{...saved.modes,[source]:{...saved.modes[source],[direction]:mode}},
-      revision:crypto.randomUUID(),updatedAt:new Date().toISOString()};
+      revision:crypto.randomUUID(),updatedAt:new Date().toISOString(),effectiveAfterRound};
     const result=await db.eval(CAS_SCRIPT,{keys:[ORDER_MODE_REDIS_KEY],arguments:[raw,JSON.stringify(updated)]});
     if(result!=='OK')throw Error(result==='CONFLICT'?'DIRECTION_REVISION_CONFLICT':'DIRECTION_CONFIGURATION_MISSING');
     return {changed:true,...applyDirectionSettings(updated)};

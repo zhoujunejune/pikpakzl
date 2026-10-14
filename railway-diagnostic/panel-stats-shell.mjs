@@ -212,7 +212,7 @@ var all=(j.records||[]).filter(function(x){return x.productionModel==='zl_new_vi
 function official(x){return x.productionActual==='UP'||x.productionActual==='DOWN'?x.productionActual:null}
 function pred(x){return x.productionPrediction==='UP'||x.productionPrediction==='DOWN'?x.productionPrediction:null}
 function derived(x){var p=pred(x),a=official(x);return !a?'PENDING':(!p?'NO_DECISION':(p===a?'HIT':'MISS'))}
-var settled=all.filter(function(x){return !!official(x)}),decided=settled.filter(function(x){return !!pred(x)});
+var settled=all.filter(function(x){return !!official(x)&&x.productionFallbackUsed!==true&&x.productionModelVersion===j.activeProductionModel.version}),decided=settled.filter(function(x){return !!pred(x)});
 var correct=decided.filter(function(x){return derived(x)==='HIT'}).length,wrong=decided.filter(function(x){return derived(x)==='MISS'}).length;
 var s={settledRounds:settled.length,decidedRounds:decided.length,correct:correct,wrong:wrong,noDecision:settled.length-decided.length,accuracyPct:decided.length?correct*100/decided.length:null,coveragePct:settled.length?decided.length*100/settled.length:null};
 e('rsAccuracy').innerHTML=s.accuracyPct==null?'原模型命中率：-':'原模型命中率：<span class="on">'+Number(s.accuracyPct).toFixed(2)+'%</span>';
@@ -238,6 +238,8 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
 <div class="kv"><div class="k">下单信号（反向下单）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
+<div class="kv"><div class="k">反向下单方向命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
+<div class="kv"><div class="k">反向方向命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
 </div>
@@ -261,9 +263,13 @@ fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  e('activeFast8Name').textContent=model.id+' · 唯一现役';
  e('activeFast8Direction').textContent=dir;
  e('activeFast8Accuracy').textContent=m.accuracyPct==null?'尚无新结算':Number(m.accuracyPct).toFixed(2)+'%';
+ var valid=Number(m.settledRounds),misses=Number(m.misses),hits=Number(m.hits);
+ var settledValid=Number.isFinite(valid)&&valid>0&&Number.isFinite(misses)&&Number.isFinite(hits)&&hits+misses===valid;
+ e('activeFast8InverseAccuracy').textContent=settledValid?(100*misses/valid).toFixed(2)+'%':'尚无新结算';
+ e('activeFast8InverseHitMiss').textContent=settledValid?(misses+' / '+hits+'（'+valid+'轮）'):'-';
  e('activeFast8HitMiss').textContent=x(m.hits)+' / '+x(m.misses);
  e('activeFast8Coverage').textContent=x(m.signalRounds)+' 轮'+(m.coveragePct==null?'':' · '+Number(m.coveragePct).toFixed(1)+'%');
- e('activeFast8Note').textContent='8秒内冻结 · 原始VIP75有效预测已结算 '+x(m.settledRounds)+' 轮 · 无信息方向 '+x(m.noInformationRounds)+' 轮（不计入VIP75准确率） · 准确率不保证'+(j.stale?' · ⚠ 统计缓存已过期':'');
+ e('activeFast8Note').textContent='8秒内冻结 · 原版VIP75有效预测已结算 '+x(m.settledRounds)+' 轮 · 无信息方向 '+x(m.noInformationRounds)+' 轮（不计入模型及反向命中率） · 反向方向命中率仅按官方结算推算，不代表已成交或盈利'+(j.stale?' · ⚠ 统计缓存已过期':'');
 })
 .catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }

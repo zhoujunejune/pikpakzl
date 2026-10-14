@@ -51,7 +51,7 @@ test('no previous-minute snapshot can become a new-round prediction',t=>{
   assert.ok(['UP','DOWN'].includes(d.externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction));
   assert.equal(f.published.length,1);
 });
-test('fresh aligned current-round regime and PM quote lock without prewarm',t=>{
+test('fresh current-round regime alone locks without quote or prewarm',t=>{
   const f=fixture(t);
   assert.equal(capture(f),true);
   f.time(R+LOCK_MS+10);
@@ -62,14 +62,14 @@ test('fresh aligned current-round regime and PM quote lock without prewarm',t=>{
   assert.equal(d.maxEventTimeMs,R+950);
   assert.equal(r.fullQuality,true);
   assert.equal(r.predictions.FLOW_BOOK_PROXY_V1.direction,'UP');
-  assert.equal(r.predictions.FLOW_BOOK_PROXY_V1.featureCount,2);
+  assert.equal(r.predictions.FLOW_BOOK_PROXY_V1.featureCount,1);
   assert.equal(r.predictions.FLOW_BOOK_PROXY_V1.preWeight,0);
   assert.equal(r.preparation,null);
   assert.equal(f.published.length,1);
   f.time(R+6000);
   assert.equal(f.engine.tick().externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction,'UP');
 });
-test('current-round regime alone remains usable but marks quote absence',t=>{
+test('missing PM quote cannot affect valid regime-only direction or quality',t=>{
   const f=fixture(t);
   const data={...facts(-1),predictionMarketRound:PREV};
   assert.equal(capture(f,{data}),true);
@@ -78,8 +78,9 @@ test('current-round regime alone remains usable but marks quote absence',t=>{
   assert.equal(v.direction,'DOWN');
   assert.equal(v.featureCount,1);
   assert.equal(v.fallback,false);
-  assert.equal(d.externalResearch.fullQuality,false);
+  assert.equal(d.externalResearch.fullQuality,true);
   assert.ok(d.dataQuality.includes('PM_MISSING_OR_UNALIGNED'));
+  assert.deepEqual(d.externalResearch.dataQuality,[]);
   assert.equal(v.preparationUsed,false);
 });
 test('true post-boundary data with stale upstream round LABEL remains allowed but old PM price is rejected',t=>{
@@ -119,7 +120,7 @@ test('aligned current-round data replaces a provisional delayed-label bridge',t=
   assert.equal(d.externalResearch.fullQuality,true);
   assert.equal(d.externalResearch.predictions.FLOW_BOOK_PROXY_V1.direction,'UP');
 });
-test('late shadow checkpoints compare same current-only V8 model without rewriting the live lock',t=>{
+test('late shadow checkpoints compare same current-only V9 model without rewriting the live lock',t=>{
   const f=fixture(t);
   assert.equal(capture(f,{data:facts(-1)}),true);
   f.time(R+LOCK_MS+10);

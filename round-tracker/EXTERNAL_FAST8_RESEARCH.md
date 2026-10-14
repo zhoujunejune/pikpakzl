@@ -8,14 +8,14 @@ existing FAST8 worker at ~T+2s and enters the production lock through
 Binance Prediction 5-minute round IDs and the original frozen market
 snapshot, without network calls or separate paid infrastructure.
 
-FLOW_BOOK V8 directly scores ONLY current-round regimeScore (weight 0.05)
-and aligned predictionMarketUpMid (weight 0.03), normalized across present
-valid inputs (62.5%/37.5% when both are present). Previous-round PREP60
-collection and blending are REMOVED. A current-round snapshot with one
-valid input is scored from that input only; two valid aligned inputs
-are needed for full quality. With no current-round snapshot or no valid
-input, the existing NO_INFORMATION fallback is visibly tagged and still
-returns a binary direction (not a market forecast).
+FLOW_BOOK V9 uses ONLY current-round regimeScore (100% of the direct score).
+The BTC Prediction Market UP mid-price has been removed from direction
+scoring; its existence/freshness does not gate the classifier. Previous-
+round PREP60 preparation remains disabled. Positive regimeScore predicts
+UP, negative predicts DOWN. Missing or exact-zero regimeScore produces
+a separately tagged deterministic round-clock fallback, NOT the former
+momentum/historical-majority baseline and NOT a market forecast. No other
+feature directly contributes to score or fallback direction.
 Retained upstream regimeScore may still contain INDIRECT OFI, trend, and
 trade-pressure components: excluding them from the final score does not
 eliminate their causal influence inside regimeScore. The signal does **not** contain a fitted third-party model.
@@ -68,6 +68,17 @@ An aligned current-round observation always replaces a bridge and cannot be
 overwritten by a delayed previous-round label. Existing T+1.8s lock, T+8s
 deadline, fallbacks, and order/TP-SL paths are unchanged. Forward performance
 is tracked under a distinct model version and cannot be assumed improved.
+
+## 2026-10-14 use only regimeScore for production prediction (V9)
+User-directed deletion of predictionMarketUpMid from final direction
+calculation. Exactly one direct input (current-round regimeScore) now
+determines the sign; all other scoring terms remain removed. Quality
+classification ignores missing PM, trade-flow and depth signals because
+they are not direct production features. A zero/missing regime uses
+clock-parity no-information fallback rather than inherited momentum or
+historic-majority baseline. Keep no-WAIT direction contract, V8 absence of
+PREP60, 8-second cutoff, existing inverse-order execution and TP/SL.
+Forward accuracy is unknown and previous V8 labels are excluded from V9.
 
 ## 2026-10-14 remove previous-round 60s preparation entirely (V8)
 User-directed deletion of the live prewarm mechanism, including its

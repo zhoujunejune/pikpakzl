@@ -53,7 +53,7 @@ test('only one research candidate is computed, with UP/DOWN and no invented prob
   const d=v.predictions.FLOW_BOOK_PROXY_V1;
   assert.equal(d.direction,'UP');
   assert.equal(d.fallback,false);
-  assert.equal(d.evidence,'FROZEN_MICROSTRUCTURE_INPUT');
+  assert.equal(d.evidence,'FROZEN_REGIME_INPUT');
   assert.equal(v.fullQuality,true);
   assert.equal(v.executionEligible,false);
   assert.equal(v.autoPromotion,false);
@@ -73,15 +73,15 @@ test('direct OFI and 60s trade pressure have no influence on FLOW_BOOK score',()
  assert.equal(a.strength,b.strength);
  assert.equal(a.featureCount,b.featureCount);
 });
-test('15s aggressive flow and currentScore do not directly influence V7 direction or strength',()=>{
+test('15s aggressive flow and currentScore do not directly influence V9 direction or strength',()=>{
  const a=externalResearchDirections(features,current).predictions.FLOW_BOOK_PROXY_V1;
  const b=externalResearchDirections({...features,tradePressure15s:-1,currentScore:-1},current).predictions.FLOW_BOOK_PROXY_V1;
  assert.equal(a.direction,b.direction);
  assert.equal(a.strength,b.strength);
  assert.equal(a.featureCount,b.featureCount);
- assert.equal(a.featureCount,2);
+ assert.equal(a.featureCount,1);
 });
-test('V8 ignores any supplied legacy prewarm and uses current-round regime only',()=>{
+test('V9 ignores any supplied legacy prewarm and uses current-round regime only',()=>{
  const legacy={ready:true,nextRoundStartMs:ROUND,predictionMarketContractIncluded:false,
   previewScore:-1,directionPreview:'DOWN',sampleCount:120};
  const only={regimeScore:0.6};
@@ -95,27 +95,40 @@ test('V8 ignores any supplied legacy prewarm and uses current-round regime only'
  assert.equal(d.preWeight,0);
  assert.equal(b.preparation,null);
 });
-test('regime and current-round PM mid are the only direct scoring inputs',()=>{
+test('regimeScore is the ONLY direct scoring input, regardless of PM quote',()=>{
  const base=externalResearchDirections(features,current).predictions.FLOW_BOOK_PROXY_V1;
  const altered=externalResearchDirections({...features,
   microScore:-1,currentTrendScore:-1,normalizedMomentum60s:-1,
-  currentScore:-1,tradePressure15s:-1,tradePressure60s:-1,ofiNormalized5s:-1},current)
+  currentScore:-1,tradePressure15s:-1,tradePressure60s:-1,ofiNormalized5s:-1,
+  predictionMarketUpMid:0.01},current)
   .predictions.FLOW_BOOK_PROXY_V1;
  assert.equal(base.direction,altered.direction);
  assert.equal(base.strength,altered.strength);
- assert.equal(base.featureCount,2);
+ assert.equal(base.featureCount,1);
  const down=externalResearchDirections({...features,regimeScore:-1,
-  predictionMarketUpMid:0.1},current).predictions.FLOW_BOOK_PROXY_V1;
+  predictionMarketUpMid:0.99},current).predictions.FLOW_BOOK_PROXY_V1;
  assert.equal(down.direction,'DOWN');
  assert.notEqual(down.strength,base.strength);
 });
-test('unaligned PM is not invented: regime-only direction is marked degraded',()=>{
+test('regime-only snapshot is fully qualified even without PM quote',()=>{
  const data=externalResearchDirections({regimeScore:0.8},current);
  const v=data.predictions.FLOW_BOOK_PROXY_V1;
  assert.equal(v.featureCount,1);
  assert.equal(v.direction,'UP');
  assert.equal(v.fallback,false);
- assert.equal(data.fullQuality,false);
+ assert.equal(data.fullQuality,true);
+ assert.equal(v.evidence,'FROZEN_REGIME_INPUT');
+});
+test('missing or zero regime emits clock-only fallback and ignores baseline, PM, momentum',()=>{
+  const noRegime=externalResearchDirections({predictionMarketUpMid:0.99,normalizedMomentum60s:1},
+    {...current,baselineDirection:'UP'}).predictions.FLOW_BOOK_PROXY_V1;
+  const zeroRegime=externalResearchDirections({regimeScore:0,predictionMarketUpMid:0.01},
+    {...current,baselineDirection:'UP'}).predictions.FLOW_BOOK_PROXY_V1;
+  assert.equal(noRegime.featureCount,0);
+  assert.equal(noRegime.fallback,true);
+  assert.equal(noRegime.direction,zeroRegime.direction);
+  assert.equal(noRegime.direction,'DOWN'); // deterministic clock parity, not legacy baseline
+  assert.equal(zeroRegime.fallback,true);
 });
 test('missing snapshots still produce UP/DOWN and honestly mark no-information fallback',()=>{
   const v=externalResearchDirections({},{
@@ -125,6 +138,14 @@ test('missing snapshots still produce UP/DOWN and honestly mark no-information f
   assert.equal(v.predictions.FLOW_BOOK_PROXY_V1.fallback,true);
   assert.equal(v.predictions.FLOW_BOOK_PROXY_V1.strength,null);
   assert.equal(v.fullQuality,false);
+});
+test('PM and other unused data quality issues do not downgrade a valid regime observation',()=>{
+ const a=externalResearchDirections({regimeScore:0.4},
+   {...current,dataQuality:['PM_MISSING_OR_UNALIGNED','DEPTH_MISSING_OR_STALE','TRADES_MISSING_OR_STALE']});
+ const p=a.predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(a.fullQuality,true);
+ assert.equal(p.evidence,'FROZEN_REGIME_INPUT');
+ assert.deepEqual(a.dataQuality,[]);
 });
 test('pre-round observations are rejected as prediction inputs, not reused',()=>{
   const v=externalResearchDirections(features,{...current,sourceAt:ROUND-248});

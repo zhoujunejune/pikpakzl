@@ -14,7 +14,7 @@ function sample(){
     publishedAtMs:R+2030,serverAvailableAtMs:R+2021,
     maxEventTimeMs:R-240,maxReceivedAtMs:R-150,
     capturedAtMs:R-145,presentFeatures:17,
-    externalResearch:{version:'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V8_CURRENT_ONLY_REGIME_PM',
+    externalResearch:{version:'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V9_REGIME_ONLY',
       predictedHorizonMs:300000,fullQuality:false,
       dataQuality:['PRE_ROUND_SNAPSHOT_REUSED'],
       predictions:{FLOW_BOOK_PROXY_V1:{direction:'DOWN',fallback:false,
@@ -56,7 +56,7 @@ test('full-quality one-model observation is tagged as frozen, not 65%-verified',
   const {stats,latest,readiness}=sample();
   latest.signal.externalResearch.fullQuality=true;
   latest.signal.externalResearch.dataQuality=[];
-  latest.signal.externalResearch.predictions.FLOW_BOOK_PROXY_V1.evidence='FROZEN_MICROSTRUCTURE_INPUT';
+  latest.signal.externalResearch.predictions.FLOW_BOOK_PROXY_V1.evidence='FROZEN_REGIME_INPUT';
   const result=selectExternalFast8Production(stats,latest,R,readiness);
   assert.equal(result.fallbackUsed,false);
   assert.equal(result.qualityStatus,'EXTERNAL_PRIMARY_FROZEN_INPUT');

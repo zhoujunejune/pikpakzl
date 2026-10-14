@@ -1,6 +1,7 @@
 // The sole active external BTC 5m FAST8 production candidate.
-// This is a lightweight, untrained order-flow/OFI proxy adapted from public
-// microstructure concepts, not a pretrained third-party model or a 65% claim.
+// Its current V9 scoring is an untrained direct regimeScore sign classifier.
+// The source regimeScore itself is an upstream historical-market composite,
+// not a pretrained third-party model or a verified 65% edge.
 import { EXTERNAL_RESEARCH_VERSION } from './external-btc5m-fast8-shadow.mjs';
 
 export const SINGLE_EXTERNAL_PRIMARY_ID = 'FLOW_BOOK_PROXY_V1';
@@ -24,7 +25,7 @@ export function selectExternalFast8Production(stats,latest,expectedRound,readine
       locked?.publishedAtMs > expectedRound + 8000)
     return {eligible:false,reason:'EXTERNAL_PRIMARY_NOT_FROZEN_WITHIN_8S'};
   const degraded = research.fullQuality !== true || prediction.fallback === true ||
-    prediction.evidence !== 'FROZEN_MICROSTRUCTURE_INPUT' ||
+    prediction.evidence !== 'FROZEN_REGIME_INPUT' ||
     (research.dataQuality || []).length > 0;
   return {
     eligible:true,reason:null,source:SINGLE_EXTERNAL_PRIMARY_SOURCE,

@@ -177,7 +177,6 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
         if (now < round + checkpointMs || now > round + checkpointMs + 750 ||
             saved.checkpoints?.[checkpointMs]) continue;
         const candidate = externalResearchDirections(features,{
-          baselineDirection:saved.decision.baselineDirection,
           snapshotAvailable:true,dataQuality:issues,
           sourceAt:source,roundStartMs:round,
         });
@@ -246,7 +245,7 @@ export function createFast8Engine({ dir, clock = Date.now, emit = () => {}, publ
     // Compute all independent counterfactual directions on EXACTLY the same
     // immutable pre-cutoff features. Never route them into production.
     const externalResearch = externalResearchDirections(features,{
-      baselineDirection:base.direction,snapshotAvailable:Boolean(snapshot),
+      snapshotAvailable:Boolean(snapshot),
       dataQuality:snapshot?.issues || ['NO_FRESH_SNAPSHOT'],
       sourceAt:snapshot?.sourceAt ?? null,roundStartMs:round,
     });

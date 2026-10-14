@@ -78,12 +78,14 @@ export function createFrozenVip75Fast8Probe({file,log=()=>{}}) {
       sourceWindow:prepared.sourceWindow,
       previousRoundFeatureCount:prepared.fromPrevious.length,
       currentRoundFeatureCount:prepared.fromCurrent.length,
+      previousBackupFeatureCount:prepared.fromPreviousBackup.length,
       priorContractQuoteUsed:prepared.priorContractQuoteUsed};
     log('vip75_frozen8_first_valid',{round:start,offsetMs:observedAt-start,
       direction,modelVersion:FROZEN_VIP75_VERSION,weightFingerprint:status.weightFingerprint,
       inputVersion:prepared.inputVersion,sourceRound:prepared.sourceRound,
       previousRoundFeatureCount:prepared.fromPrevious.length,
       currentRoundFeatureCount:prepared.fromCurrent.length,
+      previousBackupFeatureCount:prepared.fromPreviousBackup.length,
       priorContractQuoteUsed:prepared.priorContractQuoteUsed});
     return earliestValid;
   }
@@ -92,6 +94,7 @@ export function createFrozenVip75Fast8Probe({file,log=()=>{}}) {
     previousRoundInputCache:previousRoundInputs.report(),
     previousRoundFeatureCount:lastInput?.fromPrevious.length??0,
     currentRoundFeatureCount:lastInput?.fromCurrent.length??0,
+    previousBackupFeatureCount:lastInput?.fromPreviousBackup.length??0,
     priorContractQuoteUsed:lastInput?.priorContractQuoteUsed??false,
     inputVersion:lastInput?.inputVersion??null,
     productionEffect:'NONE_READ_ONLY_PROBE'};}

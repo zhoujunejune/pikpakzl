@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { createClient } from 'redis';
 import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
-import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
+import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,refreshDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -582,6 +582,12 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   prepareInFlight = true;
   lastPrepareAttemptAt = Date.now();
   try {
+    try { await refreshDirectionSettings(); } catch(err) {
+      console.error(JSON.stringify({event:'direction_mode_refresh_failed',error:String(err?.message||err)}));
+      return;
+    }
+    const settings=directionSettingsSnapshot();
+    if (settings.effectiveAfterRound != null && Number(signal.round)<=settings.effectiveAfterRound) return;
     const mapping=mappedOrderSignal(signal);
     if (!mapping.orderSignal) return;
     const intent = await prepareIntent({...signal,direction:mapping.orderSignal});
@@ -846,6 +852,8 @@ http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/direction-mode') {
+    try { await refreshDirectionSettings(); }
+    catch(err){return send(res,503,{ok:false,error:'方向配置未就绪：'+String(err?.message||err)})}
     const data=directionSettingsSnapshot();
     return send(res,data.ready?200:503,{ok:data.ready,...data});
   }
@@ -853,24 +861,25 @@ http.createServer(async (req, res) => {
     const body=await readBody(req);
     if(!pinOK(body.pin))return send(res,401,{ok:false,error:'控制 PIN 错误'});
     if(!directionSettingsSnapshot().ready)return send(res,503,{ok:false,error:'方向配置尚未同步'});
-    if(pendingAction?.state==='SUBMITTING')return send(res,409,{ok:false,error:'有订单正在提交，暂不能切换'});
+    if(['SUBMITTING','QUOTING'].includes(pendingAction?.state))return send(res,409,{ok:false,error:'有订单正在处理，暂不能切换'});
     try{
-      const data=await setDirectionMode(body.source,body.mode);
+      const data=await setDirectionMode(body.source,body.direction,body.mode,body.expectedRevision,currentRoundMs());
       if(data.changed){
         pendingAction=null;
         startAfterRound=currentRoundMs();
         lastPrepareAttemptAt=0;
       }
-      console.log(JSON.stringify({event:'direction_mode_changed',source:body.source,mode:body.mode,
+      console.log(JSON.stringify({event:'direction_mode_changed',source:body.source,direction:body.direction,mode:body.mode,
         revision:data.revision,changed:data.changed,at:new Date().toISOString()}));
       return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
     }catch(err){
       const message=String(err?.message||err);
-      return send(res,/INVALID_/.test(message)?400:503,{ok:false,error:message});
+      return send(res,/INVALID_/.test(message)?400:/CONFLICT|IN_PROGRESS/.test(message)?409:503,{ok:false,error:message});
     }
   }
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
+    try{await refreshDirectionSettings()}catch{}
     const mapping=mappedOrderSignal(signal);
     // The existing mobile UI renders these server-provided labels as text.
     // Do not suggest an inverse order when the direction is display-only.

@@ -13,13 +13,18 @@ function mounted(){
  const ids=['activeFast8Name','activeFast8Desc','activeFast8Direction','activeFast8Accuracy',
  'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection',
  'activeFast8InverseAccuracy','activeFast8InverseHitMiss','rsMeta','rsAccuracy','rsSettled',
- 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows','sourceRateRows'];
+ 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows','sourceRateRows','directionModeMessage'];
  return new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
 }
 async function execute(script,payload){
  const dom=mounted();
  const env={document:{readyState:'complete',getElementById:id=>dom.get(id)||null},
-   fetch:async()=>({ok:true,json:async()=>payload}),
+   window:{confirm:()=>true},
+   fetch:async url=>({ok:true,json:async()=>String(url).startsWith('/api/direction-mode')?{
+     ok:true,policy:'SOURCE_MODE_3WAY_V3:fixture',
+     modes:{SELECTIVE_V2_FAST8_PRIMARY:'FORWARD',EDGE_RESCUE_FAST8_PRIMARY:'FORWARD',
+       SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION:'INVERSE'}
+   }:payload}),
    localStorage:{setItem:()=>{},getItem:()=>null},
    setInterval:()=>0,Date,Math,Set,Array,Number,Error,Promise,String,Object,isFinite};
  new vm.Script(script).runInNewContext(env);
@@ -112,8 +117,10 @@ test('three independent strategy rows preserve sample counts and direction mappi
  assert.match(rows,/低置信度行情兜底/);
  assert.match(rows,/正向/);
  assert.match(rows,/反向/);
- assert.equal((rows.match(/1\/1 · 100\.00%/g)||[]).length,5);
+ assert.equal((rows.match(/1\/1 · 100\.00%/g)||[]).length,7);
  assert.match(rows,/0\/1 · 0\.00%/);
+ assert.match(primary,/UP胜率/);
+ assert.match(primary,/DOWN胜率/);
  assert.equal(d.get('activeFast8Accuracy').textContent,'66.67%');
  assert.equal(d.get('activeFast8InverseAccuracy').textContent,'100.00%');
  assert.doesNotMatch(rows,/zl_new_vip75/);

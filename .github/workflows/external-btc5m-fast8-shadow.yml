@@ -46,6 +46,8 @@ jobs:
           node --check railway-diagnostic/index.mjs
           node --check railway-diagnostic/wrapper.mjs
           node --check railway-diagnostic/egress-ip-diagnostic.mjs
+      - name: Install diagnostic test dependencies
+        run: npm --prefix railway-diagnostic install --no-audit --no-fund
       - name: Offline single-model regression without orders
         run: |
           node --test round-tracker/fast8-current-round-only.test.mjs round-tracker/external-btc5m-fast8-shadow.test.mjs round-tracker/external-fast8-primary.test.mjs round-tracker/fast8.test.mjs round-tracker/fast8-production-gate.test.mjs railway-diagnostic/control-quick-inputs.test.mjs railway-diagnostic/order-direction-policy.test.mjs railway-diagnostic/egress-ip-diagnostic.test.mjs

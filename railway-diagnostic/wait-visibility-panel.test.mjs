@@ -30,19 +30,19 @@ async function execute(script,payload){
 function fixture(){
  const past=Math.floor(Date.now()/300000)*300000;
  return {ok:true,settlementSource:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
-   activeProductionModel:{id:'FLOW_BOOK_PROXY_V1',onlyOneActive:true,deadlineMs:8000,
-     metrics:{signalRounds:3,settledRounds:2,hits:1,misses:1,accuracyPct:50,coveragePct:100,fallbackRounds:2}},
+   activeProductionModel:{id:'zl_new_vip75',version:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',onlyOneActive:true,deadlineMs:8000,
+     metrics:{signalRounds:3,settledRounds:2,hits:1,misses:1,accuracyPct:50,coveragePct:100,fallbackRounds:0,noInformationRounds:0}},
    records:[
-     {roundStartMs:past,productionModel:'FLOW_BOOK_PROXY_V1',productionPrediction:'DOWN',productionActual:null},
-     {roundStartMs:past-300000,productionModel:'FLOW_BOOK_PROXY_V1',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
-     {roundStartMs:past-600000,productionModel:'FLOW_BOOK_PROXY_V1',productionPrediction:'DOWN',productionActual:'UP',productionResult:'MISS'},
+     {roundStartMs:past,productionModel:'zl_new_vip75',productionModelVersion:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',productionPrediction:'DOWN',productionActual:null},
+     {roundStartMs:past-300000,productionModel:'zl_new_vip75',productionModelVersion:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
+     {roundStartMs:past-600000,productionModel:'zl_new_vip75',productionModelVersion:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774',productionPrediction:'DOWN',productionActual:'UP',productionResult:'MISS'},
      {roundStartMs:past-900000,productionModel:'ZL_FAST8_65',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
      {roundStartMs:past-1200000,productionModel:'SELECTIVE_V2',productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'},
    ]};
 }
-test('the injected trade frontend contains only sole external candidate and official stats',()=>{
+test('the injected frontend shows only frozen VIP75 and official stats',()=>{
  assert.ok(primary?.includes('id="activeFast8ModelCard"'));
- assert.ok(primary?.includes('FLOW_BOOK_PROXY_V1'));
+ assert.ok(primary?.includes('zl_new_vip75'));
  assert.ok(stats);
  assert.ok(mainScript);
  assert.ok(source.includes('${primaryCard}${statsCard}${marker}'));
@@ -56,19 +56,19 @@ test('the injected trade frontend contains only sole external candidate and offi
 });
 test('current model card reports live direction and only model-specific hit count',async()=>{
  const d=await execute(mainScript,fixture());
- assert.match(d.get('activeFast8Name').textContent,/FLOW_BOOK_PROXY_V1/);
+ assert.match(d.get('activeFast8Name').textContent,/zl_new_vip75/);
  assert.equal(d.get('activeFast8Direction').textContent,'DOWN');
  assert.equal(d.get('activeFast8Accuracy').textContent,'50.00%');
  assert.equal(d.get('activeFast8HitMiss').textContent,'1 / 1');
- assert.match(d.get('activeFast8Note').textContent,/官方结算 2 轮/);
+ assert.match(d.get('activeFast8Note').textContent,/有效预测已结算 2 轮/);
 });
 test('the settled history table excludes retired signal performance',async()=>{
  const d=await execute(stats,fixture());
  assert.match(d.get('rsAccuracy').innerHTML,/50.00%/);
  assert.equal(d.get('rsSettled').textContent,2);
  assert.equal(d.get('rsDecided').textContent,2);
- assert.match(d.get('rsMeta').textContent,/唯一现役：FLOW_BOOK_PROXY_V1/);
- assert.match(d.get('rsRows').innerHTML,/外部订单流 FAST8/);
+ assert.match(d.get('rsMeta').textContent,/唯一现役：zl_new_vip75/);
+ assert.match(d.get('rsRows').innerHTML,/zl_new_vip75 原版固定权重/);
  assert.doesNotMatch(d.get('rsRows').innerHTML,/Selective V2/);
  assert.doesNotMatch(d.get('rsRows').innerHTML,/ZL_FAST8_65/);
 });

@@ -44,7 +44,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   }
   try { await refreshDirectionSettings(); }
   catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'方向配置读取失败，已取消旧订单'}};}
-  if (!pendingOrderMatchesProduction(p,await getSignal({forceHttp:true}))) {
+  if (p.orderDirectionPolicy!==directionSettingsSnapshot().policy ||
+      p.mappingMode!==directionSettingsSnapshot().modes[p.productionSource]?.[p.productionSignal]) {
     pendingAction=null;
     return {status:409,body:{ok:false,error:'方向配置或当前原始信号已经变化'}};
   }

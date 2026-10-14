@@ -9,7 +9,6 @@ const read=name=>fs.readFileSync(new URL('./'+name,import.meta.url),'utf8');
 const service=read('daily-loss-audit-service.mjs');
 const shell=read('control-shell.mjs');
 const page=read('index.mjs');
-const client=read('daily-loss-client.js');
 const wrapper=read('wrapper.mjs');
 
 test('Beijing day changes at UTC 16:00 and prior-day cross-boundary settlements are included',()=>{
@@ -82,21 +81,16 @@ test('scheduled audits use only signed Binance GET, run every 15min, persist res
  assert.match(service,/offset:0,limit:PAGE_SIZE/);
  assert.match(service,/verified:false/);
  assert.match(service,/enforcementEnabled:false/);
- assert.match(shell,/startDailyLossAuditService\(\)/);
- assert.match(shell,/stopDailyLossAuditService\(\)/);
- assert.match(shell,/url.pathname === '\/api\/daily-loss-audit'/);
- assert.match(shell,/verifiedForLiveFuse: false/);
+ assert.doesNotMatch(shell,/startDailyLossAuditService\(\)|stopDailyLossAuditService\(\)/);
+ assert.doesNotMatch(shell,/url.pathname === '\/api\/daily-loss-audit'/);
  assert.doesNotMatch(wrapper,/daily-loss-audit-service|DAILY_LOSS_AUDIT/);
 });
-test('frontend renders non-certified status and never turns provisional PnL into verified remaining budget',()=>{
- const ui=page.indexOf('id="dailyLossAuditArea"'),limit=page.indexOf('id="dailyLossCard"');
- assert.ok(ui>limit);
- for(const id of ['dailyLossAuditHeadline','dailyLossAuditCount','dailyLossAuditExposure',
-  'dailyLossAuditTests','dailyLossAuditAt','dailyLossAuditErrors'])assert.ok(page.includes('id="'+id+'"'));
- assert.match(client,/\/api\/daily-loss-audit\?ts=/);
- assert.match(client,/readAudit/);
- assert.match(client,/每15分钟/);
- assert.match(client,/初步，未核验/);
- assert.match(client,/不可计算（未验收）/);
- assert.doesNotMatch(client,/verifiedForLiveFuse:true|enforcementEnabled:true/);
+test('daily-loss preview and auditor are inactive; TP/SL monitor remains online',()=>{
+ assert.doesNotMatch(page,/id="dailyLossCard"|id="dailyLossAuditArea"/);
+ assert.doesNotMatch(shell,/daily-loss-client\.js|\/api\/daily-loss-limit|\/api\/daily-loss-audit/);
+ assert.doesNotMatch(shell,/startDailyLossAuditService\(\)|stopDailyLossAuditService\(\)/);
+ assert.match(page,/id="realRiskStatusCard"/);
+ assert.match(shell,/\/risk-monitor-client\.js/);
+ assert.match(shell,/\/api\/risk-control/);
+ assert.doesNotMatch(wrapper,/daily-loss-audit-service|DAILY_LOSS_AUDIT/);
 });

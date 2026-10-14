@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { createClient } from 'redis';
 import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
-import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction} from './order-direction-policy.mjs';
+import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -564,7 +564,7 @@ function publicPending() {
 }
 
 async function prepareWorker(signalOverride = null, trigger = 'poll') {
-  if (!enabled || !tradeAmountText || prepareInFlight) return;
+  if (!enabled || !tradeAmountText || prepareInFlight || !directionSettingsSnapshot().ready) return;
   const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
   // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
@@ -585,6 +585,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
     const mapping=mappedOrderSignal(signal);
     if (!mapping.orderSignal) return;
     const intent = await prepareIntent({...signal,direction:mapping.orderSignal});
+    if (directionSettingsSnapshot().policy !== mapping.mappingPolicy) return;
     if (!intent.ok) {
       pendingAction = {
         state: 'PREPARE_ERROR',
@@ -594,7 +595,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
         productionSource: mapping.productionSource,
         orderSignal: mapping.orderSignal,
         mappingMode: mapping.mappingMode,
-        orderDirectionPolicy: ORDER_DIRECTION_POLICY,
+        orderDirectionPolicy: mapping.mappingPolicy,
         score: signal.score,
         signalId: signal.signalId ?? null,
         model: signal.model ?? SIGNAL_MODEL_NAME,
@@ -619,7 +620,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       productionSource: mapping.productionSource,
       orderSignal: mapping.orderSignal,
       mappingMode: mapping.mappingMode,
-      orderDirectionPolicy: ORDER_DIRECTION_POLICY,
+      orderDirectionPolicy: mapping.mappingPolicy,
       score: signal.score,
       signalId: signal.signalId ?? null,
       model: signal.model ?? SIGNAL_MODEL_NAME,
@@ -767,6 +768,9 @@ async function refreshLastOrderStatus(force = false) {
   return orderStatusRefreshPromise;
 }
 
+void hydrateDirectionSettings().catch(e=>console.error(JSON.stringify({
+  event:'direction_mode_hydrate_failed',error:String(e?.message||e)})));
+setInterval(()=>{if(!directionSettingsSnapshot().ready)void hydrateDirectionSettings().catch(()=>{});},5000);
 void startSignalRedisSubscriber();
 startSignalWebSocket();
 setInterval(prepareWorker, 1200);
@@ -841,8 +845,33 @@ http.createServer(async (req, res) => {
     return send(res, 200, page, 'text/html; charset=utf-8');
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/direction-mode') {
+    const data=directionSettingsSnapshot();
+    return send(res,data.ready?200:503,{ok:data.ready,...data});
+  }
+  if (req.method === 'POST' && url.pathname === '/api/direction-mode') {
+    const body=await readBody(req);
+    if(!pinOK(body.pin))return send(res,401,{ok:false,error:'控制 PIN 错误'});
+    if(!directionSettingsSnapshot().ready)return send(res,503,{ok:false,error:'方向配置尚未同步'});
+    if(pendingAction?.state==='SUBMITTING')return send(res,409,{ok:false,error:'有订单正在提交，暂不能切换'});
+    try{
+      const data=await setDirectionMode(body.source,body.mode);
+      if(data.changed){
+        pendingAction=null;
+        startAfterRound=currentRoundMs();
+        lastPrepareAttemptAt=0;
+      }
+      console.log(JSON.stringify({event:'direction_mode_changed',source:body.source,mode:body.mode,
+        revision:data.revision,changed:data.changed,at:new Date().toISOString()}));
+      return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
+    }catch(err){
+      const message=String(err?.message||err);
+      return send(res,/INVALID_/.test(message)?400:503,{ok:false,error:message});
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
+    const mapping=mappedOrderSignal(signal);
     // The existing mobile UI renders these server-provided labels as text.
     // Do not suggest an inverse order when the direction is display-only.
     const displayOnly = signal?.status==='LOCKED' && signal.executionEligible===false;
@@ -856,10 +885,12 @@ http.createServer(async (req, res) => {
       quoteMode: 'FRESH_ON_CONFIRM',
       signal:displaySignal,
       productionSignal: signal?.status==='LOCKED'?signal.direction:null,
-      orderSignal: displayOnly?null:mappedOrderSignal(signal).orderSignal,
-      orderMappingMode: mappedOrderSignal(signal).mappingMode,
-      orderProductionSource: mappedOrderSignal(signal).productionSource,
-      orderDirectionPolicy: ORDER_DIRECTION_POLICY,
+      orderSignal: displayOnly?null:mapping.orderSignal,
+      orderMappingMode: mapping.mappingMode,
+      orderProductionSource: mapping.productionSource,
+      orderDirectionPolicy: mapping.mappingPolicy,
+      directionModes:directionSettingsSnapshot().modes,
+      directionModeReady:directionSettingsSnapshot().ready,
       signalModel: SIGNAL_MODEL_NAME,
       signalTransport: { ...signalTransport },
       balance,

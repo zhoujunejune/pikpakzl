@@ -294,15 +294,17 @@ function buildLockedSignalEnvelope(row, live) {
     direction,
     lockedAt,
     generatedAt,
-    score: Number.isFinite(Number(row?.productionScore ?? live?.signal?.score))
-      ? Number(row?.productionScore ?? live?.signal?.score)
-      : null,
-    confidence: Number.isFinite(Number(row?.productionConfidence ?? live?.signal?.confidence))
-      ? Number(row?.productionConfidence ?? live?.signal?.confidence)
-      : null,
-    modelProbability: Number.isFinite(Number(live?.signal?.modelProbability))
+    score: (row?.productionScore ?? live?.signal?.score)==null ? null
+      : (Number.isFinite(Number(row?.productionScore ?? live?.signal?.score))
+        ? Number(row?.productionScore ?? live?.signal?.score) : null),
+    confidence: (row?.productionConfidence ?? live?.signal?.confidence)==null ? null
+      : (Number.isFinite(Number(row?.productionConfidence ?? live?.signal?.confidence))
+        ? Number(row?.productionConfidence ?? live?.signal?.confidence) : null),
+    modelProbability: live?.signal?.modelProbability!=null &&
+      Number.isFinite(Number(live.signal.modelProbability))
       ? Number(live.signal.modelProbability)
-      : (Number.isFinite(Number(row?.productionConfidence)) ? Number(row.productionConfidence) : null),
+      : (row?.productionConfidence!=null &&
+         Number.isFinite(Number(row.productionConfidence)) ? Number(row.productionConfidence) : null),
     source: 'SITE_PRODUCTION_LOCK',
     upstreamSource: row?.productionSource ?? live?.source ?? null,
     upstreamModel: row?.productionModel ?? live?.model ?? null,

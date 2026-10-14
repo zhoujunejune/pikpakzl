@@ -71,10 +71,11 @@ test('production route uses ONLY frozen VIP75; no FLOW_BOOK or worker fallback',
  assert.match(route,/vip75Frozen8Probe\.decision\(expectedRound\)/);
  assert.match(route,/model:'zl_new_vip75'/);
  assert.match(route,/vip75_frozen8_production_lock/);
- assert.match(route,/vip75_no_information_direction_locked/);
- assert.match(route,/FAST8_GATEWAY_FALLBACK_AT_MS/);
- assert.match(route,/status:'PENDING'/);
+ assert.match(route,/vip75_data_unavailable_no_trade/);
+ assert.match(route,/VIP75_DATA_GAP_DIAGNOSTIC_MS/);
+ assert.match(route,/vip75DataGapResponse/);
  assert.doesNotMatch(route,/status:'WAIT'/);
+ assert.doesNotMatch(route,/vip75NoInformationDirection/);
  assert.doesNotMatch(route,/selectExternalFast8Production/);
  assert.doesNotMatch(route,/SINGLE_EXTERNAL_PRIMARY_ID/);
  assert.doesNotMatch(route,/FAST8_GATEWAY_PREVIOUS_WORKER_DIRECTION_REUSED/);

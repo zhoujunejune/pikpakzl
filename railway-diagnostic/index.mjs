@@ -171,7 +171,9 @@ function signalFromProductionLive(live, transport = 'http') {
   ) {
     return {
       round: Number.isFinite(round) ? round : currentRound,
-      status: 'WAIT',
+      status:live?.model==='SELECTIVE_V2_FAST8_PREWARM_V1'
+        ? (live?.status==='DATA_UNAVAILABLE'?'DATA_UNAVAILABLE':'PENDING') : 'WAIT',
+      executionEligible:false,
       direction: null,
       score: null,
       confidence: null,
@@ -195,6 +197,8 @@ function signalFromProductionLive(live, transport = 'http') {
     upstreamModel: live?.model ?? null,
     source: live?.source ?? 'PRODUCTION_SIGNAL',
     generatedAt: live?.generatedAt ?? null,
+    executionEligible:live?.executionEligible!==false,
+    qualityGate:live?.fallbackUsed===true?'UNVERIFIED_DISPLAY_ONLY':'QUALIFIED_DIRECTION',
     productionPolicy: live?.productionPolicy ?? null,
     frozen: live?.frozen === true,
     signalId: SIGNAL_MODEL_NAME + ':' + round,
@@ -227,6 +231,8 @@ function normalizePushedSignal(envelope, transport) {
     upstreamModel: envelope.upstreamModel ?? null,
     source: envelope.upstreamSource ?? envelope.source ?? 'SITE_PRODUCTION_LOCK',
     generatedAt: envelope.generatedAt ?? null,
+    executionEligible:envelope.executionEligible!==false,
+    qualityGate:envelope.qualityGate??null,
     productionPolicy: envelope.productionPolicy ?? null,
     frozen: true,
     signalId,
@@ -561,6 +567,12 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   if (!enabled || !tradeAmountText || prepareInFlight) return;
   const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
+  // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
+  if (signal.executionEligible===false) {
+    console.log(JSON.stringify({event:'unverified_signal_order_blocked',
+      round:signal.round,source:signal.source,qualityGate:signal.qualityGate}));
+    return;
+  }
   if (startAfterRound != null && String(signal.round) === String(startAfterRound)) return;
   if (submittedRounds.has(String(signal.round))) return;
   if (pendingAction?.state === 'READY' && String(pendingAction.round) === String(signal.round)) return;
@@ -825,15 +837,20 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
+    // The existing mobile UI renders these server-provided labels as text.
+    // Do not suggest an inverse order when the direction is display-only.
+    const displayOnly = signal?.status==='LOCKED' && signal.executionEligible===false;
+    const displaySignal = displayOnly
+      ? {...signal,status:'低置信度（仅展示，不下单）'} : signal;
     return send(res, 200, {
       ok: true,
       enabled,
       amount: tradeAmountText,
       mode: 'API_CONFIRM_LIVE',
       quoteMode: 'FRESH_ON_CONFIRM',
-      signal,
+      signal:displaySignal,
       productionSignal: signal?.status==='LOCKED'?signal.direction:null,
-      orderSignal: mappedOrderSignal(signal).orderSignal,
+      orderSignal: displayOnly?null:mappedOrderSignal(signal).orderSignal,
       orderDirectionPolicy: ORDER_DIRECTION_POLICY,
       signalModel: SIGNAL_MODEL_NAME,
       signalTransport: { ...signalTransport },

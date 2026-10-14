@@ -250,13 +250,20 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="muted" id="activeFast8Desc">BTC 5分钟 · 上一轮行情预热 · 8秒内锁定 · 新版独立统计</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
-<div class="kv"><div class="k">下单信号（反向下单）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
+<div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
-<div class="kv"><div class="k">反向下单方向命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
-<div class="kv"><div class="k">反向方向命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
+<div class="kv"><div class="k">下单方向推算命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
+<div class="kv"><div class="k">下单方向推算命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
 </div>
+<div class="k" style="margin-top:14px">三类信号 · 分别统计胜率（仅当前8秒版本）</div>
+<div style="overflow:auto;margin-top:8px;border:1px solid #2b313d;border-radius:10px">
+<table style="width:100%;border-collapse:collapse;min-width:630px;font-size:12px">
+<thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>下单模式</th><th>已结算</th><th>原始方向命中率</th><th>按当前下单规则推算命中率</th></tr></thead>
+<tbody id="sourceRateRows"><tr><td colspan="5" style="padding:10px 6px">统计读取中...</td></tr></tbody>
+</table></div>
+<div class="muted" style="margin-top:7px">按 Binance Prediction 官方结算、当前方向映射规则分别回算。含规则切换前的历史方向时，不代表当时实际订单。不是成交胜率或收益率。</div>
 <div class="muted" id="activeFast8Note" style="margin-top:10px">仅统计新版本 Selective V2 / Edge Rescue / 真实行情兜底的官方结算；低置信度方向可下单，但不代表具有预测优势。</div>
 </div>`;
 const primaryScript = `<script>(function(){
@@ -264,6 +271,14 @@ const primaryScript = `<script>(function(){
 function e(x){return document.getElementById(x)}
 function x(v){return v==null?'-':String(v)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
+var policy='SOURCE_AWARE_SELECTIVE8_V1';
+var sources=[
+ {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',mode:'正向'},
+ {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',mode:'正向'},
+ {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',mode:'反向'}
+];
+function bySource(z){return sources.find(function(x){return x.id===z.productionSource})||null}
+function orderSide(z){var pred=z.productionPrediction;if(pred!=='UP'&&pred!=='DOWN')return null;var src=bySource(z);return src&&src.mode==='反向'?(pred==='UP'?'DOWN':'UP'):pred}
 function load(){
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
@@ -280,27 +295,41 @@ function load(){
    var now=Math.floor(Date.now()/300000)*300000;
    var current=records.find(function(z){return Number(z.roundStartMs)===now});
    var dir=current&&(current.productionPrediction==='UP'||current.productionPrediction==='DOWN')?current.productionPrediction:'待本轮锁定';
-   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · 可下单）';
-   var label=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
-   e('activeFast8Name').textContent=label;
+   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · 反向下单）';
+   e('activeFast8Name').textContent=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
    e('activeFast8Desc').textContent=currentMode
-     ? 'BTC 5分钟 · 上一轮行情预热 · 8秒截止 · 真实行情低置信度方向可下单'
-     : 'BTC 5分钟 · 历史固定模型统计';
+     ? 'BTC 5分钟 · 8秒截止 · Selective V2 / Edge 正向；低置信度兜底反向'
+     : 'BTC 5分钟 · 历史模型统计';
    e('activeFast8Direction').textContent=dir;
    var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
    var decided=settled.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'});
    var hits=decided.filter(function(z){return z.productionPrediction===z.productionActual}).length;
    var misses=decided.length-hits;
+   var mappedHits=decided.filter(function(z){return orderSide(z)===z.productionActual}).length;
+   var mappedMisses=decided.length-mappedHits;
    e('activeFast8Accuracy').textContent=decided.length?pct(100*hits/decided.length):'尚无新结算';
-   e('activeFast8InverseAccuracy').textContent=decided.length?pct(100*misses/decided.length):'尚无新结算';
-   e('activeFast8InverseHitMiss').textContent=decided.length?(misses+' / '+hits+'（'+decided.length+'轮）'):'-';
+   e('activeFast8InverseAccuracy').textContent=decided.length?pct(100*mappedHits/decided.length):'尚无新结算';
+   e('activeFast8InverseHitMiss').textContent=decided.length?(mappedHits+' / '+mappedMisses+'（'+decided.length+'轮）'):'-';
    e('activeFast8HitMiss').textContent=hits+' / '+misses;
    var locked=records.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'}).length;
    e('activeFast8Coverage').textContent=locked+' 轮'+(records.length?' · '+pct(100*locked/records.length):' · 样本不足');
    var fallback=records.filter(function(z){return z.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'}).length;
+   var rows=e('sourceRateRows');
+   if(rows)rows.innerHTML=currentMode?sources.map(function(src){
+     var group=decided.filter(function(z){return z.productionSource===src.id});
+     var rawHits=group.filter(function(z){return z.productionPrediction===z.productionActual}).length;
+     var orderHits=group.filter(function(z){return orderSide(z)===z.productionActual}).length;
+     var total=group.length;
+     return '<tr style="border-top:1px solid #2b313d">'+
+       '<td style="padding:9px 6px">'+src.name+'</td>'+
+       '<td style="text-align:center">'+src.mode+'</td>'+
+       '<td style="text-align:center">'+total+'</td>'+
+       '<td style="text-align:center">'+(total?rawHits+'/'+total+' · '+pct(rawHits*100/total):'样本不足')+'</td>'+
+       '<td style="text-align:center">'+(total?orderHits+'/'+total+' · '+pct(orderHits*100/total):'样本不足')+'</td></tr>'
+   }).join(''):'<tr><td colspan="5" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
    e('activeFast8Note').textContent=currentMode
-      ? '独立8秒新版本 · 已结算且有方向 '+decided.length+' 轮 · 低置信度行情方向 '+fallback+' 轮（可下单，但不表示有统计优势） · 反向命中率仅为方向推算，不代表已成交或盈利'+(j.stale?' · 统计缓存可能过期':'')
-      : '当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
+     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · Selective V2与Edge正向，低置信度反向 · 所有下单方向胜率均按当前规则推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
+     : '当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
  })
  .catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }
@@ -310,10 +339,11 @@ function updateOrderSignal(){
  .then(function(j){
    var expected=Math.floor(Date.now()/300000)*300000;
    var live=j.signal||{};
-   var ready=live.status==='LOCKED'&&Number(live.round)===expected&&
-     j.orderDirectionPolicy==='INVERT_PRODUCTION_UP_DOWN_V2';
+   var ready=live.status==='LOCKED'&&Number(live.round)===expected&&j.orderDirectionPolicy===policy;
+   var mode=j.orderMappingMode==='INVERSE'?'反向':'正向';
+   var direction=mode==='反向'?(live.direction==='UP'?'DOWN':'UP'):live.direction;
    var target=e('activeFast8OrderDirection');
-   if(target)target.textContent=ready&&j.orderSignal===(live.direction==='UP'?'DOWN':'UP')?(j.orderSignal+'（反向下单）'):'未锁定或未激活';
+   if(target)target.textContent=ready&&j.orderSignal===direction?(j.orderSignal+'（'+mode+'下单）'):'未锁定或未激活';
  }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'})
 }
 function boot(){load();updateOrderSignal();setInterval(load,3000);setInterval(updateOrderSignal,2000)}

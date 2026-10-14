@@ -4,12 +4,12 @@ import { createShadowV2Engine } from './shadow-v2.mjs';
 import { createShadowV3Client } from './shadow-v3-client.mjs';
 import { createShadow35Client } from './shadow35-client.mjs';
 import { createFast8Client } from './fast8-client.mjs';
-import { FAST8_SOURCE, FAST8_MODEL, FAST8_MODE, LEGACY_MODE, fast8ProductionReadiness } from './fast8-production-gate.mjs';
+import { FAST8_SOURCE, FAST8_MODEL, FAST8_MODE, LEGACY_MODE, FAST8_DEADLINE_MS, fast8ProductionReadiness } from './fast8-production-gate.mjs';
 import { SINGLE_EXTERNAL_PRIMARY_ID, SINGLE_EXTERNAL_PRIMARY_VERSION, selectExternalFast8Production } from './external-fast8-primary.mjs';
 import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
-import { createFrozenVip75Fast8Probe } from './vip75-frozen8-probe.mjs';
+import { createFrozenVip75Fast8Probe, FROZEN_VIP75_VERSION } from './vip75-frozen8-probe.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
 import { V3_NO_BASE_15S_VERSION, V3_NO_BASE_15S_START_MS, V3_NO_BASE_15S_FORWARD_TARGET, below15sPermanentDeleteThreshold, freezeNoBase15s as evaluateV3NoBase15sShadow, summarizeNoBase15s as v3NoBase15sShadowSummary } from './v3-no-base-15s-audit.mjs';
@@ -302,7 +302,10 @@ function buildLockedSignalEnvelope(row, live) {
     fallbackUsed: row?.productionFallbackUsed === true || live?.fallbackUsed === true,
     fallbackReason: row?.productionFallbackReason ?? live?.fallbackReason ?? null,
     directionEvidence: (row?.productionFallbackUsed === true || live?.fallbackUsed === true)
-      ? 'FALLBACK_UNVERIFIED' : 'FAST8_WORKER_DIRECTION',
+      ? 'FALLBACK_UNVERIFIED'
+      : (row?.productionModel ?? live?.model) === 'zl_new_vip75' &&
+          (row?.productionModelVersion ?? live?.modelVersion) === FROZEN_VIP75_VERSION
+        ? 'VIP75_ORIGINAL_WEIGHTS_FAST8_CAUSAL_SNAPSHOT' : 'FAST8_WORKER_DIRECTION',
     productionPolicy: live?.productionPolicy || productionPolicyName(),
     immutable: true,
   };
@@ -4141,7 +4144,12 @@ async function pollSignal() {
 
     const row = ensureRound(Number(live.round));
     // Probe exact old weights on the live <=8s snapshot. Never alter the locked signal.
-    vip75Frozen8Probe.observe(live, Date.now());
+    const vip75Early = vip75Frozen8Probe.observe(live, Date.now());
+    if (vip75Early && PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
+        row.productionPrediction !== 'UP' && row.productionPrediction !== 'DOWN') {
+      try { productionSignalPayload(Date.now()); }
+      catch (error) { log('vip75_fast8_trigger_error',{error:error?.message||String(error)}); }
+    }
     if (Date.now() >= row.roundStartMs + 7000 &&
         Date.now() < row.roundStartMs + 30000 &&
         vip75Frozen8ReportedRound !== row.roundStartMs) {
@@ -4761,7 +4769,7 @@ function freezeProductionLock(row, live) {
   if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE && live.source !== FAST8_SOURCE) return false;
   // Explicitly retired: never emit new locks for these historical signal sources.
   if (live.source === 'ZL_NEW_VIP75_PRIMARY' || live.source === 'LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY') return false;
-  if (isPermanentlyRetiredProductionSignal(live.source, live.model)) return false;
+  if (isPermanentlyRetiredProductionSignal(live.source, live.model, live.modelVersion)) return false;
 
   row.productionPrediction = direction;
   row.productionConfidence = live?.signal?.confidence == null ? null : (Number.isFinite(Number(live.signal.confidence)) ? Number(live.signal.confidence) : null);
@@ -4789,7 +4797,7 @@ function freezeProductionLock(row, live) {
 function productionRecordView(row) {
   // Keep official settlement history intact; remove retired names from public views.
   const removed = permanentlyRemovedSignalIds();
-  const isRetired = isPermanentlyRetiredProductionSignal(row?.productionSource, row?.productionModel);
+  const isRetired = isPermanentlyRetiredProductionSignal(row?.productionSource, row?.productionModel, row?.productionModelVersion);
   const publicSource = isRetired ? 'RETIRED_SIGNAL_ARCHIVED' : (row?.productionSource || 'WAIT');
   const publicModel = isRetired ? null : (row?.productionModel || null);
   const frozen = row?.v3NoBase15sShadow;
@@ -5206,7 +5214,13 @@ function permanentlyRemovedSignalIds(ledger = bootstrapLedger) {
   }
   return ids;
 }
-function isPermanentlyRetiredProductionSignal(source, model) {
+function isPermanentlyRetiredProductionSignal(source, model, modelVersion=null) {
+  // The 2026-10-10 original VIP75 is explicitly re-authorized ONLY through
+  // the FAST8 router and ONLY when its exact read-only trained weights passed
+  // verification. Legacy retired VIP75 route remains blocked permanently.
+  if (source === FAST8_SOURCE && model === 'zl_new_vip75' &&
+      modelVersion === FROZEN_VIP75_VERSION && vip75Frozen8Probe.report().ready)
+    return false;
   const retired = permanentlyRemovedSignalIds();
   const origin = String(source || '');
   const match = /^LOW_PRIORITY_15S_(.+)_PRIMARY$/.exec(origin);
@@ -5476,6 +5490,9 @@ function tryPriorityAware15sLock(row, now, phase, firstLayer = false) {
 // explicitly tagged no-information contingency when the worker misses deadline.
 // Do not label contingency as a model prediction or fabricated confidence.
 const FAST8_GATEWAY_FALLBACK_AT_MS = 7000;
+// Reserve a bounded causal-observation window for the restored original VIP75;
+// never change the 8000ms hard lock deadline or the 7000ms existing fallback.
+const VIP75_PINNED_PREFERENCE_END_MS = 6500;
 function fast8GatewayFallback(round) {
   const previous = [...rounds.values()]
     .filter(r => Number(r.roundStartMs) < round &&
@@ -5498,6 +5515,53 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   const readiness = fast8ProductionReadiness(stats, current, expectedRound, now);
   const prediction = selectExternalFast8Production(stats,current,expectedRound,readiness);
   const alreadyLocked = ['UP','DOWN'].includes(activeRow?.productionPrediction);
+  // Reuse the EXACT 2026-10-10 trained 22-feature model, not an approximation.
+  // Its original 10-22s observation is replaced ONLY by a live, causal <=8s
+  // snapshot. Original trained weights, inference, and parameter values stay fixed.
+  const pinnedAvailable = vip75Frozen8Probe.report().ready;
+  const pinned = vip75Frozen8Probe.decision(expectedRound);
+  if (pinnedAvailable && !alreadyLocked && pinned &&
+      pinned.observedAt >= expectedRound &&
+      pinned.observedAt <= expectedRound + FAST8_DEADLINE_MS &&
+      now <= expectedRound + FAST8_DEADLINE_MS) {
+    const probability=pinned.probability;
+    const confidence=pinned.direction === 'UP' ? probability : 1-probability;
+    const live={
+      round:expectedRound,status:'LOCKED',
+      signal:{direction:pinned.direction,
+        score:Number((probability*2-1).toFixed(6)),
+        confidence:Number(confidence.toFixed(6)),
+        modelProbability:probability},
+      input:{round:expectedRound},generatedAt:pinned.observedAt,
+      source:FAST8_SOURCE,model:'zl_new_vip75',
+      modelVersion:FROZEN_VIP75_VERSION,
+      productionPolicy:productionPolicyName(),
+      fallbackUsed:false,fallbackReason:null,
+      fast8Quality:{status:'PINNED_VIP75_VALID_CAUSAL_SNAPSHOT',
+        pinnedWeightFingerprint:pinned.weightFingerprint,
+        selectedTrainingWindow:320,halfLife:180,l2:0.12,regimeBlend:0.3},
+    };
+    if (freezeProductionLock(activeRow,live)) {
+      log('vip75_frozen8_production_lock',{round:expectedRound,
+        direction:pinned.direction,generatedDelayMs:pinned.observedAt-expectedRound,
+        modelVersion:FROZEN_VIP75_VERSION,weightFingerprint:pinned.weightFingerprint});
+      logProductionSignalState(live);
+      return {ok:true,live};
+    }
+  }
+  if (pinnedAvailable && !alreadyLocked && now < expectedRound + VIP75_PINNED_PREFERENCE_END_MS) {
+    const live={round:expectedRound,status:'PENDING',signal:null,
+      input:{round:expectedRound},generatedAt:null,source:FAST8_SOURCE,
+      model:'zl_new_vip75',modelVersion:FROZEN_VIP75_VERSION,
+      productionPolicy:productionPolicyName(),
+      pendingReason:'PINNED_VIP75_WAITING_FOR_VALID_EARLY_SNAPSHOT',
+      deadlineMs:FAST8_DEADLINE_MS,otherProductionSourcesPaused:true};
+    logProductionSignalState(live);
+    return {ok:true,live};
+  }
+  // If no eligible original snapshot arrived in time, preserve the unchanged
+  // existing FAST8 worker / 7s no-information contingency. Never fabricate
+  // a VIP75 signal, never move the lock deadline and never retrain.
   if (prediction.eligible && !alreadyLocked) {
     const live = {
       round: expectedRound, status: 'LOCKED',
@@ -5589,7 +5653,7 @@ function productionSignalPayload(now = Date.now()) {
   // A production direction is immutable for the entire 5-minute round.
   // If it has already been frozen, every subsequent request returns exactly that lock.
   if (row?.productionPrediction === 'UP' || row?.productionPrediction === 'DOWN') {
-    if (isPermanentlyRetiredProductionSignal(row.productionSource, row.productionModel)) {
+    if (isPermanentlyRetiredProductionSignal(row.productionSource, row.productionModel, row.productionModelVersion)) {
       const blocked = {round:row.roundStartMs,status:'WAIT',signal:null,
         input:{round:row.roundStartMs},source:'RETIRED_SIGNAL_SUPPRESSED',
         model:null,generatedAt:null,waitReason:'PERMANENTLY_RETIRED_SIGNAL',

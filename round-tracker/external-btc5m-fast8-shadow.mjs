@@ -1,11 +1,11 @@
 // Single external-inspired BTC 5m order-flow production feature, evaluated on
 // the immutable worker snapshot at ~T+2s. It is NOT the original author's
 // pretrained strategy, and does not have established >50% forward accuracy.
-// V5 removes direct OFI and 60s aggressive-flow weights. Upstream
-// composite scores can still contain these signals indirectly.
+// V6 removes direct OFI, 15s/60s aggressive-flow and currentScore weights.
+// Retained upstream composite scores can still indirectly contain them.
 // Two previously experimental proxy strategies have been retired from current
 // calculations; their historical journal records remain auditable.
-export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V5_NO_DIRECT_OFI_FLOW60';
+export const EXTERNAL_RESEARCH_VERSION = 'EXTERNAL_BTC5M_MICROSTRUCTURE_FAST8_V6_NO_DIRECT_OFI_FLOW15_FLOW60_CURRENT';
 export const EXTERNAL_RESEARCH_IDS = Object.freeze(['FLOW_BOOK_PROXY_V1']);
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const clamp = (x,min=-1,max=1) => Math.min(max,Math.max(min,x));
@@ -17,9 +17,7 @@ export function externalResearchDirections(facts={},{
   dataQuality=[],sourceAt=null,roundStartMs=null,preparation=null
 }={}) {
   const items = [
-    [normalized(facts,'tradePressure15s'),0.17],
     [normalized(facts,'microScore'),0.09],
-    [normalized(facts,'currentScore'),0.10],
     [normalized(facts,'currentTrendScore'),0.08],
     [normalized(facts,'regimeScore'),0.05],
     [normalized(facts,'normalizedMomentum60s'),0.05],

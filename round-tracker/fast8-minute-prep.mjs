@@ -1,17 +1,16 @@
 // Purely causal 60-second pre-round market context. Binance BTC spot flow
 // continues across five-minute settlement windows; prediction-market contracts
 // do NOT. No PM price, round-open deviation or contract id enters this buffer.
-export const NEXT_ROUND_PREP_VERSION='FAST8_PREP60_CAUSAL_V2_NO_DIRECT_OFI_FLOW60';
+export const NEXT_ROUND_PREP_VERSION='FAST8_PREP60_CAUSAL_V3_NO_DIRECT_OFI_FLOW15_FLOW60';
 export const PREP_WINDOW_MS=60000;
 const ROUND_MS=300000;
 const MIN_INTERVAL_MS=500;
 const MAX_SAMPLES=120;
 const CONTINUOUS_SPOT_KEYS=Object.freeze([
-  'tradePressure15s','microScore','regimeScore','normalizedMomentum60s'
+  'microScore','regimeScore','normalizedMomentum60s'
 ]);
 const WEIGHTS=Object.freeze({
-  tradePressure15s:0.17,microScore:0.09,
-  regimeScore:0.05,normalizedMomentum60s:0.05
+  microScore:0.09,regimeScore:0.05,normalizedMomentum60s:0.05
 });
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const clamp=x=>Math.max(-1,Math.min(1,x));
@@ -43,9 +42,6 @@ export function createNextRoundPreparation(){
     const reason=Array.isArray(issues)?issues:[];
     if(reason.includes('DEPTH_MISSING_OR_STALE')){
       clean.microScore=null;
-    }
-    if(reason.includes('TRADES_MISSING_OR_STALE')){
-      clean.tradePressure15s=null;
     }
     if(!Object.values(clean).some(finite))return false;
     let samples=data.get(nextRoundStartMs);
@@ -83,8 +79,8 @@ export function createNextRoundPreparation(){
     const directionPreview=previewScore===null?null:previewScore>0?'UP':previewScore<0?'DOWN':null;
     const ready=samples.length>=12 && spanMs>=20000 &&
       lastAgeMs!==null && lastAgeMs<=5000 &&
-      Object.values(featureSamples).filter(n=>n>=8).length>=3 &&
-      featureSamples.tradePressure15s>=8 &&
+      Object.values(featureSamples).filter(n=>n>=8).length>=2 &&
+      featureSamples.microScore>=8 &&
       directionPreview!==null;
     return {
       version:NEXT_ROUND_PREP_VERSION,nextRoundStartMs,

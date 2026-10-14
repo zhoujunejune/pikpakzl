@@ -8,12 +8,15 @@ existing FAST8 worker at ~T+2s and enters the production lock through
 Binance Prediction 5-minute round IDs and the original frozen market
 snapshot, without network calls or separate paid infrastructure.
 
-FLOW_BOOK V5 direct score combines 15s trade pressure, short-term
-micro/current/trend scores, normalized momentum and PM midprice with fixed
-weights. Direct OFI and 60s trade-pressure terms are excluded from both
-live and preceding-minute scores. The retained upstream composite scores
-(microScore/currentScore/regimeScore) may still contain INDIRECT OFI and 60s
-flow information: this change is not a complete causal exclusion. The signal does **not** contain a fitted third-party model.
+FLOW_BOOK V6 direct score combines microScore (0.09), currentTrendScore
+(0.08), regimeScore (0.05), normalizedMomentum60s (0.05), and PM midprice
+(0.03), normalized across the available inputs. Direct OFI (0.27),
+tradePressure60s (0.16), tradePressure15s (0.17) and currentScore (0.10)
+are no longer scored. The preceding-minute preparation now combines
+microScore (0.09), regimeScore (0.05) and normalizedMomentum60s (0.05).
+Retained upstream composite scores (microScore/currentTrendScore/regimeScore)
+may still contain INDIRECT OFI and trade pressure information: this does
+not establish complete causal exclusion. The signal does **not** contain a fitted third-party model.
 Original inspiration: [HorseDev77/bitcoin_price_up_down_prediction_5minute]
 (https://github.com/HorseDev77/bitcoin_price_up_down_prediction_5minute)
 and [yashvaidya42/BTC-microstructure-signal-detection]
@@ -63,6 +66,15 @@ An aligned current-round observation always replaces a bridge and cannot be
 overwritten by a delayed previous-round label. Existing T+1.8s lock, T+8s
 deadline, fallbacks, and order/TP-SL paths are unchanged. Forward performance
 is tracked under a distinct model version and cannot be assumed improved.
+
+## 2026-10-14 remove direct 15-second aggressive flow and currentScore (V6)
+Following V5, remove two further direct scoring terms: tradePressure15s
+and currentScore. The preceding-minute snapshot removes tradePressure15s
+and uses at least two populated features including microScore for readiness.
+Preserve the prior decision timing, no-WAIT fallback, inverse execution,
+order sizing, take-profit and stop-loss. Split forward performance by V6.
+No claim that eliminating further inputs improves accuracy. Indirect upstream
+composite dependencies are unchanged.
 
 ## 2026-10-14 remove direct OFI and 60-second flow weights (V5)
 User-directed live and 60-second preparation score revision. New V5 version

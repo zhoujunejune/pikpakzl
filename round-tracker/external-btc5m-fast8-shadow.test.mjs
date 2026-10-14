@@ -73,6 +73,14 @@ test('direct OFI and 60s trade pressure have no influence on FLOW_BOOK score',()
  assert.equal(a.strength,b.strength);
  assert.equal(a.featureCount,b.featureCount);
 });
+test('15s aggressive flow and currentScore do not directly influence V6 direction or strength',()=>{
+ const a=externalResearchDirections(features,current).predictions.FLOW_BOOK_PROXY_V1;
+ const b=externalResearchDirections({...features,tradePressure15s:-1,currentScore:-1},current).predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(a.direction,b.direction);
+ assert.equal(a.strength,b.strength);
+ assert.equal(a.featureCount,b.featureCount);
+ assert.equal(a.featureCount,5);
+});
 test('missing snapshots still produce UP/DOWN and honestly mark no-information fallback',()=>{
   const v=externalResearchDirections({},{
     baselineDirection:'DOWN',snapshotAvailable:false,dataQuality:['NO_FRESH_SNAPSHOT'],

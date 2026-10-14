@@ -42,6 +42,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (!enabled) {
     return { status: 409, body: { ok: false, error: '跟随已经停止，已阻止订单提交' } };
   }
+  if (directionPolicyWriteInFlight || !directionConfigSnapshot().ready) {
+    return { status: 409, body: { ok: false, error: '方向切换或 Redis 配置未就绪，已阻止提交' } };
+  }
   if (submittedRounds.has(String(p.round))) {
     return { status: 409, body: { ok: false, error: '本轮已经提交过订单' } };
   }

@@ -81,6 +81,18 @@ test('15s aggressive flow and currentScore do not directly influence V6 directio
  assert.equal(a.featureCount,b.featureCount);
  assert.equal(a.featureCount,5);
 });
+test('V6 blends fresh spot and prewarm with 3 valid inputs, without needing removed fields',()=>{
+ const p={ready:true,nextRoundStartMs:ROUND,predictionMarketContractIncluded:false,
+  previewScore:-0.8,directionPreview:'DOWN',sampleCount:50,version:'TEST'};
+ const snapshot={microScore:1,regimeScore:1,normalizedMomentum60s:1,
+  tradePressure15s:-1,currentScore:-1,ofiNormalized5s:-1,tradePressure60s:-1};
+ const d=externalResearchDirections(snapshot,{...current,preparation:p}).predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(d.preparationUsed,true);
+ assert.equal(d.preparationOnly,false);
+ assert.equal(d.preWeight,0.30);
+ assert.equal(d.featureCount,3);
+ assert.equal(d.direction,'UP');
+});
 test('missing snapshots still produce UP/DOWN and honestly mark no-information fallback',()=>{
   const v=externalResearchDirections({},{
     baselineDirection:'DOWN',snapshotAvailable:false,dataQuality:['NO_FRESH_SNAPSHOT'],

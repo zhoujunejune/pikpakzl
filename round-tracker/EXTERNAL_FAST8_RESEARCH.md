@@ -12,7 +12,9 @@ FLOW_BOOK V6 direct score combines microScore (0.09), currentTrendScore
 (0.08), regimeScore (0.05), normalizedMomentum60s (0.05), and PM midprice
 (0.03), normalized across the available inputs. Direct OFI (0.27),
 tradePressure60s (0.16), tradePressure15s (0.17) and currentScore (0.10)
-are no longer scored. The preceding-minute preparation now combines
+are no longer scored. With five possible direct score inputs, three valid live inputs suffice
+to blend the new round with a ready prewarm; fewer than three use the
+prepared score alone, if ready. The preceding-minute preparation now combines
 microScore (0.09), regimeScore (0.05) and normalizedMomentum60s (0.05).
 Retained upstream composite scores (microScore/currentTrendScore/regimeScore)
 may still contain INDIRECT OFI and trade pressure information: this does

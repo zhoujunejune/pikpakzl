@@ -269,19 +269,19 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
 <div class="kv"><div class="k">下单信号（当前正向 / 反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
-<div class="kv"><div class="k">下单方向推算命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
-<div class="kv"><div class="k">下单方向推算命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
+<div class="kv"><div class="k">开启方向的理论映射命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
+<div class="kv"><div class="k">开启方向理论命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
 </div>
-<div class="k" style="margin-top:14px">下单方向 · 三组独立选择</div>
-<div class="muted" style="margin-top:6px">每组正向或反向二选一。需填写页面上方控制 PIN，保存后下一轮生效。</div>
+<div class="k" style="margin-top:14px">下单方向 · 3个来源 × UP/DOWN独立开关（共12个）</div>
+<div class="muted" style="margin-top:6px">每个来源分别选择 UP 正向/反向、DOWN 正向/反向；同方向互斥，均关闭则只显示预测、不下单。需控制 PIN，下一轮生效。</div>
 <div id="directionModeChoices" style="margin-top:9px;display:grid;gap:8px"><div class="muted">后台配置读取中...</div></div>
 <div id="directionModeMessage" role="status" aria-live="polite" class="muted" style="margin-top:8px"></div>
 <div class="k" style="margin-top:14px">三类信号 · 分别统计胜率（仅当前8秒版本）</div>
 <div style="overflow:auto;margin-top:8px;border:1px solid #2b313d;border-radius:10px">
 <table style="width:100%;border-collapse:collapse;min-width:630px;font-size:12px">
-<thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>按当前下单规则推算命中率</th></tr></thead>
+<thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前 UP/DOWN 模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>按当前下单规则推算命中率</th></tr></thead>
 <tbody id="sourceRateRows"><tr><td colspan="6" style="padding:10px 6px">统计读取中...</td></tr></tbody>
 </table></div>
 <div class="muted" style="margin-top:7px">按 Binance Prediction 官方结算、当前方向映射规则分别回算。含规则切换前的历史方向时，不代表当时实际订单。不是成交胜率或收益率。</div>
@@ -290,32 +290,51 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 const primaryScript = `<script>(function(){
 'use strict';
 function e(x){return document.getElementById(x)}
-function x(v){return v==null?'-':String(v)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
-var policy='';
+var policy='',revision='';
 var sources=[
- {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',mode:'正向'},
- {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',mode:'正向'},
- {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',mode:'正向'}
+ {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',modes:{UP:'OFF',DOWN:'OFF'}},
+ {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',modes:{UP:'OFF',DOWN:'OFF'}},
+ {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',modes:{UP:'OFF',DOWN:'OFF'}}
 ];
-var directionModeReady=false;
-var directionModeBusy=false;
+var directionModeReady=false,directionModeBusy=false;
+function modeLabel(v){return v==='FORWARD'?'正向':v==='INVERSE'?'反向':'关闭'}
+function validateModes(modes){
+ if(!modes||Object.keys(modes).length!==3)throw Error('后台配置来源不完整');
+ sources.forEach(function(src){
+   var m=modes[src.id];
+   if(!m||Object.keys(m).length!==2||['UP','DOWN'].some(function(side){return !['FORWARD','INVERSE','OFF'].includes(m[side])}))
+     throw Error('后台方向配置无效：'+src.name);
+ });
+}
 function renderDirectionModes(){
  var target=e('directionModeChoices');if(!target)return;
  target.innerHTML=sources.map(function(src,i){
-  return '<div style="background:#10141c;padding:12px;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">'+
-    '<div style="font-size:13px;font-weight:700">'+src.name+'</div>'+
-    '<div style="display:flex;gap:6px">'+['正向','反向'].map(function(mode){
-      var selected=src.mode===mode;
-      return '<button type="button" data-dir-index="'+i+'" data-dir-mode="'+mode+'" aria-pressed="'+selected+'" '+
-      (!directionModeReady||directionModeBusy?'disabled ':'')+
-      'style="width:auto;min-width:70px;margin:0;padding:9px 12px;font-size:13px;border:1px solid '+(selected?'#3ddc84':'#435069')+
-      ';background:'+(selected?'#17392b':'#222838')+';color:'+(selected?'#7ff0b0':'#b6c0d0')+'">'+mode+'</button>';
-    }).join('')+'</div></div>';
+  return '<div style="background:#10141c;padding:12px;border-radius:10px;min-width:0">'+
+    '<div style="font-size:13px;font-weight:700;margin-bottom:8px">'+src.name+'</div>'+
+    ['UP','DOWN'].map(function(side){
+     return '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px;margin:6px 0">'+
+       '<div style="font-size:12px;min-width:80px"><strong>'+side+'</strong>：'+(directionModeReady?modeLabel(src.modes[side]):'未就绪')+'</div>'+
+       '<div style="display:flex;gap:6px;flex-wrap:wrap">'+['FORWARD','INVERSE'].map(function(mode){
+         var selected=directionModeReady&&src.modes[side]===mode;
+         return '<button type="button" data-dir-index="'+i+'" data-dir-side="'+side+'" data-dir-mode="'+mode+'" aria-pressed="'+selected+'" '+
+           (!directionModeReady||directionModeBusy?'disabled ':'')+
+           'style="width:auto;min-width:72px;margin:0;padding:9px 12px;font-size:12px;border:1px solid '+(selected?'#3ddc84':'#435069')+
+           ';background:'+(selected?'#17392b':'#222838')+';color:'+(selected?'#7ff0b0':'#b6c0d0')+'">'+side+' '+modeLabel(mode)+'</button>';
+       }).join('')+'</div></div>';
+    }).join('')+'</div>';
  }).join('');
- target.querySelectorAll('button').forEach(function(btn){
-  btn.addEventListener('click',function(){setDirectionModeFromUI(Number(btn.getAttribute('data-dir-index')),btn.getAttribute('data-dir-mode'))});
+ if(target.querySelectorAll)target.querySelectorAll('button').forEach(function(btn){
+   btn.addEventListener('click',function(){setDirectionModeFromUI(Number(btn.getAttribute('data-dir-index')),
+     btn.getAttribute('data-dir-side'),btn.getAttribute('data-dir-mode'))});
  });
+}
+function acceptSettings(state){
+ validateModes(state.modes);
+ if(typeof state.revision!=='string'||!state.revision||typeof state.policy!=='string')throw Error('缺少配置版本');
+ sources.forEach(function(src){src.modes={UP:state.modes[src.id].UP,DOWN:state.modes[src.id].DOWN}});
+ revision=state.revision;policy=state.policy;directionModeReady=true;
+ renderDirectionModes();
 }
 async function loadDirectionModes(){
  if(directionModeBusy)return;
@@ -323,114 +342,125 @@ async function loadDirectionModes(){
   var response=await fetch('/api/direction-mode?ts='+Date.now(),{cache:'no-store'});
   var state=await response.json();
   if(!response.ok||!state.ok)throw Error(state.error||'方向配置未就绪');
-  directionModeReady=true;policy=state.policy;
-  sources.forEach(function(src){src.mode=state.modes[src.id]==='INVERSE'?'反向':'正向'});
-  renderDirectionModes();
-  // Recompute theoretical mapped hit rate after asynchronous settings arrive.
+  acceptSettings(state);
   load();
  }catch(err){
-  directionModeReady=false;renderDirectionModes();
-  e('directionModeMessage').textContent='方向配置读取失败：'+(err.message||err);
+  directionModeReady=false;policy='';revision='';renderDirectionModes();
+  var target=e('directionModeMessage');if(target)target.textContent='方向配置读取失败（开关已禁用）：'+(err.message||err);
  }
 }
-async function setDirectionModeFromUI(index,mode){
- if(!directionModeReady||directionModeBusy||!sources[index]||!['正向','反向'].includes(mode))return;
- var src=sources[index];if(src.mode===mode)return;
- var pin=document.getElementById('pin');
+async function setDirectionModeFromUI(index,side,selectedMode){
+ if(!directionModeReady||directionModeBusy||!sources[index]||!['UP','DOWN'].includes(side)||
+    !['FORWARD','INVERSE'].includes(selectedMode))return;
+ var src=sources[index],mode=src.modes[side]===selectedMode?'OFF':selectedMode;
+ var pin=e('pin');
  if(!pin||!pin.value){e('directionModeMessage').textContent='请先在上方填写控制 PIN';return}
- if(!window.confirm('将 '+src.name+' 改成'+mode+'下单？下一轮开始生效。'))return;
- directionModeBusy=true;renderDirectionModes();
+ var description=mode==='OFF'?'关闭该预测方向自动下单':'切换到'+modeLabel(mode)+'下单';
+ if(!window.confirm('将 '+src.name+' 的 '+side+' '+description+'？下一轮生效。'))return;
+ directionModeBusy=true;renderDirectionModes();e('directionModeMessage').textContent='保存中...';
  try{
   var response=await fetch('/api/direction-mode',{method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({source:src.id,mode:mode==='反向'?'INVERSE':'FORWARD',pin:pin.value})});
+   body:JSON.stringify({source:src.id,direction:side,mode:mode,expectedRevision:revision,pin:pin.value})});
   var data=await response.json();
-  if(!response.ok||!data.ok)throw Error(data.error||'保存失败');
-  policy=data.policy;
-  sources.forEach(function(x){x.mode=data.modes[x.id]==='INVERSE'?'反向':'正向'});
-  e('directionModeMessage').textContent='已生效：'+src.name+' → '+mode+'（从下一轮下单）';
-  updateOrderSignal();
+  if(!response.ok||!data.ok)throw Error((response.status===409?'配置冲突，请刷新重试：':'')+(data.error||'保存失败'));
+  acceptSettings(data);
+  e('directionModeMessage').textContent='保存成功，下一轮生效：'+src.name+' '+side+' → '+modeLabel(mode);
+  updateOrderSignal();load();
  }catch(err){
   e('directionModeMessage').textContent='保存失败：'+(err.message||err);
+  await loadDirectionModes();
  }finally{directionModeBusy=false;renderDirectionModes()}
 }
 window.setDirectionModeFromUI=setDirectionModeFromUI;
-
-function bySource(z){return sources.find(function(x){return x.id===z.productionSource})||null}
-function orderSide(z){var pred=z.productionPrediction;if(pred!=='UP'&&pred!=='DOWN')return null;var src=bySource(z);return src&&src.mode==='反向'?(pred==='UP'?'DOWN':'UP'):pred}
+function bySource(z){return sources.find(function(src){return src.id===z.productionSource})||null}
+function orderSide(z){
+ var pred=z.productionPrediction,src=bySource(z);
+ if(!directionModeReady||!src||!['UP','DOWN'].includes(pred))return null;
+ var mode=src.modes[pred];
+ if(mode==='OFF')return null;
+ return mode==='INVERSE'?(pred==='UP'?'DOWN':'UP'):mode==='FORWARD'?pred:null;
+}
 function load(){
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
  .then(function(j){
-   if(!j||!j.ok)throw Error('生产统计不可用');
-   var currentMode=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
-   var version='SELECTIVE_V2_FAST8_PREWARM_V1';
-   var model=j.activeProductionModel;
-   var records=(j.records||[]).filter(function(z){
-     return currentMode
-       ? z.productionModel===version&&z.productionModelVersion===version
-       : model&&z.productionModel===model.id&&(z.productionModelVersion===model.version||z.productionModelVersion===model.version+':NO_INFORMATION')
-   });
-   var now=Math.floor(Date.now()/300000)*300000;
-   var current=records.find(function(z){return Number(z.roundStartMs)===now});
-   var dir=current&&(current.productionPrediction==='UP'||current.productionPrediction==='DOWN')?current.productionPrediction:'待本轮锁定';
-   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · '+(bySource(current)&&bySource(current).mode||'正向')+'下单）';
-   e('activeFast8Name').textContent=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
-   e('activeFast8Desc').textContent=currentMode
-     ? 'BTC 5分钟 · 8秒截止 · 三类信号分别可设正向或反向'
-     : 'BTC 5分钟 · 历史模型统计';
-   e('activeFast8Direction').textContent=dir;
-   var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
-   var decided=settled.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'});
-   var hits=decided.filter(function(z){return z.productionPrediction===z.productionActual}).length;
-   var misses=decided.length-hits;
-   var mappedHits=decided.filter(function(z){return orderSide(z)===z.productionActual}).length;
-   var mappedMisses=decided.length-mappedHits;
-   e('activeFast8Accuracy').textContent=decided.length?pct(100*hits/decided.length):'尚无新结算';
-   e('activeFast8InverseAccuracy').textContent=decided.length?pct(100*mappedHits/decided.length):'尚无新结算';
-   e('activeFast8InverseHitMiss').textContent=decided.length?(mappedHits+' / '+mappedMisses+'（'+decided.length+'轮）'):'-';
-   e('activeFast8HitMiss').textContent=hits+' / '+misses;
-   var locked=records.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'}).length;
-   e('activeFast8Coverage').textContent=locked+' 轮'+(records.length?' · '+pct(100*locked/records.length):' · 样本不足');
-   var fallback=records.filter(function(z){return z.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'}).length;
-   var rows=e('sourceRateRows');
-   if(rows)rows.innerHTML=currentMode?sources.map(function(src){
-     var group=decided.filter(function(z){return z.productionSource===src.id});
-     var rawHits=group.filter(function(z){return z.productionPrediction===z.productionActual}).length;
-     var orderHits=group.filter(function(z){return orderSide(z)===z.productionActual}).length;
-     var total=group.length;
-     function sideRate(side){
-       var part=group.filter(function(z){return z.productionPrediction===side});
-       var correct=part.filter(function(z){return z.productionPrediction===z.productionActual}).length;
-       return part.length?correct+'/'+part.length+' · '+pct(correct*100/part.length):'样本不足';
-     }
-     return '<tr style="border-top:1px solid #2b313d">'+
-       '<td style="padding:9px 6px">'+src.name+'</td>'+
-       '<td style="text-align:center">'+src.mode+'</td>'+
-       '<td style="text-align:center">'+(total?rawHits+'/'+total+' · '+pct(rawHits*100/total):'样本不足')+'</td>'+
-       '<td style="text-align:center">'+sideRate('UP')+'</td>'+
-       '<td style="text-align:center">'+sideRate('DOWN')+'</td>'+
-       '<td style="text-align:center">'+(total?orderHits+'/'+total+' · '+pct(orderHits*100/total):'样本不足')+'</td></tr>'
-   }).join(''):'<tr><td colspan="5" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
-   e('activeFast8Note').textContent=currentMode
-     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 当前配置分别正向或反向 · 下单方向胜率按现行选择推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
-     : '当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
- })
- .catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
+  if(!j||!j.ok)throw Error('生产统计不可用');
+  var currentMode=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
+  var version='SELECTIVE_V2_FAST8_PREWARM_V1';
+  var model=j.activeProductionModel;
+  var records=(j.records||[]).filter(function(z){
+   return currentMode
+    ?z.productionModel===version&&z.productionModelVersion===version
+    :model&&z.productionModel===model.id&&(z.productionModelVersion===model.version||z.productionModelVersion===model.version+':NO_INFORMATION');
+  });
+  var now=Math.floor(Date.now()/300000)*300000;
+  var current=records.find(function(z){return Number(z.roundStartMs)===now});
+  var dir=current&&['UP','DOWN'].includes(current.productionPrediction)?current.productionPrediction:'待本轮锁定';
+  if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'){
+   var src=bySource(current);
+   dir+='（低置信度 · '+(src&&directionModeReady?modeLabel(src.modes[current.productionPrediction]):'未就绪')+'）';
+  }
+  e('activeFast8Name').textContent=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
+  e('activeFast8Desc').textContent=currentMode
+   ?'BTC 5分钟 · 8秒截止 · 三类信号按UP/DOWN独立配置正反向':'BTC 5分钟 · 历史模型统计';
+  e('activeFast8Direction').textContent=dir;
+  var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
+  var decided=settled.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'});
+  var hits=decided.filter(function(z){return z.productionPrediction===z.productionActual}).length;
+  var misses=decided.length-hits;
+  var mappedEligible=decided.filter(function(z){return orderSide(z)!==null});
+  var mappedHits=mappedEligible.filter(function(z){return orderSide(z)===z.productionActual}).length;
+  var mappedMisses=mappedEligible.length-mappedHits;
+  e('activeFast8Accuracy').textContent=decided.length?pct(100*hits/decided.length):'尚无新结算';
+  e('activeFast8InverseAccuracy').textContent=mappedEligible.length?pct(100*mappedHits/mappedEligible.length):'样本不足';
+  e('activeFast8InverseHitMiss').textContent=mappedEligible.length?(mappedHits+' / '+mappedMisses+'（'+mappedEligible.length+'轮）'):'-';
+  e('activeFast8HitMiss').textContent=hits+' / '+misses;
+  var locked=records.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'}).length;
+  e('activeFast8Coverage').textContent=locked+' 轮'+(records.length?' · '+pct(100*locked/records.length):' · 样本不足');
+  var fallback=records.filter(function(z){return z.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'}).length;
+  var rows=e('sourceRateRows');
+  if(rows)rows.innerHTML=currentMode?sources.map(function(src){
+   var group=decided.filter(function(z){return z.productionSource===src.id});
+   var rawHits=group.filter(function(z){return z.productionPrediction===z.productionActual}).length;
+   var allowed=group.filter(function(z){return orderSide(z)!==null});
+   var orderHits=allowed.filter(function(z){return orderSide(z)===z.productionActual}).length;
+   var total=group.length;
+   function sideRate(side){
+    var part=group.filter(function(z){return z.productionPrediction===side});
+    var correct=part.filter(function(z){return z.productionPrediction===z.productionActual}).length;
+    return part.length?correct+'/'+part.length+' · '+pct(correct*100/part.length):'样本不足（0轮）';
+   }
+   return '<tr style="border-top:1px solid #2b313d">'+
+    '<td style="padding:9px 6px">'+src.name+'</td>'+
+    '<td style="text-align:center">UP：'+(directionModeReady?modeLabel(src.modes.UP):'未就绪')+' / DOWN：'+(directionModeReady?modeLabel(src.modes.DOWN):'未就绪')+'</td>'+
+    '<td style="text-align:center">'+(total?rawHits+'/'+total+' · '+pct(rawHits*100/total):'样本不足（0轮）')+'</td>'+
+    '<td style="text-align:center">'+sideRate('UP')+'</td>'+
+    '<td style="text-align:center">'+sideRate('DOWN')+'</td>'+
+    '<td style="text-align:center">'+(allowed.length?orderHits+'/'+allowed.length+' · '+pct(orderHits*100/allowed.length):'样本不足（0轮）')+'</td></tr>';
+  }).join(''):'<tr><td colspan="6" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
+  e('activeFast8Note').textContent=currentMode
+   ?'8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 原始UP/DOWN命中率独立于方向开关 · 理论映射仅统计开启的方向，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
+   :'当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
+ }).catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }
 function updateOrderSignal(){
  fetch('/api/status?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('交易控制状态 HTTP '+r.status);return r.json()})
  .then(function(j){
-   var expected=Math.floor(Date.now()/300000)*300000;
-   var live=j.signal||{};
-   var ready=live.status==='LOCKED'&&Number(live.round)===expected&&j.orderDirectionPolicy===policy;
-   var mode=j.orderMappingMode==='INVERSE'?'反向':'正向';
-   var direction=mode==='反向'?(live.direction==='UP'?'DOWN':'UP'):live.direction;
-   var target=e('activeFast8OrderDirection');
-   if(target)target.textContent=ready&&j.orderSignal===direction?(j.orderSignal+'（'+mode+'下单）'):'未锁定或未激活';
+  var target=e('activeFast8OrderDirection');if(!target)return;
+  var expected=Math.floor(Date.now()/300000)*300000,live=j.signal||{};
+  var ready=directionModeReady&&j.directionModeReady&&live.status==='LOCKED'&&
+    Number(live.round)===expected&&j.orderDirectionPolicy===policy;
+  if(!ready){target.textContent='未锁定或配置未就绪';return}
+  var mode=j.orderMappingMode,src=sources.find(function(s){return s.id===j.orderProductionSource});
+  if(j.orderSignal===null){target.textContent='不下单（'+(mode==='OFF'?'该方向已关闭':'不可执行')+'）';return}
+  var expectedSide=mode==='INVERSE'?(live.direction==='UP'?'DOWN':'UP'):mode==='FORWARD'?live.direction:null;
+  target.textContent=j.orderSignal===expectedSide?
+    (j.orderSignal+'（'+modeLabel(mode)+' · '+(src?src.name:'未知来源')+'）'):'方向映射校验失败';
  }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'})
 }
-function boot(){renderDirectionModes();loadDirectionModes();load();updateOrderSignal();setInterval(load,3000);setInterval(updateOrderSignal,2000);setInterval(loadDirectionModes,5000)}
+function boot(){renderDirectionModes();loadDirectionModes();load();updateOrderSignal();
+ setInterval(load,3000);setInterval(updateOrderSignal,2000);setInterval(loadDirectionModes,5000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot()
 })();</script>`;
 

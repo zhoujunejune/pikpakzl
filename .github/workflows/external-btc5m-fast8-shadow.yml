@@ -5,6 +5,10 @@ on:
       - 'round-tracker/**'
       - 'railway-diagnostic/panel-stats-shell.mjs'
       - 'railway-diagnostic/control-quick-inputs.test.mjs'
+      - 'railway-diagnostic/order-direction-policy.mjs'
+      - 'railway-diagnostic/order-direction-policy.test.mjs'
+      - 'railway-diagnostic/index.mjs'
+      - 'railway-diagnostic/wrapper.mjs'
       - '.github/workflows/external-btc5m-fast8-shadow.yml'
   push:
     branches: [main]
@@ -12,6 +16,10 @@ on:
       - 'round-tracker/**'
       - 'railway-diagnostic/panel-stats-shell.mjs'
       - 'railway-diagnostic/control-quick-inputs.test.mjs'
+      - 'railway-diagnostic/order-direction-policy.mjs'
+      - 'railway-diagnostic/order-direction-policy.test.mjs'
+      - 'railway-diagnostic/index.mjs'
+      - 'railway-diagnostic/wrapper.mjs'
 jobs:
   fast8-production-single-model:
     runs-on: ubuntu-latest
@@ -30,6 +38,9 @@ jobs:
           node --check round-tracker/external-fast8-primary.mjs
           node --check round-tracker/index-rest.mjs
           node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check railway-diagnostic/order-direction-policy.mjs
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/wrapper.mjs
       - name: Offline single-model regression without orders
         run: |
-          node --test round-tracker/fast8-current-round-only.test.mjs round-tracker/external-btc5m-fast8-shadow.test.mjs round-tracker/external-fast8-primary.test.mjs round-tracker/fast8.test.mjs round-tracker/fast8-production-gate.test.mjs railway-diagnostic/control-quick-inputs.test.mjs
+          node --test round-tracker/fast8-current-round-only.test.mjs round-tracker/external-btc5m-fast8-shadow.test.mjs round-tracker/external-fast8-primary.test.mjs round-tracker/fast8.test.mjs round-tracker/fast8-production-gate.test.mjs railway-diagnostic/control-quick-inputs.test.mjs railway-diagnostic/order-direction-policy.test.mjs

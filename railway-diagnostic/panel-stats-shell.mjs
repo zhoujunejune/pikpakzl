@@ -179,7 +179,7 @@ const statsScript = `<script>(function(){
 function e(i){return document.getElementById(i)}
 function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})}
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
-function sourceName(x){if(x&&x.productionModel==='FLOW_BOOK_PROXY_V1')return '外部订单流 FAST8';var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='ZL_FAST8_65_PRIMARY')return 'ZL_FAST8_65（8秒）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2（历史）';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
+function sourceName(x){if(x&&x.productionModel==='FLOW_BOOK_PROXY_V1')return '行情状态 FAST8';var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='ZL_FAST8_65_PRIMARY')return 'ZL_FAST8_65（8秒）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2（历史）';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
 async function getStats(){
 var errMsg='';
@@ -220,7 +220,7 @@ e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedR
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent='唯一现役：FLOW_BOOK_PROXY_V1 · 8秒内锁定 UP/DOWN · '+settlement+' · 本表按原生产信号计分，不代表反向订单实际盈利率'+status+stale;
+e('rsMeta').textContent='唯一现役：FLOW_BOOK_PROXY_V1 · 8秒内锁定 UP/DOWN · '+settlement+' · 本表按生产信号方向计分，不代表实际订单盈亏'+status+stale;
 var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待生产 Shadow 首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
@@ -233,10 +233,10 @@ function boot(){load();setInterval(load,3000)}if(document.readyState==='loading'
 const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="k">唯一现役信号模型 · 外部开源思路适配</div>
 <div class="big" id="activeFast8Name">FLOW_BOOK_PROXY_V1</div>
-<div class="muted" id="activeFast8Desc">BTC 5分钟 · 订单流/盘口失衡 · 开盘8秒内锁定 UP/DOWN</div>
+<div class="muted" id="activeFast8Desc">BTC 5分钟 · V9 行情状态 regimeScore · 开盘8秒内锁定 UP/DOWN</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
-<div class="kv"><div class="k">下单信号（反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
+<div class="kv"><div class="k">下单信号（正常跟随）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
@@ -253,7 +253,7 @@ fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
 .then(function(j){
  if(!j||!j.ok)throw Error('生产统计不可用');
  var model=j.activeProductionModel;
- if(!model||model.id!=='FLOW_BOOK_PROXY_V1')throw Error('当前服务尚未切换到订单流生产模型');
+ if(!model||model.id!=='FLOW_BOOK_PROXY_V1')throw Error('当前服务尚未切换到唯一现役模型');
  var m=model.metrics||{}, records=(j.records||[]).filter(function(z){return z.productionModel===model.id&&z.productionModelVersion===model.version});
  var now=Math.floor(Date.now()/300000)*300000;
  var current=records.find(function(z){return Number(z.roundStartMs)===now});
@@ -274,8 +274,8 @@ function updateOrderSignal(){
    var expected=Math.floor(Date.now()/300000)*300000;
    var live=j.signal||{};
    var ready=live.status==='LOCKED'&&Number(live.round)===expected&&
-     j.orderDirectionPolicy==='INVERT_PRODUCTION_UP_DOWN_V1';
-   var target=e('activeFast8OrderDirection');if(target)target.textContent=ready?(j.orderSignal+'（反向）'):'未锁定或未激活';
+     j.orderDirectionPolicy==='FOLLOW_PRODUCTION_DIRECTION_V1';
+   var target=e('activeFast8OrderDirection');if(target)target.textContent=ready&&j.orderSignal===live.direction?(j.orderSignal+'（正常跟随）'):'未锁定或未激活';
  }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'});
 }
 function boot(){load();updateOrderSignal();setInterval(load,3000);setInterval(updateOrderSignal,3000)}

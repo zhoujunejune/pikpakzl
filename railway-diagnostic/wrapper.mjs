@@ -521,7 +521,7 @@ const clientJs = String.raw`(function(){
         if(btn) btn.classList.add('hidden');
       }else if(currentPending.state==='READY'){
         text('pendingTitle','生产 '+(currentPending.productionSignal||'-')+' → 下单 '+(currentPending.action||'-')+' · '+currentPending.amount+' USDT');
-        text('pendingMeta','反向规则 '+(currentPending.orderDirectionPolicy||'-')+' · 市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+(autoMode?' · 后端自动确认已启用':' · 点击按钮即直接提交真实订单'));
+        text('pendingMeta','下单规则 '+(currentPending.orderDirectionPolicy||'-')+' · 市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+(autoMode?' · 后端自动确认已启用':' · 点击按钮即直接提交真实订单'));
         if(btn){
           if(autoMode){ btn.classList.add('hidden'); }
           else{

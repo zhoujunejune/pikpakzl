@@ -95,7 +95,7 @@ test('VIP75-only preserves 8s lock and refuses parity fallback or any untrained 
   assert.doesNotMatch(exclusive,/SINGLE_EXTERNAL_PRIMARY_ID/);
   assert.match(exclusive,/logProductionSignalState\(live\)/);
   assert.doesNotMatch(exclusive,/NO_INFORMATION_NOT_A_VIP75_PREDICTION/);
-  assert.match(exclusive,/status:'PENDING'/);
+  assert.match(exclusive,/vip75DataGapResponse/);
   assert.doesNotMatch(exclusive,/status:'WAIT'/);
   assert.equal(FAST8_SOURCE,'ZL_FAST8_65_PRIMARY');
   assert.equal(FAST8_MODE,'FAST8_ONLY');

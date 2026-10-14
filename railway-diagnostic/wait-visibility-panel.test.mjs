@@ -13,7 +13,7 @@ function mounted(){
  const ids=['activeFast8Name','activeFast8Desc','activeFast8Direction','activeFast8Accuracy',
  'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection',
  'activeFast8InverseAccuracy','activeFast8InverseHitMiss','rsMeta','rsAccuracy','rsSettled',
- 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows'];
+ 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows','sourceRateRows'];
  return new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
 }
 async function execute(script,payload){

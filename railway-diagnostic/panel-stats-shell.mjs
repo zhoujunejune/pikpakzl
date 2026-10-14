@@ -267,13 +267,17 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="muted" id="activeFast8Desc">BTC 5分钟 · 上一轮行情预热 · 8秒内锁定 · 新版独立统计</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
-<div class="kv"><div class="k">下单信号（全部正向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
+<div class="kv"><div class="k">下单信号（当前正向 / 反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
 <div class="kv"><div class="k">下单方向推算命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
 <div class="kv"><div class="k">下单方向推算命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
 </div>
+<div class="k" style="margin-top:14px">下单方向 · 三组独立选择</div>
+<div class="muted" style="margin-top:6px">每组正向或反向二选一。需填写页面上方控制 PIN，保存后下一轮生效。</div>
+<div id="directionModeChoices" style="margin-top:9px;display:grid;gap:8px"><div class="muted">后台配置读取中...</div></div>
+<div id="directionModeMessage" role="status" aria-live="polite" class="muted" style="margin-top:8px"></div>
 <div class="k" style="margin-top:14px">三类信号 · 分别统计胜率（仅当前8秒版本）</div>
 <div style="overflow:auto;margin-top:8px;border:1px solid #2b313d;border-radius:10px">
 <table style="width:100%;border-collapse:collapse;min-width:630px;font-size:12px">
@@ -288,14 +292,69 @@ const primaryScript = `<script>(function(){
 function e(x){return document.getElementById(x)}
 function x(v){return v==null?'-':String(v)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
-var policy='FORWARD_ONLY_SELECTIVE8_V2';
+var policy='';
 var sources=[
  {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',mode:'正向'},
  {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',mode:'正向'},
  {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',mode:'正向'}
 ];
+var directionModeReady=false;
+var directionModeBusy=false;
+function renderDirectionModes(){
+ var target=e('directionModeChoices');if(!target)return;
+ target.innerHTML=sources.map(function(src,i){
+  return '<div style="background:#10141c;padding:12px;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">'+
+    '<div style="font-size:13px;font-weight:700">'+src.name+'</div>'+
+    '<div style="display:flex;gap:6px">'+['正向','反向'].map(function(mode){
+      var selected=src.mode===mode;
+      return '<button type="button" data-dir-index="'+i+'" data-dir-mode="'+mode+'" aria-pressed="'+selected+'" '+
+      (!directionModeReady||directionModeBusy?'disabled ':'')+
+      'style="width:auto;min-width:70px;margin:0;padding:9px 12px;font-size:13px;border:1px solid '+(selected?'#3ddc84':'#435069')+
+      ';background:'+(selected?'#17392b':'#222838')+';color:'+(selected?'#7ff0b0':'#b6c0d0')+'">'+mode+'</button>';
+    }).join('')+'</div></div>';
+ }).join('');
+ target.querySelectorAll('button').forEach(function(btn){
+  btn.addEventListener('click',function(){setDirectionModeFromUI(Number(btn.getAttribute('data-dir-index')),btn.getAttribute('data-dir-mode'))});
+ });
+}
+async function loadDirectionModes(){
+ if(directionModeBusy)return;
+ try{
+  var response=await fetch('/api/direction-mode?ts='+Date.now(),{cache:'no-store'});
+  var state=await response.json();
+  if(!response.ok||!state.ok)throw Error(state.error||'方向配置未就绪');
+  directionModeReady=true;policy=state.policy;
+  sources.forEach(function(src){src.mode=state.modes[src.id]==='INVERSE'?'反向':'正向'});
+  renderDirectionModes();
+ }catch(err){
+  directionModeReady=false;renderDirectionModes();
+  e('directionModeMessage').textContent='方向配置读取失败：'+(err.message||err);
+ }
+}
+async function setDirectionModeFromUI(index,mode){
+ if(!directionModeReady||directionModeBusy||!sources[index]||!['正向','反向'].includes(mode))return;
+ var src=sources[index];if(src.mode===mode)return;
+ var pin=document.getElementById('pin');
+ if(!pin||!pin.value){e('directionModeMessage').textContent='请先在上方填写控制 PIN';return}
+ if(!window.confirm('将 '+src.name+' 改成'+mode+'下单？下一轮开始生效。'))return;
+ directionModeBusy=true;renderDirectionModes();
+ try{
+  var response=await fetch('/api/direction-mode',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({source:src.id,mode:mode==='反向'?'INVERSE':'FORWARD',pin:pin.value})});
+  var data=await response.json();
+  if(!response.ok||!data.ok)throw Error(data.error||'保存失败');
+  policy=data.policy;
+  sources.forEach(function(x){x.mode=data.modes[x.id]==='INVERSE'?'反向':'正向'});
+  e('directionModeMessage').textContent='已生效：'+src.name+' → '+mode+'（从下一轮下单）';
+  updateOrderSignal();
+ }catch(err){
+  e('directionModeMessage').textContent='保存失败：'+(err.message||err);
+ }finally{directionModeBusy=false;renderDirectionModes()}
+}
+window.setDirectionModeFromUI=setDirectionModeFromUI;
+
 function bySource(z){return sources.find(function(x){return x.id===z.productionSource})||null}
-function orderSide(z){var pred=z.productionPrediction;return pred==='UP'||pred==='DOWN'?pred:null}
+function orderSide(z){var pred=z.productionPrediction;if(pred!=='UP'&&pred!=='DOWN')return null;var src=bySource(z);return src&&src.mode==='反向'?(pred==='UP'?'DOWN':'UP'):pred}
 function load(){
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
@@ -312,10 +371,10 @@ function load(){
    var now=Math.floor(Date.now()/300000)*300000;
    var current=records.find(function(z){return Number(z.roundStartMs)===now});
    var dir=current&&(current.productionPrediction==='UP'||current.productionPrediction==='DOWN')?current.productionPrediction:'待本轮锁定';
-   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · 正向下单）';
+   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · '+(bySource(current)&&bySource(current).mode||'正向')+'下单）';
    e('activeFast8Name').textContent=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
    e('activeFast8Desc').textContent=currentMode
-     ? 'BTC 5分钟 · 8秒截止 · 所有来源正向下单（反向已暂停）'
+     ? 'BTC 5分钟 · 8秒截止 · 三类信号分别可设正向或反向'
      : 'BTC 5分钟 · 历史模型统计';
    e('activeFast8Direction').textContent=dir;
    var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
@@ -345,7 +404,7 @@ function load(){
        '<td style="text-align:center">'+(total?orderHits+'/'+total+' · '+pct(orderHits*100/total):'样本不足')+'</td></tr>'
    }).join(''):'<tr><td colspan="5" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
    e('activeFast8Note').textContent=currentMode
-     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 所有来源均正向下单（反向已暂停） · 所有下单方向胜率均按当前规则推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
+     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 当前配置分别正向或反向 · 下单方向胜率按现行选择推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
      : '当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
  })
  .catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
@@ -363,7 +422,7 @@ function updateOrderSignal(){
    if(target)target.textContent=ready&&j.orderSignal===direction?(j.orderSignal+'（'+mode+'下单）'):'未锁定或未激活';
  }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'})
 }
-function boot(){load();updateOrderSignal();setInterval(load,3000);setInterval(updateOrderSignal,2000)}
+function boot(){renderDirectionModes();loadDirectionModes();load();updateOrderSignal();setInterval(load,3000);setInterval(updateOrderSignal,2000);setInterval(loadDirectionModes,5000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot()
 })();</script>`;
 

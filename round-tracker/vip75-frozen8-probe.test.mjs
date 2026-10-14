@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FROZEN_VIP75_VERSION,inspectFrozenVip75Artifact,createFrozenVip75Fast8Probe } from './vip75-frozen8-probe.mjs';
+import { FROZEN_VIP75_VERSION,PINNED_WEIGHT_FINGERPRINT,inspectFrozenVip75Artifact,createFrozenVip75Fast8Probe } from './vip75-frozen8-probe.mjs';
 
 function fixture(){
   return {schemaVersion:3,version:'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3',
@@ -16,39 +16,31 @@ function withArtifact(obj,fn){
   try{const file=path.join(dir,'state.json');fs.writeFileSync(file,JSON.stringify(obj));return fn(file);}
   finally{fs.rmSync(dir,{recursive:true,force:true});}
 }
-test('identifies exact saved model and keeps trained model immutable',()=>{
+test('requires exact immutable trained weights, not only version name and parameters',()=>{
   withArtifact(fixture(),file=>{
     const result=inspectFrozenVip75Artifact(file);
-    assert.equal(result.ready,true);
-    assert.equal(result.model.version,FROZEN_VIP75_VERSION);
-    assert.equal(result.model.l2,0.12);
-    assert.equal(typeof result.weightFingerprint,'string');
+    assert.equal(result.ready,false);
+    assert.equal(result.reason,'FROZEN_WEIGHT_FINGERPRINT_MISMATCH');
+    assert.equal(PINNED_WEIGHT_FINGERPRINT.length,64);
   });
 });
-test('rejects modified training parameter or replacement model weights',()=>{
+test('rejects modified training parameters, truncated weights and replacement model',()=>{
   const mismatched=fixture();mismatched.model.l2=0.025;
   withArtifact(mismatched,file=>assert.equal(inspectFrozenVip75Artifact(file).reason,'FROZEN_PARAMETER_MISMATCH'));
   const invalid=fixture();invalid.model.weights=[1,2,3];
   withArtifact(invalid,file=>assert.equal(inspectFrozenVip75Artifact(file).reason,'FROZEN_WEIGHTS_MISSING_OR_INVALID'));
-});
-test('requires exact historical version; no re-training or model substitution',()=>{
   const newer=fixture();newer.model.version=FROZEN_VIP75_VERSION+'_RETRAINED';
   withArtifact(newer,file=>assert.equal(inspectFrozenVip75Artifact(file).reason,'FROZEN_VERSION_NOT_CURRENT_ARTIFACT'));
 });
-test('evaluates only current-round causal market features before immutable 8-second deadline',()=>{
+test('refuses to manufacture a VIP75 prediction without correct original weights',()=>{
   withArtifact(fixture(),file=>{
     const engine=createFrozenVip75Fast8Probe({file});
-    assert.equal(engine.load().ready,true);
+    assert.equal(engine.load().ready,false);
     const t=1800000000000;
     const facts={regimeScore:0.2,currentScore:0.5,microScore:0.2,currentTrendScore:0.4};
-    assert.equal(engine.observe({round:t,facts},t-1),null);
-    assert.equal(engine.observe({round:t,facts:{}},t+100),null);
-    const first=engine.observe({round:t,facts},t+2000);
-    assert.equal(first.direction,'UP');
-    assert.equal(first.observedAt,t+2000);
-    assert.deepEqual(engine.observe({round:t,facts:{...facts,currentScore:-1}},t+4000),first);
+    assert.equal(engine.observe({round:t,facts},t+2000),null);
+    assert.equal(engine.decision(t),null);
+    assert.equal(engine.report().hasCandidate,false);
     assert.equal(engine.observe({round:t+300000,facts},t+300000+8001),null);
-    assert.equal(engine.decision(t)?.direction,'UP');
-    assert.equal(engine.report().productionEffect,'NONE_READ_ONLY_PROBE');
   });
 });

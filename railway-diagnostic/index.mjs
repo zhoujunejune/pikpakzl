@@ -837,15 +837,20 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
+    // The existing mobile UI renders these server-provided labels as text.
+    // Do not suggest an inverse order when the direction is display-only.
+    const displayOnly = signal?.status==='LOCKED' && signal.executionEligible===false;
+    const displaySignal = displayOnly
+      ? {...signal,status:'低置信度（仅展示，不下单）'} : signal;
     return send(res, 200, {
       ok: true,
       enabled,
       amount: tradeAmountText,
       mode: 'API_CONFIRM_LIVE',
       quoteMode: 'FRESH_ON_CONFIRM',
-      signal,
+      signal:displaySignal,
       productionSignal: signal?.status==='LOCKED'?signal.direction:null,
-      orderSignal: mappedOrderSignal(signal).orderSignal,
+      orderSignal: displayOnly?null:mappedOrderSignal(signal).orderSignal,
       orderDirectionPolicy: ORDER_DIRECTION_POLICY,
       signalModel: SIGNAL_MODEL_NAME,
       signalTransport: { ...signalTransport },

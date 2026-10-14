@@ -10,6 +10,10 @@ import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
 import { createFrozenVip75Fast8Probe, FROZEN_VIP75_VERSION } from './vip75-frozen8-probe.mjs';
+import {routeSelectiveV2Fast8, POLICY_VERSION as SELECTIVE8_VERSION,
+  PRIMARY_SOURCE as SELECTIVE8_PRIMARY, RESCUE_SOURCE as SELECTIVE8_RESCUE,
+  UNVERIFIED_SOURCE as SELECTIVE8_UNVERIFIED, INPUT_VERSION as SELECTIVE8_INPUT_VERSION}
+  from './selective-v2-fast8-router.mjs';
 import { VIP75_PREVIOUS_ROUND_INPUT_VERSION } from './vip75-preround-features.mjs';
 import { vip75StatsByInputVersion, VIP75_LEGACY_UNKNOWN_INPUT } from './vip75-version-stats.mjs';
 import { vip75DataGapResponse, VIP75_DATA_GAP_DIAGNOSTIC_MS, VIP75_DATA_GAP_POLICY_VERSION } from './vip75-data-gap-policy.mjs';
@@ -36,11 +40,14 @@ import { WebSocketServer } from 'ws';
 
 // Reversible signal-source switch: only FAST8 can enter the production router.
 // Legacy code and model artifacts remain intact for a later explicit rollback.
-const PRODUCTION_SIGNAL_SOURCE_MODE = String(process.env.PRODUCTION_SIGNAL_SOURCE_MODE || FAST8_MODE).trim().toUpperCase() === LEGACY_MODE ? LEGACY_MODE : FAST8_MODE;
+const SELECTIVE_V2_FAST8_MODE = 'SELECTIVE_V2_FAST8';
+const requestedProductionMode = String(process.env.PRODUCTION_SIGNAL_SOURCE_MODE || FAST8_MODE).trim().toUpperCase();
+const PRODUCTION_SIGNAL_SOURCE_MODE = [LEGACY_MODE, SELECTIVE_V2_FAST8_MODE].includes(requestedProductionMode)
+  ? requestedProductionMode : FAST8_MODE;
 // Temporarily pause all NON-PRODUCTION shadows in FAST8-only mode to fit the
 // existing Railway free-memory ceiling. Set PAUSE_NONPROD_SHADOWS=0 to restore.
 // FAST8 worker, market polling, official settlements, orders and archives remain active.
-const PAUSE_NONPROD_SHADOWS = PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
+const PAUSE_NONPROD_SHADOWS = [FAST8_MODE, SELECTIVE_V2_FAST8_MODE].includes(PRODUCTION_SIGNAL_SOURCE_MODE) &&
   String(process.env.PAUSE_NONPROD_SHADOWS || '1') !== '0';
 const PORT = Number(process.env.PORT || 3000);
 const SYMBOL = String(process.env.SYMBOL || 'BTCUSDT').toUpperCase();
@@ -302,6 +309,9 @@ function buildLockedSignalEnvelope(row, live) {
     upstreamModelVersion: row?.productionModelVersion ?? live?.modelVersion ?? null,
     upstreamInputVersion: row?.productionInputVersion ?? live?.fast8Quality?.inputVersion ?? null,
     upstreamPreviousRoundFeatureCount: row?.productionPreviousRoundFeatureCount ?? live?.fast8Quality?.previousRoundFeatureCount ?? null,
+    executionEligible: row?.productionExecutionEligible !== false && live?.executionEligible !== false,
+    qualityGate: row?.productionFallbackUsed === true || live?.fallbackUsed === true
+      ? 'UNVERIFIED_DISPLAY_ONLY' : 'QUALIFIED_DIRECTION',
     // Backward-compatible additive audit markers: NEVER present deterministic
     // or missing-data fallback as trained probability or verified confidence.
     fallbackUsed: row?.productionFallbackUsed === true || live?.fallbackUsed === true,
@@ -449,6 +459,7 @@ signalWss.on('connection', ws => {
 });
 
 const rounds = new Map();
+let selective8Snapshot = null;
 let signalPollBusy = false;
 let settleBusy = false;
 let lastSignalPollAt = 0;
@@ -1635,6 +1646,8 @@ function qualifiedShadowV6Candidate() {
 }
 
 function productionPolicyName() {
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE)
+    return 'SELECTIVE_V2_THEN_EDGE_RESCUE_WITH_8S_UNVERIFIED_DISPLAY_ONLY';
   if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE) return 'EXCLUSIVE_ZL_FAST8_65_STRICT_65_GATE_NO_LEGACY_FALLBACK';
   if (productionUsesSelectiveV2()) {
     return 'IMMUTABLE_FIRST_LOCK_SELECTIVE_V2';
@@ -4155,6 +4168,15 @@ async function pollSignal() {
     const row = ensureRound(Number(live.round));
     // Probe exact old weights on the live <=8s snapshot. Never alter the locked signal.
     const vip75Early = vip75Frozen8Probe.observe(live, signalObservedAt);
+    if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE) {
+      const prepared = vip75Frozen8Probe.prepareFeatures(Number(live.round),live.facts);
+      selective8Snapshot = {round:Number(live.round),observedAt:signalObservedAt,...prepared};
+      if (Date.now() < Number(live.round)+8000 &&
+          !['UP','DOWN'].includes(ensureRound(Number(live.round)).productionPrediction)) {
+        try { productionSignalPayload(Date.now()); }
+        catch(error) { log('selective_v2_fast8_trigger_error',{error:error?.message||String(error)}); }
+      }
+    }
     if (vip75Early && PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
         row.productionPrediction !== 'UP' && row.productionPrediction !== 'DOWN') {
       try { productionSignalPayload(Date.now()); }
@@ -4790,6 +4812,7 @@ function freezeProductionLock(row, live) {
   row.productionDelayMs = Math.max(0, Number(row.productionGeneratedAt) - Number(row.roundStartMs));
   row.productionModel = live?.model || null;
   row.productionModelVersion = live?.modelVersion || null;
+  row.productionExecutionEligible = live?.executionEligible !== false;
   row.productionFallbackUsed = Boolean(live?.fallbackUsed);
   row.productionFallbackReason = live?.fallbackReason || null;
   // Persist provenance atomically with the immutable lock. Historical locks
@@ -5526,6 +5549,7 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
       productionPolicy:productionPolicyName(),frozen:true,
       fast8Quality:{inputVersion:activeRow.productionInputVersion??null},
       fallbackUsed:Boolean(activeRow.productionFallbackUsed),
+      executionEligible:activeRow.productionExecutionEligible!==false,
       fallbackReason:activeRow.productionFallbackReason??null};
     logProductionSignalState(frozen);
     return {ok:true,live:frozen};
@@ -5600,9 +5624,68 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
   return {ok:true,live};
 }
 
+// NEW prospective 8-second cohort: original V2/Edge filters on causal
+// previous-round observations, never the old 20-22s production signal.
+function selectiveV2Fast8SignalPayload(row, expectedRound, now) {
+  const activeRow = row || ensureRound(expectedRound);
+  const sample = selective8Snapshot?.round===expectedRound ? selective8Snapshot : null;
+  const routed = routeSelectiveV2Fast8({
+    round:expectedRound,now,facts:sample?.facts||null,
+    sourceRound:sample?.sourceRound??null,
+    previousRoundFeatureCount:sample?.fromPrevious?.length??0,
+    currentRoundFeatureCount:sample?.fromCurrent?.length??0,
+    previousInputVersion:sample?.inputVersion??null,
+    quality:(direction,facts,delayMs,excludeRound)=>
+      evaluateSelectiveQualityV2(direction,facts,delayMs,excludeRound),
+    edge:(direction,facts,delayMs,score)=>
+      selectiveV2EdgeRescueCandidateDecision(direction,facts,delayMs,score),
+  });
+  if(routed.status!=='LOCKED'){
+    return {ok:true,live:{round:expectedRound,status:routed.status,signal:null,
+      input:{round:expectedRound},generatedAt:null,
+      source:'SELECTIVE_V2_FAST8_ROUTER',model:SELECTIVE8_VERSION,
+      productionPolicy:productionPolicyName(),executionEligible:false,
+      waitReason:routed.reason||null,
+      fast8Quality:{inputVersion:SELECTIVE8_INPUT_VERSION,
+        status:routed.status,evidence:routed.evidence??null}}};
+  }
+  const eligible=routed.executionEligible===true;
+  const live={round:expectedRound,status:'LOCKED',
+    signal:{direction:routed.direction,score:routed.score??null,
+      confidence:null,modelProbability:null},
+    input:{round:expectedRound},generatedAt:now,
+    source:routed.source,model:SELECTIVE8_VERSION,modelVersion:SELECTIVE8_VERSION,
+    productionPolicy:productionPolicyName(),executionEligible:eligible,
+    fallbackUsed:!eligible,
+    fallbackReason:eligible?null:'UNVERIFIED_REAL_MARKET_DIRECTION_NO_AUTOMATIC_ORDER',
+    fast8Quality:{inputVersion:SELECTIVE8_INPUT_VERSION,
+      status:eligible?'QUALIFIED_8S':'UNVERIFIED_DISPLAY_ONLY',
+      previousInputVersion:routed.previousInputVersion,
+      sourceRound:routed.sourceRound,
+      previousRoundFeatureCount:routed.previousRoundFeatureCount,
+      earlierPreviousFeatureCount:sample?.fromEarlierPrevious?.length??0,
+      currentRoundFeatureCount:routed.currentRoundFeatureCount,
+      evidence:routed.evidence??null},
+    selectiveQuality:routed.quality??null,
+    edgeRescue:routed.edge??null};
+  if(freezeProductionLock(activeRow,live)){
+    log('selective_v2_fast8_production_lock',{round:expectedRound,
+      direction:routed.direction,source:routed.source,
+      elapsedMs:routed.elapsedMs,executionEligible:eligible,
+      baseFeature:routed.evidence?.baseFeature??null,
+      inputVersion:SELECTIVE8_INPUT_VERSION,
+      previousRoundFeatureCount:routed.previousRoundFeatureCount,
+      currentRoundFeatureCount:routed.currentRoundFeatureCount});
+  }
+  return {ok:true,live};
+}
+
 function productionSignalPayload(now = Date.now()) {
   const expectedRound = Math.floor(Number(now) / 300000) * 300000;
   const row = rounds.get(String(expectedRound)) || null;
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE &&
+      !['UP','DOWN'].includes(row?.productionPrediction))
+    return selectiveV2Fast8SignalPayload(row,expectedRound,now);
   if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
       !(row?.productionSource === FAST8_SOURCE && ['UP','DOWN'].includes(row.productionPrediction))) {
     return fast8ExclusiveSignalPayload(row, expectedRound, now);
@@ -5641,6 +5724,7 @@ function productionSignalPayload(now = Date.now()) {
         ? (row.shadowFacts ?? null)
         : (row.predictionFacts ?? null),
       productionPolicy: productionPolicyName(),
+      executionEligible:row.productionExecutionEligible!==false,
       fallbackUsed: row.productionFallbackUsed === true || row.productionSource === 'V6_FALLBACK',
       fallbackReason: row.productionFallbackReason || (row.productionSource === 'V6_FALLBACK' ? 'FROZEN_V6_FALLBACK' : null),
       shadowForwardStatus: shadowModelMetrics.status,

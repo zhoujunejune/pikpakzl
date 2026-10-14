@@ -288,14 +288,14 @@ const primaryScript = `<script>(function(){
 function e(x){return document.getElementById(x)}
 function x(v){return v==null?'-':String(v)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
-var policy='FORWARD_ONLY_SELECTIVE8_V2';
+// Current revisioned order policy is delivered by the control API.
 var sources=[
  {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',mode:'正向'},
  {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',mode:'正向'},
  {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',mode:'正向'}
 ];
 function bySource(z){return sources.find(function(x){return x.id===z.productionSource})||null}
-function orderSide(z){var pred=z.productionPrediction;return pred==='UP'||pred==='DOWN'?pred:null}
+function orderSide(z){var pred=z.productionPrediction;if(pred!=='UP'&&pred!=='DOWN')return null;var src=bySource(z);return src&&src.mode==='反向'?(pred==='UP'?'DOWN':'UP'):pred}
 function load(){
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
@@ -312,10 +312,10 @@ function load(){
    var now=Math.floor(Date.now()/300000)*300000;
    var current=records.find(function(z){return Number(z.roundStartMs)===now});
    var dir=current&&(current.productionPrediction==='UP'||current.productionPrediction==='DOWN')?current.productionPrediction:'待本轮锁定';
-   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · 正向下单）';
+   if(current&&current.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')dir+='（低置信度 · '+sources[2].mode+'下单）';
    e('activeFast8Name').textContent=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
    e('activeFast8Desc').textContent=currentMode
-     ? 'BTC 5分钟 · 8秒截止 · 所有来源正向下单（反向已暂停）'
+     ? 'BTC 5分钟 · 8秒截止 · 三路信号方向独立切换'
      : 'BTC 5分钟 · 历史模型统计';
    e('activeFast8Direction').textContent=dir;
    var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
@@ -345,7 +345,7 @@ function load(){
        '<td style="text-align:center">'+(total?orderHits+'/'+total+' · '+pct(orderHits*100/total):'样本不足')+'</td></tr>'
    }).join(''):'<tr><td colspan="5" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
    e('activeFast8Note').textContent=currentMode
-     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 所有来源均正向下单（反向已暂停） · 所有下单方向胜率均按当前规则推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
+     ? '8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 三路信号分别按开关执行方向 · 所有下单方向胜率均按当前规则推算，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
      : '当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
  })
  .catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
@@ -356,7 +356,9 @@ function updateOrderSignal(){
  .then(function(j){
    var expected=Math.floor(Date.now()/300000)*300000;
    var live=j.signal||{};
-   var ready=live.status==='LOCKED'&&Number(live.round)===expected&&j.orderDirectionPolicy===policy;
+   var cfg=j.orderDirectionConfig||{};
+   if(cfg.ready&&cfg.modes)sources.forEach(function(src){src.mode=cfg.modes[src.id]==='INVERSE'?'反向':'正向'});
+   var ready=cfg.ready&&live.status==='LOCKED'&&Number(live.round)===expected&&j.orderDirectionPolicy===cfg.policyVersion;
    var mode=j.orderMappingMode==='INVERSE'?'反向':'正向';
    var direction=mode==='反向'?(live.direction==='UP'?'DOWN':'UP'):live.direction;
    var target=e('activeFast8OrderDirection');
@@ -367,11 +369,13 @@ function boot(){load();updateOrderSignal();setInterval(load,3000);setInterval(up
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot()
 })();</script>`;
 
+const directionModeCard = "<section class=\"c\" id=\"directionModeControls\">\n<style>\n#directionModeControls .direction-mode-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid #354052;flex-wrap:wrap}\n#directionModeControls .direction-mode-label{display:flex;flex-direction:column;gap:3px;font-size:14px}\n#directionModeControls .direction-mode-label small{font-size:11px;color:#a6b2c2}\n#directionModeControls .direction-mode-pair{display:flex;gap:5px;flex:1;max-width:270px;min-width:220px}\n#directionModeControls .direction-mode-pair button{margin:0;padding:11px 4px;min-width:0;flex:1;font-size:13px;color:#c4cfdd;background:#263144;border:1px solid #46566d;border-radius:8px}\n#directionModeControls .direction-mode-pair button[aria-pressed=\"true\"]{color:#151b23;background:#f0b90b;border-color:#f0b90b;font-weight:800}\n#directionModeControls .direction-mode-pair button:disabled{opacity:.5}\n</style>\n<div class=\"k\">三路信号 · 独立下单方向开关</div>\n<div class=\"muted\" style=\"margin:6px 0 8px\">每一路独立二选一，不能同时选择正反方向。首次默认正向，切换使用上方控制 PIN。</div>\n<div class=\"direction-mode-row\"><div class=\"direction-mode-label\"><strong>Selective V2</strong><small>主策略</small></div><div class=\"direction-mode-pair\"><button type=\"button\" data-direction-source=\"SELECTIVE_V2_FAST8_PRIMARY\" data-direction-mode=\"FORWARD\" aria-pressed=\"false\" disabled>正向下单</button><button type=\"button\" data-direction-source=\"SELECTIVE_V2_FAST8_PRIMARY\" data-direction-mode=\"INVERSE\" aria-pressed=\"false\" disabled>反向下单</button></div></div>\n<div class=\"direction-mode-row\"><div class=\"direction-mode-label\"><strong>Edge Rescue</strong><small>兜底策略</small></div><div class=\"direction-mode-pair\"><button type=\"button\" data-direction-source=\"EDGE_RESCUE_FAST8_PRIMARY\" data-direction-mode=\"FORWARD\" aria-pressed=\"false\" disabled>正向下单</button><button type=\"button\" data-direction-source=\"EDGE_RESCUE_FAST8_PRIMARY\" data-direction-mode=\"INVERSE\" aria-pressed=\"false\" disabled>反向下单</button></div></div>\n<div class=\"direction-mode-row\"><div class=\"direction-mode-label\"><strong>低置信度行情兜底</strong><small>低置信度不代表预测准确</small></div><div class=\"direction-mode-pair\"><button type=\"button\" data-direction-source=\"SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION\" data-direction-mode=\"FORWARD\" aria-pressed=\"false\" disabled>正向下单</button><button type=\"button\" data-direction-source=\"SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION\" data-direction-mode=\"INVERSE\" aria-pressed=\"false\" disabled>反向下单</button></div></div>\n<div id=\"directionModeSaveResult\" class=\"muted\" role=\"status\" aria-live=\"polite\" style=\"margin-top:10px\">正在读取 Redis 设置…</div>\n<div class=\"muted\" style=\"margin-top:5px\">仅对后续新订单生效；不改变已经提交的订单。正向、反向均有亏损风险。</div>\n</section>";
+const directionModeScript = "<script>(function(){\n'use strict';\nvar busy=false;\nfunction e(id){return document.getElementById(id)}\nfunction allButtons(){return Array.prototype.slice.call(document.querySelectorAll('[data-direction-source]'))}\nfunction status(message){var el=e('directionModeSaveResult');if(el)el.textContent=message}\nfunction render(j){\n var ready=!!(j&&j.ready);\n allButtons().forEach(function(b){\n  var selected=ready&&j.modes&&j.modes[b.dataset.directionSource]===b.dataset.directionMode;\n  b.setAttribute('aria-pressed',selected?'true':'false');\n  b.disabled=!ready||busy;\n });\n if(!ready)status('方向配置尚未恢复，按钮已停用。');\n else if(!busy)status('Redis 配置已加载 · 版本 '+j.revision+' · 各信号独立生效');\n}\nasync function load(){\n if(busy)return;\n try{\n  var r=await fetch('/api/order-direction-config?ts='+Date.now(),{cache:'no-store'});\n  var j=await r.json();if(!r.ok||!j.ok)throw Error(j.error||'配置读取失败');\n  render(j);\n }catch(err){render(null);status('配置读取失败：'+String(err.message||err))}\n}\nasync function choose(source,mode){\n if(busy)return;\n var pin=e('pin')&&e('pin').value;\n if(!pin){status('请填写上方交易控制 PIN');return}\n var label=source==='SELECTIVE_V2_FAST8_PRIMARY'?'Selective V2':source==='EDGE_RESCUE_FAST8_PRIMARY'?'Edge Rescue':'低置信度行情兜底';\n if(!confirm('确定将 '+label+' 切换为'+(mode==='INVERSE'?'反向':'正向')+'下单？'))return;\n busy=true;allButtons().forEach(function(b){b.disabled=true});\n status('正在保存 '+label+' 的方向...');\n try{\n  var r=await fetch('/api/order-direction-config',{method:'POST',\n    headers:{'content-type':'application/json'},\n    body:JSON.stringify({pin:pin,source:source,mode:mode}),cache:'no-store'});\n  var j=await r.json();if(!r.ok||!j.ok)throw Error(j.error||'保存失败');\n  busy=false;render(j);\n  status(label+' 已改为'+(mode==='INVERSE'?'反向':'正向')+'下单 · 已保存至 Redis（版本 '+j.revision+'）');\n }catch(err){busy=false;status('保存失败：'+String(err.message||err));await load()}\n}\nfunction boot(){\n allButtons().forEach(function(b){b.addEventListener('click',function(){void choose(b.dataset.directionSource,b.dataset.directionMode)})});\n void load();setInterval(load,5000);\n}\nif(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();\n})();</script>";
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
-  let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}</body>`);
-  return out.replace('</body>', `${primaryScript}${statsScript}</body>`);
+  let out = html.includes(marker) ? html.replace(marker, `${directionModeCard}${primaryCard}${statsCard}${marker}`) : html.replace('</body>', `${directionModeCard}${primaryCard}${statsCard}</body>`);
+  return out.replace('</body>', `${directionModeScript}${primaryScript}${statsScript}</body>`);
 }
 
 let child = null;

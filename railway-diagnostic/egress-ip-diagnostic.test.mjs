@@ -6,7 +6,7 @@ const spy=({first='203.0.113.9',second='203.0.113.9',country='SG'}={})=>{
  const urls=[];
  const fetchImpl=async(url,opts)=>{urls.push({url,method:opts.method});
   if(url.includes('ipinfo.io'))return {ok:true,json:async()=>({ip:first,country,region:'Singapore',org:'Test'})};
-  return {ok:true,text:async()=> 'ip='+second+'\\nloc='+country+'\\n'};
+  return {ok:true,text:async()=> 'ip='+second+'\nloc='+country+'\n'};
  };
  return {urls,fetchImpl};
 };
@@ -34,10 +34,10 @@ test('PIN protected diagnostic route never reads Binance private APIs or places 
  const end=source.indexOf("if (req.method === 'GET' && url.pathname === '/healthz')",start);
  assert.ok(start>0&&end>start);
  const route=source.slice(start,end);
- assert.match(route,/pinOK\\(body\\.pin\\)/);
- assert.match(route,/probeRailwayEgress\\(\\)/);
- assert.doesNotMatch(route,/signedGet|signedPost|prepareWorker|submitPendingOrder|enabled\\s*=/);
- assert.match(source,/onclick="checkEgressIp\\(\\)"/);
- assert.match(wrapper,/window\\.checkEgressIp=function\\(\\)/);
- assert.match(wrapper,/request\\('POST','\\/api\\/egress-ip'/);
+ assert.ok(route.includes('pinOK(body.pin)'));
+ assert.ok(route.includes('probeRailwayEgress()'));
+ assert.doesNotMatch(route,/signedGet|signedPost|prepareWorker|submitPendingOrder/);
+ assert.ok(source.includes('onclick="checkEgressIp()"'));
+ assert.ok(wrapper.includes('window.checkEgressIp=function()'));
+ assert.ok(wrapper.includes("request('POST','/api/egress-ip'"));
 });

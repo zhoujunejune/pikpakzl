@@ -34,7 +34,8 @@ function summarize(rows,calendar) {
 }
 
 export function vip75StatsByInputVersion(rows,modelVersion,currentInputVersion) {
-  const all=Array.from(rows).filter(r=>r.productionModel==='zl_new_vip75' &&
+  const calendarRows=Array.from(rows);
+  const all=calendarRows.filter(r=>r.productionModel==='zl_new_vip75' &&
     (r.productionModelVersion===modelVersion ||
      r.productionModelVersion===modelVersion+':NO_INFORMATION'))
     .sort((a,b)=>Number(a.roundStartMs)-Number(b.roundStartMs));
@@ -55,20 +56,21 @@ export function vip75StatsByInputVersion(rows,modelVersion,currentInputVersion) 
     const nextVersionStart=authentic.find(r=>Number(r.roundStartMs)>start &&
       (r.productionInputVersion||VIP75_LEGACY_UNKNOWN_INPUT)!==version)?.roundStartMs;
     const until=nextVersionStart==null?Infinity:Number(nextVersionStart);
-    const calendar=all.filter(r=>Number(r.roundStartMs)>=start &&
+    const calendar=calendarRows.filter(r=>Number(r.roundStartMs)>=start &&
       Number(r.roundStartMs)<until);
     versionMetrics[version]={
       inputVersion:version,
       modelVersion,attributed:version!==VIP75_LEGACY_UNKNOWN_INPUT,
       ...summarize(items,calendar),
-      coverageDenominatorNote:'RECORDED_MODEL_ROUNDS_ONLY_NO_UNSIGNALED_ROUND_BACKFILL',
+      coverageDenominatorNote:'OFFICIAL_SETTLED_CALENDAR_ROUNDS_WITHIN_COHORT_WINDOW',
     };
   }
   const current=versionMetrics[currentInputVersion]||{
     inputVersion:currentInputVersion,modelVersion,attributed:true,
     ...summarize([],[]),coverageDenominatorNote:'NO_CURRENT_VERSION_SIGNAL_YET',
   };
-  const historicalCombined=summarize(authentic,all);
+  const historicalStart=authentic.length?Number(authentic[0].roundStartMs):Infinity;
+  const historicalCombined=summarize(authentic,calendarRows.filter(r=>Number(r.roundStartMs)>=historicalStart));
   const oldParityFallbacks=all.filter(r=>r.productionFallbackUsed===true).length;
   return {
     id:'zl_new_vip75',version:modelVersion,

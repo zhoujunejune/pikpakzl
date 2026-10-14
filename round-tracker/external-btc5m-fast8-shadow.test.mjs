@@ -73,25 +73,48 @@ test('direct OFI and 60s trade pressure have no influence on FLOW_BOOK score',()
  assert.equal(a.strength,b.strength);
  assert.equal(a.featureCount,b.featureCount);
 });
-test('15s aggressive flow and currentScore do not directly influence V6 direction or strength',()=>{
+test('15s aggressive flow and currentScore do not directly influence V7 direction or strength',()=>{
  const a=externalResearchDirections(features,current).predictions.FLOW_BOOK_PROXY_V1;
  const b=externalResearchDirections({...features,tradePressure15s:-1,currentScore:-1},current).predictions.FLOW_BOOK_PROXY_V1;
  assert.equal(a.direction,b.direction);
  assert.equal(a.strength,b.strength);
  assert.equal(a.featureCount,b.featureCount);
- assert.equal(a.featureCount,5);
+ assert.equal(a.featureCount,2);
 });
-test('V6 blends fresh spot and prewarm with 3 valid inputs, without needing removed fields',()=>{
+test('V7 blends available regime with causal prewarm when PM has not yet aligned',()=>{
  const p={ready:true,nextRoundStartMs:ROUND,predictionMarketContractIncluded:false,
   previewScore:-0.8,directionPreview:'DOWN',sampleCount:50,version:'TEST'};
- const snapshot={microScore:1,regimeScore:1,normalizedMomentum60s:1,
-  tradePressure15s:-1,currentScore:-1,ofiNormalized5s:-1,tradePressure60s:-1};
+ const snapshot={regimeScore:1,tradePressure15s:-1,currentScore:-1,
+  microScore:-1,currentTrendScore:-1,normalizedMomentum60s:-1,
+  ofiNormalized5s:-1,tradePressure60s:-1};
  const d=externalResearchDirections(snapshot,{...current,preparation:p}).predictions.FLOW_BOOK_PROXY_V1;
  assert.equal(d.preparationUsed,true);
  assert.equal(d.preparationOnly,false);
  assert.equal(d.preWeight,0.30);
- assert.equal(d.featureCount,3);
+ assert.equal(d.featureCount,1);
  assert.equal(d.direction,'UP');
+});
+test('regime and current-round PM mid are the only direct scoring inputs',()=>{
+ const base=externalResearchDirections(features,current).predictions.FLOW_BOOK_PROXY_V1;
+ const altered=externalResearchDirections({...features,
+  microScore:-1,currentTrendScore:-1,normalizedMomentum60s:-1,
+  currentScore:-1,tradePressure15s:-1,tradePressure60s:-1,ofiNormalized5s:-1},current)
+  .predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(base.direction,altered.direction);
+ assert.equal(base.strength,altered.strength);
+ assert.equal(base.featureCount,2);
+ const down=externalResearchDirections({...features,regimeScore:-1,
+  predictionMarketUpMid:0.1},current).predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(down.direction,'DOWN');
+ assert.notEqual(down.strength,base.strength);
+});
+test('unaligned PM is not invented: regime-only direction is marked degraded',()=>{
+ const data=externalResearchDirections({regimeScore:0.8},current);
+ const v=data.predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(v.featureCount,1);
+ assert.equal(v.direction,'UP');
+ assert.equal(v.fallback,false);
+ assert.equal(data.fullQuality,false);
 });
 test('missing snapshots still produce UP/DOWN and honestly mark no-information fallback',()=>{
   const v=externalResearchDirections({},{

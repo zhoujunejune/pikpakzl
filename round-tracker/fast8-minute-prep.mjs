@@ -1,16 +1,16 @@
 // Purely causal 60-second pre-round market context. Binance BTC spot flow
 // continues across five-minute settlement windows; prediction-market contracts
 // do NOT. No PM price, round-open deviation or contract id enters this buffer.
-export const NEXT_ROUND_PREP_VERSION='FAST8_PREP60_CAUSAL_V3_NO_DIRECT_OFI_FLOW15_FLOW60';
+export const NEXT_ROUND_PREP_VERSION='FAST8_PREP60_CAUSAL_V4_REGIME_ONLY';
 export const PREP_WINDOW_MS=60000;
 const ROUND_MS=300000;
 const MIN_INTERVAL_MS=500;
 const MAX_SAMPLES=120;
 const CONTINUOUS_SPOT_KEYS=Object.freeze([
-  'microScore','regimeScore','normalizedMomentum60s'
+  'regimeScore'
 ]);
 const WEIGHTS=Object.freeze({
-  microScore:0.09,regimeScore:0.05,normalizedMomentum60s:0.05
+  regimeScore:0.05
 });
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const clamp=x=>Math.max(-1,Math.min(1,x));
@@ -39,10 +39,6 @@ export function createNextRoundPreparation(){
     const clean=Object.fromEntries(CONTINUOUS_SPOT_KEYS.map(k=>[
       k,finite(features?.[k])?clamp(features[k]):null
     ]));
-    const reason=Array.isArray(issues)?issues:[];
-    if(reason.includes('DEPTH_MISSING_OR_STALE')){
-      clean.microScore=null;
-    }
     if(!Object.values(clean).some(finite))return false;
     let samples=data.get(nextRoundStartMs);
     if(!samples){samples=[];data.set(nextRoundStartMs,samples)}
@@ -79,8 +75,7 @@ export function createNextRoundPreparation(){
     const directionPreview=previewScore===null?null:previewScore>0?'UP':previewScore<0?'DOWN':null;
     const ready=samples.length>=12 && spanMs>=20000 &&
       lastAgeMs!==null && lastAgeMs<=5000 &&
-      Object.values(featureSamples).filter(n=>n>=8).length>=2 &&
-      featureSamples.microScore>=8 &&
+      featureSamples.regimeScore>=8 &&
       directionPreview!==null;
     return {
       version:NEXT_ROUND_PREP_VERSION,nextRoundStartMs,

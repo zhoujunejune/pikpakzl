@@ -8,17 +8,18 @@ existing FAST8 worker at ~T+2s and enters the production lock through
 Binance Prediction 5-minute round IDs and the original frozen market
 snapshot, without network calls or separate paid infrastructure.
 
-FLOW_BOOK V6 direct score combines microScore (0.09), currentTrendScore
-(0.08), regimeScore (0.05), normalizedMomentum60s (0.05), and PM midprice
-(0.03), normalized across the available inputs. Direct OFI (0.27),
-tradePressure60s (0.16), tradePressure15s (0.17) and currentScore (0.10)
-are no longer scored. With five possible direct score inputs, three valid live inputs suffice
-to blend the new round with a ready prewarm; fewer than three use the
-prepared score alone, if ready. The preceding-minute preparation now combines
-microScore (0.09), regimeScore (0.05) and normalizedMomentum60s (0.05).
-Retained upstream composite scores (microScore/currentTrendScore/regimeScore)
-may still contain INDIRECT OFI and trade pressure information: this does
-not establish complete causal exclusion. The signal does **not** contain a fitted third-party model.
+FLOW_BOOK V7 directly scores ONLY regimeScore (weight 0.05) and
+predictionMarketUpMid (weight 0.03), normalized across available valid
+inputs (62.5%/37.5% when both are present). No other feature directly
+contributes to the live candidate score. PREP60 uses ONLY the previous
+round's final 60s regimeScore samples; prior-contract PM price is NEVER
+prewarmed. With one fresh valid input, the model may blend 70% live/30%
+prewarm; with prewarm and no fresh input, it uses prep only. Full quality
+requires BOTH live inputs and current-round aligned PM. No valid inputs
+and no ready prewarm produces a tagged NO_INFORMATION fallback.
+Retained upstream regimeScore may still contain INDIRECT OFI, trend, and
+trade-pressure components: excluding them from the final score does not
+eliminate their causal influence inside regimeScore. The signal does **not** contain a fitted third-party model.
 Original inspiration: [HorseDev77/bitcoin_price_up_down_prediction_5minute]
 (https://github.com/HorseDev77/bitcoin_price_up_down_prediction_5minute)
 and [yashvaidya42/BTC-microstructure-signal-detection]
@@ -68,6 +69,17 @@ An aligned current-round observation always replaces a bridge and cannot be
 overwritten by a delayed previous-round label. Existing T+1.8s lock, T+8s
 deadline, fallbacks, and order/TP-SL paths are unchanged. Forward performance
 is tracked under a distinct model version and cannot be assumed improved.
+
+## 2026-10-14 score only regime and current-round PM midprice (V7)
+User-directed removal of microScore, currentTrendScore, and
+normalizedMomentum60s from the direct production score, leaving ONLY
+regimeScore and predictionMarketUpMid. PREP60 becomes regime-only and
+its readiness gate uses regimeScore sample count. The two-input model
+accepts one live input as degraded evidence, with two aligned inputs
+required for full quality; this preserves prewarm blending and NO WAIT.
+New model version separates forward results from V6. Inverse order
+direction, 8s lock, execution, amount, TP and SL are unchanged.
+NO claim of improved 5m forward accuracy or guaranteed edge.
 
 ## 2026-10-14 remove direct 15-second aggressive flow and currentScore (V6)
 Following V5, remove two further direct scoring terms: tradePressure15s

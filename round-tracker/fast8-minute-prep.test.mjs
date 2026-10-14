@@ -81,7 +81,7 @@ test('poll duplicates, late arrivals, poor depth and future source cannot fabric
  assert.equal('ofiNormalized5s' in prepared.featureSamples,false);
  assert.equal('tradePressure60s' in prepared.featureSamples,false);
  assert.equal('tradePressure15s' in prepared.featureSamples,false);
- assert.equal(prepared.featureSamples.microScore,1);
+ assert.equal(prepared.featureSamples.regimeScore,2);
 });
 test('previous-minute score is unchanged by OFI and 60s trade-pressure values',()=>{
  const preview=(ofi,flow)=>{
@@ -112,6 +112,24 @@ test('previous minute preview ignores 15s trade pressure as well as removed OFI/
  assert.equal(a.previewScore,b.previewScore);
  assert.equal(a.directionPreview,b.directionPreview);
  assert.equal('tradePressure15s' in b.avgFeatures,false);
+});
+test('60s preparation uses ONLY regimeScore and ignores other indicators',()=>{
+ const mk=(micro,momentum,trend,pm)=>{
+  const prep=createNextRoundPreparation();
+  for(let at=R-58000;at<=R-1000;at+=1000){
+   const features={...goodSpot(-1),microScore:micro,
+    normalizedMomentum60s:momentum,currentTrendScore:trend,predictionMarketUpMid:pm};
+   prep.observe({roundStartMs:PREV,sourceAt:at,receivedAt:at+25,features});
+  }
+  return prep.preparedFor(R);
+ };
+ const a=mk(1,1,1,0.99),b=mk(-1,-1,-1,0.01);
+ assert.equal(a.ready,true);
+ assert.equal(b.ready,true);
+ assert.deepEqual(Object.keys(a.avgFeatures),['regimeScore']);
+ assert.equal(a.previewScore,b.previewScore);
+ assert.equal(a.directionPreview,'DOWN');
+ assert.equal(a.featureSamples.regimeScore,a.sampleCount);
 });
 test('upcoming model receives a real ready prep one minute ahead, not prior-round PM',t=>{
  const f=fx(t);

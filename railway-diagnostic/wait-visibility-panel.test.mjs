@@ -117,8 +117,10 @@ test('three independent strategy rows preserve sample counts and direction mappi
  assert.match(rows,/低置信度行情兜底/);
  assert.match(rows,/正向/);
  assert.match(rows,/反向/);
- assert.equal((rows.match(/1\/1 · 100\.00%/g)||[]).length,5);
+ assert.equal((rows.match(/1\/1 · 100\.00%/g)||[]).length,7);
  assert.match(rows,/0\/1 · 0\.00%/);
+ assert.match(primary,/UP胜率/);
+ assert.match(primary,/DOWN胜率/);
  assert.equal(d.get('activeFast8Accuracy').textContent,'66.67%');
  assert.equal(d.get('activeFast8InverseAccuracy').textContent,'100.00%');
  assert.doesNotMatch(rows,/zl_new_vip75/);

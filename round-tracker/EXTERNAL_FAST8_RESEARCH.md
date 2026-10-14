@@ -8,10 +8,12 @@ existing FAST8 worker at ~T+2s and enters the production lock through
 Binance Prediction 5-minute round IDs and the original frozen market
 snapshot, without network calls or separate paid infrastructure.
 
-The FLOW_BOOK score combines order book OFI, 15s/60s trade pressure
-(proxy for cumulative volume delta), short-term micro/current/trend
-scores, normalized momentum and PM midprice, with fixed published
-weights. The signal does **not** contain a fitted third-party model.
+FLOW_BOOK V5 direct score combines 15s trade pressure, short-term
+micro/current/trend scores, normalized momentum and PM midprice with fixed
+weights. Direct OFI and 60s trade-pressure terms are excluded from both
+live and preceding-minute scores. The retained upstream composite scores
+(microScore/currentScore/regimeScore) may still contain INDIRECT OFI and 60s
+flow information: this change is not a complete causal exclusion. The signal does **not** contain a fitted third-party model.
 Original inspiration: [HorseDev77/bitcoin_price_up_down_prediction_5minute]
 (https://github.com/HorseDev77/bitcoin_price_up_down_prediction_5minute)
 and [yashvaidya42/BTC-microstructure-signal-detection]
@@ -61,6 +63,12 @@ An aligned current-round observation always replaces a bridge and cannot be
 overwritten by a delayed previous-round label. Existing T+1.8s lock, T+8s
 deadline, fallbacks, and order/TP-SL paths are unchanged. Forward performance
 is tracked under a distinct model version and cannot be assumed improved.
+
+## 2026-10-14 remove direct OFI and 60-second flow weights (V5)
+User-directed live and 60-second preparation score revision. New V5 version
+keeps forward performance separate from V4 historical results. No changes
+to Binance orders, inversion policy, 8-second signal lock, sizing or TP/SL.
+Upstream composite indicators can still reflect the removed raw factors.
 
 ## 2026-10-13 round-clock, opening-price safety and timing shadow (V4)
 A new BTC five-minute candle can lag the market event clock. The upstream

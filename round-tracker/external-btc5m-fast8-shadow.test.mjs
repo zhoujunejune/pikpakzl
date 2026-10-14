@@ -66,6 +66,13 @@ test('opposite orderflow produces opposite direction',()=>{
     predictionMarketUpMid:0.35};
   assert.equal(externalResearchDirections(opposite,current).predictions.FLOW_BOOK_PROXY_V1.direction,'DOWN');
 });
+test('direct OFI and 60s trade pressure have no influence on FLOW_BOOK score',()=>{
+ const a=externalResearchDirections(features,current).predictions.FLOW_BOOK_PROXY_V1;
+ const b=externalResearchDirections({...features,ofiNormalized5s:-1,tradePressure60s:-1},current).predictions.FLOW_BOOK_PROXY_V1;
+ assert.equal(a.direction,b.direction);
+ assert.equal(a.strength,b.strength);
+ assert.equal(a.featureCount,b.featureCount);
+});
 test('missing snapshots still produce UP/DOWN and honestly mark no-information fallback',()=>{
   const v=externalResearchDirections({},{
     baselineDirection:'DOWN',snapshotAvailable:false,dataQuality:['NO_FRESH_SNAPSHOT'],

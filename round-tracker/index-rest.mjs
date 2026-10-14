@@ -4138,7 +4138,7 @@ async function pollSignal() {
     // 22-10 seconds, including while nonproduction shadows are paused.
     // This only changes the frozen VIP75 input, not model weights or orders.
     vip75Frozen8Probe.capturePreRound(live, signalObservedAt);
-    fast8.observe(live, signalObservedAt);
+    fast8.observe(live, Date.now());
     if (!live?.round) {
       if (!PAUSE_NONPROD_SHADOWS) shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, live, Date.now());
       return;

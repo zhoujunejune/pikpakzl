@@ -62,19 +62,23 @@ test('full-quality one-model observation is tagged as frozen, not 65%-verified',
   assert.equal(result.qualityStatus,'EXTERNAL_PRIMARY_FROZEN_INPUT');
   assert.equal('accuracy' in result,false);
 });
-test('production route remains single source, no WAIT and stores official winning metrics separately',()=>{
-  const source=fs.readFileSync(new URL('./index-rest.mjs',import.meta.url),'utf8');
-  const a=source.indexOf('function fast8ExclusiveSignalPayload(');
-  const b=source.indexOf('function productionSignalPayload(',a);
-  assert.ok(a>=0&&b>a);
-  const route=source.slice(a,b);
-  assert.match(route,/selectExternalFast8Production\(stats,current,expectedRound,readiness\)/);
-  assert.match(route,/model:SINGLE_EXTERNAL_PRIMARY_ID/);
-  assert.match(route,/external_fast8_primary_production_lock/);
-  assert.match(route,/FAST8_GATEWAY_FALLBACK_AT_MS/);
-  assert.match(route,/status:'PENDING'/);
-  assert.doesNotMatch(route,/status:'WAIT'/);
-  assert.match(source,/activeFast8Primary:/);
-  assert.match(source,/activeProductionModel:/);
-  assert.match(source,/PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE && live.source !== FAST8_SOURCE/);
+test('production route uses ONLY frozen VIP75; no FLOW_BOOK or worker fallback',()=>{
+ const source=fs.readFileSync(new URL('./index-rest.mjs',import.meta.url),'utf8');
+ const a=source.indexOf('function fast8ExclusiveSignalPayload(');
+ const b=source.indexOf('function productionSignalPayload(',a);
+ assert.ok(a>=0&&b>a);
+ const route=source.slice(a,b);
+ assert.match(route,/vip75Frozen8Probe\.decision\(expectedRound\)/);
+ assert.match(route,/model:'zl_new_vip75'/);
+ assert.match(route,/vip75_frozen8_production_lock/);
+ assert.match(route,/vip75_no_information_direction_locked/);
+ assert.match(route,/FAST8_GATEWAY_FALLBACK_AT_MS/);
+ assert.match(route,/status:'PENDING'/);
+ assert.doesNotMatch(route,/status:'WAIT'/);
+ assert.doesNotMatch(route,/selectExternalFast8Production/);
+ assert.doesNotMatch(route,/SINGLE_EXTERNAL_PRIMARY_ID/);
+ assert.doesNotMatch(route,/FAST8_GATEWAY_PREVIOUS_WORKER_DIRECTION_REUSED/);
+ assert.match(source,/activeFast8Primary:/);
+ assert.match(source,/activeProductionModel:/);
+ assert.match(source,/PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE && live.source !== FAST8_SOURCE/);
 });

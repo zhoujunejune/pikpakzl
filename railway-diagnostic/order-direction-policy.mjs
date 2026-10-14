@@ -1,11 +1,10 @@
-// Order execution direction is separate from the immutable production prediction.
-// Inversion is paused: locked UP buys UP, and locked DOWN buys DOWN.
-// The policy version is checked on submit: an old inverted pending intent
-// cannot be accepted by the normal-direction execution path.
-export const ORDER_DIRECTION_POLICY = 'FOLLOW_PRODUCTION_DIRECTION_V1';
+// The original production UP/DOWN prediction is immutable.
+// Explicit user-selected inverse ORDER direction is a separate, versioned mapping.
+// Invalidate old normal or old inverse prepare tokens across policy transitions.
+export const ORDER_DIRECTION_POLICY = 'INVERT_PRODUCTION_UP_DOWN_V2';
 export function orderDirectionForProduction(productionDirection) {
-  return productionDirection === 'UP' || productionDirection === 'DOWN'
-    ? productionDirection : null;
+  return productionDirection === 'UP' ? 'DOWN' :
+    productionDirection === 'DOWN' ? 'UP' : null;
 }
 export function mappedOrderSignal(signal) {
   const productionSignal = signal?.status === 'LOCKED' ? signal.direction : null;

@@ -773,45 +773,6 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
   <div class="muted" id="realRiskDetails" style="margin-top:12px">尚未确认最近一次扫描或卖出报价；系统运行不保证卖单一定成交。</div>
   <div class="muted" id="realRiskUpdated" style="margin-top:5px">状态更新时间：等待响应</div>
 </div>
-<div class="c" id="dailyLossCard" style="border:1px solid #4e5564">
-  <div class="k">账户级资金管理 · 每日亏损上限</div>
-  <div class="big" style="font-size:22px;margin:9px 0">每日亏损保护</div>
-  <div id="dailyLossMode" role="status" aria-live="polite" class="warn" style="font-weight:800">观察模式 · 尚未启用真实熔断</div>
-  <div id="dailyLossSwitchStatus" class="muted" role="status" aria-live="polite" style="margin-top:9px">每日亏损观察开关：读取中...</div>
-  <div class="muted" id="dailyLossEnforceStatus" style="margin-top:5px">真实交易熔断：未接入（开关不会拦截下单）</div>
-  <input id="dailyLossPin" type="password" inputmode="numeric" autocomplete="off" placeholder="控制 PIN（设置和开关共用）">
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-    <button class="start" id="dailyLossEnableButton" type="button" style="font-size:15px;padding:12px 4px">开启观察监控</button>
-    <button class="stop" id="dailyLossDisableButton" type="button" style="font-size:15px;padding:12px 4px">关闭观察监控</button>
-  </div>
-  <div id="dailyLossSwitchMessage" class="muted" role="status" aria-live="polite" style="margin-top:8px">开启仅保存观察状态，不执行止损或停止下单。</div>
-  <div class="grid" style="margin-top:12px">
-    <div class="kv"><div class="k">每日亏损上限</div><div class="v" id="dailyLossLimitValue">读取中...</div></div>
-    <div class="kv"><div class="k">今日已实现盈亏</div><div class="v" id="dailyLossPnl">未核验</div></div>
-    <div class="kv"><div class="k">剩余亏损额度</div><div class="v" id="dailyLossRemaining">不可计算</div></div>
-    <div class="kv"><div class="k">统计日界线</div><div class="v" style="font-size:13px">北京时间 00:00</div></div>
-  </div>
-  <details style="margin-top:12px" id="dailyLossEditor">
-    <summary style="cursor:pointer;min-height:36px;font-weight:700">设置每日亏损上限（只保存观察参数）</summary>
-    <label class="k" for="dailyLossAmount">金额（USDT）</label>
-    <input id="dailyLossAmount" type="number" inputmode="decimal" step="0.01" min="0.01" max="100000" placeholder="例如 5.00 USDT">
-    <button class="confirm" type="button" id="dailyLossSaveButton">保存每日亏损观察值</button>
-    <div id="dailyLossMessage" class="muted" role="status" aria-live="polite"></div>
-  </details>
-  <div class="muted" id="dailyLossHint" style="margin-top:12px">每日亏损监控开关只记录你的观察偏好。官方已结算盈亏尚未独立核验，无法计算真实剩余额度；真正的每日亏损停单保护仍未接入后台。</div>
-  <div style="margin-top:14px;border-top:1px solid #414b5d;padding-top:12px" id="dailyLossAuditArea">
-    <div style="font-weight:800;margin-bottom:6px">自动验收与官方对账</div>
-    <div id="dailyLossAuditHeadline" class="warn" role="status" aria-live="polite">自动审计启动中...</div>
-    <div class="muted" id="dailyLossAuditSummary" style="margin-top:8px">只读采集和模拟订单拦截，不会影响生产交易。</div>
-    <div class="grid" style="margin-top:10px">
-      <div class="kv"><div class="k">官方已结算记录</div><div class="v" id="dailyLossAuditCount">读取中</div></div>
-      <div class="kv"><div class="k">未结算最大成本敞口</div><div class="v" id="dailyLossAuditExposure">未核验</div></div>
-      <div class="kv"><div class="k">模拟用例</div><div class="v" id="dailyLossAuditTests">未执行</div></div>
-      <div class="kv"><div class="k">上次审计</div><div class="v" id="dailyLossAuditAt" style="font-size:13px">等待中</div></div>
-    </div>
-    <div class="muted" id="dailyLossAuditErrors" style="margin-top:10px">独立结算对账和正式交易熔断尚未验收完成。</div>
-  </div>
-</div>
 <div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（反向下单）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>

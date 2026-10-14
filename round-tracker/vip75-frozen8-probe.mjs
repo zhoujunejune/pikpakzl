@@ -6,6 +6,8 @@ import { independentFeatures, independentAdaptiveProbability, chooseIndependentD
 
 export const FROZEN_VIP75_VERSION = 'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3_1791566406774';
 const ENGINE_VERSION = 'INDEPENDENT_DIRECTION_REGIME_ADAPTIVE_V3';
+// Identifies the EXACT production-trained artifact recovered from the 2026-10-10 3/13 period.
+export const PINNED_WEIGHT_FINGERPRINT = '08c99732dff85ed6b0a05613b1eecadcef30af827e3a07d71c476535ec51500f';
 const PINNED = Object.freeze({ trainingSamples:718, selectedTrainingWindow:320, halfLife:180, l2:0.12, regimeBlend:0.3 });
 const REQUIRED = ['regimeScore','currentScore','microScore','currentTrendScore'];
 const within = (x,v) => typeof x==='number' && Number.isFinite(x) && Math.abs(x-v)<1e-12;
@@ -34,6 +36,8 @@ export function inspectFrozenVip75Artifact(file) {
     selectedTrainingWindow:m.selectedTrainingWindow,halfLife:m.halfLife,l2:m.l2,regimeBlend:m.regimeBlend,
     featureKeys:m.featureKeys,
   })).digest('hex');
+  if (digest!==PINNED_WEIGHT_FINGERPRINT)
+    return {ready:false,reason:'FROZEN_WEIGHT_FINGERPRINT_MISMATCH'};
   return {ready:true,reason:null,model:m,version:m.version,weightFingerprint:digest};
 }
 

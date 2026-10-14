@@ -10,6 +10,8 @@ import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
 import { createFrozenVip75Fast8Probe, FROZEN_VIP75_VERSION } from './vip75-frozen8-probe.mjs';
+import { VIP75_PREVIOUS_ROUND_INPUT_VERSION } from './vip75-preround-features.mjs';
+import { summarizeVip75VersionedStats } from './vip75-versioned-stats.mjs';
 import { vip75DataGapResponse, VIP75_DATA_GAP_DIAGNOSTIC_MS, VIP75_DATA_GAP_POLICY_VERSION } from './vip75-data-gap-policy.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
@@ -4785,6 +4787,18 @@ function freezeProductionLock(row, live) {
   row.productionDelayMs = Math.max(0, Number(row.productionGeneratedAt) - Number(row.roundStartMs));
   row.productionModel = live?.model || null;
   row.productionModelVersion = live?.modelVersion || null;
+  // Freeze the market-input provenance with the direction BEFORE settlement.
+  // Never infer a new input version for older historical rounds.
+  row.productionInputVersion = live?.fast8Quality?.inputVersion ?? null;
+  row.productionInputSourceRound = live?.fast8Quality?.sourceRound ?? null;
+  row.productionPreviousRoundFeatureCount =
+    live?.fast8Quality?.previousRoundFeatureCount ?? null;
+  row.productionCurrentRoundFeatureCount =
+    live?.fast8Quality?.currentRoundFeatureCount ?? null;
+  row.productionPreviousBackupFeatureCount =
+    live?.fast8Quality?.previousBackupFeatureCount ?? null;
+  row.productionPriorContractQuoteUsed =
+    live?.fast8Quality?.priorContractQuoteUsed ?? null;
   row.productionFallbackUsed = Boolean(live?.fallbackUsed);
   row.productionFallbackReason = live?.fallbackReason || null;
   row.productionLockedAt = Date.now();
@@ -4794,6 +4808,11 @@ function freezeProductionLock(row, live) {
     direction: row.productionPrediction,
     source: row.productionSource,
     model: row.productionModel,
+    modelVersion:row.productionModelVersion,
+    inputVersion:row.productionInputVersion,
+    previousRoundFeatureCount:row.productionPreviousRoundFeatureCount,
+    currentRoundFeatureCount:row.productionCurrentRoundFeatureCount,
+    previousBackupFeatureCount:row.productionPreviousBackupFeatureCount,
     generatedAt: row.productionGeneratedAt,
   });
   emitLockedSignal(row, live);
@@ -4871,26 +4890,32 @@ function productionSummary() {
     edgeRescueRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY').length,
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
+    // Only the current input cohort is shown as the active strategy.
+    // Older VIP75 directions, even with identical weights, remain separate.
     activeFast8Primary: (() => {
-      const chosen=records.filter(r=>r.productionModel==='zl_new_vip75' &&
-        (r.productionModelVersion===FROZEN_VIP75_VERSION ||
-         r.productionModelVersion===FROZEN_VIP75_VERSION+':NO_INFORMATION'));
-      const authentic=chosen.filter(r=>r.productionModelVersion===FROZEN_VIP75_VERSION &&
-        r.productionFallbackUsed!==true);
-      const labels=authentic.filter(r=>r.productionActual==='UP'||r.productionActual==='DOWN');
-      const successes=labels.filter(r=>r.productionResult==='HIT').length;
-      const start=chosen.length?chosen[0].roundStartMs:null;
-      const eligibleCalendar=start==null?[]:records.filter(r=>Number(r.roundStartMs)>=Number(start));
+      const versions=summarizeVip75VersionedStats(records,{
+        modelVersion:FROZEN_VIP75_VERSION,
+        currentInputVersion:VIP75_PREVIOUS_ROUND_INPUT_VERSION,
+      });
+      const c=versions.current;
       return {id:'zl_new_vip75',version:FROZEN_VIP75_VERSION,
-        startRound:start,signalRounds:chosen.length,settledRounds:labels.length,
-        hits:successes,misses:labels.length-successes,
-        accuracyPct:labels.length?Number((100*successes/labels.length).toFixed(2)):null,
-        coveragePct:eligibleCalendar.length?Number((100*chosen.length/eligibleCalendar.length).toFixed(2)):null,
-        fallbackRounds:chosen.filter(r=>r.productionFallbackUsed===true).length,
-        noInformationRounds:chosen.filter(r=>r.productionFallbackUsed===true).length,
-        winRateNote:'EXCLUDES_NO_INFORMATION_DIRECTIONS_NOT_INDEPENDENTLY_CERTIFIED',
+        inputVersion:VIP75_PREVIOUS_ROUND_INPUT_VERSION,
+        startRound:c.firstRound??null,signalRounds:c.signalRounds,
+        settledRounds:c.officialSampleCount,
+        hits:c.originalHits,misses:c.originalMisses,
+        accuracyPct:c.originalAccuracyPct,
+        reverseTheoreticalHits:c.inverseHits,
+        reverseTheoreticalAccuracyPct:c.inverseTheoreticalAccuracyPct,
+        coveragePct:null,
+        coverageNote:'VERSION_COHORT_COVERAGE_NOT_ESTIMATED_WITHOUT_FULL_ELIGIBLE_CALENDAR',
+        fallbackRounds:0,noInformationRounds:0,
+        winRateNote:'ONLY_THIS_MODEL_AND_INPUT_VERSION_NOT_ACTUAL_ORDER_PNL',
         eligibleForAutoTrading:true,accuracyGuaranteed:false};
     })(),
+    vip75VersionedAccuracy:summarizeVip75VersionedStats(records,{
+      modelVersion:FROZEN_VIP75_VERSION,
+      currentInputVersion:VIP75_PREVIOUS_ROUND_INPUT_VERSION,
+    }),
     currentQualifiedModel: productionUsesSelectiveV2()
       ? LOCK_QUALITY_V2_VERSION
       : productionUsesShadowV3()
@@ -5546,6 +5571,7 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
         sourceWindow:pinned.sourceWindow,
         previousRoundFeatureCount:pinned.previousRoundFeatureCount,
         currentRoundFeatureCount:pinned.currentRoundFeatureCount,
+        previousBackupFeatureCount:pinned.previousBackupFeatureCount,
         priorContractQuoteUsed:pinned.priorContractQuoteUsed,
         selectedTrainingWindow:320,halfLife:180,l2:0.12,regimeBlend:0.3},
     };

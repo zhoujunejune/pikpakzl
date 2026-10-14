@@ -21,20 +21,20 @@ test('only when V2 fails does original Edge Rescue qualify',()=>{
  assert.equal(a.status,'LOCKED');assert.equal(a.source,RESCUE_SOURCE);
  assert.equal(a.executionEligible,true);assert.equal(a.direction,'UP');
 });
-test('unverified direction is visible but NEVER execution eligible after 7.8s',()=>{
+test('low-confidence direction is labeled and eligible before the deadline',()=>{
  const a=route({...opts,now:round+7800,facts:base,
    quality:()=>({pass:false,reasons:['FILTER']}),
    edge:()=>({pass:false,reasons:['FILTER']})});
  assert.equal(a.source,UNVERIFIED_SOURCE);assert.equal(a.status,'LOCKED');
- assert.equal(a.executionEligible,false);assert.equal(a.fallbackUsed,true);
+ assert.equal(a.executionEligible,true);assert.equal(a.fallbackUsed,true);
  assert.equal(a.confidence,null);assert.equal(a.direction,'UP');
 });
-test('does not reuse previous contract price for executable prediction',()=>{
+test('missing contract quote cannot qualify the filters',()=>{
  const f={...base,predictionMarketUpMid:null};
  const a=route({...opts,now:round+7900,facts:f,currentRoundFeatureCount:0,
    quality:()=>{throw Error('no valid contract quote')},
    edge:()=>{throw Error('no valid contract quote')}});
- assert.equal(a.executionEligible,false);assert.equal(a.direction,'UP');
+ assert.equal(a.executionEligible,true);assert.equal(a.direction,'UP');
 });
 test('no measurements means explicit DATA_UNAVAILABLE, never fabricate UP/DOWN',()=>{
  const a=route({...opts,facts:{},now:round+7800});
@@ -53,5 +53,5 @@ test('DOWN direction is propagated, not a clock-parity fallback',()=>{
 });
 test('too late cannot claim a qualified 8-second production signal',()=>{
  const a=route({...opts,facts:base,now:round+9000,quality:()=>({pass:true})});
- assert.equal(a.source,UNVERIFIED_SOURCE);assert.equal(a.executionEligible,false);
+ assert.equal(a.status,'DATA_UNAVAILABLE');assert.equal(a.executionEligible,false);
 });

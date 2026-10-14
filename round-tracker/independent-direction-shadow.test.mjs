@@ -36,6 +36,26 @@ test('features use market facts, not an upstream UP/DOWN prediction',()=>{
   assert.equal(chooseIndependentDirection(0.499999),'DOWN');
   assert.equal(chooseIndependentDirection(NaN),null);
 });
+test('all 18 model inputs require observed values; missing is never silently zero',()=>{
+  const valid=facts(1);
+  const original=independentFeatures(valid);
+  assert.equal(original.length,22);
+  assert.equal(independentFeatures({...valid,normalizedMomentum60s:0})[6],0);
+  for(const field of [
+    'normalizedMomentum15s','tradePressure60s','ofiNormalized5s',
+    'predictionMarketUpMid','absorptionRisk','liveScore','distanceFromOpenBps'
+  ]){
+    const partial={...valid};
+    delete partial[field];
+    assert.equal(independentFeatures(partial),null,'missing '+field);
+  }
+  assert.equal(independentFeatures({...valid,normalizedMomentum30s:NaN}),null);
+  assert.equal(independentFeatures({...valid,normalizedMomentum60s:' '}),null);
+  assert.equal(independentFeatures({...valid,predictionMarketUpMid:1.15}),null);
+  assert.equal(independentFeatures({...valid,absorptionRisk:false})[15],0);
+  assert.equal(independentFeatures({...valid,absorptionRisk:true})[15],1);
+});
+
 test('strict snapshot rejects after-window observations and missing scores',()=>{
   const r=row(3);
   assert.ok(validLiveObservation(r));

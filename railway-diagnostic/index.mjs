@@ -3,7 +3,8 @@ import crypto from 'node:crypto';
 import { createClient } from 'redis';
 import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
-import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction} from './order-direction-policy.mjs';
+import {activeOrderDirectionPolicy,mappedOrderSignal,pendingOrderMatchesProduction} from './order-direction-policy.mjs';
+import {directionConfigSnapshot,hydrateDirectionSettings,saveDirectionMode} from './order-direction-config.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -22,6 +23,10 @@ const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MOD
 
 
 let enabled = false;
+let directionPolicyWriteInFlight = false;
+void hydrateDirectionSettings().catch(err=>console.error(JSON.stringify({event:'direction_config_load_failed',error:String(err?.message||err)})));
+const directionConfigRetry=setInterval(()=>{if(!directionConfigSnapshot().ready)void hydrateDirectionSettings().catch(()=>{})},10000);
+directionConfigRetry.unref?.();
 let tradeAmountText = null;
 let startAfterRound = null;
 let pendingAction = null;
@@ -564,7 +569,7 @@ function publicPending() {
 }
 
 async function prepareWorker(signalOverride = null, trigger = 'poll') {
-  if (!enabled || !tradeAmountText || prepareInFlight) return;
+  if (!enabled || !tradeAmountText || prepareInFlight || directionPolicyWriteInFlight || !directionConfigSnapshot().ready) return;
   const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
   // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
@@ -585,6 +590,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
     const mapping=mappedOrderSignal(signal);
     if (!mapping.orderSignal) return;
     const intent = await prepareIntent({...signal,direction:mapping.orderSignal});
+    if (directionPolicyWriteInFlight || mapping.mappingPolicy !== activeOrderDirectionPolicy()) return;
     if (!intent.ok) {
       pendingAction = {
         state: 'PREPARE_ERROR',
@@ -594,7 +600,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
         productionSource: mapping.productionSource,
         orderSignal: mapping.orderSignal,
         mappingMode: mapping.mappingMode,
-        orderDirectionPolicy: ORDER_DIRECTION_POLICY,
+        orderDirectionPolicy: mapping.mappingPolicy,
         score: signal.score,
         signalId: signal.signalId ?? null,
         model: signal.model ?? SIGNAL_MODEL_NAME,
@@ -619,7 +625,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       productionSource: mapping.productionSource,
       orderSignal: mapping.orderSignal,
       mappingMode: mapping.mappingMode,
-      orderDirectionPolicy: ORDER_DIRECTION_POLICY,
+      orderDirectionPolicy: mapping.mappingPolicy,
       score: signal.score,
       signalId: signal.signalId ?? null,
       model: signal.model ?? SIGNAL_MODEL_NAME,
@@ -841,6 +847,32 @@ http.createServer(async (req, res) => {
     return send(res, 200, page, 'text/html; charset=utf-8');
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/order-direction-config') {
+    return send(res,200,{ok:true,...directionConfigSnapshot(),policyVersion:activeOrderDirectionPolicy()});
+  }
+  if (req.method === 'POST' && url.pathname === '/api/order-direction-config') {
+    const body=await readBody(req);
+    if(!pinOK(body.pin))return send(res,401,{ok:false,error:'控制 PIN 错误'});
+    if(!directionConfigSnapshot().ready)return send(res,503,{ok:false,error:'方向配置尚未从 Redis 恢复，禁止修改'});
+    if(directionPolicyWriteInFlight)return send(res,409,{ok:false,error:'正在保存方向配置'});
+    if(pendingAction&&['QUOTING','SUBMITTING'].includes(pendingAction.state))
+      return send(res,409,{ok:false,error:'有订单正在报价或提交，请待订单状态明确后再切换方向'});
+    if(!['SELECTIVE_V2_FAST8_PRIMARY','EDGE_RESCUE_FAST8_PRIMARY',
+      'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'].includes(body.source)||
+      !['FORWARD','INVERSE'].includes(body.mode))
+      return send(res,400,{ok:false,error:'信号来源或方向无效'});
+    directionPolicyWriteInFlight=true;
+    try{
+      const changed=await saveDirectionMode(body.source,body.mode);
+      pendingAction=null; // Invalidate all earlier pending order tokens and quotes.
+      console.log(JSON.stringify({event:'direction_mode_updated',source:body.source,
+        mode:body.mode,revision:changed.revision,at:new Date().toISOString()}));
+      return send(res,200,{ok:true,...changed,policyVersion:activeOrderDirectionPolicy()});
+    }catch(err){
+      return send(res,503,{ok:false,error:'方向配置持久化失败：'+String(err?.message||err)});
+    }finally{directionPolicyWriteInFlight=false}
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
     // The existing mobile UI renders these server-provided labels as text.
@@ -858,8 +890,9 @@ http.createServer(async (req, res) => {
       productionSignal: signal?.status==='LOCKED'?signal.direction:null,
       orderSignal: displayOnly?null:mappedOrderSignal(signal).orderSignal,
       orderMappingMode: mappedOrderSignal(signal).mappingMode,
+      orderDirectionConfig: {...directionConfigSnapshot(),policyVersion:activeOrderDirectionPolicy()},
       orderProductionSource: mappedOrderSignal(signal).productionSource,
-      orderDirectionPolicy: ORDER_DIRECTION_POLICY,
+      orderDirectionPolicy: activeOrderDirectionPolicy(),
       signalModel: SIGNAL_MODEL_NAME,
       signalTransport: { ...signalTransport },
       balance,
@@ -879,6 +912,8 @@ http.createServer(async (req, res) => {
     const body = await readBody(req);
     if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
     const nextEnabled = Boolean(body.enabled);
+    if(nextEnabled&&(!directionConfigSnapshot().ready||directionPolicyWriteInFlight))
+      return send(res,503,{ok:false,error:'交易方向配置尚未可用，暂不能开启跟随'});
     if (nextEnabled) {
       if (lastOrder?.state === 'RECONCILIATION_REQUIRED')
         return send(res, 409, { ok:false, error:'上一笔订单的成交与失败状态矛盾，请先核对交易所原始成交记录，禁止继续自动下单' });

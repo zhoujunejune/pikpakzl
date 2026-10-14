@@ -12,6 +12,7 @@ const stats=source.match(/const statsScript = `<script>([\s\S]*?)<\/script>`;/)?
 function mounted(){const ids=['activeFast8Name','activeFast8Direction','activeFast8Accuracy',
  'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection','rsMeta','rsAccuracy',
  'rsSettled','rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows'];
+ ids.push('activeFast8InverseAccuracy','activeFast8InverseHitMiss');
  const dom=new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
  return dom;
 }
@@ -59,6 +60,8 @@ test('current model card reports live direction and only model-specific hit coun
  assert.match(d.get('activeFast8Name').textContent,/zl_new_vip75/);
  assert.equal(d.get('activeFast8Direction').textContent,'DOWN');
  assert.equal(d.get('activeFast8Accuracy').textContent,'50.00%');
+ assert.equal(d.get('activeFast8InverseAccuracy').textContent,'50.00%');
+ assert.equal(d.get('activeFast8InverseHitMiss').textContent,'1 / 1（2轮）');
  assert.equal(d.get('activeFast8HitMiss').textContent,'1 / 1');
  assert.match(d.get('activeFast8Note').textContent,/有效预测已结算 2 轮/);
 });
@@ -83,4 +86,25 @@ test('model card includes separate actual order direction and never confuses raw
  assert.ok(primary.includes('id="activeFast8OrderDirection"'));
  assert.match(mainScript,/j\.orderSignal/);
  assert.match(stats,/原模型命中率/);
+});
+
+test('inverse direction is opposite to valid original outcomes; no-information is excluded',async()=>{
+ const j=fixture();
+ j.activeProductionModel.metrics={signalRounds:4,settledRounds:3,hits:1,misses:2,accuracyPct:33.33,coveragePct:100,noInformationRounds:1};
+ j.records.push({roundStartMs:j.records[0].roundStartMs-1500000,productionModel:'zl_new_vip75',
+   productionModelVersion:j.activeProductionModel.version,productionPrediction:'DOWN',
+   productionActual:'UP',productionResult:'MISS'});
+ j.records.push({roundStartMs:j.records[0].roundStartMs-1800000,productionModel:'zl_new_vip75',
+   productionModelVersion:j.activeProductionModel.version+':NO_INFORMATION',productionFallbackUsed:true,
+   productionPrediction:'UP',productionActual:'UP',productionResult:'HIT'});
+ const card=await execute(mainScript,j),detail=await execute(stats,j);
+ assert.equal(card.get('activeFast8Accuracy').textContent,'33.33%');
+ assert.equal(card.get('activeFast8InverseAccuracy').textContent,'66.67%');
+ assert.equal(card.get('activeFast8InverseHitMiss').textContent,'2 / 1（3轮）');
+ assert.equal(detail.get('rsSettled').textContent,3);
+});
+test('inverse rate displays no result without settled original samples',async()=>{
+ const j=fixture();j.activeProductionModel.metrics={settledRounds:0,hits:0,misses:0};
+ const el=await execute(mainScript,j);
+ assert.equal(el.get('activeFast8InverseAccuracy').textContent,'尚无新结算');
 });

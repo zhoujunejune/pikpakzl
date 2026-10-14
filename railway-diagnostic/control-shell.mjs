@@ -3,8 +3,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { hydrateRiskConfig, persistRiskConfig } from './risk-config-storage.mjs';
-import { getDailyLossDraft, saveDailyLossDraft, setDailyLossMonitoring } from './daily-loss-draft.mjs';
-import { startDailyLossAuditService, stopDailyLossAuditService, currentDailyLossAudit } from './daily-loss-audit-service.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PORT = Number(process.env.INNER_CONTROL_PORT || 3001);
@@ -18,8 +16,6 @@ let persistenceRestored = false;
 let persistenceError = null;
 let syncInFlight = false;
 let writeChain = Promise.resolve();
-let dailyLossWriteChain = Promise.resolve();
-function serializeDailyLossWrite(operation) { const next = dailyLossWriteChain.catch(() => {}).then(operation); dailyLossWriteChain = next; return next; }
 async function syncRiskConfig() {
   if (syncInFlight) return;
   syncInFlight = true;
@@ -132,7 +128,7 @@ function injectRiskControls(html) {
   if (html.includes('id="slCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${riskCards}${marker}`) : html.replace('</body>', `${riskCards}</body>`);
-  out = out.replace('</body>', `${riskScript}<script src="/risk-monitor-client.js?v=2" defer></script><script src="/daily-loss-client.js?v=1" defer></script></body>`);
+  out = out.replace('</body>', `${riskScript}<script src="/risk-monitor-client.js?v=2" defer></script></body>`);
   return out;
 }
 
@@ -182,69 +178,12 @@ startInner();
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
-  if (req.method === 'GET' && url.pathname === '/daily-loss-client.js') {
-    try {
-      res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' });
-      return res.end(fs.readFileSync(new URL('./daily-loss-client.js', import.meta.url), 'utf8'));
-    } catch {
-      return sendJson(res, 503, { ok: false, error: 'DAILY_LOSS_CLIENT_UNAVAILABLE' });
-    }
-  }
-
   if (req.method === 'GET' && url.pathname === '/risk-monitor-client.js') {
     try {
       res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(fs.readFileSync(new URL('./risk-monitor-client.js', import.meta.url), 'utf8'));
     } catch (e) {
       return sendJson(res, 503, { ok: false, error: 'RISK_MONITOR_SCRIPT_UNAVAILABLE' });
-    }
-  }
-
-  // Draft-only guardrail. Must not gate or submit orders until an independently audited
-  // daily realized PnL stream and a separately reviewed execution-level fuse are available.
-  if (req.method === 'GET' && url.pathname === '/api/daily-loss-audit') {
-    return sendJson(res, 200, { ...currentDailyLossAudit(), mode: 'READ_ONLY_SHADOW', enforcementEnabled: false, verifiedForLiveFuse: false });
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/daily-loss-limit') {
-    try {
-      const draft = await getDailyLossDraft();
-      return sendJson(res, 200, {
-        ok: true, ...draft, configured: Boolean(draft),
-        dailyLimitUsdt: draft?.dailyLimitUsdt ?? null,
-        monitorEnabled: draft?.monitorEnabled === true,
-        mode: 'OBSERVE_ONLY', enforcementEnabled: false,
-        realizedPnlUsdt: null, realizedPnlVerified: false, remainingLossUsdt: null,
-        pnlError: 'OFFICIAL_DAILY_REALIZED_PNL_NOT_INDEPENDENTLY_VERIFIED',
-        timezone: 'Asia/Shanghai', checkedAt: new Date().toISOString(),
-      });
-    } catch (e) {
-      log('daily_loss_read_failed', { error: String(e?.message || e) });
-      return sendJson(res, 503, {ok:false, error:'每日亏损观察值暂不可读取，请检查 Redis 连接', mode:'OBSERVE_ONLY', monitorEnabled:false, enforcementEnabled:false});
-    }
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/daily-loss-limit') {
-    const body = await readJsonBody(req);
-    if (!pinOK(body.pin)) return sendJson(res, 401, {ok:false, error:'PIN 错误'});
-    try {
-      if (Object.prototype.hasOwnProperty.call(body,'enforcementEnabled') || Object.prototype.hasOwnProperty.call(body,'mode')) return sendJson(res, 400, {ok:false,error:'真实每日亏损熔断尚未开放；只能切换观察状态'});
-      const changingSwitch = Object.prototype.hasOwnProperty.call(body,'monitorEnabled');
-      if (changingSwitch && typeof body.monitorEnabled !== 'boolean') return sendJson(res, 400, {ok:false,error:'开关值无效'});
-      if (!changingSwitch && !Object.prototype.hasOwnProperty.call(body,'dailyLimitUsdt')) return sendJson(res, 400, {ok:false,error:'缺少每日亏损金额'});
-      const saved = await serializeDailyLossWrite(() => changingSwitch ? setDailyLossMonitoring(body.monitorEnabled) : saveDailyLossDraft({dailyLimitUsdt: body.dailyLimitUsdt}));
-      log('daily_loss_preview_saved', { limitUsdt:saved.dailyLimitUsdt, monitorEnabled:saved.monitorEnabled, mode:'OBSERVE_ONLY' });
-      return sendJson(res, 200, {
-        ok:true, ...saved, configured:true, monitorEnabled:saved.monitorEnabled===true, enforcementEnabled:false,
-        realizedPnlUsdt:null, realizedPnlVerified:false, remainingLossUsdt:null,
-        message:'仅观察参数已保存，真实交易熔断尚未启用',
-      });
-    } catch (e) {
-      const badInput = e instanceof RangeError;
-      if (!badInput) log('daily_loss_write_failed', { error:String(e?.message || e) });
-      return sendJson(res, badInput ? 400 : 503, {
-        ok:false, error:badInput ? String(e.message) : '每日亏损观察值保存失败，Redis 可能不可用',
-      });
     }
   }
 
@@ -354,13 +293,11 @@ http.createServer(async (req, res) => {
   return proxy(req, res);
 }).listen(PORT, '0.0.0.0', () => {
   log('control_shell_started', { port: PORT, innerPort: INNER_PORT, riskControlFile: RISK_CONTROL_FILE });
-  startDailyLossAuditService();
 });
 
 function shutdown(signal) {
   stopping = true;
   clearInterval(persistenceSyncTimer);
-  stopDailyLossAuditService();
   if (inner) inner.kill('SIGTERM');
   log('control_shell_stopped', { signal });
   setTimeout(() => process.exit(0), 150).unref();

@@ -8,10 +8,14 @@ export const LOW_CONFIDENCE_SOURCE = 'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';
 export const PRIMARY_SOURCE = 'SELECTIVE_V2_FAST8_PRIMARY';
 export const RESCUE_SOURCE = 'EDGE_RESCUE_FAST8_PRIMARY';
 
-export function orderDirectionForProduction(productionDirection, productionSource = null) {
+export function applyDirectionMode(productionDirection, mode) {
   if (productionDirection !== 'UP' && productionDirection !== 'DOWN') return null;
-  return selectedMode(productionSource)==='INVERSE'?
-    (productionDirection==='UP'?'DOWN':'UP'):productionDirection;
+  if (mode !== 'FORWARD' && mode !== 'INVERSE') return null;
+  return mode === 'INVERSE'
+    ? (productionDirection === 'UP' ? 'DOWN' : 'UP') : productionDirection;
+}
+export function orderDirectionForProduction(productionDirection, productionSource = null) {
+  return applyDirectionMode(productionDirection, selectedMode(productionSource));
 }
 
 export function mappedOrderSignal(signal) {

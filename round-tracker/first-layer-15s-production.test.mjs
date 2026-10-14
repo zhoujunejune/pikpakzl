@@ -179,12 +179,16 @@ test('retired Edge Rescue can neither lock a fresh round nor reappear from a fro
   const source=fs.readFileSync(fileURLToPath(new URL('./index-rest.mjs',import.meta.url)),'utf8');
   assert.match(source,/27 HIT \/ 41 settled = 65\.85%/);
   assert.match(source,/'SELECTIVE_V2_EDGE_RESCUE_PRIMARY', 'SELECTIVE_V2_EDGE_RESCUE_V1'/);
-  const guard=source.slice(source.indexOf('function isPermanentlyRetiredProductionSignal('),source.indexOf('function isPermanentlyRetiredProductionSignal(')+640);
+  const guard=source.slice(source.indexOf('function isPermanentlyRetiredProductionSignal('),source.indexOf('function isPermanentlyRetiredProductionSignal(')+1250);
   assert.match(guard,/retired\.has\(origin\)/);
+  // Existing permanent retirements still apply; only the exact audited FAST8
+  // restoration of the original frozen VIP75 is explicitly re-authorized.
+  assert.match(guard,/modelVersion === FROZEN_VIP75_VERSION/);
+  assert.match(guard,/vip75Frozen8Probe\.report\(\)\.ready/);
   const immutable=source.slice(source.indexOf('function productionSignalPayload('),source.indexOf('function productionSignalPayload(')+1500);
-  assert.match(immutable,/isPermanentlyRetiredProductionSignal\(row\.productionSource, row\.productionModel\)/);
+  assert.match(immutable,/isPermanentlyRetiredProductionSignal\(row\.productionSource, row\.productionModel, row\.productionModelVersion\)/);
   const freeze=source.slice(source.indexOf('function freezeProductionLock('),source.indexOf('function freezeProductionLock(')+900);
-  assert.match(freeze,/isPermanentlyRetiredProductionSignal\(live\.source, live\.model\)/);
+  assert.match(freeze,/isPermanentlyRetiredProductionSignal\(live\.source, live\.model, live\.modelVersion\)/);
   const live=source.slice(source.indexOf('function productionSignalPayload('));
   assert.match(live,/const edgeRescue = !isPermanentlyRetiredProductionSignal\('SELECTIVE_V2_EDGE_RESCUE_PRIMARY', SELECTIVE_V2_EDGE_RESCUE_VERSION\)/);
   assert.match(source,/FROZEN_FIRST_DUAL_15S_THEN_EXISTING_EARLY_15S_THEN_SELECTIVE_V2_THEN_HARD_FUSE_RESCUE_THEN_WAIT/);

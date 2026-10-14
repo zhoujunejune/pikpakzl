@@ -4133,6 +4133,11 @@ async function pollSignal() {
     if (!r.ok) throw new Error(`HTTP_${r.status}`);
     const json = await r.json();
     const live = json?.live;
+    const signalObservedAt = Date.now();
+    // Continuously retain causal samples from the prior 5m round's last
+    // 22-10 seconds, including while nonproduction shadows are paused.
+    // This only changes the frozen VIP75 input, not model weights or orders.
+    vip75Frozen8Probe.capturePreRound(live, signalObservedAt);
     fast8.observe(live, Date.now());
     if (!live?.round) {
       if (!PAUSE_NONPROD_SHADOWS) shadow35.observe({ roundStartMs: Math.floor(Date.now() / 300000) * 300000 }, live, Date.now());
@@ -4144,7 +4149,7 @@ async function pollSignal() {
 
     const row = ensureRound(Number(live.round));
     // Probe exact old weights on the live <=8s snapshot. Never alter the locked signal.
-    const vip75Early = vip75Frozen8Probe.observe(live, Date.now());
+    const vip75Early = vip75Frozen8Probe.observe(live, signalObservedAt);
     if (vip75Early && PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE &&
         row.productionPrediction !== 'UP' && row.productionPrediction !== 'DOWN') {
       try { productionSignalPayload(Date.now()); }
@@ -5543,12 +5548,21 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
       fallbackUsed:false,fallbackReason:null,
       fast8Quality:{status:'PINNED_VIP75_VALID_CAUSAL_SNAPSHOT',
         pinnedWeightFingerprint:pinned.weightFingerprint,
+        inputVersion:pinned.inputVersion,sourceRound:pinned.sourceRound,
+        sourceWindow:pinned.sourceWindow,
+        previousRoundFeatureCount:pinned.previousRoundFeatureCount,
+        currentRoundFeatureCount:pinned.currentRoundFeatureCount,
+        priorContractQuoteUsed:pinned.priorContractQuoteUsed,
         selectedTrainingWindow:320,halfLife:180,l2:0.12,regimeBlend:0.3},
     };
     if(freezeProductionLock(activeRow,live)){
       log('vip75_frozen8_production_lock',{round:expectedRound,
         direction:pinned.direction,generatedDelayMs:pinned.observedAt-expectedRound,
-        modelVersion:FROZEN_VIP75_VERSION,weightFingerprint:pinned.weightFingerprint});
+        modelVersion:FROZEN_VIP75_VERSION,weightFingerprint:pinned.weightFingerprint,
+        inputVersion:pinned.inputVersion,sourceRound:pinned.sourceRound,
+        previousRoundFeatureCount:pinned.previousRoundFeatureCount,
+        currentRoundFeatureCount:pinned.currentRoundFeatureCount,
+        priorContractQuoteUsed:pinned.priorContractQuoteUsed});
       logProductionSignalState(live);
       return {ok:true,live};
     }

@@ -855,13 +855,13 @@ http.createServer(async (req, res) => {
     if(!directionSettingsSnapshot().ready)return send(res,503,{ok:false,error:'方向配置尚未同步'});
     if(pendingAction?.state==='SUBMITTING')return send(res,409,{ok:false,error:'有订单正在提交，暂不能切换'});
     try{
-      const data=await setDirectionMode(body.source,body.mode);
+      const data=body.direction==null ? await setDirectionMode(body.source,body.mode) : await setDirectionMode(body.source,body.direction,body.mode);
       if(data.changed){
         pendingAction=null;
         startAfterRound=currentRoundMs();
         lastPrepareAttemptAt=0;
       }
-      console.log(JSON.stringify({event:'direction_mode_changed',source:body.source,mode:body.mode,
+      console.log(JSON.stringify({event:'direction_mode_changed',source:body.source,direction:body.direction??'BOTH',mode:body.mode,
         revision:data.revision,changed:data.changed,at:new Date().toISOString()}));
       return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
     }catch(err){

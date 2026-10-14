@@ -10,16 +10,16 @@ const ready=(dir)=>{const m=mappedOrderSignal(locked(dir));return {round,
   signal:m.orderSignal,action:m.action,orderDirectionPolicy:m.mappingPolicy};
 };
 
-test('locked UP produces BUY_UP with the same production direction',()=>{
+test('locked UP produces BUY_DOWN with inverse order direction',()=>{
  const m=mappedOrderSignal(locked('UP'));
- assert.deepEqual(m,{productionSignal:'UP',orderSignal:'UP',action:'BUY_UP',mappingPolicy:ORDER_DIRECTION_POLICY});
- assert.equal(orderDirectionForProduction('UP'),'UP');
+ assert.deepEqual(m,{productionSignal:'UP',orderSignal:'DOWN',action:'BUY_DOWN',mappingPolicy:ORDER_DIRECTION_POLICY});
+ assert.equal(orderDirectionForProduction('UP'),'DOWN');
  assert.equal(pendingOrderMatchesProduction(ready('UP'),locked('UP')),true);
 });
-test('locked DOWN produces BUY_DOWN with the same production direction',()=>{
+test('locked DOWN produces BUY_UP with inverse order direction',()=>{
  const m=mappedOrderSignal(locked('DOWN'));
- assert.deepEqual(m,{productionSignal:'DOWN',orderSignal:'DOWN',action:'BUY_DOWN',mappingPolicy:ORDER_DIRECTION_POLICY});
- assert.equal(orderDirectionForProduction('DOWN'),'DOWN');
+ assert.deepEqual(m,{productionSignal:'DOWN',orderSignal:'UP',action:'BUY_UP',mappingPolicy:ORDER_DIRECTION_POLICY});
+ assert.equal(orderDirectionForProduction('DOWN'),'UP');
  assert.equal(pendingOrderMatchesProduction(ready('DOWN'),locked('DOWN')),true);
 });
 test('no WAIT or unknown signal is silently interpreted as an order',()=>{
@@ -34,21 +34,23 @@ test('submission refuses mismatching round, original direction, token action or 
  const p=ready('UP');
  assert.equal(pendingOrderMatchesProduction(p,{...locked('UP'),round:round+300000}),false);
  assert.equal(pendingOrderMatchesProduction(p,locked('DOWN')),false);
- assert.equal(pendingOrderMatchesProduction({...p,signal:'DOWN'},locked('UP')),false);
- assert.equal(pendingOrderMatchesProduction({...p,action:'BUY_DOWN'},locked('UP')),false);
- assert.equal(pendingOrderMatchesProduction({...p,orderSignal:'DOWN'},locked('UP')),false);
+ assert.equal(pendingOrderMatchesProduction({...p,signal:'UP'},locked('UP')),false);
+ assert.equal(pendingOrderMatchesProduction({...p,action:'BUY_UP'},locked('UP')),false);
+ assert.equal(pendingOrderMatchesProduction({...p,orderSignal:'UP'},locked('UP')),false);
  assert.equal(pendingOrderMatchesProduction({...p,orderDirectionPolicy:'OLD'},locked('UP')),false);
  assert.equal(pendingOrderMatchesProduction(p,{...locked('UP'),status:'WAIT'}),false);
 });
-test('legacy reversed intent must not be submitted after returning to normal mode',()=>{
- const old={...ready('UP'),orderSignal:'DOWN',signal:'DOWN',action:'BUY_DOWN',
-  orderDirectionPolicy:'INVERT_PRODUCTION_UP_DOWN_V1'};
+test('old normal and old inverse pending intents are both rejected after inverse V2 switch',()=>{
+ const old={...ready('UP'),orderSignal:'UP',signal:'UP',action:'BUY_UP',
+  orderDirectionPolicy:'FOLLOW_PRODUCTION_DIRECTION_V1'};
+ const oldInverse={...ready('UP'),orderDirectionPolicy:'INVERT_PRODUCTION_UP_DOWN_V1'};
+ assert.equal(pendingOrderMatchesProduction(oldInverse,locked('UP')),false);
  assert.equal(pendingOrderMatchesProduction(old,locked('UP')),false);
- assert.equal(ready('UP').orderSignal,ready('UP').productionSignal);
- assert.equal(ready('DOWN').orderSignal,ready('DOWN').productionSignal);
- assert.equal(ORDER_DIRECTION_POLICY,'FOLLOW_PRODUCTION_DIRECTION_V1');
+ assert.notEqual(ready('UP').orderSignal,ready('UP').productionSignal);
+ assert.notEqual(ready('DOWN').orderSignal,ready('DOWN').productionSignal);
+ assert.equal(ORDER_DIRECTION_POLICY,'INVERT_PRODUCTION_UP_DOWN_V2');
 });
-test('live prepare token mapping and auto-submit both use the same normal policy',()=>{
+test('live prepare token mapping and auto-submit both use the same inverse policy',()=>{
  const index=fs.readFileSync(new URL('./index.mjs',import.meta.url),'utf8');
  const wrapper=fs.readFileSync(new URL('./wrapper.mjs',import.meta.url),'utf8');
  const shell=fs.readFileSync(new URL('./panel-stats-shell.mjs',import.meta.url),'utf8');

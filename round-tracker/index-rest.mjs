@@ -10,6 +10,8 @@ import { createNoBaseSpecialistClient } from './no-base-specialist-client.mjs';
 import { createBaseDirectionRescueV2 } from './base-direction-rescue-v2.mjs';
 import { createIndependentDirectionShadow } from './independent-direction-shadow.mjs'; // zl_new_vip75 training + strict-forward ledger
 import { createFrozenVip75Fast8Probe, FROZEN_VIP75_VERSION } from './vip75-frozen8-probe.mjs';
+import { VIP75_PREVIOUS_ROUND_INPUT_VERSION } from './vip75-preround-features.mjs';
+import { vip75StatsByInputVersion, VIP75_LEGACY_UNKNOWN_INPUT } from './vip75-version-stats.mjs';
 import { vip75DataGapResponse, VIP75_DATA_GAP_DIAGNOSTIC_MS, VIP75_DATA_GAP_POLICY_VERSION } from './vip75-data-gap-policy.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
 import { V3_NO_BASE_20S_VERSION, V3_NO_BASE_20S_START_MS, V3_NO_BASE_20S_FORWARD_TARGET, freezeNoBase20s as evaluateV3NoBase20sShadow, summarizeNoBase20s as v3NoBase20sShadowSummary } from './v3-no-base-20s-audit.mjs';
@@ -298,6 +300,8 @@ function buildLockedSignalEnvelope(row, live) {
     upstreamSource: row?.productionSource ?? live?.source ?? null,
     upstreamModel: row?.productionModel ?? live?.model ?? null,
     upstreamModelVersion: row?.productionModelVersion ?? live?.modelVersion ?? null,
+    upstreamInputVersion: row?.productionInputVersion ?? live?.fast8Quality?.inputVersion ?? null,
+    upstreamPreviousRoundFeatureCount: row?.productionPreviousRoundFeatureCount ?? live?.fast8Quality?.previousRoundFeatureCount ?? null,
     // Backward-compatible additive audit markers: NEVER present deterministic
     // or missing-data fallback as trained probability or verified confidence.
     fallbackUsed: row?.productionFallbackUsed === true || live?.fallbackUsed === true,
@@ -4753,6 +4757,7 @@ async function settlePendingRounds() {
           productionActual: row.productionActual ?? null,
           productionResult: row.productionResult ?? null,
           productionSource: row.productionSource ?? null,
+          productionInputVersion: row.productionInputVersion ?? null,
         });
       } catch (e) {
         lastSettlementError = e?.message || String(e);
@@ -4787,6 +4792,18 @@ function freezeProductionLock(row, live) {
   row.productionModelVersion = live?.modelVersion || null;
   row.productionFallbackUsed = Boolean(live?.fallbackUsed);
   row.productionFallbackReason = live?.fallbackReason || null;
+  // Persist provenance atomically with the immutable lock. Historical locks
+  // cannot be backfilled, so an unrecorded version remains unknown.
+  row.productionInputVersion = typeof live?.fast8Quality?.inputVersion==='string'
+    ? live.fast8Quality.inputVersion : null;
+  row.productionInputSourceRound = Number.isSafeInteger(live?.fast8Quality?.sourceRound)
+    ? live.fast8Quality.sourceRound : null;
+  row.productionPreviousRoundFeatureCount = Number.isInteger(live?.fast8Quality?.previousRoundFeatureCount)
+    ? live.fast8Quality.previousRoundFeatureCount : null;
+  row.productionEarlierPreviousFeatureCount = Number.isInteger(live?.fast8Quality?.earlierPreviousFeatureCount)
+    ? live.fast8Quality.earlierPreviousFeatureCount : null;
+  row.productionCurrentRoundFeatureCount = Number.isInteger(live?.fast8Quality?.currentRoundFeatureCount)
+    ? live.fast8Quality.currentRoundFeatureCount : null;
   row.productionLockedAt = Date.now();
   saveHistory();
   log('production_signal_locked', {
@@ -4794,6 +4811,10 @@ function freezeProductionLock(row, live) {
     direction: row.productionPrediction,
     source: row.productionSource,
     model: row.productionModel,
+    inputVersion:row.productionInputVersion,
+    previousRoundFeatureCount:row.productionPreviousRoundFeatureCount,
+    earlierPreviousFeatureCount:row.productionEarlierPreviousFeatureCount,
+    currentRoundFeatureCount:row.productionCurrentRoundFeatureCount,
     generatedAt: row.productionGeneratedAt,
   });
   emitLockedSignal(row, live);
@@ -4830,6 +4851,8 @@ function productionRecordView(row) {
     v3NoBase15sShadow: publicFrozen,
     productionModel: publicModel,
     productionModelVersion: isRetired ? null : (row?.productionModelVersion ?? null),
+    productionInputVersion: isRetired ? null : (row?.productionInputVersion ||
+      (row?.productionModel==='zl_new_vip75'?VIP75_LEGACY_UNKNOWN_INPUT:null)),
     // Public/display fields are canonical production statistics only.
     // Prevent clients from rendering legacy V6 outcome as production Shadow outcome.
     prediction: direction,
@@ -4871,26 +4894,9 @@ function productionSummary() {
     edgeRescueRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_RESCUE_PRIMARY').length,
     edgeExpansionRounds: decided.filter(r => r.productionSource === 'SELECTIVE_V2_EDGE_EXPANSION_PRIMARY').length,
     v6FallbackRounds: decided.filter(r => r.productionSource === 'V6_FALLBACK').length,
-    activeFast8Primary: (() => {
-      const chosen=records.filter(r=>r.productionModel==='zl_new_vip75' &&
-        (r.productionModelVersion===FROZEN_VIP75_VERSION ||
-         r.productionModelVersion===FROZEN_VIP75_VERSION+':NO_INFORMATION'));
-      const authentic=chosen.filter(r=>r.productionModelVersion===FROZEN_VIP75_VERSION &&
-        r.productionFallbackUsed!==true);
-      const labels=authentic.filter(r=>r.productionActual==='UP'||r.productionActual==='DOWN');
-      const successes=labels.filter(r=>r.productionResult==='HIT').length;
-      const start=chosen.length?chosen[0].roundStartMs:null;
-      const eligibleCalendar=start==null?[]:records.filter(r=>Number(r.roundStartMs)>=Number(start));
-      return {id:'zl_new_vip75',version:FROZEN_VIP75_VERSION,
-        startRound:start,signalRounds:chosen.length,settledRounds:labels.length,
-        hits:successes,misses:labels.length-successes,
-        accuracyPct:labels.length?Number((100*successes/labels.length).toFixed(2)):null,
-        coveragePct:eligibleCalendar.length?Number((100*chosen.length/eligibleCalendar.length).toFixed(2)):null,
-        fallbackRounds:chosen.filter(r=>r.productionFallbackUsed===true).length,
-        noInformationRounds:chosen.filter(r=>r.productionFallbackUsed===true).length,
-        winRateNote:'EXCLUDES_NO_INFORMATION_DIRECTIONS_NOT_INDEPENDENTLY_CERTIFIED',
-        eligibleForAutoTrading:true,accuracyGuaranteed:false};
-    })(),
+    aggregateAccuracyScope:'HISTORICAL_ALL_MODELS_AND_INPUT_VERSIONS_NOT_CURRENT_VIP75',
+    activeFast8Primary: vip75StatsByInputVersion(records,
+      FROZEN_VIP75_VERSION,VIP75_PREVIOUS_ROUND_INPUT_VERSION),
     currentQualifiedModel: productionUsesSelectiveV2()
       ? LOCK_QUALITY_V2_VERSION
       : productionUsesShadowV3()
@@ -5518,6 +5524,7 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
       source:activeRow.productionSource,model:activeRow.productionModel,
       modelVersion:activeRow.productionModelVersion,
       productionPolicy:productionPolicyName(),frozen:true,
+      fast8Quality:{inputVersion:activeRow.productionInputVersion??null},
       fallbackUsed:Boolean(activeRow.productionFallbackUsed),
       fallbackReason:activeRow.productionFallbackReason??null};
     logProductionSignalState(frozen);
@@ -5545,6 +5552,7 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
         inputVersion:pinned.inputVersion,sourceRound:pinned.sourceRound,
         sourceWindow:pinned.sourceWindow,
         previousRoundFeatureCount:pinned.previousRoundFeatureCount,
+        earlierPreviousFeatureCount:pinned.earlierPreviousFeatureCount,
         currentRoundFeatureCount:pinned.currentRoundFeatureCount,
         priorContractQuoteUsed:pinned.priorContractQuoteUsed,
         selectedTrainingWindow:320,halfLife:180,l2:0.12,regimeBlend:0.3},
@@ -5555,6 +5563,7 @@ function fast8ExclusiveSignalPayload(row, expectedRound, now) {
         modelVersion:FROZEN_VIP75_VERSION,weightFingerprint:pinned.weightFingerprint,
         inputVersion:pinned.inputVersion,sourceRound:pinned.sourceRound,
         previousRoundFeatureCount:pinned.previousRoundFeatureCount,
+        earlierPreviousFeatureCount:pinned.earlierPreviousFeatureCount,
         currentRoundFeatureCount:pinned.currentRoundFeatureCount,
         priorContractQuoteUsed:pinned.priorContractQuoteUsed});
       logProductionSignalState(live);
@@ -6356,6 +6365,11 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/v3-trend-band-forward-stats') {
     res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
     return res.end(JSON.stringify(summarizeV3TrendBand(rounds)));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/vip75-input-version-stats') {
+    res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(productionSummary().activeFast8Primary));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/independent-direction-stats') {

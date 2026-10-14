@@ -1,8 +1,8 @@
-// The 2026-10-10 VIP75 coefficients are immutable. This module changes only
-// the causal input snapshot: take the preceding round's final 22-10 second
-// window, then fill genuinely unavailable fields with valid current-round data.
-// Never convert a missing live feature to zero to manufacture a prediction.
-export const VIP75_PREVIOUS_ROUND_INPUT_VERSION = 'PRIOR_ROUND_TAIL_22_TO_10S_V1';
+// The immutable frozen VIP75 weights are never retrained in this module.
+// Market observations are continuous across 5-minute settlement boundaries;
+// collect a larger preceding-round reserve (120-22s to close) and prioritize
+// the original final 22-10s segment. Never invent any missing value.
+export const VIP75_PREVIOUS_ROUND_INPUT_VERSION = 'PRIOR_ROUND_TAIL_22_TO_10S_RESERVE120_STRICT_V2';
 export const VIP75_RAW_INPUT_KEYS = Object.freeze([
   'regimeScore','currentScore','microScore','currentTrendScore',
   'normalizedMomentum15s','normalizedMomentum30s','normalizedMomentum60s',
@@ -12,8 +12,8 @@ export const VIP75_RAW_INPUT_KEYS = Object.freeze([
   'liveScore','distanceFromOpenBps',
 ]);
 const ROUND_MS = 300000;
-const TAIL_BEGIN = 22000;
-const TAIL_END = 10000;
+const TAIL_BEGIN = 22000, TAIL_END = 10000;
+const RESERVE_BEGIN = 120000;
 
 function usable(key,value) {
   if (key === 'absorptionRisk') return typeof value === 'boolean';
@@ -25,28 +25,37 @@ function usable(key,value) {
 }
 
 export function createVip75PreviousRoundInputs() {
-  // One small, bounded cache. No settlement, price after lock or future round is
-  // allowed to enter the model. Restarting mid-window starts with an empty cache.
+  // Bounded in-memory cache for a SINGLE preceding round. No settlement
+  // labels, future observations or observations from earlier rounds enter it.
   let tail = null;
   function capture(live,at=Date.now()) {
     const round = Number(live?.round);
     if (!Number.isSafeInteger(round) || round <= 0 || round % ROUND_MS !== 0 ||
         !Number.isFinite(at) || Math.floor(at / ROUND_MS)*ROUND_MS !== round ||
-        at < round + ROUND_MS - TAIL_BEGIN ||
+        at < round + ROUND_MS - RESERVE_BEGIN ||
         at > round + ROUND_MS - TAIL_END ||
         !live?.facts || typeof live.facts !== 'object' ||
         live.facts.dataFresh === false) return false;
     if (!tail || tail.sourceRound !== round) {
       tail = {sourceRound:round,targetRound:round+ROUND_MS,
-        firstAt:at,lastAt:at,samples:0,values:{}};
+        firstAt:null,lastAt:null,samples:0,
+        reserveSamples:0,values:{},reserveValues:{}};
     }
-    tail.samples++;
-    tail.lastAt = at;
+    const isPrimary=at>=round+ROUND_MS-TAIL_BEGIN;
+    if (isPrimary) {
+      tail.samples++;
+      tail.firstAt ??= at;
+      tail.lastAt = at;
+    } else {
+      tail.reserveSamples++;
+    }
     for (const key of VIP75_RAW_INPUT_KEYS) {
       const value=live.facts[key];
-      if (usable(key,value)) {
-        tail.values[key]={value:key==='absorptionRisk'?value:Number(value),at};
-      }
+      if (!usable(key,value)) continue;
+      const record={value:key==='absorptionRisk'?value:Number(value),at};
+      const dest=isPrimary?tail.values:tail.reserveValues;
+      // Do not replace a newer real sample with delayed/stale delivery.
+      if(!dest[key] || dest[key].at<=at) dest[key]=record;
     }
     return true;
   }
@@ -54,42 +63,52 @@ export function createVip75PreviousRoundInputs() {
     const previous = tail && tail.targetRound === Number(targetRound) ? tail : null;
     const current = currentFacts && typeof currentFacts === 'object' ? currentFacts : {};
     const facts = {};
-    const missing = [], fromPrevious = [], fromCurrent = [];
+    const missing = [], fromPrevious = [], fromCurrent = [], fromEarlierPrevious = [];
     for (const key of VIP75_RAW_INPUT_KEYS) {
-      // A prediction-market quote belongs to a particular contract. Prefer
-      // this round's quote over the earlier contract's tail quote if available.
-      const preferCurrent = key === 'predictionMarketUpMid';
       const old = previous?.values[key]?.value;
+      const reserve = previous?.reserveValues[key]?.value;
       const fresh = current[key];
-      if (preferCurrent && usable(key,fresh)) {
-        facts[key] = key==='absorptionRisk'?fresh:Number(fresh);
-        fromCurrent.push(key);
+      // Prediction-market midquote refers to a contract, not continuous BTC
+      // spot data. Old-contract quotes must NEVER substitute for new quotes.
+      if (key === 'predictionMarketUpMid') {
+        if (usable(key,fresh)) {
+          facts[key] = Number(fresh); fromCurrent.push(key);
+        } else missing.push(key);
       } else if (usable(key,old)) {
-        facts[key] = old;
-        fromPrevious.push(key);
+        facts[key] = old; fromPrevious.push(key);
+      } else if (usable(key,reserve)) {
+        facts[key] = reserve;
+        fromPrevious.push(key);fromEarlierPrevious.push(key);
       } else if (usable(key,fresh)) {
         facts[key] = key==='absorptionRisk'?fresh:Number(fresh);
         fromCurrent.push(key);
-      } else {
-        missing.push(key);
-      }
+      } else missing.push(key);
     }
     return {
-      facts,complete:missing.length===0,missing,fromPrevious,fromCurrent,
+      facts,complete:missing.length===0,missing,
+      fromPrevious,fromEarlierPrevious,fromCurrent,
       sourceRound:previous?.sourceRound??null,
       sourceWindow:previous?[previous.sourceRound+ROUND_MS-TAIL_BEGIN,
         previous.sourceRound+ROUND_MS-TAIL_END]:null,
+      reserveWindow:previous?[previous.sourceRound+ROUND_MS-RESERVE_BEGIN,
+        previous.sourceRound+ROUND_MS-TAIL_BEGIN]:null,
       inputVersion:VIP75_PREVIOUS_ROUND_INPUT_VERSION,
-      priorContractQuoteUsed:fromPrevious.includes('predictionMarketUpMid'),
+      priorContractQuoteUsed:false,
     };
   }
   function report() {
-    return tail?{sourceRound:tail.sourceRound,targetRound:tail.targetRound,
-      samples:tail.samples,collectedKeys:Object.keys(tail.values).length,
+    return tail?{
+      sourceRound:tail.sourceRound,targetRound:tail.targetRound,
+      samples:tail.samples,reserveSamples:tail.reserveSamples,
+      collectedKeys:Object.keys(tail.values).length,
+      reserveCollectedKeys:Object.keys(tail.reserveValues).length,
       firstAt:tail.firstAt,lastAt:tail.lastAt,
-      version:VIP75_PREVIOUS_ROUND_INPUT_VERSION}:
-      {sourceRound:null,targetRound:null,samples:0,collectedKeys:0,
-        version:VIP75_PREVIOUS_ROUND_INPUT_VERSION};
+      version:VIP75_PREVIOUS_ROUND_INPUT_VERSION,
+    }:{
+      sourceRound:null,targetRound:null,samples:0,reserveSamples:0,
+      collectedKeys:0,reserveCollectedKeys:0,
+      version:VIP75_PREVIOUS_ROUND_INPUT_VERSION,
+    };
   }
   return {capture,prepare,report};
 }

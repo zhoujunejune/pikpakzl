@@ -9,7 +9,6 @@ export const INDEPENDENT_TARGET = Object.freeze({
   recentDecisions: 100, longWindow: 200, trainingSamples: 320,
 });
 
-const REQUIRES = ['regimeScore','currentScore','microScore','currentTrendScore'];
 const FEATURE_KEYS = [
   'regimeScore','currentScore','microScore','currentTrendScore',
   'normalizedMomentum15s','normalizedMomentum30s','normalizedMomentum60s',
@@ -20,6 +19,9 @@ const FEATURE_KEYS = [
   'currentTrendInteraction','microTrendInteraction','shortLongMomentumGap','marketCurrentAgreement',
 ];
 
+// The raw 18 market features must all exist before computing the 22-feature
+// frozen vector. Never manufacture missing momentum/volume/OFI/PM as zero.
+const RAW_FEATURE_KEYS = FEATURE_KEYS.slice(0,18);
 export const ADAPTIVE_POLICY = Object.freeze({
   retrainEverySettledRounds:24, driftMinSamples:20, driftAccuracy:0.65,
   minChallengerGain:0.015,
@@ -33,14 +35,20 @@ function sigmoid(z) {return z >= 0 ? 1/(1+Math.exp(-z)) : Math.exp(z)/(1+Math.ex
 export function independentMarketRegime(f) {
   const current=finite(f?.currentScore),trend=finite(f?.currentTrendScore);
   if(current===null||trend===null) return 'UNKNOWN';
-  const momentum=finite(f?.normalizedMomentum60s)??0;
+  const momentum=finite(f?.normalizedMomentum60s);
+  if(momentum===null)return 'UNKNOWN';
   return Math.abs(trend)>=0.55 && Math.sign(trend)===Math.sign(current) &&
     Math.abs(current)>=0.45 && Math.sign(momentum)===Math.sign(trend)
       ? 'TREND' : 'RANGE';
 }
 export function independentFeatures(f) {
-  if (!f || typeof f !== 'object' || REQUIRES.some(k => finite(f[k]) === null)) return null;
-  const v = k => clip(finite(f[k]) ?? 0);
+  if (!f || typeof f !== 'object' ||
+      RAW_FEATURE_KEYS.some(k=>k==='absorptionRisk'
+        ? typeof f[k]!=='boolean'
+        : finite(f[k])===null) ||
+      Number(f.predictionMarketUpMid)<0 || Number(f.predictionMarketUpMid)>1) return null;
+  // Only actual, validated values enter the unchanged trained feature formula.
+  const v = k => clip(finite(f[k]));
   const upMid = finite(f.predictionMarketUpMid);
   const current = v('currentScore'), trend = v('currentTrendScore'), micro = v('microScore');
   const mom15 = v('normalizedMomentum15s'), mom300 = v('normalizedMomentum300s');
@@ -51,11 +59,11 @@ export function independentFeatures(f) {
     v('tradePressure15s'),v('tradePressure60s'),
     v('ofiNormalized5s'),v('ofiNormalized60s'),
     v('rangePosition180'),
-    upMid === null ? 0 : clip((upMid - 0.5)*2),
+    clip((upMid - 0.5)*2),
     f.absorptionRisk === true ? 1 : 0,
-    v('liveScore'),clip((finite(f.distanceFromOpenBps)??0)/10),
+    v('liveScore'),clip(finite(f.distanceFromOpenBps)/10),
     clip(current*trend),clip(micro*trend),clip(mom15-mom300),
-    upMid === null ? 0 : clip(current*(upMid-0.5)*2),
+    clip(current*(upMid-0.5)*2),
   ];
 }
 export function validLiveObservation(row) {

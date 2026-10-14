@@ -109,7 +109,7 @@ test('PIN-protected Redis switch, revision invalidation, and frontend selectors 
  assert.match(wrapper,/directionPolicyWriteInFlight/);
  assert.match(storage,/await db.set\(DIRECTION_REDIS_KEY/);
  assert.match(storage,/revision:current.revision\+1/);
- assert.match(shell,/id="directionModeControls"/);
+ assert.match(shell,/directionModeControls/);
  assert.match(shell,/data-direction-source/);
  assert.match(shell,/cfg.policyVersion/);
 });

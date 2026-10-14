@@ -281,8 +281,8 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="k" style="margin-top:14px">三类信号 · 分别统计胜率（仅当前8秒版本）</div>
 <div style="overflow:auto;margin-top:8px;border:1px solid #2b313d;border-radius:10px">
 <table style="width:100%;border-collapse:collapse;min-width:630px;font-size:12px">
-<thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>下单模式</th><th>已结算</th><th>原始方向命中率</th><th>按当前下单规则推算命中率</th></tr></thead>
-<tbody id="sourceRateRows"><tr><td colspan="5" style="padding:10px 6px">统计读取中...</td></tr></tbody>
+<thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>当前下单方向推算胜率</th></tr></thead>
+<tbody id="sourceRateRows"><tr><td colspan="6" style="padding:10px 6px">统计读取中...</td></tr></tbody>
 </table></div>
 <div class="muted" style="margin-top:7px">按 Binance Prediction 官方结算、当前方向映射规则分别回算。含规则切换前的历史方向时，不代表当时实际订单。不是成交胜率或收益率。</div>
 <div class="muted" id="activeFast8Note" style="margin-top:10px">仅统计新版本 Selective V2 / Edge Rescue / 真实行情兜底的官方结算；低置信度方向可下单，但不代表具有预测优势。</div>
@@ -396,11 +396,17 @@ function load(){
      var rawHits=group.filter(function(z){return z.productionPrediction===z.productionActual}).length;
      var orderHits=group.filter(function(z){return orderSide(z)===z.productionActual}).length;
      var total=group.length;
+     function sideRate(side){
+       var part=group.filter(function(z){return z.productionPrediction===side});
+       var correct=part.filter(function(z){return z.productionPrediction===z.productionActual}).length;
+       return part.length?correct+'/'+part.length+' · '+pct(correct*100/part.length):'样本不足';
+     }
      return '<tr style="border-top:1px solid #2b313d">'+
        '<td style="padding:9px 6px">'+src.name+'</td>'+
        '<td style="text-align:center">'+src.mode+'</td>'+
-       '<td style="text-align:center">'+total+'</td>'+
        '<td style="text-align:center">'+(total?rawHits+'/'+total+' · '+pct(rawHits*100/total):'样本不足')+'</td>'+
+       '<td style="text-align:center">'+sideRate('UP')+'</td>'+
+       '<td style="text-align:center">'+sideRate('DOWN')+'</td>'+
        '<td style="text-align:center">'+(total?orderHits+'/'+total+' · '+pct(orderHits*100/total):'样本不足')+'</td></tr>'
    }).join(''):'<tr><td colspan="5" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
    e('activeFast8Note').textContent=currentMode

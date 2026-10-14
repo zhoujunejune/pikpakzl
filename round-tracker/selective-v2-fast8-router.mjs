@@ -32,6 +32,9 @@ export function routeSelectiveV2Fast8({round,now=Date.now(),facts,quality,edge,
     return {status:'DATA_UNAVAILABLE',reason:'ROUND_NOT_ACTIVE',executionEligible:false};
   }
   const elapsedMs=now-round;
+  if(elapsedMs>=LOCK_DEADLINE_MS)
+    return {round,elapsedMs,status:'DATA_UNAVAILABLE',
+      reason:'EIGHT_SECOND_DEADLINE_EXPIRED',executionEligible:false};
   const base=derive(facts);
   const common={
     round,elapsedMs,model:POLICY_VERSION,inputVersion:INPUT_VERSION,
@@ -67,9 +70,10 @@ export function routeSelectiveV2Fast8({round,now=Date.now(),facts,quality,edge,
       score:originalScore,confidence:null,evidence,edge:e};
   if(elapsedMs<FALLBACK_COMMIT_MS)
     return {...common,status:'PENDING',signal:null,reason:'AWAITING_QUALIFIED_DIRECTION',evidence};
-  // Never execute a weak or incomplete prediction: directions and orders differ.
+  // User-authorized: every real-market UP/DOWN direction is order-eligible.
+  // Preserve the weak-signal label; never invent confidence or a market value.
   return {...common,status:'LOCKED',direction:base.direction,
-    source:UNVERIFIED_SOURCE,executionEligible:false,
+    source:UNVERIFIED_SOURCE,executionEligible:true,
     fallbackUsed:true,fallbackReason:'UNVERIFIED_REAL_MARKET_DIRECTION',
     score:null,confidence:null,evidence};
 }

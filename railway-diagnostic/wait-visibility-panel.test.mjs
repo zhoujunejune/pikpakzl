@@ -13,7 +13,7 @@ function mounted(){
  const ids=['activeFast8Name','activeFast8Desc','activeFast8Direction','activeFast8Accuracy',
  'activeFast8HitMiss','activeFast8Coverage','activeFast8Note','activeFast8OrderDirection',
  'activeFast8InverseAccuracy','activeFast8InverseHitMiss','rsMeta','rsAccuracy','rsSettled',
- 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows','sourceRateRows','directionModeMessage'];
+ 'rsDecided','rsCorrect','rsWrong','rsWait','rsCoverage','rsRows','sourceRateRows','directionModeChoices','directionModeMessage'];
  return new Map(ids.map(id=>[id,{innerHTML:'',textContent:''}]));
 }
 async function execute(script,payload){
@@ -131,7 +131,7 @@ test('missing settled current-version predictions shows no synthetic accuracy',a
  j.records=j.records.filter(z=>z.productionModel==='zl_new_vip75'||z.productionActual==null);
  const d=await execute(mainScript,j);
  assert.equal(d.get('activeFast8Accuracy').textContent,'尚无新结算');
- assert.equal(d.get('activeFast8InverseAccuracy').textContent,'尚无新结算');
+ assert.equal(d.get('activeFast8InverseAccuracy').textContent,'样本不足');
 });
 
 test('mobile control area contains 12 explicit independent switches, OFF labels and revision checks',async()=>{

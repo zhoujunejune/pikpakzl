@@ -21,9 +21,10 @@ async function execute(script,payload){
  const env={document:{readyState:'complete',getElementById:id=>dom.get(id)||null},
    window:{confirm:()=>true},
    fetch:async url=>({ok:true,json:async()=>String(url).startsWith('/api/direction-mode')?{
-     ok:true,policy:'SOURCE_MODE_3WAY_V3:fixture',
-     modes:{SELECTIVE_V2_FAST8_PRIMARY:'FORWARD',EDGE_RESCUE_FAST8_PRIMARY:'FORWARD',
-       SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION:'INVERSE'}
+     ok:true,policy:'SOURCE_SIDE_3WAY_V4:fixture',revision:'fixture',
+     modes:{SELECTIVE_V2_FAST8_PRIMARY:{UP:'FORWARD',DOWN:'FORWARD'},
+       EDGE_RESCUE_FAST8_PRIMARY:{UP:'FORWARD',DOWN:'FORWARD'},
+       SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION:{UP:'INVERSE',DOWN:'INVERSE'}}
    }:payload}),
    localStorage:{setItem:()=>{},getItem:()=>null},
    setInterval:()=>0,Date,Math,Set,Array,Number,Error,Promise,String,Object,isFinite};
@@ -92,7 +93,7 @@ test('without production-mode confirmation frontend does not pretend restored mo
 test('low-confidence direction is distinctly labeled but not suppressed',async()=>{
  const j=fixture(),cur=j.records[0];cur.productionSource='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';
  const d=await execute(mainScript,j);
- assert.match(d.get('activeFast8Direction').textContent,/DOWN（低置信度 · 反向下单）/);
+ assert.match(d.get('activeFast8Direction').textContent,/DOWN（低置信度 · 反向）/);
 });
 test('the card keeps separate model prediction vs source-aware order direction',()=>{
  assert.ok(primary.includes('id="activeFast8Direction"'));
@@ -131,4 +132,25 @@ test('missing settled current-version predictions shows no synthetic accuracy',a
  const d=await execute(mainScript,j);
  assert.equal(d.get('activeFast8Accuracy').textContent,'尚无新结算');
  assert.equal(d.get('activeFast8InverseAccuracy').textContent,'尚无新结算');
+});
+
+test('mobile control area contains 12 explicit independent switches, OFF labels and revision checks',async()=>{
+ const d=await execute(mainScript,fixture());
+ const html=d.get('directionModeChoices').innerHTML;
+ assert.equal((html.match(/<button /g)||[]).length,12);
+ for(const side of ['UP','DOWN'])for(const mode of ['正向','反向'])
+   assert.match(html,new RegExp(side+' '+mode));
+ assert.match(html,/data-dir-side="UP"/);
+ assert.match(html,/data-dir-side="DOWN"/);
+ assert.match(mainScript,/expectedRevision:revision/);
+ assert.match(mainScript,/mode=src\.modes\[side\]===selectedMode\?'OFF':selectedMode/);
+ assert.match(html,/aria-pressed="true"/);
+});
+test('mode data is read from backend and no old source-wide toggle is shown',async()=>{
+ const d=await execute(mainScript,fixture());
+ const html=d.get('directionModeChoices').innerHTML;
+ assert.match(html,/Selective V2（主策略）/);
+ assert.match(html,/低置信度行情兜底/);
+ assert.match(html,/DOWN 反向/);
+ assert.doesNotMatch(html,/data-dir-mode="正向"/);
 });

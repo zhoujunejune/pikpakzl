@@ -59,6 +59,14 @@ export function invalidateDirectionSettings(){
   state={ready:false,modes:{},revision:null,updatedAt:null,effectiveAfterRound:null};
 }
 
+// Close the shared client on graceful shutdown (also used by isolated CI tests).
+export async function closeDirectionSettingsConnection(){
+  const current=redis;
+  redis=null;opening=null;
+  if(current?.isOpen)await current.quit();
+  invalidateDirectionSettings();
+}
+
 async function client(){
   const url=String(process.env.SIGNAL_REDIS_URL||'').trim();
   if(!url)throw Error('DIRECTION_REDIS_URL_MISSING');

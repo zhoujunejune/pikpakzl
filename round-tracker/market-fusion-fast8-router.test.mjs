@@ -8,7 +8,7 @@ const run=(extra={})=>evaluateMarketFusionFast8({round,now:round+6800,...extra})
 
 test('V2 version and cutoff isolate old settlement statistics',()=>{
  assert.equal(VERSION,'MARKET_FUSION_FAST8_V2');
- assert.match(INPUT_VERSION,/CURRENT1_TREND_MARKET/);
+ assert.match(INPUT_VERSION,/CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR80_CURRENT20/);
  assert.equal(LOCK_BY_MS,1000);
  assert.equal(DEADLINE_MS,8000);
 });
@@ -28,12 +28,12 @@ test('momentum and order flow do not influence the scoring or direction fallback
  assert.equal(onlyRemoved.status,'DATA_UNAVAILABLE');
  assert.equal(onlyRemoved.executionEligible,false);
 });
-test('both rounds use 70 percent prior and 30 percent current when valid',()=>{
+test('both rounds use 80 percent prior and 20 percent current when valid',()=>{
  const r=run({now:round+1100,prior:prior({regimeScore:0.55}),
    currentFacts:{regimeScore:-0.55},currentRoundAligned:true,
    currentObservedAt:round+1050});
  assert.equal(r.status,'LOCKED');assert.equal(r.direction,'UP');
- assert.equal(r.score,0.4);assert.equal(r.evidence.previousFeatureCount,1);
+ assert.equal(r.score,0.6);assert.equal(r.evidence.previousFeatureCount,1);
  assert.equal(r.evidence.currentFeatureCount,1);
 });
 test('previous-contract quotes never leak; aligned current contract quote can count',()=>{

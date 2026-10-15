@@ -1717,6 +1717,37 @@ http.createServer(async (req, res) => {
     return res.end(JSON.stringify(data));
   }
 
+  // Strictly read-only diagnosis for missing Binance Prediction final settlement.
+  // Never exposes API credentials, account data, full response payloads, or orders.
+  if (req.method === 'GET' && url.pathname === '/api/official-settlement-source-diagnostic') {
+    const [list,search] = await Promise.all([
+      signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/list',{
+        l1Category:'crypto',l2Category:'up-down',sortBy:'CREATED_TIME',orderBy:'DESC',offset:0,limit:100
+      }),
+      signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/search',{query:'BTC 5m',topK:50})
+    ]);
+    const describe=(result,kind)=>{
+      const data=result?.data;
+      const arr=kind==='list'?(Array.isArray(data?.marketTopics)?data.marketTopics:[])
+        :(Array.isArray(data)?data:[]);
+      const aligned=arr.filter(t=>String(t?.symbol||'').toUpperCase()===SYMBOL&&predDurationLooks5m(t));
+      return {
+        ok:result?.ok===true,httpStatus:Number(result?.status)||0,
+        binanceCode:(typeof data?.code==='number'||typeof data?.code==='string')?String(data.code).slice(0,30):null,
+        itemCount:arr.length,btcusdt5mItems:aligned.length,
+        shape:kind==='list'?(Array.isArray(data?.marketTopics)?'marketTopics-array':'unrecognized'):(Array.isArray(data)?'array':'unrecognized'),
+        errorType:result?.error?String(result.error).slice(0,90):null
+      };
+    };
+    res.writeHead(200,{'content-type':'application/json; charset=utf-8',
+      'cache-control':'no-store','x-content-type-options':'nosniff'});
+    return res.end(JSON.stringify({
+      ok:true,readOnly:true,symbol:SYMBOL,credentialsConfigured:Boolean(PREDICTION_API_KEY&&PREDICTION_API_SECRET),
+      list:describe(list,'list'),search:describe(search,'search'),
+      note:'This endpoint reports source health only, not Binance Prediction official settlement.'
+    }));
+  }
+
   if (req.method === 'GET' && url.pathname === '/healthz') {
     const p = payload();
     const healthy = p.dataIntegrity.wsConnected

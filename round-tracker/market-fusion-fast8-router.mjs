@@ -3,8 +3,8 @@
 // Versioned, deterministic and deliberately NOT labelled a trained probability.
 // Uses real previous-round tail and fresh current observations; missing values
 // are omitted instead of zero-filled. The last contract's PM quote is never reused.
-export const VERSION='MARKET_FUSION_FAST8_V2';
-export const INPUT_VERSION='BTC5M_PREV_TAIL120_CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR80_CURRENT20';
+export const VERSION='MARKET_FUSION_FAST8_V2_PRIOR50_CURRENT50';
+export const INPUT_VERSION='BTC5M_PREV_TAIL120_CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR50_CURRENT50';
 export const SOURCE='SELECTIVE_V2_FAST8_PRIMARY'; // Reuse the existing independent UP/DOWN order policy.
 export const DEADLINE_MS=8000;
 export const LOCK_BY_MS=1000;
@@ -77,8 +77,8 @@ export function evaluateMarketFusionFast8({round,now=Date.now(),prior=null,
     reason:'NO_OBSERVED_MARKET_FEATURE',executionEligible:false};
   // Prior snapshot is continuous BTC spot information, not the prior contract.
   // Fixed V2 mix whenever both rounds contain usable inputs.
-  const pWeight=p&&q?0.80:p?1:0;
-  const qWeight=p&&q?0.20:q?1:0;
+  const pWeight=p&&q?0.50:p?1:0;
+  const qWeight=p&&q?0.50:q?1:0;
   const score=(p?.score||0)*pWeight+(q?.score||0)*qWeight;
   const featureCount=(p?.featureCount||0)+(q?.featureCount||0);
   const groupCount=Math.max(p?.groupCount||0,q?.groupCount||0);

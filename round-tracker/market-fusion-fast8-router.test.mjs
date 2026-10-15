@@ -7,8 +7,8 @@ const prior=facts=>({sourceRound:round-300000,facts});
 const run=(extra={})=>evaluateMarketFusionFast8({round,now:round+6800,...extra});
 
 test('V2 version and cutoff isolate old settlement statistics',()=>{
- assert.equal(VERSION,'MARKET_FUSION_FAST8_V2');
- assert.match(INPUT_VERSION,/CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR80_CURRENT20/);
+ assert.equal(VERSION,'MARKET_FUSION_FAST8_V2_PRIOR50_CURRENT50');
+ assert.match(INPUT_VERSION,/CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR50_CURRENT50/);
  assert.equal(LOCK_BY_MS,1000);
  assert.equal(DEADLINE_MS,8000);
 });
@@ -28,13 +28,17 @@ test('momentum and order flow do not influence the scoring or direction fallback
  assert.equal(onlyRemoved.status,'DATA_UNAVAILABLE');
  assert.equal(onlyRemoved.executionEligible,false);
 });
-test('both rounds use 80 percent prior and 20 percent current when valid',()=>{
- const r=run({now:round+1100,prior:prior({regimeScore:0.55}),
-   currentFacts:{regimeScore:-0.55},currentRoundAligned:true,
-   currentObservedAt:round+1050});
- assert.equal(r.status,'LOCKED');assert.equal(r.direction,'UP');
- assert.equal(r.score,0.6);assert.equal(r.evidence.previousFeatureCount,1);
- assert.equal(r.evidence.currentFeatureCount,1);
+test('both valid rounds count equally at 50 percent and preserve UP and DOWN outputs',()=>{
+ const inputs={now:round+1100,currentRoundAligned:true,currentObservedAt:round+1050};
+ const up=run({...inputs,prior:prior({regimeScore:0.55}),
+   currentFacts:{regimeScore:-0.275}});
+ assert.equal(up.status,'LOCKED');assert.equal(up.direction,'UP');
+ assert.equal(up.score,0.25);assert.equal(up.evidence.previousFeatureCount,1);
+ assert.equal(up.evidence.currentFeatureCount,1);
+ const down=run({...inputs,prior:prior({regimeScore:0.275}),
+   currentFacts:{regimeScore:-0.55}});
+ assert.equal(down.status,'LOCKED');assert.equal(down.direction,'DOWN');
+ assert.equal(down.score,-0.25);
 });
 test('previous-contract quotes never leak; aligned current contract quote can count',()=>{
  const x=run({prior:prior({predictionMarketUpMid:0.99,regimeScore:-0.5})});

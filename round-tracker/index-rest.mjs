@@ -1654,7 +1654,7 @@ function qualifiedShadowV6Candidate() {
 
 function productionPolicyName() {
   if (PRODUCTION_SIGNAL_SOURCE_MODE === MARKET_FUSION_FAST8_MODE)
-    return 'MARKET_FUSION_FAST8_V1_CAUSAL_PREWARM_CURRENT8';
+    return 'MARKET_FUSION_FAST8_V2_PRIOR70_TREND_MARKET_T1';
   if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE)
     return 'SELECTIVE_V2_THEN_EDGE_RESCUE_WITH_8S_UNVERIFIED_DISPLAY_ONLY';
   if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE) return 'EXCLUSIVE_ZL_FAST8_65_STRICT_65_GATE_NO_LEGACY_FALLBACK';
@@ -6190,7 +6190,7 @@ function payload() {
     // configured live router is listed, never archived or shadow strategies.
     // This is a read-only presentation contract: it changes no route/order.
     activeSignalModels:PRODUCTION_SIGNAL_SOURCE_MODE===MARKET_FUSION_FAST8_MODE
-      ? [{id:MARKET_FUSION_VERSION,name:'Market Fusion（8秒行情融合）',
+      ? [{id:MARKET_FUSION_VERSION,name:'Market Fusion V2（8秒趋势+报价）',
           source:MARKET_FUSION_SOURCE,version:MARKET_FUSION_VERSION,active:true}]
       : PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
       ? [{id:'zl_new_vip75',name:'zl_new_vip75（8秒）',

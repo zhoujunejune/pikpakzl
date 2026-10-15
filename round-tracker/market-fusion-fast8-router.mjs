@@ -3,8 +3,8 @@
 // Versioned, deterministic and deliberately NOT labelled a trained probability.
 // Uses real previous-round tail and fresh current observations; missing values
 // are omitted instead of zero-filled. The last contract's PM quote is never reused.
-export const VERSION='MARKET_FUSION_FAST8_V2';
-export const INPUT_VERSION='BTC5M_PREV_TAIL120_CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR80_CURRENT20';
+export const VERSION='MARKET_FUSION_FAST8_V2_FINAL_DOWN_V1';
+export const INPUT_VERSION='BTC5M_PREV_TAIL120_CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR80_CURRENT20_FINAL_DOWN_V1';
 export const SOURCE='SELECTIVE_V2_FAST8_PRIMARY'; // Reuse the existing independent UP/DOWN order policy.
 export const DEADLINE_MS=8000;
 export const LOCK_BY_MS=1000;
@@ -82,7 +82,12 @@ export function evaluateMarketFusionFast8({round,now=Date.now(),prior=null,
   const score=(p?.score||0)*pWeight+(q?.score||0)*qWeight;
   const featureCount=(p?.featureCount||0)+(q?.featureCount||0);
   const groupCount=Math.max(p?.groupCount||0,q?.groupCount||0);
-  const direction=score>0?'UP':score<0?'DOWN':fallbackDirection(previous,recent);
+  // Keep the original causal V2 judgment for attribution, while the final
+  // production SIGNAL (not the downstream order-direction mapping) follows
+  // the user-defined UP=>DOWN / DOWN=>DOWN rule.
+  const rawDirection=score>0?'UP':score<0?'DOWN':fallbackDirection(previous,recent);
+  const direction=rawDirection==='UP'||rawDirection==='DOWN'?'DOWN':null;
+  const finalScore=direction==='DOWN'?-Math.abs(score):null;
   const evidence={score:Number(score.toFixed(6)),featureCount,groupCount,
     previousRound:priorValid?prior.sourceRound:null,
     previousFeatureCount:p?.featureCount||0,
@@ -91,7 +96,11 @@ export function evaluateMarketFusionFast8({round,now=Date.now(),prior=null,
     previousGroups:p?.groups||{},currentGroups:q?.groups||{},
     previousContractQuoteUsed:false,
     currentContractQuoteUsed:Boolean(q?.groups.market),
-    probabilityCalibrated:false};
+    probabilityCalibrated:false,
+    rawDirection,rawScore:Number(score.toFixed(6)),
+    finalDirection:direction,
+    signalDirectionRule:'RAW_UP_TO_DOWN_RAW_DOWN_KEEP_DOWN',
+    directionAdjusted:rawDirection==='UP'};
   if(elapsedMs>=DEADLINE_MS)
     return {round,elapsedMs,status:'DATA_UNAVAILABLE',
       reason:'EIGHT_SECOND_DEADLINE_EXPIRED',executionEligible:false,evidence};
@@ -104,7 +113,7 @@ export function evaluateMarketFusionFast8({round,now=Date.now(),prior=null,
       reason:'NO_NONZERO_MARKET_DIRECTION',executionEligible:false,evidence};
   const lowEvidence=Math.abs(score)<0.16||groupCount<2||!recent;
   return {round,elapsedMs,status:'LOCKED',source:SOURCE,model:VERSION,
-    modelVersion:VERSION,direction,score:evidence.score,
+    modelVersion:VERSION,direction,score:Number(finalScore.toFixed(6)),
     executionEligible:true,fallbackUsed:lowEvidence,
     fallbackReason:lowEvidence?'LOW_EVIDENCE_REAL_MARKET_DIRECTION':null,
     evidence,inputVersion:INPUT_VERSION};

@@ -274,11 +274,11 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
 </div>
-<div class="k" style="margin-top:14px">下单方向 · 3个来源 × UP/DOWN独立开关（共12个）</div>
+<div class="k" style="margin-top:14px">当前活跃模型 · 已支持来源的 UP/DOWN 独立开关</div>
 <div class="muted" style="margin-top:6px">每个来源分别选择 UP 正向/反向、DOWN 正向/反向；同方向互斥，均关闭则只显示预测、不下单。需控制 PIN，下一轮生效。</div>
 <div id="directionModeChoices" style="margin-top:9px;display:grid;gap:8px"><div class="muted">后台配置读取中...</div></div>
 <div id="directionModeMessage" role="status" aria-live="polite" class="muted" style="margin-top:8px"></div>
-<div class="k" style="margin-top:14px">三类信号 · 分别统计胜率（仅当前8秒版本）</div>
+<div class="k" style="margin-top:14px">活跃信号模型 · 自动同步展示与分方向胜率</div>
 <div style="overflow:auto;margin-top:8px;border:1px solid #2b313d;border-radius:10px">
 <table style="width:100%;border-collapse:collapse;min-width:630px;font-size:12px">
 <thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前 UP/DOWN 模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>按当前下单规则推算命中率</th></tr></thead>
@@ -297,7 +297,20 @@ var sources=[
  {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',modes:{UP:'OFF',DOWN:'OFF'}},
  {id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底',modes:{UP:'OFF',DOWN:'OFF'}}
 ];
+// The tracker catalog is authoritative. The legacy three-source setting
+// remains intact on the control service, but retired/inactive sources are hidden.
+var activeCatalog=[];
 var directionModeReady=false,directionModeBusy=false;
+function syncActiveCatalog(j){
+ var raw=Array.isArray(j.activeSignalModels)?j.activeSignalModels:[];
+ if(!raw.length&&j.productionSignalSourceMode==='SELECTIVE_V2_FAST8')
+   raw=sources.map(function(s){return {id:'SELECTIVE_V2_FAST8_PREWARM_V1',source:s.id,name:s.name}});
+ if(!raw.length&&j.activeProductionModel)
+   raw=[{id:j.activeProductionModel.id,source:j.activeProductionModel.source,name:j.activeProductionModel.id}];
+ activeCatalog=raw.filter(function(x){return x&&typeof x.id==='string'&&x.id&&
+   typeof x.source==='string'&&x.source&&x.active!==false});
+ renderDirectionModes();
+}
 function modeLabel(v){return v==='FORWARD'?'正向':v==='INVERSE'?'反向':'关闭'}
 function validateModes(modes){
  if(!modes||Object.keys(modes).length!==3)throw Error('后台配置来源不完整');
@@ -309,7 +322,9 @@ function validateModes(modes){
 }
 function renderDirectionModes(){
  var target=e('directionModeChoices');if(!target)return;
- target.innerHTML=sources.map(function(src,i){
+ var visible=sources.filter(function(src){return activeCatalog.some(function(m){return m.source===src.id})});
+ target.innerHTML=visible.length?visible.map(function(src){
+  var i=sources.indexOf(src);
   return '<div style="background:#10141c;padding:12px;border-radius:10px;min-width:0">'+
     '<div style="font-size:13px;font-weight:700;margin-bottom:8px">'+src.name+'</div>'+
     ['UP','DOWN'].map(function(side){
@@ -323,7 +338,7 @@ function renderDirectionModes(){
            ';background:'+(selected?'#17392b':'#222838')+';color:'+(selected?'#7ff0b0':'#b6c0d0')+'">'+side+' '+modeLabel(mode)+'</button>';
        }).join('')+'</div></div>';
     }).join('')+'</div>';
- }).join('');
+ }).join(''):'<div class="muted">当前活跃模型没有匹配的旧版来源开关；不显示已暂停的三类来源，原有后台方向规则保持不变。</div>';
  if(target.querySelectorAll)target.querySelectorAll('button').forEach(function(btn){
    btn.addEventListener('click',function(){setDirectionModeFromUI(Number(btn.getAttribute('data-dir-index')),
      btn.getAttribute('data-dir-side'),btn.getAttribute('data-dir-mode'))});
@@ -390,6 +405,7 @@ function load(){
  .then(function(j){
   if(!j||!j.ok)throw Error('生产统计不可用');
   var currentMode=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
+  syncActiveCatalog(j);
   var version='SELECTIVE_V2_FAST8_PREWARM_V1';
   var model=j.activeProductionModel;
   var records=(j.records||[]).filter(function(z){
@@ -404,9 +420,9 @@ function load(){
    var src=bySource(current);
    dir+='（低置信度 · '+(src&&directionModeReady?modeLabel(src.modes[current.productionPrediction]):'未就绪')+'）';
   }
-  e('activeFast8Name').textContent=currentMode?'Selective V2（8秒主策略） + Edge Rescue（8秒兜底）':model?model.id:'生产模式待确认';
-  e('activeFast8Desc').textContent=currentMode
-   ?'BTC 5分钟 · 8秒截止 · 三类信号按UP/DOWN独立配置正反向':'BTC 5分钟 · 历史模型统计';
+  e('activeFast8Name').textContent=activeCatalog.length
+   ?activeCatalog.map(function(m){return m.name||m.id}).join(' + '):'当前没有活跃信号模型';
+  e('activeFast8Desc').textContent='BTC 5分钟 · 8秒截止 · 模型列表由生产服务自动同步；非活跃来源隐藏';
   e('activeFast8Direction').textContent=dir;
   var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
   var decided=settled.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'});
@@ -423,8 +439,10 @@ function load(){
   e('activeFast8Coverage').textContent=locked+' 轮'+(records.length?' · '+pct(100*locked/records.length):' · 样本不足');
   var fallback=records.filter(function(z){return z.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'}).length;
   var rows=e('sourceRateRows');
-  if(rows)rows.innerHTML=currentMode?sources.map(function(src){
-   var group=decided.filter(function(z){return z.productionSource===src.id});
+  if(rows)rows.innerHTML=activeCatalog.length?activeCatalog.map(function(item){
+   var matched=sources.find(function(src){return src.id===item.source});
+   var src=matched||{id:item.source,name:item.name||item.id,modes:{UP:'OFF',DOWN:'OFF'}};
+   var group=decided.filter(function(z){return z.productionSource===item.source && z.productionModel===item.id});
    var rawHits=group.filter(function(z){return z.productionPrediction===z.productionActual}).length;
    var allowed=group.filter(function(z){return orderSide(z)!==null});
    var orderHits=allowed.filter(function(z){return orderSide(z)===z.productionActual}).length;
@@ -435,16 +453,18 @@ function load(){
     return part.length?correct+'/'+part.length+' · '+pct(correct*100/part.length):'样本不足（0轮）';
    }
    return '<tr style="border-top:1px solid #2b313d">'+
-    '<td style="padding:9px 6px">'+src.name+'</td>'+
-    '<td style="text-align:center">UP：'+(directionModeReady?modeLabel(src.modes.UP):'未就绪')+' / DOWN：'+(directionModeReady?modeLabel(src.modes.DOWN):'未就绪')+'</td>'+
+    '<td style="padding:9px 6px">'+esc(item.name||item.id)+'</td>'+
+    '<td style="text-align:center">'+(matched
+       ? 'UP：'+(directionModeReady?modeLabel(src.modes.UP):'未就绪')+' / DOWN：'+(directionModeReady?modeLabel(src.modes.DOWN):'未就绪')
+       : '无独立来源开关')+'</td>'+
     '<td style="text-align:center">'+(total?rawHits+'/'+total+' · '+pct(rawHits*100/total):'样本不足（0轮）')+'</td>'+
     '<td style="text-align:center">'+sideRate('UP')+'</td>'+
     '<td style="text-align:center">'+sideRate('DOWN')+'</td>'+
     '<td style="text-align:center">'+(allowed.length?orderHits+'/'+allowed.length+' · '+pct(orderHits*100/allowed.length):'样本不足（0轮）')+'</td></tr>';
-  }).join(''):'<tr><td colspan="6" style="padding:10px 6px">8秒版当前未启用，不显示新策略胜率</td></tr>';
-  e('activeFast8Note').textContent=currentMode
-   ?'8秒新版本 · 已结算方向 '+decided.length+' 轮 · 低置信度方向 '+fallback+' 轮 · 原始UP/DOWN命中率独立于方向开关 · 理论映射仅统计开启的方向，不代表真实成交'+(j.stale?' · 统计缓存可能过期':'')
-   :'当前展示历史模型数据。与8秒 Selective V2 新版互不混算。';
+  }).join(''):'<tr><td colspan="6" style="padding:10px 6px">生产服务暂无活跃模型，不显示历史或退役信号</td></tr>';
+  e('activeFast8Note').textContent='当前活跃 '+activeCatalog.length+' 类来源 · 已结算方向 '+decided.length+
+   ' 轮 · 低置信度方向 '+fallback+' 轮 · 仅当前模型版本计分，正反向映射不代表实际成交'+
+   (j.stale?' · 统计缓存可能过期':'');
  }).catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }
 function updateOrderSignal(){

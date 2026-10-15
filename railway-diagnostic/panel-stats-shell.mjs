@@ -107,21 +107,27 @@ async function load(){
   var currentModels=(Array.isArray(liveCatalog.activeSignalModels)?liveCatalog.activeSignalModels:[])
     .filter(function(m){return m&&m.active!==false&&m.id&&m.source});
   var routeStages=e('spRouteStages');
-  if(productionMode==='MARKET_FUSION_FAST8'){
+  if(productionMode==='MARKET_FUSION_FAST8'||productionMode==='BREAKOUT20_FAST8'){
+    var breakout20Mode=productionMode==='BREAKOUT20_FAST8';
     if(e('spLegacyRegistryWrap'))e('spLegacyRegistryWrap').style.display='none';
     var name=currentModels.length
       ?currentModels.map(function(m){return m.name||m.id}).join(' + ')
       :'生产模型未确认';
     globalThis.__active15sCandidateIds=[];
     if(routeStages)routeStages.innerHTML='<span class="on">唯一生产模型 · '+esc(name)+'</span>'
-      +'<span>目标第1秒锁定，8秒截止</span><span>旧策略不参与生产</span>';
+      +(breakout20Mode?'<span>Cloudflare T+6.25秒采样，8秒截止</span>':'<span>目标第1秒锁定，8秒截止</span>')
+      +'<span>旧策略不参与生产</span>';
     e('spQualified').textContent=currentModels.length?'1 类活跃来源':'未确认';
     e('spObserve').textContent='其他旧策略暂停';
     e('spFreshness').textContent='已同步生产接口';
-    e('spTitle').textContent=name+' · 8秒行情融合';
+    e('spTitle').textContent=name+(breakout20Mode?' · RSI/MACD 8秒影子方向':' · 8秒行情融合');
     e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">当前生产仅使用 '+esc(name)+'；旧策略不参与实时生产预测。</td></tr>';
-    e('spRule').textContent='仅使用趋势评分与本轮有效市场报价；历史80%、实时20%，目标第1秒锁定，8秒截止。动量、OFI、成交压力均不参与；无真实数据不伪造信号。';
-    e('spNotice').textContent='来源映射沿用现有方向开关配置；真实胜率仅按本模型版本与币安官方结算统计，不继承旧策略记录。';
+    e('spRule').textContent=breakout20Mode
+      ?'生产信号采用突破20%即可的 RSI、MACD、价格区间和高低位，Cloudflare 原轮次 T+6.25秒附近锁定，Railway 仅接受本轮8秒内有效方向。历史影子预测不补录生产，失联或超时不伪造方向。'
+      :'仅使用趋势评分与本轮有效市场报价；历史80%、实时20%，目标第1秒锁定，8秒截止。动量、OFI、成交压力均不参与；无真实数据不伪造信号。';
+    e('spNotice').textContent=breakout20Mode
+      ?'生产采用独立云端模型方向，正反向开关沿用 SELECTIVE_V2_FAST8_PRIMARY 既有配置。生产命中率以币安官方结算独立计算，不混用影子模型现货代理结果。'
+      :'来源映射沿用现有方向开关配置；真实胜率仅按本模型版本与币安官方结算统计，不继承旧策略记录。';
     return;
   }
   if(e('spLegacyRegistryWrap'))e('spLegacyRegistryWrap').style.display='';

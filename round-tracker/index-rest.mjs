@@ -15,6 +15,7 @@ import {routeSelectiveV2Fast8, POLICY_VERSION as SELECTIVE8_VERSION,
   UNVERIFIED_SOURCE as SELECTIVE8_UNVERIFIED, INPUT_VERSION as SELECTIVE8_INPUT_VERSION}
   from './selective-v2-fast8-router.mjs';
 import { VIP75_PREVIOUS_ROUND_INPUT_VERSION } from './vip75-preround-features.mjs';
+import {createBreakout20ProductionFeed, BREAKOUT20_MODE, BREAKOUT20_MODEL, BREAKOUT20_SOURCE, BREAKOUT20_DEADLINE_MS} from './breakout20-production-feed.mjs';
 import {evaluateMarketFusionFast8, VERSION as MARKET_FUSION_VERSION, INPUT_VERSION as MARKET_FUSION_INPUT_VERSION,
   SOURCE as MARKET_FUSION_SOURCE, DEADLINE_MS as MARKET_FUSION_DEADLINE_MS}
   from './market-fusion-fast8-router.mjs';
@@ -46,12 +47,12 @@ import { WebSocketServer } from 'ws';
 const SELECTIVE_V2_FAST8_MODE = 'SELECTIVE_V2_FAST8';
 const MARKET_FUSION_FAST8_MODE = 'MARKET_FUSION_FAST8';
 const requestedProductionMode = String(process.env.PRODUCTION_SIGNAL_SOURCE_MODE || FAST8_MODE).trim().toUpperCase();
-const PRODUCTION_SIGNAL_SOURCE_MODE = [LEGACY_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE].includes(requestedProductionMode)
+const PRODUCTION_SIGNAL_SOURCE_MODE = [LEGACY_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE, BREAKOUT20_MODE].includes(requestedProductionMode)
   ? requestedProductionMode : FAST8_MODE;
 // Temporarily pause all NON-PRODUCTION shadows in FAST8-only mode to fit the
 // existing Railway free-memory ceiling. Set PAUSE_NONPROD_SHADOWS=0 to restore.
 // FAST8 worker, market polling, official settlements, orders and archives remain active.
-const PAUSE_NONPROD_SHADOWS = [FAST8_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE].includes(PRODUCTION_SIGNAL_SOURCE_MODE) &&
+const PAUSE_NONPROD_SHADOWS = [FAST8_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE, BREAKOUT20_MODE].includes(PRODUCTION_SIGNAL_SOURCE_MODE) &&
   String(process.env.PAUSE_NONPROD_SHADOWS || '1') !== '0';
 const PORT = Number(process.env.PORT || 3000);
 const SYMBOL = String(process.env.SYMBOL || 'BTCUSDT').toUpperCase();
@@ -467,6 +468,11 @@ signalWss.on('connection', ws => {
 const rounds = new Map();
 let selective8Snapshot = null;
 let marketFusionSnapshot = null;
+const breakout20ProductionFeed = createBreakout20ProductionFeed({onDecision:decision=>{
+  if(PRODUCTION_SIGNAL_SOURCE_MODE!==BREAKOUT20_MODE)return;
+  try{productionSignalPayload(Date.now());}
+  catch(error){log('breakout20_production_lock_error',{round:decision.round,error:error?.message||String(error)});}
+}});
 let signalPollBusy = false;
 let settleBusy = false;
 let lastSignalPollAt = 0;
@@ -1653,6 +1659,8 @@ function qualifiedShadowV6Candidate() {
 }
 
 function productionPolicyName() {
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === BREAKOUT20_MODE)
+    return 'BREAKOUT20_CLOUDFLARE_SHADOW_LOCKED_CURRENT_ROUND_STRICT_T8';
   if (PRODUCTION_SIGNAL_SOURCE_MODE === MARKET_FUSION_FAST8_MODE)
     return 'MARKET_FUSION_FAST8_V2_PRIOR80_TREND_MARKET_T1';
   if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE)
@@ -5746,9 +5754,45 @@ function marketFusionFast8SignalPayload(row,expectedRound,now) {
   return {ok:true,live};
 }
 
+function breakout20ProductionSignalPayload(row,expectedRound,now){
+  const current=row||ensureRound(expectedRound);
+  const decision=breakout20ProductionFeed.latestFor(expectedRound,now);
+  if(decision && !['UP','DOWN'].includes(current.productionPrediction)){
+    const live={
+      round:expectedRound,status:'LOCKED',
+      signal:{direction:decision.direction,score:null,confidence:null,modelProbability:null},
+      input:{round:expectedRound},generatedAt:decision.lockedAt,
+      source:BREAKOUT20_SOURCE,model:BREAKOUT20_MODEL,modelVersion:BREAKOUT20_MODEL,
+      productionPolicy:productionPolicyName(),executionEligible:true,
+      fallbackUsed:false,fallbackReason:null,
+      fast8Quality:{status:'CLOUDFLARE_SHADOW_CAUSAL_LOCK',
+        inputVersion:BREAKOUT20_MODEL,sourceRound:expectedRound,
+        previousRoundFeatureCount:0,currentRoundFeatureCount:10},
+    };
+    if(freezeProductionLock(current,live)){
+      log('breakout20_production_locked',{round:expectedRound,direction:decision.direction,
+        delayMs:decision.delayMs,source:BREAKOUT20_SOURCE,model:BREAKOUT20_MODEL});
+    }
+    return {ok:true,live};
+  }
+  const error=breakout20ProductionFeed.report().lastError;
+  const live={round:expectedRound,
+    status:now>=expectedRound+BREAKOUT20_DEADLINE_MS?'DATA_UNAVAILABLE':'PENDING',
+    signal:null,input:{round:expectedRound},generatedAt:null,
+    source:BREAKOUT20_SOURCE,model:BREAKOUT20_MODEL,modelVersion:BREAKOUT20_MODEL,
+    productionPolicy:productionPolicyName(),executionEligible:false,
+    waitReason:error||'AWAITING_CLOUDFLARE_BREAKOUT20_CURRENT_ROUND_LOCK',
+    fast8Quality:{inputVersion:BREAKOUT20_MODEL,status:error?'SHADOW_FEED_PENDING_OR_ERROR':'COLLECTING_CAUSAL_SHADOW_DATA'}};
+  logProductionSignalState(live);
+  return {ok:true,live};
+}
+
 function productionSignalPayload(now = Date.now()) {
   const expectedRound = Math.floor(Number(now) / 300000) * 300000;
   const row = rounds.get(String(expectedRound)) || null;
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === BREAKOUT20_MODE &&
+      !['UP','DOWN'].includes(row?.productionPrediction))
+    return breakout20ProductionSignalPayload(row,expectedRound,now);
   if (PRODUCTION_SIGNAL_SOURCE_MODE === MARKET_FUSION_FAST8_MODE &&
       !['UP','DOWN'].includes(row?.productionPrediction))
     return marketFusionFast8SignalPayload(row,expectedRound,now);
@@ -6189,7 +6233,10 @@ function payload() {
     // Authoritative active-model catalog for trade-control UI. Only the
     // configured live router is listed, never archived or shadow strategies.
     // This is a read-only presentation contract: it changes no route/order.
-    activeSignalModels:PRODUCTION_SIGNAL_SOURCE_MODE===MARKET_FUSION_FAST8_MODE
+    activeSignalModels:PRODUCTION_SIGNAL_SOURCE_MODE===BREAKOUT20_MODE
+      ? [{id:BREAKOUT20_MODEL,name:'突破20%即可（RSI+MACD+高低位）',
+          source:BREAKOUT20_SOURCE,version:BREAKOUT20_MODEL,active:true}]
+      : PRODUCTION_SIGNAL_SOURCE_MODE===MARKET_FUSION_FAST8_MODE
       ? [{id:MARKET_FUSION_VERSION,name:'Market Fusion V2（8秒趋势+报价）',
           source:MARKET_FUSION_SOURCE,version:MARKET_FUSION_VERSION,active:true}]
       : PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
@@ -6205,7 +6252,12 @@ function payload() {
             source:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',
             version:SELECTIVE8_VERSION,active:true},
         ] : [],
-    activeProductionModel:PRODUCTION_SIGNAL_SOURCE_MODE===MARKET_FUSION_FAST8_MODE
+    activeProductionModel:PRODUCTION_SIGNAL_SOURCE_MODE===BREAKOUT20_MODE
+      ? {id:BREAKOUT20_MODEL,version:BREAKOUT20_MODEL,source:BREAKOUT20_SOURCE,
+          onlyOneActive:true,deadlineMs:BREAKOUT20_DEADLINE_MS,
+          verifiedAccuracy:null,estimatedAccuracyGuaranteed:false,
+          feed:breakout20ProductionFeed.report(),noWait:false}
+      : PRODUCTION_SIGNAL_SOURCE_MODE===MARKET_FUSION_FAST8_MODE
       ? {id:MARKET_FUSION_VERSION,version:MARKET_FUSION_VERSION,
           source:MARKET_FUSION_SOURCE,onlyOneActive:true,noWait:true,deadlineMs:8000,
           estimatedAccuracyGuaranteed:false,verifiedAccuracy:null}
@@ -6347,6 +6399,11 @@ log('nonproduction_shadow_pause_status', {paused:PAUSE_NONPROD_SHADOWS, activePr
 ensureCurrentRound();
 fast8.start();
 setInterval(pollSignal, POLL_MS).unref();
+if(PRODUCTION_SIGNAL_SOURCE_MODE===BREAKOUT20_MODE){
+  breakout20ProductionFeed.start();
+  log('breakout20_production_feed_started',{mode:BREAKOUT20_MODE,model:BREAKOUT20_MODEL,
+    source:BREAKOUT20_SOURCE,deadlineMs:BREAKOUT20_DEADLINE_MS,ordersUnchanged:true});
+}
 // A fresh, safe report is also available through Railway logs when a scheduled
 // notification cannot reach the public read-only HTTP endpoint.
 if (!PAUSE_NONPROD_SHADOWS) {

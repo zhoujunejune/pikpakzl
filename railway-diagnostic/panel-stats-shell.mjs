@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { spawn } from 'node:child_process';
 
 // RAILWAY_EGRESS_IP_READONLY_DIAG_20261014
@@ -552,8 +553,8 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
-  let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}</body>`);
-  return out.replace('</body>', `${primaryScript}${statsScript}</body>`);
+  let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${shadowCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}${shadowCard}</body>`);
+  return out.replace('</body>', `${primaryScript}${statsScript}${shadowScript}</body>`);
 }
 
 let child = null;
@@ -743,6 +744,7 @@ startInner();
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
+  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/round-stats') return proxyStats(res);
   if (req.method === 'GET' && url.pathname === '/api/training-status') return proxyTrainingStatus(res);
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);

@@ -119,7 +119,7 @@ async function load(){
     e('spFreshness').textContent='已同步生产接口';
     e('spTitle').textContent=name+' · 8秒行情融合';
     e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">当前生产仅使用 '+esc(name)+'；旧策略不参与实时生产预测。</td></tr>';
-    e('spRule').textContent='仅使用趋势评分与本轮有效市场报价；历史70%、实时30%，目标第1秒锁定，8秒截止。动量、OFI、成交压力均不参与；无真实数据不伪造信号。';
+    e('spRule').textContent='仅使用趋势评分与本轮有效市场报价；历史80%、实时20%，目标第1秒锁定，8秒截止。动量、OFI、成交压力均不参与；无真实数据不伪造信号。';
     e('spNotice').textContent='来源映射沿用现有方向开关配置；真实胜率仅按本模型版本与币安官方结算统计，不继承旧策略记录。';
     return;
   }

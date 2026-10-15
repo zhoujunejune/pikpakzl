@@ -59,10 +59,12 @@ test('current-model direction switches, confirmation, save notice and mapped ord
  assert.match(env.el('directionModeChoices').innerHTML,/Market Fusion（8秒行情融合）/);
  assert.doesNotMatch(env.el('directionModeChoices').innerHTML,/Selective V2/);
  assert.equal((env.el('directionModeChoices').innerHTML.match(/<button /g)||[]).length,4);
- assert.match(env.el('activeFast8OrderDirection').textContent,/Market Fusion（8秒行情融合）/);
- assert.doesNotMatch(env.el('activeFast8OrderDirection').textContent,/Selective V2/);
  await env.win.setDirectionModeFromUI(0,'DOWN','INVERSE');
  await flush();
+ // The initial status poll may precede loading Redis direction settings.
+ // Save completion triggers a fresh authoritative mapping check.
+ assert.match(env.el('activeFast8OrderDirection').textContent,/Market Fusion（8秒行情融合）/);
+ assert.doesNotMatch(env.el('activeFast8OrderDirection').textContent,/Selective V2/);
  assert.equal(env.posts.length,1);
  assert.equal(env.posts[0].source,'SELECTIVE_V2_FAST8_PRIMARY');
  assert.equal(env.posts[0].direction,'DOWN');

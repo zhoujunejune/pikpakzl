@@ -1,0 +1,30 @@
+name: Deploy independent breakout20 shadow
+on:
+  push:
+    branches: [cloudflare-breakout20-only-20261015]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-breakout20-shadow
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: 3ba148af3f98117d6b299158e20bf687
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate independent model
+        run: node --test model.test.mjs
+      - name: Deploy only breakout20-shadow
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing CLOUDFLARE_API_TOKEN secret'; exit 1; }
+          npx --yes wrangler@4 deploy 2>&1 | tee /tmp/breakout20-deploy.log
+      - name: Activate and verify first market round
+        run: node verify-deployment.mjs

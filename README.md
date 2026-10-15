@@ -1,151 +1,26 @@
-<p align="center">
-  <a href="https://github.com/LinYuanovo/pikpak_auto_invite">
-    <img src="https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/faviconV2.png" alt="Logo" width="80" height="80">
-  </a>
-  <h1 align="center">PikPak自动邀请</h1>
-  <p align="center">
-    ·
-    <a href="https://github.com/LinYuanovo/pikpak_auto_invite/issues">报告Bug</a>
-    ·
-    <a href="https://github.com/LinYuanovo/pikpak_auto_invite/issues">提出新特性</a>
-  </p>
-</p>
+# 突破20%即可 · Cloudflare Workers Free 独立影子模型
 
-基于bilibili平台UP主[纸鸢花的花语](https://space.bilibili.com/67788420/)所公开的源码以及其群管理Atong的pikpak临时碰撞版脚本进行修改的PikPak自动邀请程序，附带图像识别过验证码
+基于 **Cloudflare Workers + SQLite Durable Objects + Alarms**，无需常驻服务器，也不需要额外创建 D1。代码完全独立、只读，**不触碰 Railway 生产 V2 / 实盘下单**。
 
-<!-- PROJECT SHIELDS -->
+## 逻辑
 
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
+- 每个5分钟轮次的 T+6.25 秒安排 Durable Object Alarm，调用 Binance 公共 REST API：1m / 5m K线（含未完成的当前K线最新价格）。
+- 使用已经完整收盘的历史 1m / 5m K线计算 RSI(14)、MACD(12,26,9)、20根1m/12根5m高低位及价格区间位置。
+- 收到当前轮次的两种K线且在 T+8 秒前返回，就冻结 UP/DOWN。超时、451/429 或缺失记录为 DATA_GAP，不伪造信号。
+- 初始样本使用历史目标5分钟K线的开盘价进行**代理训练**；与实时 T+6.25秒观测分布不同，需以后续独立前瞻统计验证。
+- 最少100样本才能训练 L2 逻辑回归，时间顺序训练/验证隔离一轮；验证不优于基线则保持基线。每20个已结算前瞻样本重新训练。
+- 严格区分实时前瞻统计与历史训练准确率。结算用现货K线涨跌代理，**不是 Binance Prediction 官方结算**。
+- Durable Object `storage` 持久化权重/前瞻结果，`GET /status` 返回统计与可见故障；`GET /latest` 返回最新影子方向，`GET /health` 启用并返回健康状态。
 
-<!-- PROJECT LOGO -->
+## Cloudflare 部署
 
-## 目录
+需拥有 Cloudflare 账户和 Workers 权限（只需免费版）；首次部署必须由有权限的会话执行。**当前聊天没有 Cloudflare 部署接口，此文件尚未部署。**
 
-- [作者](#作者)
-- [上手指南](#上手指南)
-  - [本地运行](#本地运行)
-  - [GitHub Actions运行（每日云端定时自动运行）](#GitHubActions运行)
-- [文件目录说明](#文件目录说明)
-- [说明](#说明)
+在目录执行 `npx wrangler deploy`。首次访问 `https://breakout20-shadow.<subdomain>.workers.dev/status` 会激活唯一 Durable Object 的周期 Alarm。Cloudflare 不保证 Alarms 秒级严格准时，容错场景可能晚到达；如晚于8秒即记录超时。
 
-### 作者
+### 必须核实
 
-临渊
-
-邮箱：<1577242215@qq.com>
-
-### 上手指南
-
-#### 本地运行
-
-##### 使用前的配置
-
-在使用本项目前请确保你具有以下环境
-
-1. Python[推荐Python3.9~~别问为什么，我就是3.9，别的我不知道能不能运行~~]（如未安装请查看[Python安装教程](https://blog.csdn.net/maiya_yayaya/article/details/131828467?ops_request_misc=&request_id=&biz_id=102&utm_term=python如何安装&utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduweb~default-0-131828467.142^v100^pc_search_result_base7&spm=1018.2226.3001.4187)）
-2. pip（如未安装请查看[pip安装及如何加速安装第三方组件](https://blog.csdn.net/figo0423/article/details/136146344?ops_request_misc=%7B%22request%5Fid%22%3A%22171784122216800226579490%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&request_id=171784122216800226579490&biz_id=0&utm_medium=distribute.pc_search_result.none-task-blog-2~all~baidu_landing_v2~default-7-136146344-null-null.142^v100^pc_search_result_base7&utm_term=pip如何安装&spm=1018.2226.3001.4187)）
-
-##### **安装步骤**
-
-1. 克隆项目到本地，如无法克隆也可以直接从右上角下载zip压缩包到本地解压
-
-```shell
-git clone https://github.com/LinYuanovo/pikpak_auto_invite.git
-```
-
-2. 进入到项目目录
-
-```shell
-cd pikpak_auto_invite
-```
-
-3. 安装项目所需依赖（如安装有问题自行换源）
-
-```shell
-pip install -r requirements.txt
-```
-
-##### 效果演示
-
-在项目目录下用终端输入或利用`Pycharm`等工具直接运行`run.py`
-
-```shell
-python run.py
-```
-
-![效果演示](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/7c010670-6d0c-41c0-8ad5-d6dab5e6bf02.png)
-
-如果需要查看请求返回信息，请将主程序`run.py`的`DEBUG_MODE`参数设为True
-
-如果多次出现IP问题可尝试将自己所用的魔法设置为代理，即主程序`run.py`的`PROXY`参数
-
-如果觉得模型不够满意也可以查看我的另一个项目[Ddddocr 自训练今日校园、PikPak验证码模型](https://github.com/LinYuanovo/ddddocr_models)里面包含了几个版本的模型以及数据集，可以自己进行训练
-
-#### GitHubActions运行
-
-[B站-视频教程](https://www.bilibili.com/video/BV1JZ3FeWEsF/)
-
-1. 点击项目右上角进行**fork**，也可以顺手点个**star**
-
-    ![对项目进行fork](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/f43174c1-1576-4ab0-b86f-31355b400887.png)
-
-2. 然后点击你fork的项目中的**Settings**，找到**Secrets and variables**，选中**Actions**里的**New repository secret**添加一个环境变量，名称必须为**INVITE_CODE**，内容就填你的邀请码
-
-    ![添加变量](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/8ad57054-1c8b-4100-8e24-ab8d6ef51899.png)
-
-    ![添加变量](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/1a702216-0a12-44c4-8067-54eb8e34e7c5.png)
-
-3. 点击你项目上方的**Actions**，第一次打开可能需要点击 `I understand...`，来启用actions
-
-4. 提交修改来触发Actions，建议直接修改`run.py`，在空白的地方输入一次换行**commit**提交即可
-
-    ![修改run.py](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/44e7cf20-658a-4400-99a3-35babc2d5834.png)
-
-    ![提交修改](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/cca72584-36be-4b16-b0bb-141899eaa1b5.png)
-
-5. 点开**Actions**查看运行日志
-
-    ![查看日志](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/3e58af4c-bf57-496c-9129-d237fd0aae7d.png)
-
-    ![查看日志](https://raw.githubusercontent.com/LinYuanovo/pic_bed/main/pikpak_auto_invite/2cbadd33-bb64-4619-bc38-f86b3bd59ed8.png)
-
-    至此操作完成，每天早十点、晚六点十分各定时执行一次（可以自己到`/.github/workflows/run.yml`中修改定时），可以以同样方式进入**Actions**查看日志
-
-### 文件目录说明
-
-```
-pikpak_auto_invite 
-├── /.github/
-│  │──  /workflows/
-│  │  │── run.yml           Github Actions配置文件
-├── README.md
-├── /models/
-│  │── pikpak3.0.onnx       图像识别模型
-│  │── pikpak4.0.onnx       图像识别模型
-│  │── charsets.json        配置
-├── /temp/                  缓存验证图片
-├── run.py                  程序主入口
-├── image.py                处理图片
-└── recognize.py            图像识别
-```
-
-### 说明
-
-- 本项目仅仅只是在UP主[纸鸢花的花语](https://space.bilibili.com/67788420/)所公开的源码以及其群管理Atong的脚本基础上进行简单修改，加入了图像识别处理验证码，并未进行任何架构上的更改。上传本项目也仅为了用于学习研究以及备份，无任何不良引导，如有侵权请联系我进行删除。如果项目对你有帮助欢迎点点star。
-- 项目依赖于GitHub Actions运行，不会泄露你的邀请码
-- 官方限制现在邀请的会员掉了人数也不会掉，所以邀请之前请查看自己人数是否超**50**人
-
-<!-- links -->
-
-[your-project-path]:LinYuanovo/pikpak_auto_invite
-[contributors-shield]: https://img.shields.io/github/contributors/LinYuanovo/pikpak_auto_invite.svg?style=flat-square
-[contributors-url]: https://github.com/LinYuanovo/pikpak_auto_invite/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/LinYuanovo/pikpak_auto_invite.svg?style=flat-square
-[forks-url]: https://github.com/LinYuanovo/pikpak_auto_invite/network/members
-[stars-shield]: https://img.shields.io/github/stars/LinYuanovo/pikpak_auto_invite.svg?style=flat-square
-[stars-url]: https://github.com/LinYuanovo/pikpak_auto_invite/stargazers
-[issues-shield]: https://img.shields.io/github/issues/LinYuanovo/pikpak_auto_invite.svg?style=flat-square
-[issues-url]: https://img.shields.io/github/issues/LinYuanovo/pikpak_auto_invite.svg
+1. 账户免费额度、Durable Objects 是否可用，是否出现 Workers CPU/请求数量限制。
+2. 从 Cloudflare 网络访问 Binance 市场数据能否返回200，而不是451/429。
+3. `/status` 的 1m/5m 数据与真实行情一致；至少观察20轮及时率/数据缺口/前瞻准确率。
+4. 不部署覆盖已有 `zl-fast8-adaptive-shadow` Worker。

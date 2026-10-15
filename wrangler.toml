@@ -1,0 +1,12 @@
+name = "breakout20-shadow"
+main = "src/index.mjs"
+compatibility_date = "2026-10-15"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "BREAKOUT20"
+class_name = "Breakout20"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Breakout20"]

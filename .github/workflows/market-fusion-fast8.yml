@@ -1,0 +1,26 @@
+name: Market Fusion FAST8 production regression
+on:
+  pull_request:
+    paths:
+      - 'round-tracker/market-fusion-fast8-router.mjs'
+      - 'round-tracker/market-fusion-fast8-router.test.mjs'
+      - 'round-tracker/index-rest.mjs'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - '.github/workflows/market-fusion-fast8.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'round-tracker/market-fusion-fast8-router.mjs'
+      - 'round-tracker/index-rest.mjs'
+jobs:
+  market-fusion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check round-tracker/index-rest.mjs
+      - run: node --check round-tracker/market-fusion-fast8-router.mjs
+      - run: node --check railway-diagnostic/panel-stats-shell.mjs
+      - run: node --test round-tracker/market-fusion-fast8-router.test.mjs round-tracker/fast8-nonprod-pause.test.mjs round-tracker/fast8-production-gate.test.mjs

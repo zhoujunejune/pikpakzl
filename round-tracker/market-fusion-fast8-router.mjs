@@ -1,26 +1,22 @@
-// Market Fusion FAST8: causal BTC spot microstructure + current-contract context.
+// Market Fusion V2: only trend and aligned current-contract market quote.
+// Momentum and order flow are excluded, including directional tie-breaks.
 // Versioned, deterministic and deliberately NOT labelled a trained probability.
 // Uses real previous-round tail and fresh current observations; missing values
 // are omitted instead of zero-filled. The last contract's PM quote is never reused.
-export const VERSION='MARKET_FUSION_FAST8_V1';
-export const INPUT_VERSION='BTC5M_PREV_TAIL120_CURRENT8_CAUSAL_V1';
+export const VERSION='MARKET_FUSION_FAST8_V2';
+export const INPUT_VERSION='BTC5M_PREV_TAIL120_CURRENT1_TREND_MARKET_CAUSAL_V2';
 export const SOURCE='SELECTIVE_V2_FAST8_PRIMARY'; // Reuse the existing independent UP/DOWN order policy.
 export const DEADLINE_MS=8000;
-export const LOCK_BY_MS=6500;
+export const LOCK_BY_MS=1000;
 const ROUND_MS=300000;
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 const clamp=(x,lo=-1,hi=1)=>Math.min(hi,Math.max(lo,x));
 
 const GROUPS={
-  momentum:[['normalizedMomentum15s',0.30,0.23],['normalizedMomentum30s',0.22,0.25],
-    ['normalizedMomentum60s',0.22,0.30],['normalizedMomentum180s',0.09,0.40],
-    ['normalizedMomentum300s',0.06,0.45],['microScore',0.11,0.55]],
-  flow:[['tradePressure15s',0.34,0.65],['ofiNormalized5s',0.32,0.65],
-    ['tradePressure60s',0.18,0.75],['ofiNormalized60s',0.16,0.75]],
   trend:[['regimeScore',0.32,0.55],['currentTrendScore',0.27,0.55],
     ['currentScore',0.23,0.55],['liveScore',0.18,0.65]],
 };
-const GROUP_WEIGHTS={momentum:0.36,flow:0.30,trend:0.24,market:0.10};
+const GROUP_WEIGHTS={trend:0.70,market:0.30};
 function signedGroup(facts,name){
   const entries=GROUPS[name];
   let sum=0,weight=0,count=0,signals=[];
@@ -41,8 +37,7 @@ function marketGroup(facts,permitQuote){
     signals:[{field:'predictionMarketUpMid',value:facts.predictionMarketUpMid}]};
 }
 function snapshotScore(facts,{permitQuote=false}={}){
-  const groups={momentum:signedGroup(facts,'momentum'),
-    flow:signedGroup(facts,'flow'),trend:signedGroup(facts,'trend'),
+  const groups={trend:signedGroup(facts,'trend'),
     market:marketGroup(facts,permitQuote)};
   let value=0,weight=0,count=0,groupCount=0;
   for(const [key,g] of Object.entries(groups)){
@@ -55,10 +50,9 @@ function snapshotScore(facts,{permitQuote=false}={}){
     groups:Object.fromEntries(Object.entries(groups).filter(([,x])=>x))};
 }
 function fallbackDirection(prior,current){
-  // A real nonzero observed input is a valid sign tie-breaker, never the clock.
+  // Only retained trend indicators can resolve a truly zero aggregate score.
   for(const facts of [current,prior]){
-    for(const field of ['normalizedMomentum15s','tradePressure15s',
-      'ofiNormalized5s','regimeScore','currentTrendScore','normalizedMomentum60s']){
+    for(const field of ['regimeScore','currentTrendScore','currentScore','liveScore']){
       if(finite(facts?.[field])&&facts[field]!==0)
         return facts[field]>0?'UP':'DOWN';
     }
@@ -82,9 +76,9 @@ export function evaluateMarketFusionFast8({round,now=Date.now(),prior=null,
   if(!p&&!q)return {round,elapsedMs,status:elapsedMs>=LOCK_BY_MS?'DATA_UNAVAILABLE':'PENDING',
     reason:'NO_OBSERVED_MARKET_FEATURE',executionEligible:false};
   // Prior snapshot is continuous BTC spot information, not the prior contract.
-  // A fresh aligned observation receives increased weight when available.
-  const pWeight=p&&q?0.45:p?1:0;
-  const qWeight=p&&q?0.55:q?1:0;
+  // Fixed V2 mix whenever both rounds contain usable inputs.
+  const pWeight=p&&q?0.70:p?1:0;
+  const qWeight=p&&q?0.30:q?1:0;
   const score=(p?.score||0)*pWeight+(q?.score||0)*qWeight;
   const featureCount=(p?.featureCount||0)+(q?.featureCount||0);
   const groupCount=Math.max(p?.groupCount||0,q?.groupCount||0);
@@ -101,9 +95,8 @@ export function evaluateMarketFusionFast8({round,now=Date.now(),prior=null,
   if(elapsedMs>=DEADLINE_MS)
     return {round,elapsedMs,status:'DATA_UNAVAILABLE',
       reason:'EIGHT_SECOND_DEADLINE_EXPIRED',executionEligible:false,evidence};
-  const strongEarly=elapsedMs>=1000&&Math.abs(score)>=0.24&&
-    groupCount>=2&&Boolean(recent);
-  if(!strongEarly&&elapsedMs<LOCK_BY_MS)
+  // Target T+1s whenever observed trend/quote evidence exists; never invent inputs.
+  if(elapsedMs<LOCK_BY_MS)
     return {round,elapsedMs,status:'PENDING',reason:'COLLECTING_CAUSAL_MARKET_DATA',
       executionEligible:false,evidence};
   if(!direction)

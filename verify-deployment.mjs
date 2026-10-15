@@ -4,6 +4,7 @@ const url=log.match(/https:\/\/breakout20-shadow\.[a-zA-Z0-9-]+\.workers\.dev/)?
 if(!url)throw Error('No deployment URL in Wrangler output');
 console.log('Shadow URL:',url);
 async function get(path){const r=await fetch(url+path);if(!r.ok)throw Error(`${path}: HTTP ${r.status}`);return r.json();}
+await new Promise(r=>setTimeout(r,20000));
 const health=await get('/health');console.log('Health:',JSON.stringify(health));
 if(health.orders!==false)throw Error('Unexpected order capability');
 console.log('Live market initialization:',JSON.stringify(await get('/market-check')));

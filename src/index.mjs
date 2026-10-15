@@ -58,6 +58,7 @@ function settleExistingRows(rows, historicalBars, until){
 
 export class Breakout20 extends DurableObject {
   constructor(ctx,env){super(ctx,env);}
+  async retire(){ const s=await this.state();s.retired=true;await this.ctx.storage.put('state',s);await this.ctx.storage.deleteAlarm();return true;}
   async state(){return await this.ctx.storage.get('state')||blank();}
   async fetch(req){
     const path=new URL(req.url).pathname;
@@ -96,6 +97,7 @@ export class Breakout20 extends DurableObject {
   }
   async alarm(){
     // Schedule next alarm before I/O; a thrown network error never stops future sampling.
+    if((await this.state()).retired)return;
     const scheduledAt=Date.now();
     await this.ctx.storage.setAlarm(fixedNextAlarm(scheduledAt));
     const t=nowRound(scheduledAt),elapsed=scheduledAt-t;
@@ -146,7 +148,9 @@ export default {
     // Stable one-instance experiment; public read-only endpoints only.
     const path=new URL(request.url).pathname;
     if(!['/status','/latest','/health','/market-check'].includes(path))return new Response('Not Found',{status:404});
-    const id=env.BREAKOUT20.idFromName('breakout20-single-shadow');
-    return env.BREAKOUT20.get(id).fetch(request);
+    const old=env.BREAKOUT20.idFromName('breakout20-single-shadow');
+    await env.BREAKOUT20.get(old).retire();
+    const id=env.BREAKOUT20.idFromName('breakout20-apac-shadow');
+    return env.BREAKOUT20.get(id,{locationHint:'apac'}).fetch(request);
   }
 };

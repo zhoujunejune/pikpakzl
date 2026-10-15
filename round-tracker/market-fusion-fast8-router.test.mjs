@@ -7,17 +7,14 @@ const prior=facts=>({sourceRound:round-300000,facts});
 const run=(extra={})=>evaluateMarketFusionFast8({round,now:round+6800,...extra});
 
 test('V2 version and cutoff isolate old settlement statistics',()=>{
- assert.equal(VERSION,'MARKET_FUSION_FAST8_V2_FINAL_DOWN_V1');
- assert.match(INPUT_VERSION,/CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR80_CURRENT20_FINAL_DOWN_V1/);
+ assert.equal(VERSION,'MARKET_FUSION_FAST8_V2');
+ assert.match(INPUT_VERSION,/CURRENT1_TREND_MARKET_CAUSAL_V2_PRIOR80_CURRENT20/);
  assert.equal(LOCK_BY_MS,1000);
  assert.equal(DEADLINE_MS,8000);
 });
 test('prior trend can lock a genuine UP direction with unchanged order-policy source',()=>{
  const r=run({prior:prior({regimeScore:0.5})});
- assert.equal(r.status,'LOCKED');assert.equal(r.direction,'DOWN');assert.equal(r.source,SOURCE);
- assert.equal(r.evidence.rawDirection,'UP');
- assert.equal(r.evidence.finalDirection,'DOWN');
- assert.equal(r.evidence.directionAdjusted,true);
+ assert.equal(r.status,'LOCKED');assert.equal(r.direction,'UP');assert.equal(r.source,SOURCE);
  assert.equal(r.model,VERSION);assert.equal(r.executionEligible,true);
  assert.equal(r.evidence.previousContractQuoteUsed,false);
 });
@@ -35,10 +32,8 @@ test('both rounds use 80 percent prior and 20 percent current when valid',()=>{
  const r=run({now:round+1100,prior:prior({regimeScore:0.55}),
    currentFacts:{regimeScore:-0.55},currentRoundAligned:true,
    currentObservedAt:round+1050});
- assert.equal(r.status,'LOCKED');assert.equal(r.direction,'DOWN');
- assert.equal(r.score,-0.6);
- assert.equal(r.evidence.rawScore,0.6);
- assert.equal(r.evidence.rawDirection,'UP');assert.equal(r.evidence.previousFeatureCount,1);
+ assert.equal(r.status,'LOCKED');assert.equal(r.direction,'UP');
+ assert.equal(r.score,0.6);assert.equal(r.evidence.previousFeatureCount,1);
  assert.equal(r.evidence.currentFeatureCount,1);
 });
 test('previous-contract quotes never leak; aligned current contract quote can count',()=>{
@@ -50,8 +45,7 @@ test('previous-contract quotes never leak; aligned current contract quote can co
  const z=run({currentFacts:{predictionMarketUpMid:0.99,regimeScore:-0.2,
    predictionMarketRoundAligned:true},currentRoundAligned:true,
    currentObservedAt:round+6500});
- assert.equal(z.direction,'DOWN');assert.equal(z.evidence.rawDirection,'UP');
- assert.equal(z.evidence.currentContractQuoteUsed,true);
+ assert.equal(z.direction,'UP');assert.equal(z.evidence.currentContractQuoteUsed,true);
 });
 test('T+1 second target never locks earlier even if valid prewarm exists',()=>{
  const input={prior:prior({regimeScore:-0.3})};
@@ -69,23 +63,4 @@ test('missing/stale facts never result in a fabricated order-eligible direction'
 test('no signal may be locked after the original 8-second deadline',()=>{
  const r=run({now:round+8000,prior:prior({regimeScore:0.9})});
  assert.equal(r.status,'DATA_UNAVAILABLE');assert.equal(r.executionEligible,false);
-});
-
-test('final V2 signal always DOWN for either raw causal direction without changing source or timing',()=>{
- const rawUp=run({prior:prior({regimeScore:0.4})});
- const rawDown=run({prior:prior({regimeScore:-0.4})});
- for(const r of [rawUp,rawDown]){
-   assert.equal(r.status,'LOCKED');
-   assert.equal(r.direction,'DOWN');
-   assert.equal(r.source,SOURCE);
-   assert.ok(r.elapsedMs<DEADLINE_MS);
-   assert.equal(r.inputVersion,INPUT_VERSION);
-   assert.equal(r.evidence.signalDirectionRule,'RAW_UP_TO_DOWN_RAW_DOWN_KEEP_DOWN');
- }
- assert.equal(rawUp.evidence.rawDirection,'UP');
- assert.equal(rawUp.evidence.directionAdjusted,true);
- assert.equal(rawDown.evidence.rawDirection,'DOWN');
- assert.equal(rawDown.evidence.directionAdjusted,false);
- assert.ok(rawUp.score<=0);
- assert.ok(rawDown.score<=0);
 });

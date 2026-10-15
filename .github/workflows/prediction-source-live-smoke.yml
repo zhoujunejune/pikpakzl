@@ -1,0 +1,34 @@
+name: Read-only Prediction settlement source health smoke
+on:
+  push:
+    paths: [.github/workflows/prediction-source-live-smoke.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: V3 source status (no secrets)
+        run: |
+          node --input-type=module <<'NODE'
+          const url='https://signal-diagnostic-v3-production.up.railway.app/api/official-settlement-source-diagnostic';
+          const end=Date.now()+200000;
+          while(Date.now()<end){
+            try{
+              const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(21000)});
+              const j=await r.json();
+              if(r.ok&&j.ok===true&&j.readOnly===true&&j.list&&j.search){
+                console.log(JSON.stringify({ok:true,checkedAt:new Date().toISOString(),credentialsConfigured:j.credentialsConfigured,
+                  list:j.list,search:j.search},null,2));
+                process.exit(0);
+              }
+              console.log('diagnostic not yet live '+r.status);
+            }catch(e){console.log('probe: '+String(e?.message||e));}
+            await new Promise(r=>setTimeout(r,4000));
+          }
+          throw Error('LIVE_DIAGNOSTIC_UNAVAILABLE');
+          NODE

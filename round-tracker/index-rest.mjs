@@ -15,6 +15,7 @@ import {routeSelectiveV2Fast8, POLICY_VERSION as SELECTIVE8_VERSION,
   UNVERIFIED_SOURCE as SELECTIVE8_UNVERIFIED, INPUT_VERSION as SELECTIVE8_INPUT_VERSION}
   from './selective-v2-fast8-router.mjs';
 import { VIP75_PREVIOUS_ROUND_INPUT_VERSION } from './vip75-preround-features.mjs';
+import {summarizeBreakout20Official} from './breakout20-official-accuracy.mjs';
 import {createBreakout20ProductionFeed, BREAKOUT20_MODE, BREAKOUT20_MODEL, BREAKOUT20_SOURCE, BREAKOUT20_DEADLINE_MS} from './breakout20-production-feed.mjs';
 import {evaluateMarketFusionFast8, VERSION as MARKET_FUSION_VERSION, INPUT_VERSION as MARKET_FUSION_INPUT_VERSION,
   SOURCE as MARKET_FUSION_SOURCE, DEADLINE_MS as MARKET_FUSION_DEADLINE_MS}
@@ -6693,6 +6694,16 @@ const signalHttpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/prelock-adaptive-shadow-stats') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(preLockAdaptiveShadow.stats(Array.from(rounds.values()))));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/breakout20-official-accuracy') {
+    // Railway persists Binance Prediction final resolutions; no spot-candle
+    // proxy result can enter this response. This GET route has no order effects.
+    const output=summarizeBreakout20Official(rounds.values(),{
+      officialFromRow:officialDirectionFromRow,retentionLimit:HISTORY_LIMIT});
+    res.writeHead(200,{'content-type':'application/json; charset=utf-8',
+      'cache-control':'no-store','x-content-type-options':'nosniff'});
+    return res.end(JSON.stringify(output));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/production-signal') {

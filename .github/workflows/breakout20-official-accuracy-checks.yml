@@ -1,0 +1,44 @@
+name: Breakout20 Binance official accuracy verification
+on:
+  push:
+    branches: [fix/breakout20-binance-official-accuracy-20261016]
+  pull_request:
+    paths:
+      - round-tracker/breakout20-official-accuracy.mjs
+      - round-tracker/breakout20-official-accuracy.test.mjs
+      - round-tracker/index-rest.mjs
+      - railway-diagnostic/shadow-breakout20-dashboard.mjs
+      - railway-diagnostic/shadow-breakout20-dashboard.test.mjs
+      - railway-diagnostic/panel-stats-shell.mjs
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse affected server files
+        run: |
+          node --check round-tracker/index-rest.mjs
+          node --check round-tracker/breakout20-official-accuracy.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check railway-diagnostic/shadow-breakout20-dashboard.mjs
+      - name: Official settlements tests (incl spot mismatch, pending)
+        run: |
+          node --test round-tracker/breakout20-official-accuracy.test.mjs
+          node --test railway-diagnostic/shadow-breakout20-dashboard.test.mjs
+      - name: Assert existing production route remains present
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const code=readFileSync('round-tracker/index-rest.mjs','utf8');
+          assert.match(code,/return breakout20ProductionSignalPayload\(row,expectedRound,now\)/);
+          assert.match(code,/function freezeProductionLock\(/);
+          assert.match(code,/function buildLockedSignalEnvelope\(/);
+          console.log('Read-only official endpoint; production signal route preserved');
+          NODE

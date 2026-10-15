@@ -301,6 +301,22 @@ function derived(x){var p=pred(x),a=official(x);return !a?'PENDING':(!p?'NO_DECI
 var settled=all.filter(function(x){return !!official(x)&&(selective8||(x.productionFallbackUsed!==true&&x.productionModelVersion===j.activeProductionModel.version))}),decided=settled.filter(function(x){return !!pred(x)});
 var correct=decided.filter(function(x){return derived(x)==='HIT'}).length,wrong=decided.filter(function(x){return derived(x)==='MISS'}).length;
 var s={settledRounds:settled.length,decidedRounds:decided.length,correct:correct,wrong:wrong,noDecision:settled.length-decided.length,accuracyPct:decided.length?correct*100/decided.length:null,coveragePct:settled.length?decided.length*100/settled.length:null};
+if(j.productionSignalSourceMode==='BREAKOUT20_FAST8'){
+  // The official model ledger is longer than the generic 100-row UI snapshot.
+  // If that ledger is unavailable, do not silently fall back to a partial figure.
+  s={settledRounds:0,decidedRounds:0,correct:0,wrong:0,noDecision:0,accuracyPct:null,coveragePct:null};
+  try{
+    var verifiedResponse=await fetch('/api/shadow-breakout20/status?ts='+Date.now(),{cache:'no-store'});
+    var verified=await verifiedResponse.json();
+    var officialRate=verifiedResponse.ok&&verified.official?.available?verified.official.results:null;
+    if(officialRate&&officialRate.overall){
+      var v=officialRate.overall;
+      s={settledRounds:v.samples,decidedRounds:v.samples,correct:v.hits,
+         wrong:v.samples-v.hits,noDecision:0,
+         accuracyPct:v.accuracy==null?null:v.accuracy*100,coveragePct:null};
+    }
+  }catch(_){}
+}
 e('rsAccuracy').innerHTML=s.accuracyPct==null?'新版模型命中率：-':'新版模型命中率：<span class="on">'+Number(s.accuracyPct).toFixed(2)+'%</span>';
 e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedRounds;e('rsCorrect').innerHTML='<span class="on">'+s.correct+'</span>';e('rsWrong').innerHTML='<span class="bad">'+s.wrong+'</span>';e('rsWait').textContent=s.noDecision;e('rsCoverage').textContent=s.coveragePct==null?'-':Number(s.coveragePct).toFixed(2)+'%';
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
@@ -310,7 +326,7 @@ var activeNames=activeCatalog.length?activeCatalog.map(function(m){return m.name
  :selective8?'Selective V2（8秒） / Edge Rescue（8秒） / 行情兜底'
  :j.activeProductionModel?.id||'暂无明确活跃模型';
 e('rsMeta').textContent='当前生产：'+activeNames+' · '+settlement+
- ' · 仅按活跃模型和版本的生产原始方向计分，不代表反向订单成交或盈亏'+status+stale;
+ (j.productionSignalSourceMode==='BREAKOUT20_FAST8'?' · 准确率采用 Railway 保留历史的本模型官方结算':' · 仅按活跃模型和版本的生产原始方向计分')+'，不代表反向订单成交或盈亏'+status+stale;
 var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=strengthLabel(x),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=currentSourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待本策略首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
@@ -470,8 +486,17 @@ function orderSide(z){
 function load(){
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
- .then(function(j){
+ .then(async function(j){
   if(!j||!j.ok)throw Error('生产统计不可用');
+  var breakout20Official=null;
+  if(j.productionSignalSourceMode==='BREAKOUT20_FAST8'){
+   try{
+    var officialResponse=await fetch('/api/shadow-breakout20/status?ts='+Date.now(),{cache:'no-store'});
+    var officialBody=await officialResponse.json();
+    if(officialResponse.ok&&officialBody.official?.available)
+      breakout20Official=officialBody.official.results;
+   }catch(_){}
+  }
   var currentMode=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
   syncActiveCatalog(j);
   var version='SELECTIVE_V2_FAST8_PREWARM_V1';
@@ -499,12 +524,19 @@ function load(){
   var mappedEligible=decided.filter(function(z){return orderSide(z)!==null});
   var mappedHits=mappedEligible.filter(function(z){return orderSide(z)===z.productionActual}).length;
   var mappedMisses=mappedEligible.length-mappedHits;
-  e('activeFast8Accuracy').textContent=decided.length?pct(100*hits/decided.length):'尚无新结算';
+  var officialTotal=breakout20Official?.overall;
+  e('activeFast8Accuracy').textContent=j.productionSignalSourceMode==='BREAKOUT20_FAST8'
+   ?(officialTotal&&officialTotal.samples?pct(100*officialTotal.hits/officialTotal.samples):'暂无已确认官方结果')
+   :(decided.length?pct(100*hits/decided.length):'尚无新结算');
   e('activeFast8InverseAccuracy').textContent=mappedEligible.length?pct(100*mappedHits/mappedEligible.length):'样本不足';
   e('activeFast8InverseHitMiss').textContent=mappedEligible.length?(mappedHits+' / '+mappedMisses+'（'+mappedEligible.length+'轮）'):'-';
-  e('activeFast8HitMiss').textContent=hits+' / '+misses;
+  e('activeFast8HitMiss').textContent=j.productionSignalSourceMode==='BREAKOUT20_FAST8'
+   ?(officialTotal?officialTotal.hits+' / '+(officialTotal.samples-officialTotal.hits):'官方数据暂不可用')
+   :hits+' / '+misses;
   var locked=records.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'}).length;
-  e('activeFast8Coverage').textContent=locked+' 轮'+(records.length?' · '+pct(100*locked/records.length):' · 样本不足');
+  e('activeFast8Coverage').textContent=j.productionSignalSourceMode==='BREAKOUT20_FAST8'
+   ?(breakout20Official?breakout20Official.locked+' 轮（Railway 已保留）':'官方数据暂不可用')
+   :locked+' 轮'+(records.length?' · '+pct(100*locked/records.length):' · 样本不足');
   var fallback=records.filter(function(z){return z.productionSource==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'}).length;
   var rows=e('sourceRateRows');
   if(rows)rows.innerHTML=activeCatalog.length?activeCatalog.map(function(item){
@@ -515,7 +547,14 @@ function load(){
    var allowed=group.filter(function(z){return orderSide(z)!==null});
    var orderHits=allowed.filter(function(z){return orderSide(z)===z.productionActual}).length;
    var total=group.length;
+   if(j.productionSignalSourceMode==='BREAKOUT20_FAST8'){
+     total=officialTotal?.samples??0;rawHits=officialTotal?.hits??0;
+   }
    function sideRate(side){
+    if(j.productionSignalSourceMode==='BREAKOUT20_FAST8'){
+      var pair=breakout20Official?.[side.toLowerCase()];
+      return pair&&pair.samples?pair.hits+'/'+pair.samples+' · '+pct(pair.hits*100/pair.samples):'暂无已确认官方结果';
+    }
     var part=group.filter(function(z){return z.productionPrediction===side});
     var correct=part.filter(function(z){return z.productionPrediction===z.productionActual}).length;
     return part.length?correct+'/'+part.length+' · '+pct(correct*100/part.length):'样本不足（0轮）';
@@ -530,8 +569,8 @@ function load(){
     '<td style="text-align:center">'+sideRate('DOWN')+'</td>'+
     '<td style="text-align:center">'+(allowed.length?orderHits+'/'+allowed.length+' · '+pct(orderHits*100/allowed.length):'样本不足（0轮）')+'</td></tr>';
   }).join(''):'<tr><td colspan="6" style="padding:10px 6px">生产服务暂无活跃模型，不显示历史或退役信号</td></tr>';
-  e('activeFast8Note').textContent='当前活跃 '+activeCatalog.length+' 类来源 · 已结算方向 '+decided.length+
-   ' 轮 · 低置信度方向 '+fallback+' 轮 · 仅当前模型版本计分，正反向映射不代表实际成交'+
+  e('activeFast8Note').textContent='当前活跃 '+activeCatalog.length+' 类来源 · 已结算方向 '+(j.productionSignalSourceMode==='BREAKOUT20_FAST8'?(officialTotal?.samples??0):decided.length)+
+   ' 轮 · 低置信度方向 '+fallback+' 轮 · 仅当前模型版本与币安官方结算计分；正反向理论映射仍基于页面最近100轮，不代表实际成交'+
    (j.stale?' · 统计缓存可能过期':'');
  }).catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }

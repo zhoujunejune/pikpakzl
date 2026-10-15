@@ -1,0 +1,43 @@
+name: Diagnose Binance Prediction official settlement read-only
+on:
+  push:
+    paths: [.github/workflows/breakout20-official-settlement-diagnostic.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Read-only V2 ledger status and V3 official resolution sample
+        run: |
+          node --input-type=module <<'NODE'
+          const bases={
+            v2:'https://signal-diagnostic-v2-production.up.railway.app',
+            v3:'https://signal-diagnostic-v3-production.up.railway.app'
+          };
+          const get=async(url)=>{
+            try{
+              const r=await fetch(url,{signal:AbortSignal.timeout(9000),cache:'no-store'});
+              const s=await r.text();
+              try{return {http:r.status,body:JSON.parse(s)}}catch{return {http:r.status,error:s.slice(0,450)}}
+            }catch(e){return {http:null,error:String(e?.message||e)}}
+          };
+          const stats=await get(bases.v2+'/api/round-stats');
+          const rows=(stats.body?.records||[]).filter(r=>r.productionModelVersion==='BREAKOUT20_RSI_MACD_RANGE_V1');
+          const recent=rows.slice(0,9).map(r=>({
+            round:r.roundStartMs,model:r.productionModelVersion,signal:r.productionPrediction,
+            actual:r.productionActual,evidence:r.resolutionEvidence,
+            topic:r.predictionMarketTopicId,settleAttempts:r.settleAttempts
+          }));
+          const finished=recent.find(r=>r.round&&r.round+400000<Date.now());
+          const probe=finished?await get(bases.v3+'/api/prediction-resolution?round='+finished.round):null;
+          console.log(JSON.stringify({v2Http:stats.http,productionMode:stats.body?.productionSignalSourceMode,
+            v2Health:{lastSettlementOkAt:stats.body?.health?.lastSettlementOkAt,
+              lastSettlementError:stats.body?.health?.lastSettlementError,
+              lastSignalError:stats.body?.health?.lastSignalError},
+            recent,probe},null,2));
+          NODE

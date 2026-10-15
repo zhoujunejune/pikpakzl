@@ -384,6 +384,7 @@ async function discoverPredictionTopic(round, maxAgeMs = 4000) {
     offset: 0,
     limit: 100,
   });
+  let searchCall = null;
   let topics = listCall.ok && Array.isArray(listCall.data?.marketTopics) ? listCall.data.marketTopics : [];
   const hasRound = topics.some(t =>
     String(t?.symbol || '').toUpperCase() === SYMBOL &&
@@ -392,13 +393,29 @@ async function discoverPredictionTopic(round, maxAgeMs = 4000) {
     Math.abs(Number(t.startDate) - target) <= 30000
   );
   if (!topics.length || !hasRound) {
-    const searchCall = await signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/search', { query: 'BTC 5m', topK: 50 });
+    searchCall = await signedPredictionGet('/sapi/v1/w3w/wallet/prediction/market/search', { query: 'BTC 5m', topK: 50 });
     if (searchCall.ok && Array.isArray(searchCall.data)) {
       const merged = new Map();
       for (const t of topics) merged.set(String(t?.marketTopicId ?? (String(t?.startDate) + ':' + String(t?.symbol))), t);
       for (const t of searchCall.data) merged.set(String(t?.marketTopicId ?? (String(t?.startDate) + ':' + String(t?.symbol))), t);
       topics = Array.from(merged.values());
     }
+  }
+
+  // Surface the real upstream failure instead of incorrectly telling users that
+  // the Prediction contract doesn't exist. Spot OHLC must not impersonate official settlement.
+  if (!topics.length && listCall?.ok !== true && searchCall?.ok !== true) {
+    const statuses = [listCall?.status, searchCall?.status].map(Number);
+    const error = statuses.includes(451)
+      ? 'BINANCE_PREDICTION_REGION_RESTRICTED_HTTP_451'
+      : statuses.includes(401) || statuses.includes(403)
+        ? 'BINANCE_PREDICTION_API_AUTH_OR_ACCESS_DENIED'
+        : statuses.includes(500) && !PREDICTION_API_KEY
+          ? 'BINANCE_PREDICTION_API_CREDENTIALS_MISSING'
+          : 'BINANCE_PREDICTION_DISCOVERY_SOURCE_UNAVAILABLE';
+    const value = {ok:false,error,round:target};
+    predictionTopicCache.set(String(target),{at:Date.now(),value});
+    return value;
   }
 
   const candidates = topics

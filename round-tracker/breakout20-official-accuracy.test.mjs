@@ -18,7 +18,7 @@ test('official accuracy follows Railway official settlement only, never spot pro
  const rows=[
  make(0,'UP','DOWN',{spotKlineActual:'UP'}),make(1,'DOWN','DOWN'),
  make(2,'UP',null,{actual:'UP',actualSource:'BINANCE_5M_KLINE_OPEN_CLOSE'}),
- make(3,'DOWN',null,{actual:'DOWN',actualSource:'BINANCE_5M_KLINE_OPEN_CLOSE'}),
+ make(3,'DOWN',null,{actual:'DOWN',actualSource:'BINANCE_5M_KLINE_OPEN_CLOSE',resolutionEvidence:'PREDICTION_TOPIC_NOT_FOUND'}),
  make(4,'UP','UP',{productionModel:'MARKET_FUSION_FAST8_V2_PRIOR50_CURRENT50'}),
  make(5,'UP','UP',{productionGeneratedAt:start+300000*5+9000}),
  make(6,'UP','UP',{productionModelVersion:'OLD_MODEL_V0'}),
@@ -33,6 +33,7 @@ test('official accuracy follows Railway official settlement only, never spot pro
  assert.deepEqual(s.results.recent20,{samples:2,hits:1,accuracy:0.5});
  assert.equal(s.recent[0].actual,null);
  assert.equal(s.recent[0].status,'PENDING');
+ assert.equal(s.recent[0].pendingReason,'PREDICTION_TOPIC_NOT_FOUND');
  assert.equal(s.recent[2].resolutionEvidence,'OFFICIAL_DOWN:CONFIRMED');
 });
 test('zero official settlements is null accuracy, not fabricated 0% or spot result',()=>{

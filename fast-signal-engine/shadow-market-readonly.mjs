@@ -2,7 +2,7 @@
 // Does not import or write production signals, trading controls, Redis, or orders.
 const SYMBOL = 'BTCUSDT';
 const PROVIDERS = ['https://data-api.binance.vision', 'https://api.binance.com'];
-const LIMIT = 100;
+const LIMITS = Object.freeze({ '1m': 1000, '5m': 240 });
 const CACHE_MS = 1800;
 const MAX_SPOT_AGE_MS = 12000;
 
@@ -21,7 +21,7 @@ export function createReadOnlyMarketFeed({
     const errors = [];
     for (const origin of PROVIDERS) {
       try {
-        const endpoint = origin + '/api/v3/klines?symbol=' + SYMBOL + '&interval=' + interval + '&limit=' + LIMIT;
+        const endpoint = origin + '/api/v3/klines?symbol=' + SYMBOL + '&interval=' + interval + '&limit=' + LIMITS[interval];
         const response = await fetchImpl(endpoint, {
           method: 'GET', cache: 'no-store', signal: AbortSignal.timeout(2600),
           headers: { accept: 'application/json' },

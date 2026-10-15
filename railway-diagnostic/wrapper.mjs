@@ -42,6 +42,13 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (!enabled || !directionSettingsSnapshot().ready) {
     return {status:409,body:{ok:false,error:'跟随已停止或方向配置未就绪'}};
   }
+  try { await refreshDirectionSettings(); }
+  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'方向配置读取失败，已取消旧订单'}};}
+  if (p.orderDirectionPolicy!==directionSettingsSnapshot().policy ||
+      p.mappingMode!==directionSettingsSnapshot().modes[p.productionSource]?.[p.productionSignal]) {
+    pendingAction=null;
+    return {status:409,body:{ok:false,error:'方向配置或当前原始信号已经变化'}};
+  }
   if (submittedRounds.has(String(p.round))) {
     return { status: 409, body: { ok: false, error: '本轮已经提交过订单' } };
   }
@@ -229,8 +236,10 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     return { status: 409, body: { ok: false, error: p.error } };
   }
 
-  // Re-check immediately before the irreversible POST. A mode change during
-  // quote retrieval invalidates the original direction and quote.
+  // Refresh the shared authority immediately before the irreversible POST.
+  // A switch on another Railway replica must invalidate this prepared order.
+  try { await refreshDirectionSettings(); }
+  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'提交前方向配置读取失败，已停止下单'}};}
   if (p !== pendingAction || !enabled || !directionSettingsSnapshot().ready ||
       p.orderDirectionPolicy !== directionSettingsSnapshot().policy ||
       !pendingOrderMatchesProduction(p,current)) {

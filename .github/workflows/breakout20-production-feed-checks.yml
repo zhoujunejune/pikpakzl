@@ -1,0 +1,47 @@
+name: Breakout20 production signal integration checks
+on:
+  push:
+    branches:
+      - feat/breakout20-production-router-20261015
+  pull_request:
+    paths:
+      - round-tracker/breakout20-production-feed.mjs
+      - round-tracker/breakout20-production-feed.test.mjs
+      - round-tracker/index-rest.mjs
+      - railway-diagnostic/panel-stats-shell.mjs
+      - .github/workflows/breakout20-production-feed-checks.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Production router syntax
+        run: |
+          node --check round-tracker/index-rest.mjs
+          node --check round-tracker/breakout20-production-feed.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+      - name: Boundary and no-order integration tests
+        run: node --test round-tracker/breakout20-production-feed.test.mjs
+      - name: Read-only upstream availability and freshness probe
+        run: |
+          node --input-type=module <<'NODE'
+          const url='https://breakout20-shadow.zl528094-3ba.workers.dev/status';
+          const r=await fetch(url,{signal:AbortSignal.timeout(8000),cache:'no-store'});
+          if(!r.ok)throw Error('CLOUDFLARE_HTTP_'+r.status);
+          const s=await r.json();
+          if(s?.name!=='突破20%即可'||s.readOnly!==true||s.orders!==false)
+            throw Error('UNTRUSTED_MODEL_OR_DATA');
+          const age=Date.now()-Number(s.timed?.lastGoodDataAt);
+          console.log(JSON.stringify({ok:true,name:s.name,model:s.training?.trainedModel,
+            lastTickAt:s.timed?.lastTickAt,lastGoodDataAt:s.timed?.lastGoodDataAt,
+            ageMs:age,latestDirection:s.latest?.direction,latestStatus:s.latest?.status,
+            settlementSamples:s.results?.overall?.samples,settlementAccuracy:s.results?.overall?.accuracy}));
+          if(!Number.isFinite(age)||age>660000||age < -3000)
+            throw Error('SHADOW_STALE_OR_UNHEALTHY');
+          NODE

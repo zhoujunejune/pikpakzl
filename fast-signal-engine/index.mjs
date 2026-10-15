@@ -9,6 +9,7 @@ function predBookUsableForBand(side, meta, book, now) {
 import http from 'node:http';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
+import { createReadOnlyMarketFeed } from './shadow-market-readonly.mjs';
 import {marketRoundClock,minuteOpenAligned} from './market-round-clock.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -1702,10 +1703,19 @@ function payload() {
   };
 }
 
+const breakout20ReadonlyFeed = createReadOnlyMarketFeed({ live: payload });
+
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('cache-control', 'no-store');
   res.setHeader('access-control-allow-origin', '*');
+
+  // Shadow-only public OHLCV read endpoint. This path cannot control prediction or trading.
+  if (req.method === 'GET' && url.pathname === '/api/shadow-market-data') {
+    const data = await breakout20ReadonlyFeed.read();
+    res.writeHead(data.ok ? 200 : 503, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(data));
+  }
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
     const p = payload();

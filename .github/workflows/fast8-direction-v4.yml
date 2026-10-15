@@ -4,6 +4,7 @@ on:
     paths:
       - 'railway-diagnostic/order-direction-policy.mjs'
       - 'railway-diagnostic/order-direction-policy.test.mjs'
+      - 'railway-diagnostic/order-direction-redis.integration.test.mjs'
       - 'railway-diagnostic/index.mjs'
       - 'railway-diagnostic/wrapper.mjs'
       - 'railway-diagnostic/panel-stats-shell.mjs'
@@ -20,6 +21,16 @@ jobs:
   direction-v4:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,6 +46,9 @@ jobs:
           node --check railway-diagnostic/wrapper.mjs
           node --check railway-diagnostic/panel-stats-shell.mjs
           node --check railway-diagnostic/order-direction-policy.test.mjs
+          node --check railway-diagnostic/order-direction-redis.integration.test.mjs
           node --check railway-diagnostic/wait-visibility-panel.test.mjs
-      - name: Test direction mode and mobile display
-        run: node --test railway-diagnostic/order-direction-policy.test.mjs railway-diagnostic/wait-visibility-panel.test.mjs
+      - name: Test direction modes, Redis persistence and mobile display
+        env:
+          FAST8_REDIS_TEST_URL: redis://127.0.0.1:6379
+        run: node --test railway-diagnostic/order-direction-policy.test.mjs railway-diagnostic/order-direction-redis.integration.test.mjs railway-diagnostic/wait-visibility-panel.test.mjs

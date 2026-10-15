@@ -82,7 +82,7 @@ test('current strategy card hides retired waterfall and legacy 15s audit table',
  assert.match(env.el('spRouteStages').innerHTML,/唯一生产模型/);
  assert.doesNotMatch(env.el('spRouteStages').innerHTML,/Selective V2|Edge Rescue/);
  assert.equal(env.el('spLegacyRegistryWrap').style.display,'none');
- assert.match(env.el('spRule').textContent,/历史70%、实时30%/);
+ assert.match(env.el('spRule').textContent,/历史80%、实时20%/);
  assert.match(env.el('spRule').textContent,/目标第1秒锁定/);
  assert.match(env.el('spRule').textContent,/均不参与/);
  assert.doesNotMatch(env.el('spRule').textContent,/70%永久淘汰/);

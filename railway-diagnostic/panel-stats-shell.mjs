@@ -66,15 +66,10 @@ const previewCard = `<div class="c" id="waitVisibilityCard">
 </div>`;
 
 const policyCard = `<div class="c" id="signalPolicyCard">
-<div class="k">生产信号策略 · 8秒主策略及兜底</div>
+<div class="k">生产信号策略 · 当前活跃模型</div>
 <div class="big" id="spTitle">正在读取现役信号状态...</div>
 <div class="muted" style="margin-top:6px">以当前生产信号源开关为准；原有15秒策略停止晋级，被暂停的旧策略不参与锁定，历史统计继续保留。</div>
-<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px">
-  <span class="on" style="padding:6px 8px;border:1px solid #365b48;border-radius:7px">8秒内 · 快速锁定</span>
-  <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">第一层 · Selective V2</span>
-  <span style="padding:6px 8px;border:1px solid #384255;border-radius:7px">第二层 · Edge Rescue</span>
-  <span class="warn" style="padding:6px 8px;border:1px solid #59492d;border-radius:7px">未达标 → 真实行情低置信度方向（可下单）</span>
-</div>
+<div id="spRouteStages" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px"><span class="muted">同步生产模型中...</span></div>
 <div class="grid" style="margin-top:12px">
   <div class="kv"><div class="k">现役可放行</div><div class="v" id="spQualified">-</div></div>
   <div class="kv"><div class="k">现役暂不可用</div><div class="v" id="spObserve">-</div></div>
@@ -101,6 +96,36 @@ globalThis.__active15sCandidateIds=[];
 async function load(){
  if(!e('signalPolicyCard'))return;
  try{
+  // The live round-stats model catalog is authoritative; training registry is
+  // historical and must never relabel the currently selected production route.
+  var liveResponse=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});
+  var liveCatalog=await liveResponse.json();
+  if(!liveResponse.ok||!liveCatalog||liveCatalog.ok!==true)
+    throw Error('生产模型清单暂不可用');
+  var productionMode=String(liveCatalog.productionSignalSourceMode||'');
+  var currentModels=(Array.isArray(liveCatalog.activeSignalModels)?liveCatalog.activeSignalModels:[])
+    .filter(function(m){return m&&m.active!==false&&m.id&&m.source});
+  var routeStages=e('spRouteStages');
+  if(productionMode==='MARKET_FUSION_FAST8'){
+    var name=currentModels.length
+      ?currentModels.map(function(m){return m.name||m.id}).join(' + ')
+      :'生产模型未确认';
+    globalThis.__active15sCandidateIds=[];
+    if(routeStages)routeStages.innerHTML='<span class="on">唯一生产模型 · '+esc(name)+'</span>'
+      +'<span>8秒内锁定</span><span>旧策略不参与生产</span>';
+    e('spQualified').textContent=currentModels.length?'1 类活跃来源':'未确认';
+    e('spObserve').textContent='其他旧策略暂停';
+    e('spFreshness').textContent='已同步生产接口';
+    e('spTitle').textContent=name+' · 8秒行情融合';
+    e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">当前生产仅使用 '
+      +esc(name)+'；Selective V2、Edge Rescue 与旧行情兜底均不作为生产预测模型。</td></tr>';
+    e('spRule').textContent='上一轮真实行情预热 + 当前轮动量、OFI、成交压力与市场状态；8秒截止。缺乏有效行情时明确标记数据不可用，不伪造信号。';
+    e('spNotice').textContent='来源映射沿用现有方向开关配置；真实胜率仅按本模型版本与币安官方结算统计，不继承旧策略记录。';
+    return;
+  }
+  if(routeStages)routeStages.innerHTML=currentModels.length
+    ?currentModels.map(function(m){return '<span>'+esc(m.name||m.id)+'</span>'}).join('')
+    :'<span class="muted">当前生产模型未确认</span>';
   var r=await fetch('/api/training-status?ts='+Date.now(),{cache:'no-store'});
   var j=await r.json();
   if(!r.ok||!j||j.ok!==true)throw Error(j&&j.error||'训练数据不可用');
@@ -318,6 +343,10 @@ var sources=[
 // The tracker catalog is authoritative. The legacy three-source setting
 // remains intact on the control service, but retired/inactive sources are hidden.
 var activeCatalog=[];
+function activeSourceName(source){
+ var entry=activeCatalog.find(function(m){return m.source===source});
+ return entry?(entry.name||entry.id):null;
+}
 var directionModeReady=false,directionModeBusy=false;
 function syncActiveCatalog(j){
  var raw=Array.isArray(j.activeSignalModels)?j.activeSignalModels:[];
@@ -344,7 +373,7 @@ function renderDirectionModes(){
  target.innerHTML=visible.length?visible.map(function(src){
   var i=sources.indexOf(src);
   return '<div style="background:#10141c;padding:12px;border-radius:10px;min-width:0">'+
-    '<div style="font-size:13px;font-weight:700;margin-bottom:8px">'+escModel((activeCatalog.find(function(m){return m.source===src.id})||{}).name||src.name)+'</div>'+
+    '<div style="font-size:13px;font-weight:700;margin-bottom:8px">'+escModel(activeSourceName(src.id)||src.name)+'</div>'+
     ['UP','DOWN'].map(function(side){
      return '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px;margin:6px 0">'+
        '<div style="font-size:12px;min-width:80px"><strong>'+side+'</strong>：'+(directionModeReady?modeLabel(src.modes[side]):'未就绪')+'</div>'+
@@ -386,10 +415,14 @@ async function setDirectionModeFromUI(index,side,selectedMode){
  if(!directionModeReady||directionModeBusy||!sources[index]||!['UP','DOWN'].includes(side)||
     !['FORWARD','INVERSE'].includes(selectedMode))return;
  var src=sources[index],mode=src.modes[side]===selectedMode?'OFF':selectedMode;
+ // A source identifier may be reused by a newer model. Never present its old
+ // source alias as the production model name, nor edit a retired source.
+ var modelName=activeSourceName(src.id);
+ if(!modelName){e('directionModeMessage').textContent='该信号来源已非当前活跃模型，请刷新后重试';return}
  var pin=e('pin');
  if(!pin||!pin.value){e('directionModeMessage').textContent='请先在上方填写控制 PIN';return}
  var description=mode==='OFF'?'关闭该预测方向自动下单':'切换到'+modeLabel(mode)+'下单';
- if(!window.confirm('将 '+src.name+' 的 '+side+' '+description+'？下一轮生效。'))return;
+ if(!window.confirm('将 '+modelName+' 的 '+side+' '+description+'？下一轮生效。'))return;
  directionModeBusy=true;renderDirectionModes();e('directionModeMessage').textContent='保存中...';
  try{
   var response=await fetch('/api/direction-mode',{method:'POST',headers:{'content-type':'application/json'},
@@ -397,7 +430,7 @@ async function setDirectionModeFromUI(index,side,selectedMode){
   var data=await response.json();
   if(!response.ok||!data.ok)throw Error((response.status===409?'配置冲突，请刷新重试：':'')+(data.error||'保存失败'));
   acceptSettings(data);
-  e('directionModeMessage').textContent='保存成功，下一轮生效：'+src.name+' '+side+' → '+modeLabel(mode);
+  e('directionModeMessage').textContent='保存成功，下一轮生效：'+(activeSourceName(src.id)||modelName)+' '+side+' → '+modeLabel(mode);
   updateOrderSignal();load();
  }catch(err){
   directionModeReady=false;policy='';revision='';
@@ -498,7 +531,7 @@ function updateOrderSignal(){
   if(j.orderSignal===null){target.textContent='不下单（'+(mode==='OFF'?'该方向已关闭':'不可执行')+'）';return}
   var expectedSide=mode==='INVERSE'?(live.direction==='UP'?'DOWN':'UP'):mode==='FORWARD'?live.direction:null;
   target.textContent=j.orderSignal===expectedSide?
-    (j.orderSignal+'（'+modeLabel(mode)+' · '+(src?src.name:'未知来源')+'）'):'方向映射校验失败';
+    (j.orderSignal+'（'+modeLabel(mode)+' · '+(src?activeSourceName(src.id)||'生产模型待同步':'未知来源')+'）'):'方向映射校验失败';
  }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'})
 }
 function boot(){renderDirectionModes();loadDirectionModes();load();updateOrderSignal();

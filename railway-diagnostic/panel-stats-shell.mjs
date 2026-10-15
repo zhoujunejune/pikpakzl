@@ -368,8 +368,11 @@ async function setDirectionModeFromUI(index,side,selectedMode){
   updateOrderSignal();load();
  }catch(err){
   e('directionModeMessage').textContent='保存失败：'+(err.message||err);
-  await loadDirectionModes();
- }finally{directionModeBusy=false;renderDirectionModes()}
+ }finally{
+  directionModeBusy=false;renderDirectionModes();
+  // Discard any stale local state after a conflict or failed persistence.
+  if(!directionModeReady)await loadDirectionModes();
+ }
 }
 window.setDirectionModeFromUI=setDirectionModeFromUI;
 function bySource(z){return sources.find(function(src){return src.id===z.productionSource})||null}

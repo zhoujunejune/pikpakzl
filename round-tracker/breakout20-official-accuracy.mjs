@@ -34,6 +34,7 @@ export function summarizeBreakout20Official(rows,{
       delayMs:Number(r.productionGeneratedAt)-Number(r.roundStartMs),
       settlementSource:verified?OFFICIAL_RESOLUTION_SOURCE:null,
       resolutionEvidence:verified?String(r.resolutionEvidence||'OFFICIAL_PERSISTED_DIRECTION').slice(0,240):null,
+      pendingReason:verified?null:(typeof r.resolutionEvidence==='string'?r.resolutionEvidence.slice(0,120):null),
     };
   });
   const settled=normalized.filter(x=>valid(x.actual));

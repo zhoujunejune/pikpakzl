@@ -6121,6 +6121,22 @@ function payload() {
     productionSummary: productionSummary(),
     productionPolicy: productionPolicyName(),
     productionSignalSourceMode:PRODUCTION_SIGNAL_SOURCE_MODE,
+    // Authoritative active-model catalog for trade-control UI. Only the
+    // configured live router is listed, never archived or shadow strategies.
+    // This is a read-only presentation contract: it changes no route/order.
+    activeSignalModels:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
+      ? [{id:'zl_new_vip75',name:'zl_new_vip75（8秒）',
+          source:FAST8_SOURCE,version:FROZEN_VIP75_VERSION,active:true}]
+      : PRODUCTION_SIGNAL_SOURCE_MODE===SELECTIVE_V2_FAST8_MODE
+        ? [
+          {id:SELECTIVE8_VERSION,name:'Selective V2（8秒主策略）',
+            source:'SELECTIVE_V2_FAST8_PRIMARY',version:SELECTIVE8_VERSION,active:true},
+          {id:SELECTIVE8_VERSION,name:'Edge Rescue（8秒兜底）',
+            source:'EDGE_RESCUE_FAST8_PRIMARY',version:SELECTIVE8_VERSION,active:true},
+          {id:SELECTIVE8_VERSION,name:'行情方向兜底（8秒）',
+            source:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',
+            version:SELECTIVE8_VERSION,active:true},
+        ] : [],
     activeProductionModel:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
       ? {id:'zl_new_vip75',version:FROZEN_VIP75_VERSION,
          source:FAST8_SOURCE,onlyOneActive:true,noWait:true,deadlineMs:8000,

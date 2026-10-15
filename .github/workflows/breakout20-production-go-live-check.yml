@@ -1,0 +1,63 @@
+name: Verify Breakout20 production signal go-live (read-only)
+on:
+  push:
+    paths:
+      - .github/workflows/breakout20-production-go-live-check.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Production current mode, isolated shadow and first locked signal
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://signal-diagnostic-v2-production.up.railway.app';
+          const read=async(path)=>{
+            const r=await fetch(base+path,{cache:'no-store',signal:AbortSignal.timeout(10000)});
+            if(!r.ok)throw Error(path+'_HTTP_'+r.status);
+            return r.json();
+          };
+          let modeSeen=false,sourceSeen=false,firstLock=null,lastStatus=null;
+          const end=Date.now()+460000;
+          while(Date.now()<end){
+            try{
+              const status=await read('/api/round-stats');
+              lastStatus=status?.productionSignalSourceMode;
+              const active=status?.activeProductionModel;
+              if(lastStatus==='BREAKOUT20_FAST8'&&
+                 active?.version==='BREAKOUT20_RSI_MACD_RANGE_V1'&&
+                 status?.activeSignalModels?.[0]?.name?.includes('突破20%即可'))modeSeen=true;
+              const production=await read('/api/production-signal');
+              const live=production?.live;
+              const expected=Math.floor(Date.now()/300000)*300000;
+              if(modeSeen&&live?.status==='LOCKED' &&
+                 live?.round===expected &&
+                 live?.model==='BREAKOUT20_RSI_MACD_RANGE_V1' &&
+                 live?.source==='SELECTIVE_V2_FAST8_PRIMARY' &&
+                 ['UP','DOWN'].includes(live?.signal?.direction)){
+                 sourceSeen=true;
+                 firstLock={round:live.round,direction:live.signal.direction,
+                   generatedAt:live.generatedAt,delayMs:Number(live.generatedAt)-live.round,
+                   source:live.source,model:live.model};
+                 if(firstLock.delayMs<0||firstLock.delayMs>=8000)
+                   throw Error('PRODUCTION_LOCK_LATE');
+                 console.log(JSON.stringify({ok:true,mode:lastStatus,active,
+                   firstLock,readOnlyProbe:true},null,2));
+                 process.exit(0);
+              }
+              if(!modeSeen)console.log('Awaiting production mode, observed '+lastStatus);
+              else if(live?.status==='DATA_UNAVAILABLE')console.log('Shadow no-data for round '+expected+', reason '+(live.waitReason||'unknown'));
+            }catch(err){console.log('Read-only probe warning: '+String(err?.message||err));}
+            await new Promise(resolve=>setTimeout(resolve,2500));
+          }
+          console.log(JSON.stringify({modeSeen,sourceSeen,lastStatus,firstLock}));
+          if(!modeSeen)throw Error('PRODUCTION_MODE_NOT_LIVE');
+          throw Error('NO_VALID_BREAKOUT20_PRODUCTION_LOCK_WITHIN_VERIFY_WINDOW');
+          NODE

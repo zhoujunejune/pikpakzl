@@ -15,6 +15,9 @@ import {routeSelectiveV2Fast8, POLICY_VERSION as SELECTIVE8_VERSION,
   UNVERIFIED_SOURCE as SELECTIVE8_UNVERIFIED, INPUT_VERSION as SELECTIVE8_INPUT_VERSION}
   from './selective-v2-fast8-router.mjs';
 import { VIP75_PREVIOUS_ROUND_INPUT_VERSION } from './vip75-preround-features.mjs';
+import {evaluateMarketFusionFast8, VERSION as MARKET_FUSION_VERSION, INPUT_VERSION as MARKET_FUSION_INPUT_VERSION,
+  SOURCE as MARKET_FUSION_SOURCE, DEADLINE_MS as MARKET_FUSION_DEADLINE_MS}
+  from './market-fusion-fast8-router.mjs';
 import { vip75StatsByInputVersion, VIP75_LEGACY_UNKNOWN_INPUT } from './vip75-version-stats.mjs';
 import { vip75DataGapResponse, VIP75_DATA_GAP_DIAGNOSTIC_MS, VIP75_DATA_GAP_POLICY_VERSION } from './vip75-data-gap-policy.mjs';
 import { freezeV3TrendBand, summarizeV3TrendBand, VERSION as V3_TREND_BAND_FORWARD_VERSION } from './v3-trend-band-forward.mjs';
@@ -41,13 +44,14 @@ import { WebSocketServer } from 'ws';
 // Reversible signal-source switch: only FAST8 can enter the production router.
 // Legacy code and model artifacts remain intact for a later explicit rollback.
 const SELECTIVE_V2_FAST8_MODE = 'SELECTIVE_V2_FAST8';
+const MARKET_FUSION_FAST8_MODE = 'MARKET_FUSION_FAST8';
 const requestedProductionMode = String(process.env.PRODUCTION_SIGNAL_SOURCE_MODE || FAST8_MODE).trim().toUpperCase();
-const PRODUCTION_SIGNAL_SOURCE_MODE = [LEGACY_MODE, SELECTIVE_V2_FAST8_MODE].includes(requestedProductionMode)
+const PRODUCTION_SIGNAL_SOURCE_MODE = [LEGACY_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE].includes(requestedProductionMode)
   ? requestedProductionMode : FAST8_MODE;
 // Temporarily pause all NON-PRODUCTION shadows in FAST8-only mode to fit the
 // existing Railway free-memory ceiling. Set PAUSE_NONPROD_SHADOWS=0 to restore.
 // FAST8 worker, market polling, official settlements, orders and archives remain active.
-const PAUSE_NONPROD_SHADOWS = [FAST8_MODE, SELECTIVE_V2_FAST8_MODE].includes(PRODUCTION_SIGNAL_SOURCE_MODE) &&
+const PAUSE_NONPROD_SHADOWS = [FAST8_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE].includes(PRODUCTION_SIGNAL_SOURCE_MODE) &&
   String(process.env.PAUSE_NONPROD_SHADOWS || '1') !== '0';
 const PORT = Number(process.env.PORT || 3000);
 const SYMBOL = String(process.env.SYMBOL || 'BTCUSDT').toUpperCase();
@@ -462,6 +466,7 @@ signalWss.on('connection', ws => {
 
 const rounds = new Map();
 let selective8Snapshot = null;
+let marketFusionSnapshot = null;
 let signalPollBusy = false;
 let settleBusy = false;
 let lastSignalPollAt = 0;
@@ -1648,6 +1653,8 @@ function qualifiedShadowV6Candidate() {
 }
 
 function productionPolicyName() {
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === MARKET_FUSION_FAST8_MODE)
+    return 'MARKET_FUSION_FAST8_V1_CAUSAL_PREWARM_CURRENT8';
   if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE)
     return 'SELECTIVE_V2_THEN_EDGE_RESCUE_WITH_8S_UNVERIFIED_DISPLAY_ONLY';
   if (PRODUCTION_SIGNAL_SOURCE_MODE === FAST8_MODE) return 'EXCLUSIVE_ZL_FAST8_65_STRICT_65_GATE_NO_LEGACY_FALLBACK';
@@ -4170,6 +4177,16 @@ async function pollSignal() {
     const row = ensureRound(Number(live.round));
     // Probe exact old weights on the live <=8s snapshot. Never alter the locked signal.
     const vip75Early = vip75Frozen8Probe.observe(live, signalObservedAt);
+    if (PRODUCTION_SIGNAL_SOURCE_MODE === MARKET_FUSION_FAST8_MODE) {
+      marketFusionSnapshot = {round:Number(live.round),observedAt:signalObservedAt,
+        currentFacts:live.facts&&typeof live.facts==='object'?live.facts:null,
+        prewarm:vip75Frozen8Probe.prepareFeatures(Number(live.round),live.facts)};
+      if (Date.now()<Number(live.round)+MARKET_FUSION_DEADLINE_MS &&
+          !['UP','DOWN'].includes(row.productionPrediction)) {
+        try { productionSignalPayload(Date.now()); }
+        catch(error) { log('market_fusion_fast8_trigger_error',{error:error?.message||String(error)}); }
+      }
+    }
     if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE) {
       const prepared = vip75Frozen8Probe.prepareFeatures(Number(live.round),live.facts);
       selective8Snapshot = {round:Number(live.round),observedAt:signalObservedAt,...prepared};
@@ -5684,9 +5701,57 @@ function selectiveV2Fast8SignalPayload(row, expectedRound, now) {
   return {ok:true,live};
 }
 
+function marketFusionFast8SignalPayload(row,expectedRound,now) {
+  const activeRow=row||ensureRound(expectedRound);
+  const sample=marketFusionSnapshot?.round===expectedRound?marketFusionSnapshot:null;
+  const evaluated=evaluateMarketFusionFast8({
+    round:expectedRound,now,
+    prior:sample?.prewarm||vip75Frozen8Probe.prepareFeatures(expectedRound,null),
+    currentFacts:sample?.currentFacts||null,
+    currentObservedAt:sample?.observedAt??null,
+    currentRoundAligned:sample?.round===expectedRound,
+  });
+  if(evaluated.status!=='LOCKED'){
+    return {ok:true,live:{round:expectedRound,status:evaluated.status,
+      signal:null,input:{round:expectedRound},generatedAt:null,
+      source:MARKET_FUSION_SOURCE,model:MARKET_FUSION_VERSION,
+      modelVersion:MARKET_FUSION_VERSION,executionEligible:false,
+      productionPolicy:productionPolicyName(),
+      waitReason:evaluated.reason??null,
+      fast8Quality:{inputVersion:MARKET_FUSION_INPUT_VERSION,
+        status:evaluated.status,evidence:evaluated.evidence??null}}};
+  }
+  const live={round:expectedRound,status:'LOCKED',
+    signal:{direction:evaluated.direction,score:evaluated.score,
+      confidence:null,modelProbability:null},
+    input:{round:expectedRound},generatedAt:now,
+    source:MARKET_FUSION_SOURCE,model:MARKET_FUSION_VERSION,
+    modelVersion:MARKET_FUSION_VERSION,
+    productionPolicy:productionPolicyName(),executionEligible:true,
+    fallbackUsed:evaluated.fallbackUsed,
+    fallbackReason:evaluated.fallbackReason,
+    fast8Quality:{status:evaluated.fallbackUsed?'LOW_EVIDENCE_REAL_MARKET_DIRECTION':'CAUSAL_MARKET_FUSION',
+      inputVersion:MARKET_FUSION_INPUT_VERSION,
+      sourceRound:evaluated.evidence?.previousRound??null,
+      previousRoundFeatureCount:evaluated.evidence?.previousFeatureCount??0,
+      currentRoundFeatureCount:evaluated.evidence?.currentFeatureCount??0,
+      evidence:evaluated.evidence}};
+  if(freezeProductionLock(activeRow,live)){
+    log('market_fusion_fast8_production_lock',{round:expectedRound,
+      direction:evaluated.direction,score:evaluated.score,
+      delayMs:evaluated.elapsedMs,source:MARKET_FUSION_SOURCE,
+      lowEvidence:evaluated.fallbackUsed,
+      evidence:evaluated.evidence});
+  }
+  return {ok:true,live};
+}
+
 function productionSignalPayload(now = Date.now()) {
   const expectedRound = Math.floor(Number(now) / 300000) * 300000;
   const row = rounds.get(String(expectedRound)) || null;
+  if (PRODUCTION_SIGNAL_SOURCE_MODE === MARKET_FUSION_FAST8_MODE &&
+      !['UP','DOWN'].includes(row?.productionPrediction))
+    return marketFusionFast8SignalPayload(row,expectedRound,now);
   if (PRODUCTION_SIGNAL_SOURCE_MODE === SELECTIVE_V2_FAST8_MODE &&
       !['UP','DOWN'].includes(row?.productionPrediction))
     return selectiveV2Fast8SignalPayload(row,expectedRound,now);
@@ -6124,7 +6189,10 @@ function payload() {
     // Authoritative active-model catalog for trade-control UI. Only the
     // configured live router is listed, never archived or shadow strategies.
     // This is a read-only presentation contract: it changes no route/order.
-    activeSignalModels:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
+    activeSignalModels:PRODUCTION_SIGNAL_SOURCE_MODE===MARKET_FUSION_FAST8_MODE
+      ? [{id:MARKET_FUSION_VERSION,name:'Market Fusion（8秒行情融合）',
+          source:MARKET_FUSION_SOURCE,version:MARKET_FUSION_VERSION,active:true}]
+      : PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
       ? [{id:'zl_new_vip75',name:'zl_new_vip75（8秒）',
           source:FAST8_SOURCE,version:FROZEN_VIP75_VERSION,active:true}]
       : PRODUCTION_SIGNAL_SOURCE_MODE===SELECTIVE_V2_FAST8_MODE
@@ -6137,7 +6205,11 @@ function payload() {
             source:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',
             version:SELECTIVE8_VERSION,active:true},
         ] : [],
-    activeProductionModel:PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
+    activeProductionModel:PRODUCTION_SIGNAL_SOURCE_MODE===MARKET_FUSION_FAST8_MODE
+      ? {id:MARKET_FUSION_VERSION,version:MARKET_FUSION_VERSION,
+          source:MARKET_FUSION_SOURCE,onlyOneActive:true,noWait:true,deadlineMs:8000,
+          estimatedAccuracyGuaranteed:false,verifiedAccuracy:null}
+      : PRODUCTION_SIGNAL_SOURCE_MODE===FAST8_MODE
       ? {id:'zl_new_vip75',version:FROZEN_VIP75_VERSION,
          source:FAST8_SOURCE,onlyOneActive:true,noWait:true,deadlineMs:8000,
          estimatedAccuracyGuaranteed:false,

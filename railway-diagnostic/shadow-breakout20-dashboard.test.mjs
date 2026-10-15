@@ -17,6 +17,22 @@ const sample = {
   recent:[{t:Date.now()-300000,direction:'UP',actual:'UP',status:'SETTLED',lockedAt:Date.now()-293000}]
 };
 
+const officialResult={
+ ok:true,model:'BREAKOUT20_RSI_MACD_RANGE_V1',
+ source:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
+ statsScope:'CURRENT_MODEL_VERSION_PRODUCTION_LOCKS_ONLY',
+ generatedAt:100000,retentionMayLimitTotal:false,
+ results:{rounds:3,locked:3,pending:1,
+   overall:{samples:2,hits:1,accuracy:0.5},
+   up:{samples:1,hits:0,accuracy:0},
+   down:{samples:1,hits:1,accuracy:1},
+   recent20:{samples:2,hits:1,accuracy:0.5},
+   recent100:{samples:2,hits:1,accuracy:0.5}},
+ latest:{t:100000,direction:'UP',actual:null,status:'PENDING',lockedAt:107000,delayMs:7000},
+ recent:[{t:100000,direction:'UP',actual:null,status:'PENDING',lockedAt:107000},
+   {t:100000-300000,direction:'UP',actual:'DOWN',status:'SETTLED',lockedAt:0}]
+};
+
 function fakeResponse() {
   return {status:0,headers:{},body:null,writeHead(code,headers){this.status=code;this.headers=headers;},
     end(body){this.body=JSON.parse(body);}};
@@ -25,14 +41,18 @@ function fakeResponse() {
 test('readonly proxy validates external status, caches and strips unspecified payload fields',async()=>{
   let calls=0;
   const proxy=createShadowStatusProxy({fetcher:async(url,options)=>{
-    calls++; assert.equal(url,'https://breakout20-shadow.zl528094-3ba.workers.dev/status');
-    assert.equal(options.method,'GET');
-    return {ok:true,json:async()=>sample};
+    calls++;assert.equal(options.method,'GET');
+    if(url.includes('breakout20-shadow'))return {ok:true,json:async()=>sample};
+    assert.match(url,/\/api\/breakout20-official-accuracy$/);
+    return {ok:true,json:async()=>officialResult};
   },now:()=>100000,cacheTtlMs:4500});
   const a=fakeResponse(),b=fakeResponse();
   await Promise.all([proxy(a),proxy(b)]);
-  assert.equal(a.status,200);assert.equal(b.status,200);assert.equal(calls,1);
+  assert.equal(a.status,200);assert.equal(b.status,200);assert.equal(calls,2);
   assert.equal(a.body.results.overall.accuracy,0.5);
+  assert.equal(a.body.results.up.accuracy,0); // official, NOT spot proxy 100%
+  assert.equal(a.body.shadowSpotResults.up.accuracy,1);
+  assert.equal(a.body.official.source,'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY');
   assert.equal(a.body.training.historicalApproxSamples,191);
   assert.equal(a.body.latest.direction,'UP');
   assert.equal(a.body.serverSecret,undefined);
@@ -55,7 +75,7 @@ test('readonly proxy fails closed on non-shadow trading payload or network fault
 
 test('the UI renders only observational data and independent forward accuracy',async()=>{
   assert.match(shadowCard,/突破20%即可/);
-  assert.match(shadowCard,/仅观察 · 不参与下单/);
+  assert.match(shadowCard,/官方结算只读统计/);
   assert.doesNotMatch(shadowScript,/\/api\/control|\/api\/confirm|method:\s*['"]POST/);
   let requested=[];
   const els=new Map(),element=id=>{
@@ -64,15 +84,17 @@ test('the UI renders only observational data and independent forward accuracy',a
   };
   element('breakout20ShadowCard');
   const env={document:{readyState:'complete',getElementById:element},
-    fetch:async(url)=>{requested.push(String(url));return {ok:true,json:async()=>({...sample,ok:true,fetchedAt:Date.now()})};},
+    fetch:async(url)=>{requested.push(String(url));return {ok:true,json:async()=>({...sample,ok:true,fetchedAt:Date.now(),
+      official:{available:true},results:officialResult.results,latest:officialResult.latest,
+      recent:officialResult.recent})};},
     setInterval:()=>0,Date,Array,Math,Number,String,Object,Error,Promise,isFinite};
   new vm.Script(shadowScript.replace(/^<script>/,'').replace(/<\/script>$/,'')).runInNewContext(env);
   for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));
   assert.match(element('b20Accuracy').textContent,/50\.00%/);
-  assert.match(element('b20UpAccuracy').textContent,/100\.00%/);
-  assert.match(element('b20DownAccuracy').textContent,/0\.00%/);
+  assert.match(element('b20UpAccuracy').textContent,/0\.00%/);
+  assert.match(element('b20DownAccuracy').textContent,/100\.00%/);
   assert.match(element('b20Training').textContent,/保留基线/);
-  assert.match(element('b20Rows').innerHTML,/命中/);
+  assert.match(element('b20Rows').innerHTML,/待官方结算/);
   assert.ok(requested.every(u=>u.startsWith('/api/shadow-breakout20/status?ts=')));
 });
 
@@ -82,4 +104,18 @@ test('production shell only imports and mounts isolated UI and GET route',()=>{
   assert.match(shell,/shadowCard/);
   assert.match(shell,/url.pathname === '\/api\/shadow-breakout20\/status'\) return proxyShadowStatus\(res\)/);
   assert.doesNotMatch(shadowScript,/window\.(confirmOrder|setV|setDirectionMode)/);
+});
+
+
+test('no Railway official settlement produces unavailable (not spot-based win rate)',async()=>{
+ const proxy=createShadowStatusProxy({now:()=>100000,fetcher:async(url)=>{
+  if(url.includes('breakout20-shadow'))return {ok:true,json:async()=>sample};
+  throw Error('OFFICIAL_RAILWAY_OFFLINE');
+ }});
+ const r=fakeResponse();await proxy(r);
+ assert.equal(r.status,200);
+ assert.equal(r.body.official.available,false);
+ assert.equal(r.body.results.overall.accuracy,null);
+ assert.equal(r.body.shadowSpotResults.overall.accuracy,0.5);
+ assert.equal(r.body.latest,null);
 });

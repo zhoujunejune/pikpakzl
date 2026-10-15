@@ -46,8 +46,8 @@ const statsCard = `<div class="c" id="roundStatsCard">
 <div class="kv"><div class="k">未出方向</div><div class="v" id="rsWait">-</div></div>
 <div class="kv"><div class="k">判断覆盖率</div><div class="v" id="rsCoverage">-</div></div>
 </div>
-<div style="overflow:auto;max-height:460px;margin-top:12px;border:1px solid #2b313d;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px"><thead style="position:sticky;top:0;background:#151922;z-index:2"><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">生产判断</th><th style="padding:8px 6px">来源</th><th style="padding:8px 6px">强度</th><th style="padding:8px 6px">耗时</th><th style="padding:8px 6px">官方结果</th><th style="padding:8px 6px">命中结果</th><th style="padding:8px 6px">官方结算证据</th></tr></thead><tbody id="rsRows"><tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">读取中...</td></tr></tbody></table></div>
-<div class="muted" style="margin-top:10px">真实结果只认 Binance Prediction 官方 UP/DOWN；官方未结算时显示“待结算”。现货 K 线不再参与命中判定或 Shadow 训练标签。</div>
+<div style="overflow:auto;max-height:460px;margin-top:12px;border:1px solid #2b313d;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px"><thead style="position:sticky;top:0;background:#151922;z-index:2"><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">生产判断</th><th style="padding:8px 6px">来源</th><th style="padding:8px 6px">强度 / 原始评分</th><th style="padding:8px 6px">耗时</th><th style="padding:8px 6px">官方结果</th><th style="padding:8px 6px">命中结果</th><th style="padding:8px 6px">官方结算证据</th></tr></thead><tbody id="rsRows"><tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">读取中...</td></tr></tbody></table></div>
+<div class="muted" style="margin-top:10px">有置信度时显示接口原值；置信度缺失但有 score 时，显示原始评分绝对值（未校准，非概率、非预测胜率，不同模型之间不可直接比较）；两者均缺失则标记“未提供”或“兜底无评分”。真实结果仅按 Binance Prediction 官方结算。</div>
 </div>`;
 
 const previewCard = `<div class="c" id="waitVisibilityCard">
@@ -235,6 +235,15 @@ function esc(v){return String(v==null?'-':v).replace(/[&<>\"]/g,function(c){retu
 function tm(ms){if(!ms)return '-';try{return new Date(Number(ms)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(_){return '-'}}
 function sourceName(x){var source=String(x&&x.productionSource||'');if(source==='SELECTIVE_V2_FAST8_PRIMARY')return 'Selective V2（8秒主策略）';if(source==='EDGE_RESCUE_FAST8_PRIMARY')return 'Edge Rescue（8秒兜底）';if(source==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION')return '低置信度行情方向（允许下单）';if(x&&x.productionModel==='zl_new_vip75')return x.productionFallbackUsed?'VIP75 无信息方向（非模型预测）':'zl_new_vip75 原版固定权重';if(x&&x.productionModel==='FLOW_BOOK_PROXY_V1')return '行情状态 FAST8（历史）';var v=String(x&&x.productionSource||'');if(v==='ZL_NEW_VIP75_PRIMARY'||v==='LOW_PRIORITY_15S_PM_LEAN_03_PRIMARY')return '已删除策略（历史记录）';if(v==='ZL_FAST8_65_PRIMARY')return 'ZL_FAST8_65（8秒）';if(v==='LOCK_QUALITY_SELECTIVE_V2_PRIMARY')return 'Selective V2（历史）';if(v==='SELECTIVE_V2_EDGE_RESCUE_PRIMARY')return '已删除策略（历史记录）';if(v==='PM_CURRENT25_SUPPORT08_15S_PRIMARY'||v==='CURRENT_03_PM_AGREE_15S_PRIMARY'||(v.indexOf('LOW_PRIORITY_15S_')===0&&v.endsWith('_PRIMARY'))){var model=x&&x.productionModel||v.replace(/^LOW_PRIORITY_15S_/,'').replace(/_15S_PRIMARY$/,'').replace(/_PRIMARY$/,'');if((globalThis.__active15sCandidateIds||[]).indexOf(model)<0)return '已删除的15秒历史策略';return (String(x&&x.productionFallbackReason||'').indexOf('AUTO_PROMOTED_')===0?'15秒现役 · ':'15秒历史试验 · ')+model}if(v==='SHADOW_CANDIDATE_PRIMARY')return 'Shadow(历史)';if(v==='SHADOW_V3_AUTOML_PRIMARY')return 'V3 AutoML(历史)';if(v==='V6_FALLBACK')return 'V6回退(历史)';return v||'WAIT'}
 function badge(v){var x=String(v||'-');if(x==='UP')return '<span class="on">UP</span>';if(x==='DOWN')return '<span class="bad">DOWN</span>';if(x==='HIT')return '<span class="on">命中</span>';if(x==='MISS')return '<span class="bad">未命中</span>';if(x==='NO_DECISION')return '<span class="warn">WAIT</span>';if(x==='PENDING')return '<span class="warn">待结算</span>';return esc(x)}
+function strengthLabel(x){
+ var c=x&&x.productionConfidence;
+ if(c!==null&&c!==undefined&&c!==''&&Number.isFinite(Number(c)))
+   return Number(c).toFixed(3)+'（置信度）';
+ var raw=x&&x.productionScore;
+ if(raw!==null&&raw!==undefined&&raw!==''&&Number.isFinite(Number(raw)))
+   return '评分 '+Math.abs(Number(raw)).toFixed(3)+(x.productionFallbackUsed?' · 低证据':'');
+ return x&&x.productionFallbackUsed?'兜底无评分':'未提供';
+}
 async function getStats(){
 var errMsg='';
 try{
@@ -295,7 +304,7 @@ var activeNames=activeCatalog.length?activeCatalog.map(function(m){return m.name
  :j.activeProductionModel?.id||'暂无明确活跃模型';
 e('rsMeta').textContent='当前生产：'+activeNames+' · '+settlement+
  ' · 仅按活跃模型和版本的生产原始方向计分，不代表反向订单成交或盈亏'+status+stale;
-var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=currentSourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待本策略首个轮次...</td></tr>';
+var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=strengthLabel(x),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=currentSourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待本策略首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;

@@ -263,8 +263,8 @@ function boot(){load();setInterval(load,3000)}if(document.readyState==='loading'
 // the tracker archive and is never rewritten or attributed to the new model.
 const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="k">当前生产信号模型 · 8秒版</div>
-<div class="big" id="activeFast8Name">Selective V2 + Edge Rescue（8秒版）</div>
-<div class="muted" id="activeFast8Desc">BTC 5分钟 · 上一轮行情预热 · 8秒内锁定 · 新版独立统计</div>
+<div class="big" id="activeFast8Name">读取生产模型中...</div>
+<div class="muted" id="activeFast8Desc">生产模型清单以后台返回结果为准</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
 <div class="kv"><div class="k">下单信号（当前正向 / 反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
@@ -291,6 +291,7 @@ const primaryScript = `<script>(function(){
 'use strict';
 function e(x){return document.getElementById(x)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
+function escModel(v){return String(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 var policy='',revision='';
 var sources=[
  {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',modes:{UP:'OFF',DOWN:'OFF'}},
@@ -453,7 +454,7 @@ function load(){
     return part.length?correct+'/'+part.length+' · '+pct(correct*100/part.length):'样本不足（0轮）';
    }
    return '<tr style="border-top:1px solid #2b313d">'+
-    '<td style="padding:9px 6px">'+esc(item.name||item.id)+'</td>'+
+    '<td style="padding:9px 6px">'+escModel(item.name||item.id)+'</td>'+
     '<td style="text-align:center">'+(matched
        ? 'UP：'+(directionModeReady?modeLabel(src.modes.UP):'未就绪')+' / DOWN：'+(directionModeReady?modeLabel(src.modes.DOWN):'未就绪')
        : '无独立来源开关')+'</td>'+

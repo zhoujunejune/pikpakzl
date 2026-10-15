@@ -344,7 +344,7 @@ function renderDirectionModes(){
  target.innerHTML=visible.length?visible.map(function(src){
   var i=sources.indexOf(src);
   return '<div style="background:#10141c;padding:12px;border-radius:10px;min-width:0">'+
-    '<div style="font-size:13px;font-weight:700;margin-bottom:8px">'+src.name+'</div>'+
+    '<div style="font-size:13px;font-weight:700;margin-bottom:8px">'+escModel((activeCatalog.find(function(m){return m.source===src.id})||{}).name||src.name)+'</div>'+
     ['UP','DOWN'].map(function(side){
      return '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px;margin:6px 0">'+
        '<div style="font-size:12px;min-width:80px"><strong>'+side+'</strong>：'+(directionModeReady?modeLabel(src.modes[side]):'未就绪')+'</div>'+
@@ -440,7 +440,7 @@ function load(){
   }
   e('activeFast8Name').textContent=activeCatalog.length
    ?activeCatalog.map(function(m){return m.name||m.id}).join(' + '):'当前没有活跃信号模型';
-  e('activeFast8Desc').textContent='BTC 5分钟 · 8秒截止 · 模型列表由生产服务自动同步；非活跃来源隐藏';
+  e('activeFast8Desc').textContent='BTC 5分钟 · 8秒截止 · 模型列表由生产服务自动同步；低证据方向不代表预测优势；非活跃来源隐藏';
   e('activeFast8Direction').textContent=dir;
   var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
   var decided=settled.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'});

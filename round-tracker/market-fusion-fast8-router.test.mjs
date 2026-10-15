@@ -1,67 +1,66 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateMarketFusionFast8,VERSION,SOURCE,DEADLINE_MS} from './market-fusion-fast8-router.mjs';
+import {evaluateMarketFusionFast8,VERSION,SOURCE,DEADLINE_MS,LOCK_BY_MS,INPUT_VERSION} from './market-fusion-fast8-router.mjs';
 
-const start=1800000000000;
-const prior=facts=>({sourceRound:start-300000,facts});
-const run=(props={})=>evaluateMarketFusionFast8({round:start,now:start+6800,...props});
+const round=1800000000000;
+const prior=facts=>({sourceRound:round-300000,facts});
+const run=(extra={})=>evaluateMarketFusionFast8({round,now:round+6800,...extra});
 
-test('market fusion locks UP from observed positive BTC momentum/flow/trend within eight seconds',()=>{
- const result=run({prior:prior({regimeScore:0.5,normalizedMomentum15s:0.31,
-   normalizedMomentum60s:0.25,tradePressure15s:0.35,ofiNormalized5s:0.2})});
- assert.equal(result.status,'LOCKED');
- assert.equal(result.direction,'UP');
- assert.equal(result.source,SOURCE);
- assert.equal(result.model,VERSION);
- assert.equal(result.executionEligible,true);
- assert.ok(result.elapsedMs<DEADLINE_MS);
- assert.equal(result.evidence.previousContractQuoteUsed,false);
+test('V2 version and cutoff isolate old settlement statistics',()=>{
+ assert.equal(VERSION,'MARKET_FUSION_FAST8_V2');
+ assert.match(INPUT_VERSION,/CURRENT1_TREND_MARKET/);
+ assert.equal(LOCK_BY_MS,1000);
+ assert.equal(DEADLINE_MS,8000);
 });
-test('market fusion locks DOWN for aligned negative flow and momentum',()=>{
- const result=run({prior:prior({normalizedMomentum15s:-0.25,tradePressure15s:-0.4,
-   currentTrendScore:-0.35,regimeScore:-0.4})});
- assert.equal(result.status,'LOCKED');
- assert.equal(result.direction,'DOWN');
- assert.equal(result.evidence.probabilityCalibrated,false);
+test('prior trend can lock a genuine UP direction with unchanged order-policy source',()=>{
+ const r=run({prior:prior({regimeScore:0.5})});
+ assert.equal(r.status,'LOCKED');assert.equal(r.direction,'UP');assert.equal(r.source,SOURCE);
+ assert.equal(r.model,VERSION);assert.equal(r.executionEligible,true);
+ assert.equal(r.evidence.previousContractQuoteUsed,false);
 });
-test('prior prediction-market quote is NEVER a predictor of the next contract',()=>{
- const x=run({prior:prior({predictionMarketUpMid:0.99,normalizedMomentum15s:-0.4})});
- assert.equal(x.status,'LOCKED');
- assert.equal(x.direction,'DOWN');
- assert.equal(x.evidence.currentContractQuoteUsed,false);
- const y=run({currentFacts:{predictionMarketUpMid:0.99,normalizedMomentum15s:-0.2},
-   currentRoundAligned:true,currentObservedAt:start+6500});
- assert.equal(y.evidence.currentContractQuoteUsed,false);
- const z=run({currentFacts:{predictionMarketUpMid:0.99,normalizedMomentum15s:-0.2,
-   predictionMarketRoundAligned:true},currentRoundAligned:true,currentObservedAt:start+6500});
- assert.equal(z.evidence.currentContractQuoteUsed,true);
+test('momentum and order flow do not influence the scoring or direction fallback',()=>{
+ const r=run({prior:prior({regimeScore:-0.5,normalizedMomentum15s:1,
+   tradePressure15s:1,ofiNormalized5s:1})});
+ assert.equal(r.direction,'DOWN');assert.equal(r.evidence.previousFeatureCount,1);
+ assert.deepEqual(Object.keys(r.evidence.previousGroups),['trend']);
+ const onlyRemoved=run({prior:prior({normalizedMomentum15s:1,tradePressure15s:1,
+   ofiNormalized5s:1,microScore:1})});
+ assert.equal(onlyRemoved.status,'DATA_UNAVAILABLE');
+ assert.equal(onlyRemoved.executionEligible,false);
 });
-test('no data does not invent clock parity, confidence, or order eligibility',()=>{
- const early=run({now:start+3000});
- assert.equal(early.status,'PENDING');
- const end=run();
- assert.equal(end.status,'DATA_UNAVAILABLE');
- assert.equal(end.executionEligible,false);
- assert.equal(end.direction,undefined);
+test('both rounds use 70 percent prior and 30 percent current when valid',()=>{
+ const r=run({now:round+1100,prior:prior({regimeScore:0.55}),
+   currentFacts:{regimeScore:-0.55},currentRoundAligned:true,
+   currentObservedAt:round+1050});
+ assert.equal(r.status,'LOCKED');assert.equal(r.direction,'UP');
+ assert.equal(r.score,0.4);assert.equal(r.evidence.previousFeatureCount,1);
+ assert.equal(r.evidence.currentFeatureCount,1);
 });
-test('stale or mismatched previous-round data is excluded',()=>{
- const stale=run({prior:{sourceRound:start-600000,facts:{regimeScore:0.9}}});
- assert.equal(stale.status,'DATA_UNAVAILABLE');
- const missing=run({currentRoundAligned:false,currentObservedAt:start+6600,
-   currentFacts:{normalizedMomentum15s:0.8}});
- assert.equal(missing.status,'DATA_UNAVAILABLE');
+test('previous-contract quotes never leak; aligned current contract quote can count',()=>{
+ const x=run({prior:prior({predictionMarketUpMid:0.99,regimeScore:-0.5})});
+ assert.equal(x.direction,'DOWN');assert.equal(x.evidence.currentContractQuoteUsed,false);
+ const y=run({currentFacts:{predictionMarketUpMid:0.99,regimeScore:-0.2},
+   currentRoundAligned:true,currentObservedAt:round+6500});
+ assert.equal(y.direction,'DOWN');assert.equal(y.evidence.currentContractQuoteUsed,false);
+ const z=run({currentFacts:{predictionMarketUpMid:0.99,regimeScore:-0.2,
+   predictionMarketRoundAligned:true},currentRoundAligned:true,
+   currentObservedAt:round+6500});
+ assert.equal(z.direction,'UP');assert.equal(z.evidence.currentContractQuoteUsed,true);
 });
-test('strong current-round signal can lock before 6.5 seconds',()=>{
- const result=run({now:start+1400,
-   currentRoundAligned:true,currentObservedAt:start+1200,
-   currentFacts:{normalizedMomentum15s:0.35,tradePressure15s:0.45,
-     currentTrendScore:0.5,ofiNormalized5s:0.4}});
- assert.equal(result.status,'LOCKED');
- assert.equal(result.direction,'UP');
- assert.ok(result.elapsedMs<6500);
+test('T+1 second target never locks earlier even if valid prewarm exists',()=>{
+ const input={prior:prior({regimeScore:-0.3})};
+ assert.equal(run({...input,now:round+999}).status,'PENDING');
+ const r=run({...input,now:round+1000});
+ assert.equal(r.status,'LOCKED');assert.equal(r.direction,'DOWN');
 });
-test('model never locks after the 8-second deadline',()=>{
- const x=run({now:start+8000,prior:prior({regimeScore:0.9})});
- assert.equal(x.status,'DATA_UNAVAILABLE');
- assert.equal(x.executionEligible,false);
+test('missing/stale facts never result in a fabricated order-eligible direction',()=>{
+ assert.equal(run({now:round+400}).status,'PENDING');
+ assert.equal(run().status,'DATA_UNAVAILABLE');
+ assert.equal(run({prior:{sourceRound:round-600000,facts:{regimeScore:0.9}}}).status,'DATA_UNAVAILABLE');
+ assert.equal(run({currentRoundAligned:false,currentObservedAt:round+6500,
+   currentFacts:{regimeScore:0.9}}).status,'DATA_UNAVAILABLE');
+});
+test('no signal may be locked after the original 8-second deadline',()=>{
+ const r=run({now:round+8000,prior:prior({regimeScore:0.9})});
+ assert.equal(r.status,'DATA_UNAVAILABLE');assert.equal(r.executionEligible,false);
 });

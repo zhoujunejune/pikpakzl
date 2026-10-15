@@ -68,20 +68,20 @@ const previewCard = `<div class="c" id="waitVisibilityCard">
 const policyCard = `<div class="c" id="signalPolicyCard">
 <div class="k">生产信号策略 · 当前活跃模型</div>
 <div class="big" id="spTitle">正在读取现役信号状态...</div>
-<div class="muted" style="margin-top:6px">以当前生产信号源开关为准；原有15秒策略停止晋级，被暂停的旧策略不参与锁定，历史统计继续保留。</div>
+<div class="muted" style="margin-top:6px">以生产服务当前活跃模型清单为准；历史策略不会重新获得生产资格。</div>
 <div id="spRouteStages" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px"><span class="muted">同步生产模型中...</span></div>
 <div class="grid" style="margin-top:12px">
-  <div class="kv"><div class="k">现役可放行</div><div class="v" id="spQualified">-</div></div>
-  <div class="kv"><div class="k">现役暂不可用</div><div class="v" id="spObserve">-</div></div>
+  <div class="kv"><div class="k">当前生产来源</div><div class="v" id="spQualified">-</div></div>
+  <div class="kv"><div class="k">其他来源状态</div><div class="v" id="spObserve">-</div></div>
   <div class="kv"><div class="k">新策略晋级</div><div class="v">已关闭</div></div>
   <div class="kv"><div class="k">进度数据</div><div class="v" id="spFreshness">读取中</div></div>
 </div>
-<div class="muted" id="spRule" style="margin-top:10px">已冻结现役名单；只允许风控合格的现役策略交易，70%永久淘汰、30分钟独立熔断继续有效。无第四层35秒兜底。</div>
-<div style="overflow:auto;max-height:410px;margin-top:12px;border:1px solid #2b313d;border-radius:10px">
+<div class="muted" id="spRule" style="margin-top:10px">读取生产信号规则中...</div>
+<div id="spLegacyRegistryWrap" style="overflow:auto;max-height:410px;margin-top:12px;border:1px solid #2b313d;border-radius:10px">
 <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:820px"><thead style="position:sticky;top:0;background:#151922;z-index:2">
 <tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">15秒现役模型</th><th style="padding:8px 6px">风控状态</th><th style="padding:8px 6px">前瞻样本</th><th style="padding:8px 6px">总准确率</th><th style="padding:8px 6px">近30次</th><th style="padding:8px 6px">UP / DOWN</th><th style="padding:8px 6px">30分钟熔断</th></tr>
 </thead><tbody id="spRows"><tr><td colspan="7" style="padding:12px 6px">读取现役记录中...</td></tr></tbody></table></div>
-<div class="muted" id="spNotice" style="margin-top:10px">仅现役15秒信号可优先出方向；主策略未放行时仅可尝试独立硬熔断补救；已淘汰 Edge Rescue 不再参与生产。</div>
+<div class="muted" id="spNotice" style="margin-top:10px">正在同步当前生产信号...</div>
 </div>`;
 
 const policyScript = `<script>(function(){
@@ -107,6 +107,7 @@ async function load(){
     .filter(function(m){return m&&m.active!==false&&m.id&&m.source});
   var routeStages=e('spRouteStages');
   if(productionMode==='MARKET_FUSION_FAST8'){
+    if(e('spLegacyRegistryWrap'))e('spLegacyRegistryWrap').style.display='none';
     var name=currentModels.length
       ?currentModels.map(function(m){return m.name||m.id}).join(' + ')
       :'生产模型未确认';
@@ -117,12 +118,12 @@ async function load(){
     e('spObserve').textContent='其他旧策略暂停';
     e('spFreshness').textContent='已同步生产接口';
     e('spTitle').textContent=name+' · 8秒行情融合';
-    e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">当前生产仅使用 '
-      +esc(name)+'；Selective V2、Edge Rescue 与旧行情兜底均不作为生产预测模型。</td></tr>';
+    e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">当前生产仅使用 '+esc(name)+'；旧策略不参与实时生产预测。</td></tr>';
     e('spRule').textContent='上一轮真实行情预热 + 当前轮动量、OFI、成交压力与市场状态；8秒截止。缺乏有效行情时明确标记数据不可用，不伪造信号。';
     e('spNotice').textContent='来源映射沿用现有方向开关配置；真实胜率仅按本模型版本与币安官方结算统计，不继承旧策略记录。';
     return;
   }
+  if(e('spLegacyRegistryWrap'))e('spLegacyRegistryWrap').style.display='';
   if(routeStages)routeStages.innerHTML=currentModels.length
     ?currentModels.map(function(m){return '<span>'+esc(m.name||m.id)+'</span>'}).join('')
     :'<span class="muted">当前生产模型未确认</span>';
@@ -327,7 +328,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <tbody id="sourceRateRows"><tr><td colspan="6" style="padding:10px 6px">统计读取中...</td></tr></tbody>
 </table></div>
 <div class="muted" style="margin-top:7px">按 Binance Prediction 官方结算、当前方向映射规则分别回算。含规则切换前的历史方向时，不代表当时实际订单。不是成交胜率或收益率。</div>
-<div class="muted" id="activeFast8Note" style="margin-top:10px">仅统计新版本 Selective V2 / Edge Rescue / 真实行情兜底的官方结算；低置信度方向可下单，但不代表具有预测优势。</div>
+<div class="muted" id="activeFast8Note" style="margin-top:10px">仅统计当前生产模型版本的官方结算；任何低证据方向都不代表具有预测优势。</div>
 </div>`;
 const primaryScript = `<script>(function(){
 'use strict';

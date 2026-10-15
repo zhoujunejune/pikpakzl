@@ -6,6 +6,7 @@ console.log('Shadow URL:',url);
 async function get(path){const r=await fetch(url+path);if(!r.ok)throw Error(`${path}: HTTP ${r.status}`);return r.json();}
 const health=await get('/health');console.log('Health:',JSON.stringify(health));
 if(health.orders!==false)throw Error('Unexpected order capability');
+console.log('Live market initialization:',JSON.stringify(await get('/market-check')));
 let status=await get('/status');
 const due=status.timed.nextAlarm;
 console.log('Next independent alarm:',new Date(due).toISOString());

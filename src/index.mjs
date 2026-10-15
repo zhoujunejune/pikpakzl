@@ -4,7 +4,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NAME, VERSION, parseKline, features, baseline, probability, train, prospectiveStats } from './model.mjs';
 
 const PERIOD=300000, LOCK_OFFSET=6250, DEADLINE=8000;
-const MARKET='https://data-api.binance.vision/api/v3/klines';
+const MARKETS=['https://data-api.binance.vision/api/v3/klines','https://api.binance.com/api/v3/klines','https://api1.binance.com/api/v3/klines'];
 const nowRound=t=>Math.floor(t/PERIOD)*PERIOD;
 const fixedNextAlarm=now=>{
   const thisSlot=nowRound(now)+LOCK_OFFSET;
@@ -17,14 +17,16 @@ const safelySerializable=e=>String(e?.message||e||'UnknownError').slice(0,500);
 const json=(v,status=200)=>Response.json(v,{status,headers:{'cache-control':'no-store'}});
 
 async function candles(period, limit){
-  const url=`${MARKET}?symbol=BTCUSDT&interval=${period}&limit=${limit}`;
-  const result=await fetch(url,{signal:AbortSignal.timeout(5000),headers:{'accept':'application/json'}});
-  if(!result.ok)throw Error(`MARKET_HTTP_${result.status}_${period}`);
-  const body=await result.json();
-  if(!Array.isArray(body))throw Error(`INVALID_KLINE_RESPONSE_${period}`);
-  const bars=body.map(parseKline).filter(Boolean);
-  if(!bars.length)throw Error(`EMPTY_KLINES_${period}`);
-  return bars;
+  return Promise.any(MARKETS.map(async endpoint=>{
+    const url=`${endpoint}?symbol=BTCUSDT&interval=${period}&limit=${limit}`;
+    const result=await fetch(url,{signal:AbortSignal.timeout(1800),headers:{'accept':'application/json'}});
+    if(!result.ok)throw Error(`MARKET_HTTP_${result.status}_${period}_${new URL(endpoint).host}`);
+    const body=await result.json();
+    if(!Array.isArray(body))throw Error(`INVALID_KLINE_RESPONSE_${period}`);
+    const bars=body.map(parseKline).filter(Boolean);
+    if(!bars.length)throw Error(`EMPTY_KLINES_${period}`);
+    bars.endpoint=endpoint;return bars;
+  })).catch(e=>{throw Error((e.errors||[e]).map(safelySerializable).join(';'));});
 }
 
 function seeds(one, five){
@@ -59,12 +61,25 @@ export class Breakout20 extends DurableObject {
   async state(){return await this.ctx.storage.get('state')||blank();}
   async fetch(req){
     const path=new URL(req.url).pathname;
-    if(path!=='/status'&&path!=='/latest'&&path!=='/health')return new Response('Not Found',{status:404});
+    if(path!=='/status'&&path!=='/latest'&&path!=='/health'&&path!=='/market-check')return new Response('Not Found',{status:404});
     const s=await this.state();
     if(await this.ctx.storage.getAlarm()===null){
       const alarm=fixedNextAlarm(Date.now());
       await this.ctx.storage.setAlarm(alarm);
       if(s.firstRound===null){s.firstRound=nowRound(alarm);await this.ctx.storage.put('state',s);}
+    }
+    if(path==='/market-check'){
+      try{
+        const [one,five]=await Promise.all([candles('1m',1000),candles('5m',240)]);
+        s.seed=seeds(one,five);
+        const out=train(s.seed,{minimum:100});
+        if(out.ok){s.weights=out.weights;s.model=out.adopted?'LOGISTIC_L2_V1':'BASELINE';}
+        s.training={at:Date.now(),...out};
+        await this.ctx.storage.put('state',s);
+        return json({ok:true,observedAt:Date.now(),oneMinuteSource:one.endpoint,fiveMinuteSource:five.endpoint,
+          indicators:features(one.filter(x=>x.closed),five.filter(x=>x.closed),one.at(-1).c)?.indicators,
+          training:s.training,seedSamples:s.seed.length});
+      }catch(e){return json({ok:false,error:safelySerializable(e)},502);}
     }
     if(path==='/health')return json({ok:true,name:NAME,version:VERSION,activated:true,orders:false,
       lastTickAt:s.lastTickAt,error:s.lastFailure});
@@ -89,7 +104,6 @@ export class Breakout20 extends DurableObject {
     if(s.firstRound===null)s.firstRound=t;
     try{
       const [one,five]=await Promise.all([candles('1m',1000),candles('5m',240)]);
-      if(s.seed.length===0)s.seed=seeds(one,five);
       const settled=settleExistingRows(s.rows,five,Date.now());
       s.settlementsSinceTrain+=settled;
       if(!s.rows.some(r=>r.t===t)){
@@ -108,6 +122,7 @@ export class Breakout20 extends DurableObject {
           source:'BINANCE_PUBLIC_MARKET_REST',model:s.model,
           reason:direction?null:receivedAt-t>=DEADLINE?'LOCKED_LATE_OR_FETCH_SLOW':'MARKET_DATA_UNAVAILABLE'});
       }
+      if(s.seed.length===0)s.seed=seeds(one,five);
       if(s.training===null||s.settlementsSinceTrain>=20){
         const live=s.rows.filter(r=>r.vector&&['UP','DOWN'].includes(r.actual))
           .map(r=>({t:r.t,x:r.vector,y:Number(r.actual==='UP'),source:'LIVE_8S_FROZEN'}));
@@ -130,7 +145,7 @@ export default {
   async fetch(request,env){
     // Stable one-instance experiment; public read-only endpoints only.
     const path=new URL(request.url).pathname;
-    if(!['/status','/latest','/health'].includes(path))return new Response('Not Found',{status:404});
+    if(!['/status','/latest','/health','/market-check'].includes(path))return new Response('Not Found',{status:404});
     const id=env.BREAKOUT20.idFromName('breakout20-single-shadow');
     return env.BREAKOUT20.get(id).fetch(request);
   }

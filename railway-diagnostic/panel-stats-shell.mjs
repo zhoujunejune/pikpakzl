@@ -367,6 +367,7 @@ async function setDirectionModeFromUI(index,side,selectedMode){
   e('directionModeMessage').textContent='保存成功，下一轮生效：'+src.name+' '+side+' → '+modeLabel(mode);
   updateOrderSignal();load();
  }catch(err){
+  directionModeReady=false;policy='';revision='';
   e('directionModeMessage').textContent='保存失败：'+(err.message||err);
  }finally{
   directionModeBusy=false;renderDirectionModes();

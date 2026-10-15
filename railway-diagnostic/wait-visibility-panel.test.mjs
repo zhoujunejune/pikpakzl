@@ -52,7 +52,7 @@ function fixture(){
    ]};
 }
 test('production dashboard identifies 8s Selective V2 + Edge Rescue, not retired VIP75',()=>{
- assert.match(primary,/Selective V2 \+ Edge Rescue/);
+ assert.match(primary,/读取生产模型中/);
  assert.doesNotMatch(primary,/2026-10-10 固定训练版本/);
  assert.match(source,/SELECTIVE_V2_FAST8_THEN_EDGE_RESCUE_FAST8/);
  assert.match(source,/SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION/);
@@ -87,7 +87,7 @@ test('current stats exclude historical VIP75 and label each new production layer
 });
 test('without production-mode confirmation frontend does not pretend restored mode is active',async()=>{
  const d=await execute(mainScript,{ok:true,records:[],activeProductionModel:null});
- assert.equal(d.get('activeFast8Name').textContent,'生产模式待确认');
+ assert.equal(d.get('activeFast8Name').textContent,'当前没有活跃信号模型');
  assert.equal(d.get('activeFast8Accuracy').textContent,'尚无新结算');
 });
 test('low-confidence direction is distinctly labeled but not suppressed',async()=>{
@@ -153,4 +153,38 @@ test('mode data is read from backend and no old source-wide toggle is shown',asy
  assert.match(html,/低置信度行情兜底/);
  assert.match(html,/DOWN 反向/);
  assert.doesNotMatch(html,/data-dir-mode="正向"/);
+});
+
+test('active model catalog hides the historical three-way controls in VIP75 mode',async()=>{
+ const j=fixture(),now=Math.floor(Date.now()/300000)*300000;
+ j.productionSignalSourceMode='FAST8_ONLY';
+ j.activeProductionModel={id:'zl_new_vip75',source:'ZL_FAST8_65_PRIMARY',version:'VIP_TEST'};
+ j.activeSignalModels=[{id:'zl_new_vip75',source:'ZL_FAST8_65_PRIMARY',
+   name:'zl_new_vip75（8秒）',version:'VIP_TEST',active:true}];
+ j.records=[
+  {roundStartMs:now,productionModel:'zl_new_vip75',productionModelVersion:'VIP_TEST',
+   productionSource:'ZL_FAST8_65_PRIMARY',productionPrediction:'UP',
+   productionActual:'UP',productionResult:'HIT'},
+  ...j.records
+ ];
+ const d=await execute(mainScript,j);
+ assert.match(d.get('activeFast8Name').textContent,/zl_new_vip75/);
+ assert.doesNotMatch(d.get('activeFast8Name').textContent,/Selective V2/);
+ assert.match(d.get('directionModeChoices').innerHTML,/没有匹配的旧版来源开关/);
+ assert.doesNotMatch(d.get('directionModeChoices').innerHTML,/<button /);
+ assert.match(d.get('sourceRateRows').innerHTML,/zl_new_vip75/);
+ assert.doesNotMatch(d.get('sourceRateRows').innerHTML,/Selective V2/);
+ assert.equal(d.get('activeFast8Accuracy').textContent,'100.00%');
+});
+test('catalog supplied by backend replaces legacy sources instead of appending them',async()=>{
+ const j=fixture();
+ j.activeSignalModels=[{id:modelVersion,source:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue 当前活跃',active:true}];
+ const d=await execute(mainScript,j);
+ assert.equal(d.get('activeFast8Name').textContent,'Edge Rescue 当前活跃');
+ const html=d.get('directionModeChoices').innerHTML;
+ assert.equal((html.match(/<button /g)||[]).length,4);
+ assert.doesNotMatch(html,/Selective V2（主策略）/);
+ const rows=d.get('sourceRateRows').innerHTML;
+ assert.match(rows,/Edge Rescue 当前活跃/);
+ assert.doesNotMatch(rows,/低置信度行情兜底/);
 });

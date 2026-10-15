@@ -188,3 +188,21 @@ test('catalog supplied by backend replaces legacy sources instead of appending t
  assert.match(rows,/Edge Rescue 当前活跃/);
  assert.doesNotMatch(rows,/低置信度行情兜底/);
 });
+
+
+test('per-round statistics label the actual current VIP75 source, never historical VIP75',async()=>{
+ const j=fixture();
+ const now=Math.floor(Date.now()/300000)*300000;
+ j.productionSignalSourceMode='FAST8_ONLY';
+ j.activeProductionModel={id:'zl_new_vip75',source:'ZL_FAST8_65_PRIMARY',version:'VIP_NEW'};
+ j.activeSignalModels=[{id:'zl_new_vip75',name:'zl_new_vip75（8秒）',
+   source:'ZL_FAST8_65_PRIMARY',version:'VIP_NEW',active:true}];
+ j.records=[{roundStartMs:now-300000,productionSource:'ZL_FAST8_65_PRIMARY',
+   productionModel:'zl_new_vip75',productionModelVersion:'VIP_NEW',
+   productionPrediction:'DOWN',productionActual:'DOWN',productionResult:'HIT'}];
+ const d=await execute(stats,j);
+ assert.match(d.get('rsMeta').textContent,/当前生产：zl_new_vip75（8秒）/);
+ assert.doesNotMatch(d.get('rsMeta').textContent,/历史 VIP75 统计/);
+ assert.match(d.get('rsRows').innerHTML,/zl_new_vip75（8秒）/);
+ assert.match(d.get('rsAccuracy').innerHTML,/100.00%/);
+});

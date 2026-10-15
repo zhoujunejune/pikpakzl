@@ -236,10 +236,23 @@ throw new Error(errMsg||'统计服务暂不可用')
 async function load(){try{
 var j=await getStats();var h=j.health||{};
 var selective8=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
-var all=(j.records||[]).filter(function(x){return selective8
+var activeCatalog=(Array.isArray(j.activeSignalModels)?j.activeSignalModels:[])
+ .filter(function(m){return m&&m.active!==false&&m.id&&m.source&&m.version});
+var all=(j.records||[]).filter(function(x){
+ if(activeCatalog.length)return activeCatalog.some(function(m){
+  return x.productionModel===m.id&&x.productionSource===m.source&&
+   (x.productionModelVersion===m.version||x.productionModelVersion===m.version+':NO_INFORMATION');
+ });
+ // Compatibility for old tracker versions without activeSignalModels.
+ return selective8
   ? x.productionModel==='SELECTIVE_V2_FAST8_PREWARM_V1' && x.productionModelVersion==='SELECTIVE_V2_FAST8_PREWARM_V1'
   : x.productionModel==='zl_new_vip75'&&j.activeProductionModel&&
-    (x.productionModelVersion===j.activeProductionModel.version||x.productionModelVersion===j.activeProductionModel.version+':NO_INFORMATION')});
+    (x.productionModelVersion===j.activeProductionModel.version||x.productionModelVersion===j.activeProductionModel.version+':NO_INFORMATION');
+});
+function currentSourceName(x){
+ var model=activeCatalog.find(function(m){return m.id===x.productionModel&&m.source===x.productionSource});
+ return model?(model.name||model.id):sourceName(x);
+}
 function official(x){return x.productionActual==='UP'||x.productionActual==='DOWN'?x.productionActual:null}
 function pred(x){return x.productionPrediction==='UP'||x.productionPrediction==='DOWN'?x.productionPrediction:null}
 function derived(x){var p=pred(x),a=official(x);return !a?'PENDING':(!p?'NO_DECISION':(p===a?'HIT':'MISS'))}
@@ -251,8 +264,12 @@ e('rsSettled').textContent=s.settledRounds;e('rsDecided').textContent=s.decidedR
 var settlement=j.settlementSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'?'Binance Prediction 官方结算':'结算源：'+(j.settlementSource||'-');
 var status=h.lastSettlementError?' · 最近结算：'+h.lastSettlementError:'';
 var stale=j.stale?' · ⚠ 当前显示缓存数据 '+Math.round((j.staleAgeMs||0)/1000)+'s':'';
-e('rsMeta').textContent=(selective8?'当前生产：Selective V2（8秒） → Edge Rescue（8秒） → 低置信度真实行情方向（允许下单） · 全部按新输入版本单独统计':'历史 VIP75 统计')+' · '+settlement+' · 本表按生产原始方向计分，不代表反向订单成交或盈亏'+status+stale;
-var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=sourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待本策略首个轮次...</td></tr>';
+var activeNames=activeCatalog.length?activeCatalog.map(function(m){return m.name||m.id}).join(' / ')
+ :selective8?'Selective V2（8秒） / Edge Rescue（8秒） / 行情兜底'
+ :j.activeProductionModel?.id||'暂无明确活跃模型';
+e('rsMeta').textContent='当前生产：'+activeNames+' · '+settlement+
+ ' · 仅按活跃模型和版本的生产原始方向计分，不代表反向订单成交或盈亏'+status+stale;
+var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=x.productionConfidence==null?'-':Number(x.productionConfidence).toFixed(3),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=currentSourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待本策略首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;

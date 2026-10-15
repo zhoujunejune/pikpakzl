@@ -1,0 +1,51 @@
+name: Breakout20 read-only panel live smoke
+on:
+  push:
+    paths:
+      - .github/workflows/breakout20-shadow-panel-smoke.yml
+      - railway-diagnostic/shadow-breakout20-dashboard.mjs
+      - railway-diagnostic/panel-stats-shell.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read-only external smoke (no production order APIs)
+        run: |
+          node --input-type=module <<'NODE'
+          const origin='https://trade-control-panel-production.up.railway.app';
+          const get=async(path)=>{
+            const response=await fetch(origin+path,{cache:'no-store',signal:AbortSignal.timeout(10000)});
+            return response;
+          };
+          for(let attempt=1;attempt<=6;attempt++){
+            try{
+              const home=await get('/');
+              if(!home.ok)throw Error('PANEL_HTTP_'+home.status);
+              const html=await home.text();
+              if(!html.includes('id="breakout20ShadowCard"')||!html.includes('突破20%即可'))
+                throw Error('SHADOW_CARD_NOT_IN_LIVE_PANEL');
+              const r=await get('/api/shadow-breakout20/status');
+              const data=await r.json();
+              if(!r.ok||data?.ok!==true||data?.name!=='突破20%即可'||!data?.results||!data?.training)
+                throw Error('SHADOW_PROXY_UNAVAILABLE_HTTP_'+r.status+'_ERROR_'+(data?.error||'INVALID'));
+              console.log(JSON.stringify({ok:true,page:home.status,proxy:r.status,model:data.name,
+                latest:data.latest?.direction||null,overall:data.results.overall,
+                up:data.results.up,down:data.results.down,
+                rounds:data.results.rounds,trainedModel:data.training.trainedModel,
+                lastTickAt:data.timed?.lastTickAt},null,2));
+              process.exit(0);
+            }catch(err){
+              console.log('attempt '+attempt+' failed: '+String(err?.message||err));
+              if(attempt===6)process.exit(1);
+              await new Promise(resolve=>setTimeout(resolve,5000));
+            }
+          }
+          NODE

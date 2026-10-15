@@ -63,12 +63,13 @@ async function client(){
   const url=String(process.env.SIGNAL_REDIS_URL||'').trim();
   if(!url)throw Error('DIRECTION_REDIS_URL_MISSING');
   if(redis?.isReady)return redis;
+  if(redis?.isOpen&&!redis?.isReady)throw Error('DIRECTION_REDIS_NOT_READY');
   if(!opening){
     const temp=createClient({url,disableOfflineQueue:true,socket:{
       connectTimeout:3500,reconnectStrategy:n=>n>=3?new Error('REDIS_UNAVAILABLE'):250*(n+1)}});
     temp.on('error',()=>{if(!temp.isReady)invalidateDirectionSettings()});
     temp.on('end',()=>invalidateDirectionSettings());
-    opening=temp.connect().then(()=>{redis=temp;return redis}).catch(async err=>{
+    opening=temp.connect().then(()=>{redis=temp;opening=null;return redis}).catch(async err=>{
       opening=null;try{await temp.disconnect()}catch{}
       throw Error('DIRECTION_REDIS_CONNECT_FAILED:'+String(err?.code||err?.message||err));
     });

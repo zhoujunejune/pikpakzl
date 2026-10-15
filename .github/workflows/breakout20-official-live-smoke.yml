@@ -1,0 +1,69 @@
+name: Breakout20 official settlement live read-only smoke
+on:
+  push:
+    paths:
+      - .github/workflows/breakout20-official-live-smoke.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify Railway official final settlement and panel alignment
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const v2='https://signal-diagnostic-v2-production.up.railway.app';
+          const panel='https://trade-control-panel-production.up.railway.app';
+          async function json(url){
+            const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(9000)});
+            if(!r.ok)throw Error('HTTP_'+r.status+' '+url);
+            return await r.json();
+          }
+          let lastError='';
+          const stop=Date.now()+270000;
+          while(Date.now()<stop){
+            try{
+              const [o,p,mode]=await Promise.all([
+                json(v2+'/api/breakout20-official-accuracy'),
+                json(panel+'/api/shadow-breakout20/status'),
+                json(v2+'/api/round-stats')
+              ]);
+              assert.equal(o.ok,true);
+              assert.equal(o.model,'BREAKOUT20_RSI_MACD_RANGE_V1');
+              assert.equal(o.source,'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY');
+              assert.equal(o.statsScope,'CURRENT_MODEL_VERSION_PRODUCTION_LOCKS_ONLY');
+              assert.equal(mode.productionSignalSourceMode,'BREAKOUT20_FAST8');
+              assert.equal(p.ok,true);
+              assert.equal(p.official?.available,true);
+              assert.equal(p.official?.source,o.source);
+              assert.equal(p.results.overall.samples,o.results.overall.samples);
+              assert.equal(p.results.overall.hits,o.results.overall.hits);
+              assert.equal(p.results.overall.accuracy,o.results.overall.accuracy);
+              assert.equal(p.results.up.accuracy,o.results.up.accuracy);
+              assert.equal(p.results.down.accuracy,o.results.down.accuracy);
+              assert.equal(p.shadowSpotResults?.overall?.samples>=0,true);
+              assert.equal(o.results.overall.samples,o.results.up.samples+o.results.down.samples);
+              for(const row of o.recent){
+                if(row.status==='SETTLED'){
+                  assert.ok(['UP','DOWN'].includes(row.actual));
+                  assert.equal(row.settlementSource,'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY');
+                }else assert.equal(row.actual,null);
+              }
+              console.log(JSON.stringify({
+                ok:true,model:o.model,source:o.source,statsScope:o.statsScope,
+                official:o.results,latest:o.latest,
+                railwayPanelAgree:true,spotDiagnosticsExcluded:true,
+                retentionMayLimitTotal:o.retentionMayLimitTotal
+              },null,2));
+              process.exit(0);
+            }catch(error){lastError=String(error?.message||error);console.log('Waiting for live deploy: '+lastError)}
+            await new Promise(resolve=>setTimeout(resolve,4000));
+          }
+          throw new Error('LIVE_OFFICIAL_ALIGNMENT_FAILED: '+lastError);
+          NODE

@@ -687,6 +687,7 @@ function load(){
       breakout20Official=officialBody.official.results;
    }catch(_){}
   }
+  if(chosenOrderModel==='NOVICE_MIX_LOW_V1')return;
   var currentMode=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
   syncActiveCatalog(j);
   var version='SELECTIVE_V2_FAST8_PREWARM_V1';

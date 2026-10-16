@@ -71,3 +71,14 @@ test('production implementation contains actual source switching, PIN and final 
  assert.match(panel,/saveOrderModelChoice/);
  assert.match(panel,/chosenModelName/);
 });
+
+test('API status and UI resolve actual selected order model rather than missing legacy field',()=>{
+ const read=f=>fs.readFileSync(new URL(f,import.meta.url),'utf8');
+ const index=read('./index.mjs'),ui=read('./panel-stats-shell.mjs');
+ const api=index.slice(index.indexOf("if (req.method === 'GET' && url.pathname === '/api/status')"));
+ assert.match(api,/orderSignalModel:modelSelectionSnapshot\(\)\.model/);
+ assert.match(api,/orderSignalModelReady:modelSelectionSnapshot\(\)\.ready/);
+ assert.match(ui,/chosenModelName\(chosenOrderModel\)/);
+ assert.doesNotMatch(ui,/chosenModelName\(j\.orderSignalModel\)/);
+ assert.doesNotMatch(ui,/if\(j\.orderSignalModel===/);
+});

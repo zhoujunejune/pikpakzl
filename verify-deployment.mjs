@@ -6,6 +6,10 @@ console.log('Shadow URL:',url);
 async function get(path){const r=await fetch(url+path);if(!r.ok)throw Error(`${path}: HTTP ${r.status}`);return r.json();}
 await new Promise(r=>setTimeout(r,20000));
 const health=await get('/health');console.log('Health:',JSON.stringify(health));
+const modelAudit=await get('/model-history');
+console.log('Historical model transition audit:',JSON.stringify(modelAudit));
+if(modelAudit.ok!==true || modelAudit.currentModel!=='BASELINE')
+  throw Error('BASELINE_HISTORICAL_MODEL_AUDIT_FAILED');
 if(health.orders!==false)throw Error('Unexpected order capability');
 const preview=await get('/market-check');
 console.log('Live market initialization:',JSON.stringify(preview));

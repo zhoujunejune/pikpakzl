@@ -26,3 +26,11 @@ test('Cloudflare production uses only BASELINE and never trains or promotes',()=
   assert.equal(source.includes('probability('),false);
   assert.equal(source.includes('out.adopted'),false);
 });
+
+test('model-history diagnostic is read-only and retains original round models',()=>{
+  const source=readFileSync(new URL('./src/index.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes("path==='/model-history'"));
+  assert.ok(source.includes("r.model==='LOGISTIC_L2_V1'"));
+  assert.ok(source.includes("firstLogisticSignal:summarize(firstLogistic)"));
+  assert.ok(source.includes("segments.push(segment)"));
+});

@@ -118,12 +118,41 @@ export class Breakout20 extends DurableObject {
   }
   async fetch(req){
     const path=new URL(req.url).pathname;
-    if(path!=='/status'&&path!=='/latest'&&path!=='/health'&&path!=='/market-check')return new Response('Not Found',{status:404});
+    if(path!=='/status'&&path!=='/latest'&&path!=='/health'&&path!=='/market-check'&&path!=='/model-history')return new Response('Not Found',{status:404});
     const s=await this.state();
     if(await this.ctx.storage.getAlarm()===null){
       const alarm=fixedNextAlarm(Date.now());
       await this.ctx.storage.setAlarm(alarm);
       if(s.firstRound===null){s.firstRound=nowRound(alarm);await this.ctx.storage.put('state',s);}
+    }
+    if(path==='/model-history'){
+      // Read-only audit of previously persisted signal rows. No model changes.
+      // firstUse is the first historical LOCKED signal, not the training-completion time.
+      const rows=s.rows.filter(r=>r.status==='LOCKED' &&
+        (r.model==='BASELINE'||r.model==='LOGISTIC_L2_V1'||r.model==='BASELINE_UNTRAINED'))
+        .sort((a,b)=>a.t-b.t);
+      const segments=[];
+      for(const r of rows){
+        let segment=segments.at(-1);
+        if(!segment||segment.model!==r.model){
+          segment={model:r.model,firstRoundMs:r.t,firstLockMs:r.lockedAt,
+            lastRoundMs:r.t,lastLockMs:r.lockedAt,signals:0};
+          segments.push(segment);
+        }
+        segment.lastRoundMs=r.t;
+        segment.lastLockMs=r.lockedAt;
+        segment.signals++;
+      }
+      const firstLogistic=rows.find(r=>r.model==='LOGISTIC_L2_V1');
+      const prior=firstLogistic?rows.filter(r=>r.t<firstLogistic.t).at(-1):null;
+      const summarize=r=>r?{roundStartMs:r.t,lockedAtMs:r.lockedAt,
+        model:r.model,direction:r.direction}:null;
+      return json({ok:true,readOnly:true,currentModel:FIXED_MODEL,
+        retainedSignals:rows.length,earliestRetained:summarize(rows[0]),
+        latestRetained:summarize(rows.at(-1)),
+        firstLogisticSignal:summarize(firstLogistic),
+        precedingSignal:summarize(prior),
+        transitions:segments});
     }
     if(path==='/market-check'){
       try{
@@ -196,7 +225,7 @@ export default {
   async fetch(request,env){
     // Stable one-instance experiment; public read-only endpoints only.
     const path=new URL(request.url).pathname;
-    if(!['/status','/latest','/health','/market-check'].includes(path))return new Response('Not Found',{status:404});
+    if(!['/status','/latest','/health','/market-check','/model-history'].includes(path))return new Response('Not Found',{status:404});
     const old=env.BREAKOUT20.idFromName('breakout20-single-shadow');
     await env.BREAKOUT20.get(old).retire();
     const id=env.BREAKOUT20.idFromName('breakout20-apac-shadow');

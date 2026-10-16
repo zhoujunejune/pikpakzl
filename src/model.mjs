@@ -1,11 +1,10 @@
 // Standalone shadow predictor. No order APIs, private trading credentials or production imports.
 export const NAME = '突破20%即可';
+// Keep the integration envelope ID stable while the input feature set is versioned separately.
 export const VERSION = 'BREAKOUT20_RSI_MACD_RANGE_V1';
+export const FEATURE_SET = 'BASELINE_RSI_MACD_ONLY_V2';
 export const FEATURE_NAMES = Object.freeze([
   'rsi_1m', 'rsi_5m', 'macd_hist_1m', 'macd_hist_5m',
-  'price_position_1m20', 'price_position_5m12',
-  'distance_high_1m20', 'distance_low_1m20',
-  'distance_high_5m12', 'distance_low_5m12',
 ]);
 const clip = (v,a=-3,b=3)=>Math.max(a,Math.min(b,v));
 const num = x => (x === null || x === undefined || x === '' ? NaN : Number(x));
@@ -57,22 +56,14 @@ export function features(one,five,price){
   const r1=rsi(one.map(x=>x.c)),r5=rsi(five.map(x=>x.c));
   const m1=macdHistogram(one.map(x=>x.c)),m5=macdHistogram(five.map(x=>x.c));
   if(![r1,r5,m1,m5].every(Number.isFinite))return null;
-  const a=one.slice(-20), b=five.slice(-12);
-  const high1=Math.max(...a.map(x=>x.h)), low1=Math.min(...a.map(x=>x.l));
-  const high5=Math.max(...b.map(x=>x.h)), low5=Math.min(...b.map(x=>x.l));
-  const range1=high1-low1, range5=high5-low5;
-  if(range1<=0||range5<=0)return null;
+  // No highest/lowest price, distance-to-extrema or range-position features.
+  // OHLC high/low are only used by parseKline to validate market data integrity.
   const vector=[
     (r1-50)/25,(r5-50)/25,
     (m1/price)*1e4/5,(m5/price)*1e4/5,
-    ((price-low1)/range1-.5)*2,((price-low5)/range5-.5)*2,
-    (price-high1)/range1,(price-low1)/range1,
-    (price-high5)/range5,(price-low5)/range5,
   ].map(z=>clip(z));
   return {vector,indicators:{
     rsi1m:r1,rsi5m:r5,macdHist1m:m1,macdHist5m:m5,
-    high1m20:high1,low1m20:low1,high5m12:high5,low5m12:low5,
-    latestPrice:price,position1m:(price-low1)/range1,position5m:(price-low5)/range5,
   }};
 }
 const sigmoid=z=>1/(1+Math.exp(-clip(z,-25,25)));
@@ -82,7 +73,7 @@ export function probability(weights,x){
 }
 export function baseline(x){
   // Clearly labeled, fixed, untrained initialization policy.
-  const z=.27*x[0]+.32*x[1]+.27*x[2]+.35*x[3]+.18*x[4]+.25*x[5];
+  const z=.27*x[0]+.32*x[1]+.27*x[2]+.35*x[3];
   return sigmoid(z);
 }
 function fit(rows){

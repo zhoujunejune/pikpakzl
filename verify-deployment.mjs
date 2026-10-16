@@ -13,9 +13,9 @@ if(modelAudit.ok!==true || modelAudit.currentModel!=='BASELINE')
 if(health.orders!==false)throw Error('Unexpected order capability');
 const preview=await get('/market-check');
 console.log('Live market initialization:',JSON.stringify(preview));
-if(preview.trainedModel!=='BASELINE'||preview.trainingEnabled!==false||
-   preview.training?.reasonCode!=='BASELINE_ONLY_TRAINING_DISABLED')
-   throw Error('BASELINE_ONLY_MARKET_CHECK_NOT_ENFORCED');
+if(preview.trainedModel!=='BASELINE'||preview.trainingEnabled!==true||
+   preview.featureSet!=='BASELINE_RSI_MACD_ONLY_V2')
+   throw Error('RSI_MACD_BASELINE_FEATURE_CONTRACT_NOT_ENFORCED');
 let status=await get('/status');
 const due=status.timed.nextAlarm;
 console.log('Next independent alarm:',new Date(due).toISOString());
@@ -30,10 +30,15 @@ appendFileSync(process.env.GITHUB_STEP_SUMMARY,`Shadow: ${url}/status\n\n\`\`\`j
 if(!status.timed.lastGoodDataAt)throw Error('No successful live market fetch');
 if(!status.latest)throw Error('No prediction or data-gap record');
 if(status.training?.trainedModel!=='BASELINE'||
-   status.training?.trainingEnabled!==false||
-   status.training?.policy!=='BASELINE_ONLY_TRAINING_DISABLED')
-   throw Error('BASELINE_ONLY_STATUS_NOT_ENFORCED');
+   status.training?.trainingEnabled!==true||
+   status.training?.policy!=='BASELINE_ONE_SHOT_RSI_MACD_ONLY_RETRAIN'||
+   status.training?.featureSet!=='BASELINE_RSI_MACD_ONLY_V2')
+   throw Error('RSI_MACD_BASELINE_RETRAIN_POLICY_NOT_ENFORCED');
+if(status.latest.status==='LOCKED'&&status.latest.featureSet!=='BASELINE_RSI_MACD_ONLY_V2')
+   throw Error('LIVE_ROW_STILL_USES_LEGACY_HIGH_LOW_FEATURES');
+if(status.training.completed&&status.training.latestTraining?.ok!==true)
+   throw Error('RETRAIN_COMPLETED_WITHOUT_VALID_HOLDOUT');
 if(status.latest.status==='LOCKED'&&status.latest.model!=='BASELINE')
    throw Error('NON_BASELINE_PRODUCTION_LOCK');
-if(!status.training.latestTraining)throw Error('No fixed model policy recorded');
+if(!status.training.latestTraining)throw Error('No retraining audit recorded');
 if(status.latest.status==='DATA_GAP')throw Error('First round has data gap; inspect status for timing or market error');

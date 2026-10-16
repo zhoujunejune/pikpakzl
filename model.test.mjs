@@ -1,36 +1,61 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {rsi, features, prospectiveStats, train, baseline, probability} from './src/model.mjs';
-test('indicators reject missing history and statistics exclude gaps',()=>{
- assert.equal(features([],[],100),null);
- assert.equal(rsi(Array.from({length:40},(_,i)=>100+i)),100);
- const s=prospectiveStats([{direction:'UP',actual:'UP',status:'SETTLED'},{direction:'DOWN',actual:'UP',status:'SETTLED'},{direction:null,status:'DATA_GAP'}]);
- assert.equal(s.overall.accuracy,.5);assert.equal(s.overall.samples,2);assert.equal(s.dataGaps,1);
- assert.equal(train([]).reason,'INSUFFICIENT_SETTLED_ROUNDS');
+import {FEATURE_SET, FEATURE_NAMES, rsi, features, prospectiveStats, train, baseline, probability} from './src/model.mjs';
+
+test('RSI/MACD-only input excludes every high/low and range feature',()=>{
+  assert.equal(FEATURE_SET,'BASELINE_RSI_MACD_ONLY_V2');
+  assert.deepEqual(FEATURE_NAMES,['rsi_1m','rsi_5m','macd_hist_1m','macd_hist_5m']);
+  const bars=Array.from({length:90},(_,i)=>({
+    t:i*60000,o:100+i/10,h:101+i/10,l:99+i/10,c:100.2+i/10,
+    end:(i+1)*60000-1,closed:true
+  }));
+  const f=features(bars,bars,110);
+  assert.equal(f.vector.length,4);
+  assert.deepEqual(Object.keys(f.indicators).sort(),['macdHist1m','macdHist5m','rsi1m','rsi5m'].sort());
+  assert.equal(features([],[],100),null);
+  assert.equal(rsi(Array.from({length:40},(_,i)=>100+i)),100);
 });
 
-test('the BASELINE scoring weights remain unchanged',()=>{
-  const x=[0.4,-0.25,0.15,0.6,-0.2,0.35,0,0,0,0];
-  const fixed=[0,.27,.32,.27,.35,.18,.25,0,0,0,0];
+test('BASELINE prior high/low weights are removed, preserving four technical coefficients',()=>{
+  const x=[.4,-.25,.15,.6];
+  const fixed=[0,.27,.32,.27,.35];
   assert.ok(Math.abs(baseline(x)-probability(fixed,x))<1e-12);
+  assert.equal(probability(Array(11).fill(0),x),null);
 });
-test('Cloudflare production uses only BASELINE and never trains or promotes',()=>{
+
+test('chronological candidate retrains on four features without changing model identity',()=>{
+  const rows=Array.from({length:160},(_,i)=>({
+    t:i*300000,
+    x:[Math.sin(i/4),Math.cos(i/7),Math.sin(i/9),Math.cos(i/13)],
+    y:i%3===0?1:0
+  }));
+  const out=train(rows);
+  assert.equal(out.ok,true);
+  assert.equal(out.trainingSamples+out.holdoutSamples+1,160);
+  assert.equal(out.holdoutSamples,32);
+  assert.ok(out.weights===null||(out.weights.length===5&&out.weights.every(Number.isFinite)));
+  assert.equal(train([]).reason,'INSUFFICIENT_SETTLED_ROUNDS');
+});
+
+test('historical model audit is retained but new strategy has a separate version and one retrain attempt',()=>{
   const source=readFileSync(new URL('./src/index.mjs',import.meta.url),'utf8');
   assert.ok(source.includes("const FIXED_MODEL='BASELINE'"));
-  assert.ok(source.includes('const p=f?baseline(f.vector):null;'));
-  assert.ok(source.includes('s.weights=null;'));
-  assert.ok(source.includes('trainingEnabled:false'));
-  assert.ok(source.includes('model:FIXED_MODEL'));
-  assert.equal(source.includes('train('),false);
-  assert.equal(source.includes('probability('),false);
-  assert.equal(source.includes('out.adopted'),false);
-});
-
-test('model-history diagnostic is read-only and retains original round models',()=>{
-  const source=readFileSync(new URL('./src/index.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes('featureSet:FEATURE_SET'));
+  assert.ok(source.includes('s.rows.filter(r=>r.featureSet===FEATURE_SET)'));
+  assert.ok(source.includes('const fitted=train(s.seed,{minimum:100});'));
+  assert.ok(source.includes('s.effectiveFromRound=t+PERIOD;'));
+  assert.ok(source.includes("source:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL'"));
   assert.ok(source.includes("path==='/model-history'"));
   assert.ok(source.includes("r.model==='LOGISTIC_L2_V1'"));
   assert.ok(source.includes("firstLogisticSignal:summarize(firstLogistic)"));
-  assert.ok(source.includes("segments.push(segment)"));
+  assert.ok(!source.includes("const TRAINING_DISABLED_CODE="));
+});
+
+test('prospective statistics only count provided valid outcomes, never pending/gaps',()=>{
+ const s=prospectiveStats([{direction:'UP',actual:'UP',status:'SETTLED'},
+   {direction:'DOWN',actual:'UP',status:'SETTLED'},{direction:null,status:'DATA_GAP'}]);
+ assert.equal(s.overall.accuracy,.5);
+ assert.equal(s.overall.samples,2);
+ assert.equal(s.dataGaps,1);
 });

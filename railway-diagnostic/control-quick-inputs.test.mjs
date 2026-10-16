@@ -37,7 +37,7 @@ test('risk and model statistics panels inject using stable anchor, not moved amo
  assert.ok(control.includes("const marker = '<div id=\"riskControlsAnchor\"></div>';"));
  assert.ok(stats.includes("const marker = '<div id=\"riskControlsAnchor\"></div>';"));
  assert.ok(control.includes('$'+'{riskCards}'+'$'+'{marker}'));
- assert.ok(stats.includes('${primaryCard}${statsCard}${marker}'));
+ assert.ok(stats.includes('${primaryCard}${statsCard}${shadowCard}${marker}'));
  assert.ok(!control.includes("const marker = '<div class=\"c\"><input id=\"amount\"'"));
  assert.ok(!stats.includes("const marker = '<div class=\"c\"><input id=\"amount\"'"));
 });
@@ -59,6 +59,8 @@ test('actual two-stage page injection keeps trade inputs near wallet and risk pa
  const injectStats=vm.runInNewContext(stats.slice(statsBegin,statsEnd)+'\ninjectStats',{
   primaryCard:'<section id="primaryMock"></section>',
   statsCard:'<section id="statsMock"></section>',
+  shadowCard:'<section id="shadowMock"></section>',
+  shadowScript:'<script id="shadowScriptMock"></script>',
   statsScript:'<script id="statsScriptMock"></script>',
   primaryScript:'<script id="primaryScriptMock"></script>'
  });
@@ -72,4 +74,5 @@ test('actual two-stage page injection keeps trade inputs near wallet and risk pa
  assert.equal(each(result,'tradeInputsCard'),1);
  assert.equal(each(result,'riskCardsMock'),1);
  assert.equal(each(result,'statsMock'),1);
+ assert.equal(each(result,'shadowMock'),1);
 });

@@ -1,0 +1,61 @@
+name: Real-order signal choice read-only live smoke
+on:
+  push:
+    paths:
+      - .github/workflows/production-order-model-live-smoke.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify deployed selector and untouched current production choice (GET only)
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const origin='https://trade-control-panel-production.up.railway.app';
+          async function get(path){
+            const res=await fetch(origin+path,{cache:'no-store',signal:AbortSignal.timeout(12000)});
+            if(res.status!==200)throw Error(path+'_HTTP_'+res.status);
+            return res;
+          }
+          let lastError=null;
+          for(let i=0;i<6;i++){
+            try{
+              const html=await (await get('/')).text();
+              assert.ok(html.includes('id="orderSignalModelSelect"'),'production selector absent');
+              assert.ok(html.includes('value="NOVICE_MIX_LOW_V1"'),'novice selectable option absent');
+              assert.ok(html.includes('id="orderSignalModelSave"'),'PIN save button absent');
+              const model=await (await get('/api/order-signal-model')).json();
+              assert.equal(model.ok,true);
+              assert.equal(model.ready,true);
+              assert.equal(model.selectionControlsOrders,true);
+              assert.equal(model.model,'BREAKOUT20_RSI_MACD_RANGE_V1','existing live source unexpectedly changed');
+              assert.equal(model.models.length,2);
+              const status=await (await get('/api/status')).json();
+              assert.equal(status.ok,true);
+              assert.equal(status.orderSignalModel,'BREAKOUT20_RSI_MACD_RANGE_V1');
+              assert.equal(status.orderSignalModelReady,true);
+              const direction=await (await get('/api/direction-mode')).json();
+              assert.equal(direction.ok,true);
+              const novice=await (await get('/api/shadow-breakout20/novice-mix')).json();
+              assert.equal(novice.model,'NOVICE_MIX_LOW_V1');
+              assert.equal(novice.readOnly,true);
+              assert.equal(novice.orders,false);
+              assert.equal(novice.productionIntegration,false);
+              console.log(JSON.stringify({result:'PASS',productionModelChoice:model.model,
+                modelChoiceRevisionExists:Boolean(model.revision),
+                control:{enabled:status.enabled,signalStatus:status.signal?.status,
+                  orderSignal:status.orderSignal,model:status.orderSignalModel},
+                directionPolicy:direction.policy,
+                novice:{lastRound:novice.latest?.round||null,lastDirection:novice.latest?.direction||null,
+                  status:novice.latest?.status||null,settled:novice.results?.overall?.samples||0,
+                  storage:novice.health?.storage||null},
+                productionTradingPostCalled:false},null,2));
+              process.exit(0);
+            }catch(error){lastError=String(error?.message||error);console.log('attempt '+(i+1)+' failed: '+lastError);await new Promise(r=>setTimeout(r,5000));}
+          }
+          throw Error('ORDER_CHOICE_LIVE_READONLY_SMOKE_FAILED: '+lastError);
+          NODE

@@ -104,7 +104,7 @@ export function validateNoviceSignal(body,now=Date.now()){
    return {ok:false,reason:'NOVICE_NOT_FROZEN_BEFORE_8S'};
  if(!Number.isFinite(Number(lock.marketSnapshotAt))||
    lock.marketSnapshotAt<round||lock.marketSnapshotAt>lock.lockedAt||
-   !Number.isFinite(Number(lock.score)))
+   (typeof lock.score!=='number'||!Number.isFinite(lock.score)))
    return {ok:false,reason:'NOVICE_MARKET_EVIDENCE_MISSING'};
  if(!Number.isSafeInteger(body.generatedAt)||body.generatedAt<lock.lockedAt||
    body.generatedAt>now+250||now-body.generatedAt>4000)

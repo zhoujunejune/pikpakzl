@@ -57,6 +57,7 @@ test('actual two-stage page injection keeps trade inputs near wallet and risk pa
   riskCards:'<section id="riskCardsMock"></section>',riskScript:'<script id="riskScriptMock"></script>'
  });
  const injectStats=vm.runInNewContext(stats.slice(statsBegin,statsEnd)+'\ninjectStats',{
+  layoutStabilityStyle:'<style id="dashboard-layout-stability"></style>',
   primaryCard:'<section id="primaryMock"></section>',
   statsCard:'<section id="statsMock"></section>',
   shadowCard:'<section id="shadowMock"></section>',
@@ -75,4 +76,12 @@ test('actual two-stage page injection keeps trade inputs near wallet and risk pa
  assert.equal(each(result,'riskCardsMock'),1);
  assert.equal(each(result,'statsMock'),1);
  assert.equal(each(result,'shadowMock'),1);
+});
+
+
+test('mobile model statistics have non-expanding columns and a single raw-signal writer',()=>{
+ assert.match(stats,/grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+ assert.match(stats,/out = out\.replace\('<\/head>', layoutStabilityStyle\+'<\/head>'\)/);
+ const orderPoll=stats.slice(stats.indexOf('function updateOrderSignal(){'),stats.indexOf('\nfunction boot(){',stats.indexOf('function updateOrderSignal(){'));
+ assert.doesNotMatch(orderPoll,/activeFast8Direction'\)\.textContent/);
 });

@@ -12,6 +12,21 @@ const AUTO_CONFIRM_AMOUNT = String(process.env.AUTO_CONFIRM_AMOUNT || '').trim()
 const AUTO_CONFIRM_MAX_ORDERS_PER_ROUND = Math.max(1, Number(process.env.AUTO_CONFIRM_MAX_ORDERS_PER_ROUND || 1));
 const AUTO_CONFIRM_COOLDOWN_MS = Math.max(0, Number(process.env.AUTO_CONFIRM_COOLDOWN_MS || 2500));
 const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.env.AUTO_CONFIRM_STOP_ON_ERROR || 'true'));
+const ORDER_SUBMIT_DEADLINE_MS = 15000; // Round-relative order POST cutoff; Cloudflare 8s lock remains unchanged.
+function orderSubmitWindowOpen(round, now = Date.now()) {
+  const start = Number(round);
+  return Number.isSafeInteger(start) && start > 0 && now >= start && now < start + ORDER_SUBMIT_DEADLINE_MS;
+}
+function rejectExpiredOrderWindow(p, stage) {
+  if (orderSubmitWindowOpen(p?.round)) return false;
+  const elapsedMs = Date.now() - Number(p?.round);
+  p.state = 'ORDER_WINDOW_EXPIRED';
+  p.error = '本轮第15秒订单提交窗口已截止，未发送下单请求';
+  console.log(JSON.stringify({ event:'order_submit_deadline_expired',
+    round:p.round, elapsedMs, deadlineMs:ORDER_SUBMIT_DEADLINE_MS, stage }));
+  return true;
+}
+
 const EV_FILTER_ENABLED = false; // EV 仅保留计算/展示，不再作为实盘下单拦截条件
 const EV_FILTER_REQUIRE_CALIBRATED = !/^(0|false|no|off)$/i.test(String(process.env.PREDICTION_EV_REQUIRE_CALIBRATED || 'true'));
 const EV_MIN_EDGE = Math.max(0, Math.min(0.50, Number(process.env.PREDICTION_EV_MIN_EDGE || 0.04)));
@@ -38,6 +53,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   const isAuto = source === 'auto';
   if (!p || p !== pendingAction || p.state !== 'READY') {
     return { status: 409, body: { ok: false, error: '当前没有可提交的 API 订单' } };
+  }
+  if (rejectExpiredOrderWindow(p, 'before_quote')) {
+    return { status: 409, body: { ok:false, error:p.error, reason:'ORDER_SUBMIT_DEADLINE_EXPIRED' } };
   }
   if (!enabled || !directionSettingsSnapshot().ready) {
     return {status:409,body:{ok:false,error:'跟随已停止或方向配置未就绪'}};
@@ -246,6 +264,10 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     pendingAction=null;
     return {status:409,body:{ok:false,error:'方向配置已经变化，已取消旧订单'}};
   }
+  // Deadline applies at the irreversible Binance POST, not when the signal was generated.
+  if (rejectExpiredOrderWindow(p, 'before_place_order')) {
+    return { status: 409, body: { ok:false, error:p.error, reason:'ORDER_SUBMIT_DEADLINE_EXPIRED' } };
+  }
   p.state = 'SUBMITTING';
   const intent = p._internal;
   const placeBody = {
@@ -414,7 +436,7 @@ const submittedGuard = "  if (submittedRounds.has(String(signal.round))) return;
 if (!source.includes(submittedGuard)) throw new Error('SUBMITTED_GUARD_NOT_FOUND');
 source = source.replace(
   submittedGuard,
-  submittedGuard + "\n  if (AUTO_CONFIRM_ENABLED && autoAttemptedRounds.has(String(signal.round))) return;"
+  submittedGuard + "\n  if (!orderSubmitWindowOpen(signal.round)) return;\n  if (AUTO_CONFIRM_ENABLED && autoAttemptedRounds.has(String(signal.round))) return;"
 );
 
 const amountLine = '      const amount = cleanAmount(body.amount);';

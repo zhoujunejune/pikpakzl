@@ -1,14 +1,15 @@
 // "突破20%即可" — independent, read-only, BTC 5-minute shadow on Cloudflare Free.
 // Does not import, call or affect any Binance order API or production model.
 import { DurableObject } from 'cloudflare:workers';
-import { NAME, VERSION, parseKline, features, baseline, prospectiveStats } from './model.mjs';
+import { NAME, VERSION, FEATURE_SET, parseKline, features, baseline, probability, train, prospectiveStats } from './model.mjs';
 
 const PERIOD=300000, LOCK_OFFSET=6250, DEADLINE=8000;
 const FIXED_MODEL='BASELINE';
-const TRAINING_DISABLED_CODE='BASELINE_ONLY_TRAINING_DISABLED';
-const fixedTraining=(at=Date.now())=>({
-  at,ok:false,adopted:false,reasonCode:TRAINING_DISABLED_CODE,
-  reason:'已固定BASELINE，其他内部训练模型已停用'
+const TRAINING_POLICY='BASELINE_ONE_SHOT_RSI_MACD_ONLY_RETRAIN';
+const initialTraining=(at=Date.now())=>({
+  at,ok:false,adopted:false,reason:'AWAITING_FRESH_HISTORICAL_FEATURES',
+  featureSet:FEATURE_SET,model:FIXED_MODEL,
+  source:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL'
 });
 const RAILWAY_MARKET_URL='https://signal-diagnostic-v3-production.up.railway.app/api/shadow-market-data';
 let marketCache=null,marketInFlight=null;
@@ -17,9 +18,9 @@ const fixedNextAlarm=now=>{
   const thisSlot=nowRound(now)+LOCK_OFFSET;
   return thisSlot>now?thisSlot:thisSlot+PERIOD;
 };
-const blank=()=>({version:VERSION,startedAt:Date.now(),seed:[],rows:[],weights:null,
-  model:FIXED_MODEL,training:fixedTraining(),settlementsSinceTrain:0,
-  lastFailure:null,lastTickAt:null,lastGoodDataAt:null,firstRound:null});
+const blank=()=>({version:VERSION,featureSet:FEATURE_SET,startedAt:Date.now(),seed:[],rows:[],weights:null,
+  model:FIXED_MODEL,training:initialTraining(),trainAttempted:false,effectiveFromRound:null,
+  settlementsSinceTrain:0,lastFailure:null,lastTickAt:null,lastGoodDataAt:null,firstRound:null});
 const safelySerializable=e=>String(e?.message||e||'UnknownError').slice(0,500);
 const json=(v,status=200)=>Response.json(v,{status,headers:{'cache-control':'no-store'}});
 
@@ -104,14 +105,21 @@ export class Breakout20 extends DurableObject {
   async retire(){ const s=await this.state();s.retired=true;await this.ctx.storage.put('state',s);await this.ctx.storage.deleteAlarm();return true;}
   async state(){
     const s=await this.ctx.storage.get('state')||blank();
-    // Migrate persisted LOGISTIC_L2_V1 weights and any prior auto-training state.
-    // The baseline is fixed; past prediction rows are retained unchanged for audit.
-    if(s.model!==FIXED_MODEL || s.weights!==null ||
-       s.training?.reasonCode!==TRAINING_DISABLED_CODE || s.settlementsSinceTrain!==0){
+    // One-time migration for the four-factor BASELINE. Old predictions remain
+    // immutable; old 10-dimensional vectors and LOGISTIC weights cannot be reused.
+    if(s.featureSet!==FEATURE_SET){
+      s.previousTraining=s.training||null;
+      s.featureSet=FEATURE_SET;
+      s.seed=[];
       s.weights=null;
       s.model=FIXED_MODEL;
-      s.training=fixedTraining();
+      s.training=initialTraining();
+      s.trainAttempted=false;
+      s.effectiveFromRound=null;
       s.settlementsSinceTrain=0;
+      await this.ctx.storage.put('state',s);
+    }else if(s.model!==FIXED_MODEL){
+      s.model=FIXED_MODEL;
       await this.ctx.storage.put('state',s);
     }
     return s;
@@ -163,20 +171,25 @@ export class Breakout20 extends DurableObject {
         await this.ctx.storage.put('state',s);
         return json({ok:true,observedAt:Date.now(),oneMinuteSource:one.endpoint,fiveMinuteSource:five.endpoint,
           indicators:features(one.filter(x=>x.closed),five.filter(x=>x.closed),one.at(-1).c)?.indicators,
-          trainedModel:FIXED_MODEL,trainingEnabled:false,training:s.training,seedSamples:s.seed.length});
+          trainedModel:FIXED_MODEL,featureSet:FEATURE_SET,trainingEnabled:true,
+          training:s.training,seedSamples:s.seed.length});
       }catch(e){return json({ok:false,error:safelySerializable(e)},502);}
     }
-    if(path==='/health')return json({ok:true,name:NAME,version:VERSION,activated:true,orders:false,
-      trainedModel:FIXED_MODEL,trainingEnabled:false,lastTickAt:s.lastTickAt,error:s.lastFailure});
+    if(path==='/health')return json({ok:true,name:NAME,version:VERSION,featureSet:FEATURE_SET,activated:true,orders:false,
+      trainedModel:FIXED_MODEL,trainingEnabled:true,retrainCompleted:s.trainAttempted===true,
+      lastTickAt:s.lastTickAt,error:s.lastFailure});
     if(path==='/latest')return json({name:NAME,latest:s.rows.at(-1)||null});
-    return json({name:NAME,version:VERSION,readOnly:true,orders:false,
+    return json({name:NAME,version:VERSION,featureSet:FEATURE_SET,readOnly:true,orders:false,
       productionIntegration:false,officialSettlement:false,
       resolution:'BTCUSDT_SPOT_5MIN_CLOSE_VS_OPEN_PROXY',
       timed:{targetLockMs:LOCK_OFFSET,deadlineMs:DEADLINE,firstRound:s.firstRound,
         lastTickAt:s.lastTickAt,lastGoodDataAt:s.lastGoodDataAt,nextAlarm:await this.ctx.storage.getAlarm()},
       training:{historicalApproxSamples:s.seed.length,trainedModel:FIXED_MODEL,
-        trainingEnabled:false,policy:TRAINING_DISABLED_CODE,
-        latestTraining:s.training},results:prospectiveStats(s.rows),
+        trainingEnabled:true,policy:TRAINING_POLICY,featureSet:FEATURE_SET,
+        trainingSource:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL',
+        completed:s.trainAttempted===true,weightsActive:Array.isArray(s.weights),
+        effectiveFromRound:s.effectiveFromRound,latestTraining:s.training},
+      results:prospectiveStats(s.rows.filter(r=>r.featureSet===FEATURE_SET)),
       lastFailure:s.lastFailure,latest:s.rows.at(-1)||null,
       recent:s.rows.slice(-12).map(({t,direction,actual,status,lockedAt,reason})=>({t,direction,actual,status,lockedAt,reason}))});
   }
@@ -201,21 +214,41 @@ export class Breakout20 extends DurableObject {
         const sufficient=current1&&current5&&Number.isFinite(price)&&
           receivedAt-t<DEADLINE&&elapsed<DEADLINE;
         const f=sufficient?features(a,b,price):null;
-        const p=f?baseline(f.vector):null;
+        // Retrained BASELINE coefficients activate no earlier than the next round.
+        const trained=Array.isArray(s.weights)&&s.weights.length===5&&
+          Number.isFinite(s.effectiveFromRound)&&t>=s.effectiveFromRound;
+        const p=f?(trained?probability(s.weights,f.vector):baseline(f.vector)):null;
         const direction=Number.isFinite(p)?p>=.5?'UP':'DOWN':null;
         s.rows.push({t,status:direction?'LOCKED':'DATA_GAP',direction,
           pUp:p,lockedAt:receivedAt,delayMs:receivedAt-t,
           vector:f?.vector??null,indicators:f?.indicators??null,actual:null,
-          source:'RAILWAY_BINANCE_SPOT_READONLY_RELAY',model:FIXED_MODEL,
+          source:'RAILWAY_BINANCE_SPOT_READONLY_RELAY',model:FIXED_MODEL,featureSet:FEATURE_SET,
+          coefficientSource:trained?'CHRONOLOGICAL_RETRAINED':'FIXED_FOUR_FACTOR_BASELINE',
           reason:direction?null:receivedAt-t>=DEADLINE?'LOCKED_LATE_OR_FETCH_SLOW':'MARKET_DATA_UNAVAILABLE'});
       }
-      if(s.seed.length===0)s.seed=seeds(one,five);
-      // No automatic training, promotion or alternative internal prediction models.
+      // One isolated retraining attempt for this feature-set version, using
+      // only closed historical spot candles. The held-out window is chronological,
+      // and a candidate is not activated unless it beats the four-factor baseline.
+      // There is no LOGISTIC_L2_V1 model promotion and no mid-round change.
+      if(!s.trainAttempted){
+        s.seed=seeds(one,five);
+        const fitted=train(s.seed,{minimum:100});
+        s.training={...fitted,at:Date.now(),featureSet:FEATURE_SET,model:FIXED_MODEL,
+          source:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL'};
+        if(fitted.ok){
+          s.trainAttempted=true;
+          if(fitted.adopted&&Array.isArray(fitted.weights)&&fitted.weights.length===5){
+            s.weights=fitted.weights;
+            s.effectiveFromRound=t+PERIOD;
+          }
+        }
+      }
       s.lastGoodDataAt=Date.now();s.lastFailure=null;
     }catch(err){
       s.lastFailure=safelySerializable(err);
       if(!s.rows.some(r=>r.t===t))s.rows.push({t,status:'DATA_GAP',direction:null,actual:null,
-        lockedAt:Date.now(),reason:s.lastFailure,source:'RAILWAY_BINANCE_SPOT_READONLY_RELAY'});
+        lockedAt:Date.now(),reason:s.lastFailure,featureSet:FEATURE_SET,
+        source:'RAILWAY_BINANCE_SPOT_READONLY_RELAY'});
     }
     s.rows=s.rows.slice(-1300);
     await this.ctx.storage.put('state',s);

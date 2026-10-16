@@ -43,8 +43,15 @@ test('historical model audit is retained but new strategy has a separate version
   assert.ok(source.includes("const FIXED_MODEL='BASELINE'"));
   assert.ok(source.includes('featureSet:FEATURE_SET'));
   assert.ok(source.includes('s.rows.filter(r=>r.featureSet===FEATURE_SET)'));
-  assert.ok(source.includes('const fitted=train(s.seed,{minimum:100});'));
-  assert.ok(source.includes('s.effectiveFromRound=t+PERIOD;'));
+  assert.ok(source.includes("const TRAINING_POLICY='BASELINE_FROZEN_WEIGHTS_NO_RETRAIN'"));
+  assert.ok(source.includes('trainingEnabled:false,weightsFrozen:true,policy:TRAINING_POLICY'));
+  assert.ok(source.includes('const trained=Array.isArray(s.weights)&&s.weights.length===5&&'));
+  assert.ok(source.includes('probability(s.weights,f.vector)'));
+  assert.ok(!source.includes('if(!s.trainAttempted)'));
+  assert.ok(!source.includes('const fitted=train('));
+  assert.ok(!source.includes('s.weights=fitted.weights'));
+  assert.ok(!source.includes('s.seed=seeds('));
+  assert.ok(source.includes('s.effectiveFromRound'));
   assert.ok(source.includes("source:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL'"));
   assert.ok(source.includes("path==='/model-history'"));
   assert.ok(source.includes("r.model==='LOGISTIC_L2_V1'"));

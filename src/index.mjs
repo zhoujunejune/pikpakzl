@@ -1,13 +1,13 @@
 // "突破20%即可" — independent, read-only, BTC 5-minute shadow on Cloudflare Free.
 // Does not import, call or affect any Binance order API or production model.
 import { DurableObject } from 'cloudflare:workers';
-import { NAME, VERSION, FEATURE_SET, parseKline, features, baseline, probability, train, prospectiveStats } from './model.mjs';
+import { NAME, VERSION, FEATURE_SET, parseKline, features, baseline, probability, prospectiveStats } from './model.mjs';
 
 const PERIOD=300000, LOCK_OFFSET=6250, DEADLINE=8000;
 const FIXED_MODEL='BASELINE';
-const TRAINING_POLICY='BASELINE_ONE_SHOT_RSI_MACD_ONLY_RETRAIN';
+const TRAINING_POLICY='BASELINE_FROZEN_WEIGHTS_NO_RETRAIN';
 const initialTraining=(at=Date.now())=>({
-  at,ok:false,adopted:false,reason:'AWAITING_FRESH_HISTORICAL_FEATURES',
+  at,ok:false,adopted:false,reason:'TRAINING_DISABLED_KEEP_FIXED_BASELINE_IF_NO_SAVED_WEIGHTS',
   featureSet:FEATURE_SET,model:FIXED_MODEL,
   source:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL'
 });
@@ -71,19 +71,6 @@ async function candles(period,limit){
   bars.marketEventMs=Number(payload.latest.eventMs);
   bars.spotPrice=Number(payload.latest.lastPrice);
   return bars;
-}
-
-function seeds(one, five){
-  const result=[];
-  // Historical approximation: 5-minute OPEN price; NOT exact T+6.25s state.
-  for(const target of five.filter(k=>k.closed)){
-    const a=one.filter(x=>x.closed&&x.end<target.t);
-    const b=five.filter(x=>x.closed&&x.end<target.t);
-    if(target.c===target.o)continue;
-    const f=features(a,b,target.o);
-    if(f)result.push({t:target.t,x:f.vector,y:Number(target.c>target.o),source:'HISTORICAL_OPEN_APPROXIMATION'});
-  }
-  return result;
 }
 
 function settleExistingRows(rows, historicalBars, until){
@@ -166,17 +153,16 @@ export class Breakout20 extends DurableObject {
     if(path==='/market-check'){
       try{
         const [one,five]=await Promise.all([candles('1m',1000),candles('5m',240)]);
-        s.seed=seeds(one,five);
-        // Read-only data diagnostics do not train, promote or change production weights.
-        await this.ctx.storage.put('state',s);
+        // Diagnostics are read-only: no new training samples or weight updates.
         return json({ok:true,observedAt:Date.now(),oneMinuteSource:one.endpoint,fiveMinuteSource:five.endpoint,
           indicators:features(one.filter(x=>x.closed),five.filter(x=>x.closed),one.at(-1).c)?.indicators,
-          trainedModel:FIXED_MODEL,featureSet:FEATURE_SET,trainingEnabled:true,
-          training:s.training,seedSamples:s.seed.length});
+          trainedModel:FIXED_MODEL,featureSet:FEATURE_SET,trainingEnabled:false,
+          weightsFrozen:true,training:s.training,seedSamples:s.seed.length});
       }catch(e){return json({ok:false,error:safelySerializable(e)},502);}
     }
     if(path==='/health')return json({ok:true,name:NAME,version:VERSION,featureSet:FEATURE_SET,activated:true,orders:false,
-      trainedModel:FIXED_MODEL,trainingEnabled:true,retrainCompleted:s.trainAttempted===true,
+      trainedModel:FIXED_MODEL,trainingEnabled:false,weightsFrozen:true,
+      retrainCompleted:s.trainAttempted===true,trainedWeightsActive:Array.isArray(s.weights),
       lastTickAt:s.lastTickAt,error:s.lastFailure});
     if(path==='/latest')return json({name:NAME,latest:s.rows.at(-1)||null});
     return json({name:NAME,version:VERSION,featureSet:FEATURE_SET,readOnly:true,orders:false,
@@ -185,7 +171,7 @@ export class Breakout20 extends DurableObject {
       timed:{targetLockMs:LOCK_OFFSET,deadlineMs:DEADLINE,firstRound:s.firstRound,
         lastTickAt:s.lastTickAt,lastGoodDataAt:s.lastGoodDataAt,nextAlarm:await this.ctx.storage.getAlarm()},
       training:{historicalApproxSamples:s.seed.length,trainedModel:FIXED_MODEL,
-        trainingEnabled:true,policy:TRAINING_POLICY,featureSet:FEATURE_SET,
+        trainingEnabled:false,weightsFrozen:true,policy:TRAINING_POLICY,featureSet:FEATURE_SET,
         trainingSource:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL',
         completed:s.trainAttempted===true,weightsActive:Array.isArray(s.weights),
         effectiveFromRound:s.effectiveFromRound,latestTraining:s.training},
@@ -226,23 +212,9 @@ export class Breakout20 extends DurableObject {
           coefficientSource:trained?'CHRONOLOGICAL_RETRAINED':'FIXED_FOUR_FACTOR_BASELINE',
           reason:direction?null:receivedAt-t>=DEADLINE?'LOCKED_LATE_OR_FETCH_SLOW':'MARKET_DATA_UNAVAILABLE'});
       }
-      // One isolated retraining attempt for this feature-set version, using
-      // only closed historical spot candles. The held-out window is chronological,
-      // and a candidate is not activated unless it beats the four-factor baseline.
-      // There is no LOGISTIC_L2_V1 model promotion and no mid-round change.
-      if(!s.trainAttempted){
-        s.seed=seeds(one,five);
-        const fitted=train(s.seed,{minimum:100});
-        s.training={...fitted,at:Date.now(),featureSet:FEATURE_SET,model:FIXED_MODEL,
-          source:'HISTORICAL_SPOT_OPEN_CLOSE_PROXY_NOT_OFFICIAL'};
-        if(fitted.ok){
-          s.trainAttempted=true;
-          if(fitted.adopted&&Array.isArray(fitted.weights)&&fitted.weights.length===5){
-            s.weights=fitted.weights;
-            s.effectiveFromRound=t+PERIOD;
-          }
-        }
-      }
+      // Automatic and manual retraining are disabled. Historical training
+      // coefficients remain persisted and continue to drive inference after
+      // effectiveFromRound; no new weights or model versions are created.
       s.lastGoodDataAt=Date.now();s.lastFailure=null;
     }catch(err){
       s.lastFailure=safelySerializable(err);

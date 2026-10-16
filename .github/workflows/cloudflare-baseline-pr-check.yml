@@ -1,0 +1,22 @@
+name: Baseline RSI/MACD-only pull request checks
+on:
+  pull_request:
+    branches: [cloudflare-breakout20-only-20261015]
+    paths:
+      - src/**
+      - model.test.mjs
+      - verify-deployment.mjs
+      - .github/workflows/cloudflare-baseline-pr-check.yml
+permissions:
+  contents: read
+jobs:
+  validate-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check src/index.mjs && node --check src/model.mjs && node --check verify-deployment.mjs
+      - run: node --test model.test.mjs

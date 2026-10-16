@@ -276,8 +276,56 @@ try{
 }catch(_){}
 throw new Error(errMsg||'统计服务暂不可用')
 }
-async function load(){try{
+
+async function renderNoviceRoundStats(){
+ var response=await fetch('/api/shadow-breakout20/novice-mix?ts='+Date.now(),{cache:'no-store'});
+ var data=await response.json();
+ if(!response.ok||!data||data.ok!==true||data.model!=='NOVICE_MIX_LOW_V1'||data.readOnly!==true)
+  throw Error('新手混合独立统计不可用');
+ if(globalThis.__orderModelStatsSelection!=='NOVICE_MIX_LOW_V1')return;
+ var r=data.results||{},overall=r.overall||{},total=Number(r.rounds||0),locked=Number(r.locked||0),gaps=Number(r.dataGaps||0);
+ var correct=Number(overall.hits||0),count=Number(overall.samples||0);
+ e('rsAccuracy').innerHTML=count?'新手混合模型命中率：<span class="on">'+(correct*100/count).toFixed(2)+'%</span>':'新手混合模型命中率：暂无已结算';
+ e('rsSettled').textContent=count;
+ e('rsDecided').textContent=count;
+ e('rsCorrect').innerHTML='<span class="on">'+correct+'</span>';
+ e('rsWrong').innerHTML='<span class="bad">'+(count-correct)+'</span>';
+ e('rsWait').textContent=gaps;
+ e('rsCoverage').textContent=total?(locked*100/total).toFixed(2)+'%':'-';
+ e('rsMeta').textContent='当前真实下单选择：NOVICE_MIX_LOW_V1 · 独立影子模型的预测与 Binance Prediction 官方结算配对；'
+  +'有效已结算 '+count+' 轮，数据缺口 '+gaps+' 轮；不包含突破20%即可历史数据，不代表实际订单收益。';
+ var rows=Array.isArray(data.recent)?data.recent.slice(0,30):[];
+ e('rsRows').innerHTML=rows.length?rows.map(function(x){
+  var valid=x.status==='LOCKED'||x.status==='PARTIAL_INPUT';
+  var actual=x.actual==='UP'||x.actual==='DOWN'?x.actual:null;
+  var predicted=valid?(x.direction==='UP'||x.direction==='DOWN'?x.direction:'WAIT'):'WAIT';
+  var score=valid&&typeof x.score==='number'&&isFinite(x.score)?'评分 '+Math.abs(x.score).toFixed(3):'无有效行情评分';
+  var delay=Number.isFinite(Number(x.lockedAt))&&Number.isFinite(Number(x.round))?((Number(x.lockedAt)-Number(x.round))/1000).toFixed(3)+'s':'-';
+  var result=!valid?'数据缺口':!actual?'PENDING':(predicted===actual?'HIT':'MISS');
+  return '<tr style="border-top:1px solid #2b313d">'+
+   '<td style="padding:9px 6px">'+tm(x.round)+'</td>'+
+   '<td style="padding:9px 6px">'+badge(predicted)+'</td>'+
+   '<td style="padding:9px 6px">NOVICE_MIX_LOW_V1</td>'+
+   '<td style="padding:9px 6px">'+esc(score)+'</td>'+
+   '<td style="padding:9px 6px">'+esc(delay)+'</td>'+
+   '<td style="padding:9px 6px">'+badge(actual||'PENDING')+'</td>'+
+   '<td style="padding:9px 6px">'+badge(result)+'</td>'+
+   '<td style="padding:9px 6px">'+(valid&&actual?'Binance Prediction 官方结算':valid?'等待官方结算':'未锁定有效行情，不计胜率')+'</td></tr>';
+ }).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">新手混合模型尚无独立轮次记录</td></tr>';
+}
+async function load(){
+if(globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'){
+ try{await renderNoviceRoundStats()}
+ catch(err){if(globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'){
+  e('rsAccuracy').textContent='新手混合模型统计读取失败';
+  e('rsMeta').textContent='独立模型接口错误：'+(err?.message||err)+'。未回退使用老模型数据。';
+  e('rsRows').innerHTML='<tr><td colspan="8" style="padding:10px 6px">新模型数据暂不可用，不展示老模型记录</td></tr>';
+ }}
+ return;
+}
+try{
 var j=await getStats();var h=j.health||{};
+if(globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1')return;
 var selective8=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
 var activeCatalog=(Array.isArray(j.activeSignalModels)?j.activeSignalModels:[])
  .filter(function(m){return m&&m.active!==false&&m.id&&m.source&&m.version});
@@ -330,6 +378,7 @@ e('rsMeta').textContent='当前生产：'+activeNames+' · '+settlement+
  (j.productionSignalSourceMode==='BREAKOUT20_FAST8'?' · 准确率采用 Railway 保留历史的本模型官方结算':' · 仅按活跃模型和版本的生产原始方向计分')+'，不代表反向订单成交或盈亏'+status+stale;
 var a=all.slice(0,50);e('rsRows').innerHTML=a.length?a.map(function(x){var st=strengthLabel(x),dl=x.productionDelayMs==null?'-':(Number(x.productionDelayMs)/1000).toFixed(2)+'s',src=currentSourceName(x),actual=(x.productionActual==='UP'||x.productionActual==='DOWN')?x.productionActual:'PENDING',evidence=(x.resolutionEvidence&&String(x.resolutionEvidence).indexOf('OFFICIAL_')===0)?x.resolutionEvidence:'等待官方结算';return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.roundStartMs)+'</td><td style="padding:9px 6px">'+badge(x.productionPrediction)+'</td><td style="padding:9px 6px">'+esc(src)+'</td><td style="padding:9px 6px">'+st+'</td><td style="padding:9px 6px">'+dl+'</td><td style="padding:9px 6px">'+badge(actual)+'</td><td style="padding:9px 6px">'+badge(derived(x))+'</td><td style="padding:9px 6px">'+esc(evidence)+'</td></tr>'}).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">等待本策略首个轮次...</td></tr>';
 }catch(err){if(e('rsAccuracy'))e('rsAccuracy').innerHTML='<span class="bad">统计读取失败</span>';if(e('rsMeta'))e('rsMeta').textContent=err&&err.message?err.message:'统计服务暂不可用'}}
+globalThis.__refreshOrderModelRoundStats=load;
 function boot(){load();setInterval(load,3000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();</script>`;
 
@@ -383,6 +432,7 @@ function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
 function escModel(v){return String(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 var policy='',revision='';
 var chosenOrderModel='BREAKOUT20_RSI_MACD_RANGE_V1';
+var hasLiveOrderModelSelection=false;
 var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false;
 function chosenModelName(model){
  return model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
@@ -395,7 +445,14 @@ async function loadOrderModelChoice(){
   if(!response.ok||data.ok!==true||data.ready!==true)throw Error(data.error||'下单源配置未就绪');
   if(!Array.isArray(data.models)||!data.models.some(function(x){return x.id===data.model;}))
    throw Error('下单模型白名单无效');
+  var previouslyChosen=chosenOrderModel;
   chosenOrderModel=data.model;choiceRevision=data.revision;choiceReady=true;
+  globalThis.__orderModelStatsSelection=chosenOrderModel;
+  hasLiveOrderModelSelection=true;
+  if(previouslyChosen!==chosenOrderModel){
+   if(typeof globalThis.__refreshOrderModelRoundStats==='function')globalThis.__refreshOrderModelRoundStats();
+   load();
+  }
   var select=e('orderSignalModelSelect');
   if(select&&!choiceDirty)select.value=chosenOrderModel;
   e('orderSignalModelState').textContent='当前真实下单信号：'+chosenModelName(chosenOrderModel)
@@ -436,6 +493,9 @@ async function saveOrderModelChoice(){
   var data=await response.json();
   if(!response.ok||data.ok!==true)throw Error(data.error||'切换失败');
   choiceDirty=false;chosenOrderModel=data.model;choiceRevision=data.revision;choiceReady=true;
+  globalThis.__orderModelStatsSelection=chosenOrderModel;
+  if(typeof globalThis.__refreshOrderModelRoundStats==='function')globalThis.__refreshOrderModelRoundStats();
+  load();
   e('orderSignalModelState').textContent='保存成功：'+chosenModelName(next)+'，下一轮才开始用于实盘下单';
   await loadOrderModelChoice();
  }catch(err){e('orderSignalModelState').textContent='保存失败：'+(err.message||err);choiceDirty=false;await loadOrderModelChoice();}
@@ -456,6 +516,8 @@ var sources=[
 var activeCatalog=[];
 function activeSourceName(source){
  var entry=activeCatalog.find(function(m){return m.source===source});
+ if(chosenOrderModel==='NOVICE_MIX_LOW_V1'&&source==='SELECTIVE_V2_FAST8_PRIMARY'&&entry)
+  return '新手错误混合 NOVICE_MIX_LOW_V1';
  return entry?(entry.name||entry.id):null;
 }
 var directionModeReady=false,directionModeBusy=false;
@@ -561,11 +623,61 @@ function orderSide(z){
  if(mode==='OFF')return null;
  return mode==='INVERSE'?(pred==='UP'?'DOWN':'UP'):mode==='FORWARD'?pred:null;
 }
+
+async function renderNovicePrimary(){
+ var response=await fetch('/api/shadow-breakout20/novice-mix?ts='+Date.now(),{cache:'no-store'});
+ var data=await response.json();
+ if(!response.ok||data?.ok!==true||data.model!=='NOVICE_MIX_LOW_V1'||data.readOnly!==true)throw Error('独立新手模型数据不可用');
+ if(chosenOrderModel!=='NOVICE_MIX_LOW_V1')return;
+ var r=data.results||{},all=r.overall||{},n=Number(all.samples||0),h=Number(all.hits||0);
+ var now=Math.floor(Date.now()/300000)*300000,latest=data.latest||{},valid=(latest.status==='LOCKED'||latest.status==='PARTIAL_INPUT')&&latest.round===now;
+ e('activeFast8Name').textContent='新手错误混合 NOVICE_MIX_LOW_V1';
+ e('activeFast8Desc').textContent='BTC 5分钟 · 独立影子预测 · 8秒内锁定 · 页面仅显示当前选择模型的历史；未验证有稳定优势';
+ e('activeFast8Direction').textContent=valid?latest.direction:'本轮未锁定 / 暂不可下单';
+ e('activeFast8Accuracy').textContent=n?pct(h*100/n):'暂无已确认官方结算';
+ e('activeFast8HitMiss').textContent=h+' / '+(n-h)+'（'+n+'轮）';
+ e('activeFast8Coverage').textContent=Number(r.locked||0)+' 轮锁定 · '+Number(r.dataGaps||0)+' 轮数据缺口';
+ var src=sources.find(function(x){return x.id==='SELECTIVE_V2_FAST8_PRIMARY'})||null;
+ var rows=Array.isArray(data.recent)?data.recent:[];
+ var settled=rows.filter(function(x){return (x.status==='LOCKED'||x.status==='PARTIAL_INPUT')&&(x.actual==='UP'||x.actual==='DOWN')});
+ var allowed=settled.filter(function(x){return directionModeReady&&src&&src.modes[x.direction]!=='OFF'});
+ var mappedHits=allowed.filter(function(x){var mode=src.modes[x.direction];var direction=mode==='INVERSE'?(x.direction==='UP'?'DOWN':'UP'):x.direction;return direction===x.actual;}).length;
+ e('activeFast8InverseAccuracy').textContent=allowed.length?pct(mappedHits*100/allowed.length):'可用样本不足';
+ e('activeFast8InverseHitMiss').textContent=mappedHits+' / '+(allowed.length-mappedHits)+'（仅最近'+rows.length+'条记录中的'+allowed.length+'轮）';
+ function sideText(k){var p=r[k]||{};return p.samples?p.hits+'/'+p.samples+' · '+pct(p.hits*100/p.samples):'暂无已确认官方结果';}
+ var modes=src&&directionModeReady?'UP：'+modeLabel(src.modes.UP)+' / DOWN：'+modeLabel(src.modes.DOWN):'方向开关未就绪';
+ var part=e('sourceRateRows');
+ if(part)part.innerHTML='<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">新手错误混合 NOVICE_MIX_LOW_V1</td>'+
+ '<td style="text-align:center">'+escModel(modes)+'</td>'+
+ '<td style="text-align:center">'+(n?h+'/'+n+' · '+pct(100*h/n):'暂无已确认结果')+'</td>'+
+ '<td style="text-align:center">'+sideText('up')+'</td>'+
+ '<td style="text-align:center">'+sideText('down')+'</td>'+
+ '<td style="text-align:center">'+(allowed.length?mappedHits+'/'+allowed.length+' · '+pct(100*mappedHits/allowed.length):'可用样本不足')+'</td></tr>';
+ e('activeFast8Note').textContent='当前下单选择：NOVICE_MIX_LOW_V1 · 新模型官方结算 '+n+
+   ' 轮 · 反向理论映射仅基于新模型最近'+rows.length+'条可用记录和当前开关，不代表真实订单盈亏 · 不含突破20%即可历史结算。';
+ renderDirectionModes();
+}
 function load(){
+ if(chosenOrderModel==='NOVICE_MIX_LOW_V1'){
+  renderNovicePrimary().catch(function(err){
+   if(chosenOrderModel!=='NOVICE_MIX_LOW_V1')return;
+   e('activeFast8Name').textContent='新手错误混合 NOVICE_MIX_LOW_V1';
+   e('activeFast8Accuracy').textContent='独立统计暂不可用';
+   e('activeFast8HitMiss').textContent='-';
+   e('activeFast8InverseAccuracy').textContent='-';
+   e('activeFast8InverseHitMiss').textContent='-';
+   e('activeFast8Coverage').textContent='-';
+   e('activeFast8Direction').textContent='新模型数据未就绪';
+   e('sourceRateRows').innerHTML='<tr><td colspan="6" style="padding:10px 6px">新模型数据不可用，禁止显示老模型胜率</td></tr>';
+   e('activeFast8Note').textContent=err?.message||'新模型统计读取失败';
+  });
+  return;
+ }
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'})
  .then(function(r){if(!r.ok)throw Error('统计接口 HTTP '+r.status);return r.json()})
  .then(async function(j){
   if(!j||!j.ok)throw Error('生产统计不可用');
+  if(chosenOrderModel==='NOVICE_MIX_LOW_V1')return;
   var breakout20Official=null;
   if(j.productionSignalSourceMode==='BREAKOUT20_FAST8'){
    try{
@@ -575,6 +687,7 @@ function load(){
       breakout20Official=officialBody.official.results;
    }catch(_){}
   }
+  if(chosenOrderModel==='NOVICE_MIX_LOW_V1')return;
   var currentMode=j.productionSignalSourceMode==='SELECTIVE_V2_FAST8';
   syncActiveCatalog(j);
   var version='SELECTIVE_V2_FAST8_PREWARM_V1';

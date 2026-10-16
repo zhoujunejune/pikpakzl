@@ -57,6 +57,12 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (rejectExpiredOrderWindow(p, 'before_quote')) {
     return { status: 409, body: { ok:false, error:p.error, reason:'ORDER_SUBMIT_DEADLINE_EXPIRED' } };
   }
+  try { await refreshModelSelection(); }
+  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'下单信号选择配置不可用'}};}
+  if (!selectedSignalMatches(p)) {
+    pendingAction=null;
+    return {status:409,body:{ok:false,error:'下单信号源已经切换，旧订单已失效'}};
+  }
   if (!enabled || !directionSettingsSnapshot().ready) {
     return {status:409,body:{ok:false,error:'跟随已停止或方向配置未就绪'}};
   }
@@ -107,7 +113,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   const [current, freshQuote] = await Promise.all([
     getSignal({ forceHttp: true }), getFreshQuote(p._internal),
   ]);
-  if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current)) {
+  if (!selectedSignalMatches(p) || !current || current.status !== 'LOCKED' ||
+      String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current) ||
+      (p.signalModelChoice===NOVICE_MODEL&&current.upstreamModel!==NOVICE_MODEL)) {
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',
@@ -256,9 +264,10 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
 
   // Refresh the shared authority immediately before the irreversible POST.
   // A switch on another Railway replica must invalidate this prepared order.
-  try { await refreshDirectionSettings(); }
-  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'提交前方向配置读取失败，已停止下单'}};}
-  if (p !== pendingAction || !enabled || !directionSettingsSnapshot().ready ||
+  try { await Promise.all([refreshDirectionSettings(),refreshModelSelection()]); }
+  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'提交前信号源或方向配置读取失败，已停止下单'}};}
+  if (p !== pendingAction || !enabled || !selectedSignalMatches(p) ||
+      !directionSettingsSnapshot().ready ||
       p.orderDirectionPolicy !== directionSettingsSnapshot().policy ||
       !pendingOrderMatchesProduction(p,current)) {
     pendingAction=null;

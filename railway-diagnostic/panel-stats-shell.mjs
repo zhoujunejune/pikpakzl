@@ -388,7 +388,7 @@ function chosenModelName(model){
  return model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
 }
 async function loadOrderModelChoice(){
- if(choiceBusy)return;
+ if(choiceBusy||!e('orderSignalModelSelect')||!e('orderSignalModelState'))return;
  try{
   var response=await fetch('/api/order-signal-model?ts='+Date.now(),{cache:'no-store'});
   var data=await response.json();
@@ -405,6 +405,7 @@ async function loadOrderModelChoice(){
  }catch(err){choiceReady=false;e('orderSignalModelState').textContent='下单信号配置读取失败，禁止切换：'+(err.message||err);}
 }
 async function loadOrderModelStats(){
+ if(!e('orderSignalModelStats'))return;
  try{
   var endpoint=chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':'/api/shadow-breakout20/status';
   var response=await fetch(endpoint+'?ts='+Date.now(),{cache:'no-store'});

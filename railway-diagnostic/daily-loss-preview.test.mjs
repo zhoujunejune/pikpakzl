@@ -11,11 +11,11 @@ test('daily-loss preview has no live card, handler, client or scheduled audit',(
  assert.doesNotMatch(shell,/startDailyLossAuditService\(\)|stopDailyLossAuditService\(\)/);
 });
 test('independent TP/SL settings, risk scan and existing trading routes remain',()=>{
- assert.match(page,/id="realRiskStatusCard"/);
+ assert.doesNotMatch(page,/id="realRiskStatusCard"/);
  assert.match(shell,/tpEditor/);
  assert.match(shell,/slEditor/);
  assert.match(shell,/\/api\/risk-control/);
- assert.match(shell,/\/risk-monitor-client\.js/);
+ assert.doesNotMatch(shell,/\/risk-monitor-client\.js/);
  assert.match(worker,/const tpTriggered = TAKE_PROFIT_ENABLED/);
  assert.match(worker,/const slTriggered = STOP_LOSS_ENABLED/);
  assert.match(wrapper,/async function submitPendingOrder/);

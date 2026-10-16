@@ -1,4 +1,4 @@
-name: Real-order signal choice read-only live smoke
+name: Real-order signal choice and independent stats live smoke
 on:
   push:
     paths:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify deployed selector and untouched current production choice (GET only)
+      - name: Verify deployed selector and independent per-model stats (GET only)
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
@@ -32,11 +32,11 @@ jobs:
               assert.equal(model.ok,true);
               assert.equal(model.ready,true);
               assert.equal(model.selectionControlsOrders,true);
-              assert.equal(model.model,'BREAKOUT20_RSI_MACD_RANGE_V1','existing live source unexpectedly changed');
+              assert.ok(['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(model.model),'invalid selected model');
               assert.equal(model.models.length,2);
               const status=await (await get('/api/status')).json();
               assert.equal(status.ok,true);
-              assert.equal(status.orderSignalModel,'BREAKOUT20_RSI_MACD_RANGE_V1');
+              assert.equal(status.orderSignalModel,model.model);
               assert.equal(status.orderSignalModelReady,true);
               const direction=await (await get('/api/direction-mode')).json();
               assert.equal(direction.ok,true);
@@ -45,6 +45,14 @@ jobs:
               assert.equal(novice.readOnly,true);
               assert.equal(novice.orders,false);
               assert.equal(novice.productionIntegration,false);
+              assert.ok(html.includes('renderNoviceRoundStats'),'independent round table renderer missing');
+              assert.ok(html.includes('renderNovicePrimary'),'independent primary stats renderer missing');
+              assert.ok(html.includes('__orderModelStatsSelection'),'selected model not connected to stats renderer');
+              const legacy=await (await get('/api/shadow-breakout20/status')).json();
+              assert.equal(legacy.ok,true);
+              assert.ok(legacy.results?.overall,'legacy official results missing');
+              assert.ok(novice.results?.overall,'novice official results missing');
+              assert.equal(novice.official?.source,'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY');
               console.log(JSON.stringify({result:'PASS',productionModelChoice:model.model,
                 modelChoiceRevisionExists:Boolean(model.revision),
                 control:{enabled:status.enabled,signalStatus:status.signal?.status,
@@ -53,6 +61,9 @@ jobs:
                 novice:{lastRound:novice.latest?.round||null,lastDirection:novice.latest?.direction||null,
                   status:novice.latest?.status||null,settled:novice.results?.overall?.samples||0,
                   storage:novice.health?.storage||null},
+                historicalLedgers:{novice:novice.results?.overall,
+                   legacy:legacy.results?.overall},
+                uiIndependentRenderers:true,
                 productionTradingPostCalled:false},null,2));
               process.exit(0);
             }catch(error){lastError=String(error?.message||error);console.log('attempt '+(i+1)+' failed: '+lastError);await new Promise(r=>setTimeout(r,5000));}

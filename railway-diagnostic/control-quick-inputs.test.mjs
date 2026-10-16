@@ -82,6 +82,8 @@ test('actual two-stage page injection keeps trade inputs near wallet and risk pa
 test('mobile model statistics have non-expanding columns and a single raw-signal writer',()=>{
  assert.match(stats,/grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
  assert.match(stats,/out = out\.replace\('<\/head>', layoutStabilityStyle\+'<\/head>'\)/);
- const orderPoll=stats.slice(stats.indexOf('function updateOrderSignal(){'),stats.indexOf('\nfunction boot(){',stats.indexOf('function updateOrderSignal(){'));
+ const from=stats.indexOf('function updateOrderSignal(){');
+ const to=stats.indexOf('\nfunction boot(){',from);
+ const orderPoll=stats.slice(from,to);
  assert.doesNotMatch(orderPoll,/activeFast8Direction'\)\.textContent/);
 });

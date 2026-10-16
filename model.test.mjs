@@ -17,12 +17,12 @@ test('the BASELINE scoring weights remain unchanged',()=>{
 });
 test('Cloudflare production uses only BASELINE and never trains or promotes',()=>{
   const source=readFileSync(new URL('./src/index.mjs',import.meta.url),'utf8');
-  assert.match(source,/const FIXED_MODEL='BASELINE'/);
-  assert.match(source,/const p=f\\?baseline\\(f\\.vector\\):null/);
-  assert.match(source,/s\\.weights=null/);
-  assert.match(source,/trainingEnabled:false/);
-  assert.match(source,/model:FIXED_MODEL/);
-  assert.doesNotMatch(source,/\\btrain\\s*\\(/);
-  assert.doesNotMatch(source,/\\bprobability\\s*\\(/);
-  assert.doesNotMatch(source,/out\\.adopted/);
+  assert.ok(source.includes("const FIXED_MODEL='BASELINE'"));
+  assert.ok(source.includes('const p=f?baseline(f.vector):null;'));
+  assert.ok(source.includes('s.weights=null;'));
+  assert.ok(source.includes('trainingEnabled:false'));
+  assert.ok(source.includes('model:FIXED_MODEL'));
+  assert.equal(source.includes('train('),false);
+  assert.equal(source.includes('probability('),false);
+  assert.equal(source.includes('out.adopted'),false);
 });

@@ -46,5 +46,5 @@ test('training never invents labels or selects weights before 80 actual settleme
     model:MODEL,round:ROUND+i*300000,direction:'UP',status:'LOCKED',actual:null,
     factors:{price:1,kline:1,technical:-1,previous:null,gambler:-1,volume:1,range:0}
   })),BASE_WEIGHTS).samples,0);
-  assert.equal(weighted({price:1,kline:-1}).available,.48);
+  assert.ok(Math.abs(weighted({price:1,kline:-1}).available-.48)<1e-12);
 });

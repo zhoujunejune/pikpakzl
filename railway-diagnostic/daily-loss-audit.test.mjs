@@ -85,12 +85,12 @@ test('scheduled audits use only signed Binance GET, run every 15min, persist res
  assert.doesNotMatch(shell,/url.pathname === '\/api\/daily-loss-audit'/);
  assert.doesNotMatch(wrapper,/daily-loss-audit-service|DAILY_LOSS_AUDIT/);
 });
-test('daily-loss preview and auditor are inactive; TP/SL monitor remains online',()=>{
+test('daily-loss preview and real-risk status UI are inactive; TP/SL controls remain',()=>{
  assert.doesNotMatch(page,/id="dailyLossCard"|id="dailyLossAuditArea"/);
  assert.doesNotMatch(shell,/daily-loss-client\.js|\/api\/daily-loss-limit|\/api\/daily-loss-audit/);
  assert.doesNotMatch(shell,/startDailyLossAuditService\(\)|stopDailyLossAuditService\(\)/);
- assert.match(page,/id="realRiskStatusCard"/);
- assert.match(shell,/\/risk-monitor-client\.js/);
+ assert.doesNotMatch(page,/id="realRiskStatusCard"/);
+ assert.doesNotMatch(shell,/\/risk-monitor-client\.js/);
  assert.match(shell,/\/api\/risk-control/);
  assert.doesNotMatch(wrapper,/daily-loss-audit-service|DAILY_LOSS_AUDIT/);
 });

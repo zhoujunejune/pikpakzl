@@ -76,3 +76,39 @@ test('full production integration remains feature-flagged; no edits to order exe
  assert.match(source,/model: SIGNAL_MODEL_NAME/);
  assert.doesNotMatch(source,/BREAKOUT20_MODE.*POST \/api\/confirm/);
 });
+
+test('staggered read-only requests accept the first valid lock, without duplicate decisions',async()=>{
+  let now=start+6000,responders=[],requests=[],decisions=[];
+  const fetcher=(url,opts)=>{requests.push({url,opts});return new Promise(resolve=>responders.push(resolve));};
+  const feed=createBreakout20ProductionFeed({fetcher,clock:()=>now,onDecision:d=>decisions.push(d)});
+  const slow=feed.checkOnce();
+  now=start+6310;
+  const fast=feed.checkOnce();
+  assert.equal(requests.length,2);
+  assert.ok(requests.every(x=>x.opts.method==='GET'));
+  now=start+7200;
+  responders[1]({ok:true,json:async()=>make({lockedAt:start+6800})});
+  assert.equal((await fast).direction,'UP');
+  now=start+7300;
+  responders[0]({ok:true,json:async()=>make({lockedAt:start+6800})});
+  assert.equal(await slow,null);
+  assert.equal(decisions.length,1);
+  assert.equal(feed.report().pendingRequests,0);
+  assert.equal(feed.report().lastError,null);
+  feed.stop();
+});
+
+test('even a valid delayed response never publishes after the immutable eight-second deadline',async()=>{
+  let now=start+7600,respond,decisions=[];
+  const feed=createBreakout20ProductionFeed({
+    clock:()=>now,fetcher:()=>new Promise(resolve=>{respond=resolve}),
+    onDecision:d=>decisions.push(d),
+  });
+  const task=feed.checkOnce();
+  now=start+8100;
+  respond({ok:true,json:async()=>make({lockedAt:start+6800})});
+  assert.equal(await task,null);
+  assert.equal(feed.report().acceptedRound,null);
+  assert.equal(decisions.length,0);
+  feed.stop();
+});

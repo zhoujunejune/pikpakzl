@@ -1,9 +1,15 @@
 // "突破20%即可" — independent, read-only, BTC 5-minute shadow on Cloudflare Free.
 // Does not import, call or affect any Binance order API or production model.
 import { DurableObject } from 'cloudflare:workers';
-import { NAME, VERSION, parseKline, features, baseline, probability, train, prospectiveStats } from './model.mjs';
+import { NAME, VERSION, parseKline, features, baseline, prospectiveStats } from './model.mjs';
 
 const PERIOD=300000, LOCK_OFFSET=6250, DEADLINE=8000;
+const FIXED_MODEL='BASELINE';
+const TRAINING_DISABLED_CODE='BASELINE_ONLY_TRAINING_DISABLED';
+const fixedTraining=(at=Date.now())=>({
+  at,ok:false,adopted:false,reasonCode:TRAINING_DISABLED_CODE,
+  reason:'已固定BASELINE，其他内部训练模型已停用'
+});
 const RAILWAY_MARKET_URL='https://signal-diagnostic-v3-production.up.railway.app/api/shadow-market-data';
 let marketCache=null,marketInFlight=null;
 const nowRound=t=>Math.floor(t/PERIOD)*PERIOD;
@@ -12,7 +18,7 @@ const fixedNextAlarm=now=>{
   return thisSlot>now?thisSlot:thisSlot+PERIOD;
 };
 const blank=()=>({version:VERSION,startedAt:Date.now(),seed:[],rows:[],weights:null,
-  model:'BASELINE_UNTRAINED',training:null,settlementsSinceTrain:0,
+  model:FIXED_MODEL,training:fixedTraining(),settlementsSinceTrain:0,
   lastFailure:null,lastTickAt:null,lastGoodDataAt:null,firstRound:null});
 const safelySerializable=e=>String(e?.message||e||'UnknownError').slice(0,500);
 const json=(v,status=200)=>Response.json(v,{status,headers:{'cache-control':'no-store'}});
@@ -96,7 +102,20 @@ function settleExistingRows(rows, historicalBars, until){
 export class Breakout20 extends DurableObject {
   constructor(ctx,env){super(ctx,env);}
   async retire(){ const s=await this.state();s.retired=true;await this.ctx.storage.put('state',s);await this.ctx.storage.deleteAlarm();return true;}
-  async state(){return await this.ctx.storage.get('state')||blank();}
+  async state(){
+    const s=await this.ctx.storage.get('state')||blank();
+    // Migrate persisted LOGISTIC_L2_V1 weights and any prior auto-training state.
+    // The baseline is fixed; past prediction rows are retained unchanged for audit.
+    if(s.model!==FIXED_MODEL || s.weights!==null ||
+       s.training?.reasonCode!==TRAINING_DISABLED_CODE || s.settlementsSinceTrain!==0){
+      s.weights=null;
+      s.model=FIXED_MODEL;
+      s.training=fixedTraining();
+      s.settlementsSinceTrain=0;
+      await this.ctx.storage.put('state',s);
+    }
+    return s;
+  }
   async fetch(req){
     const path=new URL(req.url).pathname;
     if(path!=='/status'&&path!=='/latest'&&path!=='/health'&&path!=='/market-check')return new Response('Not Found',{status:404});
@@ -110,24 +129,23 @@ export class Breakout20 extends DurableObject {
       try{
         const [one,five]=await Promise.all([candles('1m',1000),candles('5m',240)]);
         s.seed=seeds(one,five);
-        const out=train(s.seed,{minimum:100});
-        if(out.ok){s.weights=out.weights;s.model=out.adopted?'LOGISTIC_L2_V1':'BASELINE';}
-        s.training={at:Date.now(),...out};
+        // Read-only data diagnostics do not train, promote or change production weights.
         await this.ctx.storage.put('state',s);
         return json({ok:true,observedAt:Date.now(),oneMinuteSource:one.endpoint,fiveMinuteSource:five.endpoint,
           indicators:features(one.filter(x=>x.closed),five.filter(x=>x.closed),one.at(-1).c)?.indicators,
-          training:s.training,seedSamples:s.seed.length});
+          trainedModel:FIXED_MODEL,trainingEnabled:false,training:s.training,seedSamples:s.seed.length});
       }catch(e){return json({ok:false,error:safelySerializable(e)},502);}
     }
     if(path==='/health')return json({ok:true,name:NAME,version:VERSION,activated:true,orders:false,
-      lastTickAt:s.lastTickAt,error:s.lastFailure});
+      trainedModel:FIXED_MODEL,trainingEnabled:false,lastTickAt:s.lastTickAt,error:s.lastFailure});
     if(path==='/latest')return json({name:NAME,latest:s.rows.at(-1)||null});
     return json({name:NAME,version:VERSION,readOnly:true,orders:false,
       productionIntegration:false,officialSettlement:false,
       resolution:'BTCUSDT_SPOT_5MIN_CLOSE_VS_OPEN_PROXY',
       timed:{targetLockMs:LOCK_OFFSET,deadlineMs:DEADLINE,firstRound:s.firstRound,
         lastTickAt:s.lastTickAt,lastGoodDataAt:s.lastGoodDataAt,nextAlarm:await this.ctx.storage.getAlarm()},
-      training:{historicalApproxSamples:s.seed.length,trainedModel:s.model,
+      training:{historicalApproxSamples:s.seed.length,trainedModel:FIXED_MODEL,
+        trainingEnabled:false,policy:TRAINING_DISABLED_CODE,
         latestTraining:s.training},results:prospectiveStats(s.rows),
       lastFailure:s.lastFailure,latest:s.rows.at(-1)||null,
       recent:s.rows.slice(-12).map(({t,direction,actual,status,lockedAt,reason})=>({t,direction,actual,status,lockedAt,reason}))});
@@ -143,8 +161,7 @@ export class Breakout20 extends DurableObject {
     if(s.firstRound===null)s.firstRound=t;
     try{
       const [one,five]=await Promise.all([candles('1m',1000),candles('5m',240)]);
-      const settled=settleExistingRows(s.rows,five,Date.now());
-      s.settlementsSinceTrain+=settled;
+      settleExistingRows(s.rows,five,Date.now());
       if(!s.rows.some(r=>r.t===t)){
         const current1=one.find(k=>k.t===t),current5=five.find(k=>k.t===t);
         const receivedAt=Date.now();
@@ -154,22 +171,16 @@ export class Breakout20 extends DurableObject {
         const sufficient=current1&&current5&&Number.isFinite(price)&&
           receivedAt-t<DEADLINE&&elapsed<DEADLINE;
         const f=sufficient?features(a,b,price):null;
-        const p=f?(s.weights?probability(s.weights,f.vector):baseline(f.vector)):null;
+        const p=f?baseline(f.vector):null;
         const direction=Number.isFinite(p)?p>=.5?'UP':'DOWN':null;
         s.rows.push({t,status:direction?'LOCKED':'DATA_GAP',direction,
           pUp:p,lockedAt:receivedAt,delayMs:receivedAt-t,
           vector:f?.vector??null,indicators:f?.indicators??null,actual:null,
-          source:'RAILWAY_BINANCE_SPOT_READONLY_RELAY',model:s.model,
+          source:'RAILWAY_BINANCE_SPOT_READONLY_RELAY',model:FIXED_MODEL,
           reason:direction?null:receivedAt-t>=DEADLINE?'LOCKED_LATE_OR_FETCH_SLOW':'MARKET_DATA_UNAVAILABLE'});
       }
       if(s.seed.length===0)s.seed=seeds(one,five);
-      if(s.training===null||s.settlementsSinceTrain>=20){
-        const live=s.rows.filter(r=>r.vector&&['UP','DOWN'].includes(r.actual))
-          .map(r=>({t:r.t,x:r.vector,y:Number(r.actual==='UP'),source:'LIVE_8S_FROZEN'}));
-        const out=train([...s.seed,...live],{minimum:100});
-        if(out.ok){s.weights=out.weights;s.model=out.adopted?'LOGISTIC_L2_V1':'BASELINE';}
-        s.training={at:Date.now(),...out};s.settlementsSinceTrain=0;
-      }
+      // No automatic training, promotion or alternative internal prediction models.
       s.lastGoodDataAt=Date.now();s.lastFailure=null;
     }catch(err){
       s.lastFailure=safelySerializable(err);

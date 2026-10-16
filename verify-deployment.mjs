@@ -7,7 +7,11 @@ async function get(path){const r=await fetch(url+path);if(!r.ok)throw Error(`${p
 await new Promise(r=>setTimeout(r,20000));
 const health=await get('/health');console.log('Health:',JSON.stringify(health));
 if(health.orders!==false)throw Error('Unexpected order capability');
-console.log('Live market initialization:',JSON.stringify(await get('/market-check')));
+const preview=await get('/market-check');
+console.log('Live market initialization:',JSON.stringify(preview));
+if(preview.trainedModel!=='BASELINE'||preview.trainingEnabled!==false||
+   preview.training?.reasonCode!=='BASELINE_ONLY_TRAINING_DISABLED')
+   throw Error('BASELINE_ONLY_MARKET_CHECK_NOT_ENFORCED');
 let status=await get('/status');
 const due=status.timed.nextAlarm;
 console.log('Next independent alarm:',new Date(due).toISOString());
@@ -21,5 +25,11 @@ console.log('Market/training/status:',JSON.stringify(status));
 appendFileSync(process.env.GITHUB_STEP_SUMMARY,`Shadow: ${url}/status\n\n\`\`\`json\n${JSON.stringify(status,null,2)}\n\`\`\`\n`);
 if(!status.timed.lastGoodDataAt)throw Error('No successful live market fetch');
 if(!status.latest)throw Error('No prediction or data-gap record');
-if(!status.training.latestTraining)throw Error('No training attempt recorded');
+if(status.training?.trainedModel!=='BASELINE'||
+   status.training?.trainingEnabled!==false||
+   status.training?.policy!=='BASELINE_ONLY_TRAINING_DISABLED')
+   throw Error('BASELINE_ONLY_STATUS_NOT_ENFORCED');
+if(status.latest.status==='LOCKED'&&status.latest.model!=='BASELINE')
+   throw Error('NON_BASELINE_PRODUCTION_LOCK');
+if(!status.training.latestTraining)throw Error('No fixed model policy recorded');
 if(status.latest.status==='DATA_GAP')throw Error('First round has data gap; inspect status for timing or market error');

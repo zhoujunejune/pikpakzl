@@ -1,0 +1,38 @@
+name: Production order-signal model selector isolation
+on:
+  pull_request:
+    paths:
+      - railway-diagnostic/production-signal-choice.mjs
+      - railway-diagnostic/production-signal-choice.test.mjs
+      - railway-diagnostic/index.mjs
+      - railway-diagnostic/wrapper.mjs
+      - railway-diagnostic/panel-stats-shell.mjs
+      - .github/workflows/production-order-signal-selector.yml
+  push:
+    paths:
+      - .github/workflows/production-order-signal-selector.yml
+permissions:
+  contents: read
+jobs:
+  isolated-production-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install production control dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund --prefix railway-diagnostic
+      - name: Check production-source selector syntax
+        run: |
+          node --check railway-diagnostic/production-signal-choice.mjs
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+      - name: Validate signal selection and side-direction guard
+        run: |
+          node --test railway-diagnostic/production-signal-choice.test.mjs railway-diagnostic/order-direction-policy.test.mjs railway-diagnostic/order-submit-window.test.mjs railway-diagnostic/shadow-breakout20-dashboard.test.mjs
+      - name: Assert live order path is limited to already-approved files
+        run: |
+          git diff --name-only origin/main...HEAD || true

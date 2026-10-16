@@ -1,0 +1,61 @@
+name: NOVICE_MIX_LOW_V1 live read-only smoke
+on:
+  push:
+    paths:
+      - .github/workflows/novice-mix-live-smoke.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify shadow selector and separate read-only APIs on live Railway
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const origin='https://trade-control-panel-production.up.railway.app';
+          const read=async(path)=>{
+            const response=await fetch(origin+path,{cache:'no-store',signal:AbortSignal.timeout(12500)});
+            assert.equal(response.status,200,path+' HTTP '+response.status);
+            return response;
+          };
+          let lastError='';
+          for(let i=1;i<=5;i++){
+            try {
+              const html=await (await read('/')).text();
+              assert.ok(html.includes('id="breakout20ShadowCard"'),'Shadow section missing');
+              assert.ok(html.includes('id="b20ModelSelector"'),'Model selector missing');
+              assert.ok(html.includes('value="NOVICE_MIX_LOW_V1"'),'NOVICE option missing');
+              assert.ok(html.includes('value="BASELINE"'),'BASELINE option missing');
+              const novice=await (await read('/api/shadow-breakout20/novice-mix')).json();
+              assert.equal(novice.ok,true);
+              assert.equal(novice.model,'NOVICE_MIX_LOW_V1');
+              assert.equal(novice.readOnly,true);
+              assert.equal(novice.orders,false);
+              assert.equal(novice.productionIntegration,false);
+              assert.equal(novice.training?.model,'NOVICE_MIX_LOW_V1');
+              assert.equal(novice.official?.source,'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY');
+              assert.ok(Number.isFinite(novice.results?.rounds));
+              const baseline=await (await read('/api/shadow-breakout20/status')).json();
+              assert.equal(baseline.ok,true);
+              assert.equal(baseline.name,'突破20%即可');
+              assert.ok(baseline.training?.trainedModel);
+              const status=await (await read('/api/status')).json();
+              assert.ok(status!=null,'Production status response missing');
+              console.log(JSON.stringify({result:'PASS',mode:'READ_ONLY',
+                novice:{model:novice.model,health:novice.health,latest:novice.latest,
+                  results:novice.results,training:novice.training},
+                baseline:{trainedModel:baseline.training?.trainedModel,
+                  official:baseline.official?.available},
+                mainStatusHTTP:200},null,2));
+              process.exit(0);
+            }catch(e){
+              lastError=String(e?.message||e);
+              console.log('attempt '+i+': '+lastError);
+              await new Promise(resolve=>setTimeout(resolve,5000));
+            }
+          }
+          throw Error('NOVICE_LIVE_SMOKE_FAILED: '+lastError);
+          NODE

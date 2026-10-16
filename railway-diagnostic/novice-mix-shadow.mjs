@@ -18,7 +18,7 @@ export function createNoviceMixShadow({
   const state={rows:[],weights:[...BASE_WEIGHTS],training:{status:'COLLECTING',samples:0,required:80,version:1},
     lastTickAt:null,lastGoodDataAt:null,nextAlarm:null,lastOfficialAt:null,marketError:null,officialError:null,
     persisted:false,storage:'MEMORY_ONLY'};
-  let client=null,timer=null,processing=false,starting=null,lastOfficialPoll=0,lastTrainingCount=0;
+  let client=null,timer=null,processing=false,lockRequestInFlight=false,starting=null,lastOfficialPoll=0,lastTrainingCount=0;
   const roundAt=ms=>Math.floor(ms/ROUND_MS)*ROUND_MS;
   async function persist(){
     if(!client)return;
@@ -52,27 +52,29 @@ export function createNoviceMixShadow({
   }
   async function lockOnce(now){
     const round=roundAt(now),elapsed=now-round;
-    if(elapsed<4500||elapsed>7750||state.rows.some(x=>x.round===round))return;
-    let result=null;
+    if(lockRequestInFlight||elapsed<4500||elapsed>7000||state.rows.some(x=>x.round===round))return;
+    lockRequestInFlight=true;
     try{
       const response=await fetcher(marketUrl,{method:'GET',cache:'no-store',signal:AbortSignal.timeout(1800)});
       if(!response.ok)throw Error('MARKET_HTTP_'+response.status);
       const payload=await response.json();
       const at=clock();
-      if(roundAt(at)!==round||at-round>=8000)return;
-      result=predictMarket(payload,state.rows,state.weights,at);
-      if(result.status==='LOCKED'||result.status==='PARTIAL_INPUT')state.lastGoodDataAt=at;
-      else state.marketError=result.reason;
+      if(roundAt(at)!==round||at-round>=7500||state.rows.some(x=>x.round===round))return;
+      const result=predictMarket(payload,state.rows,state.weights,at);
+      if(result.status==='NO_DATA_FALLBACK'){state.marketError=result.reason;return;}
+      state.lastGoodDataAt=at;state.marketError=null;
+      state.rows.push({...result,actual:null,result:'PENDING'});
+      state.rows=state.rows.slice(-MAX_ROWS);state.lastTickAt=at;
+      await persist();
     }catch(error){state.marketError=String(error?.message||'MARKET_FETCH_FAILED').slice(0,100);}
-    const end=clock();
-    if(!result&&end-round>=7400&&end-round<8000)
-      result=predictMarket(null,state.rows,state.weights,end);
-    if(!result)return;
-    // One frozen prediction per round. No mutation after official result.
+    finally{lockRequestInFlight=false;}
+  }
+  async function freezeFallback(now){
+    const round=roundAt(now);
     if(state.rows.some(x=>x.round===round))return;
+    const result=predictMarket(null,state.rows,state.weights,now);
     state.rows.push({...result,actual:null,result:'PENDING'});
-    state.rows=state.rows.slice(-MAX_ROWS);
-    state.lastTickAt=end;
+    state.rows=state.rows.slice(-MAX_ROWS);state.lastTickAt=now;
     await persist();
   }
   async function resolveOfficial(now){
@@ -112,9 +114,12 @@ export function createNoviceMixShadow({
     state.nextAlarm=round+ROUND_MS+6000;
     try{
       const elapsed=now-round;
-      // Market request only during current round's lock window.
-      if(elapsed>=4500&&elapsed<7750)await lockOnce(now);
-      if(now-lastOfficialPoll>=30000)await resolveOfficial(clock());
+      // Market requests and settlement polling never block each other's deadline.
+      if(now-lastOfficialPoll>=30000)void resolveOfficial(now).catch(()=>{});
+      if(elapsed>=4500&&elapsed<7000)void lockOnce(now).catch(()=>{});
+      // Hard pre-deadline fallback is logged as invalid data, never counted as a
+      // true market-informed prediction. No WAIT output and no late backfill.
+      if(elapsed>=7350&&elapsed<7900)await freezeFallback(now);
       state.lastTickAt=clock();
     }finally{processing=false;}
   }

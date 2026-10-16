@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
+import { noviceMixShadow } from './novice-mix-shadow.mjs';
 import { spawn } from 'node:child_process';
 
 // RAILWAY_EGRESS_IP_READONLY_DIAG_20261014
@@ -790,11 +791,13 @@ http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
+  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
   if (req.method === 'GET' && url.pathname === '/api/round-stats') return proxyStats(res);
   if (req.method === 'GET' && url.pathname === '/api/training-status') return proxyTrainingStatus(res);
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);
   return proxyInner(req, res, false);
 }).listen(PORT, '0.0.0.0', () => {
+  void noviceMixShadow.start().catch(error => log('novice_shadow_start_error', { error: String(error?.message||error) }));
   log('panel_stats_shell_started', {
     port:PORT,
     innerPanelPort:INNER_PANEL_PORT,

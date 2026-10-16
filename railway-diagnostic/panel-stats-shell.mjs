@@ -773,10 +773,9 @@ function updateOrderSignal(){
   var expected=Math.floor(Date.now()/300000)*300000,live=j.signal||{};
   var ready=directionModeReady&&j.directionModeReady&&live.status==='LOCKED'&&
     Number(live.round)===expected&&j.orderDirectionPolicy===policy;
-  if(!ready){target.textContent='未锁定或配置未就绪';
-   if(chosenOrderModel==='NOVICE_MIX_LOW_V1')e('activeFast8Direction').textContent='新手错误混合：本轮未锁定 / 暂不可下单';
-   return}
-  e('activeFast8Direction').textContent=live.direction+'（'+chosenModelName(chosenOrderModel)+'）';
+  // The raw signal field has one writer: load() / renderNovicePrimary().
+  // The 2-second order-status poll must never overwrite it with a different label.
+  if(!ready){target.textContent='未锁定或配置未就绪';return}
   var mode=j.orderMappingMode,src=sources.find(function(s){return s.id===j.orderProductionSource});
   if(j.orderSignal===null){target.textContent='不下单（'+(mode==='OFF'?'该方向已关闭':'不可执行')+'）';return}
   var expectedSide=mode==='INVERSE'?(live.direction==='UP'?'DOWN':'UP'):mode==='FORWARD'?live.direction:null;
@@ -790,10 +789,23 @@ function boot(){bindOrderModelChoice();loadOrderModelChoice();renderDirectionMod
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot()
 })();</script>`;
 
+// Keep live statistics updates from resizing the narrow mobile viewport.
+// This is injected into the control page only; backend signal/order logic is untouched.
+const layoutStabilityStyle = `<style id="dashboard-layout-stability">
+.w,.w>.c{min-width:0;box-sizing:border-box}
+.w .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.w .grid>.kv,.w .kv>.v,.w .kv>.k,.w .big,.w .muted{min-width:0;overflow-wrap:anywhere}
+.w .grid>.kv{box-sizing:border-box}
+#activeFast8ModelCard select{max-width:100%;min-width:0;box-sizing:border-box}
+#activeFast8Direction,#activeFast8OrderDirection{min-height:3.5em;line-height:1.4}
+@media(max-width:540px){.w>.c{padding:14px}.w .kv{padding:10px}}
+</style>`;
+
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${shadowCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}${shadowCard}</body>`);
+  out = out.replace('</head>', layoutStabilityStyle+'</head>');
   return out.replace('</body>', `${primaryScript}${statsScript}${shadowScript}</body>`);
 }
 

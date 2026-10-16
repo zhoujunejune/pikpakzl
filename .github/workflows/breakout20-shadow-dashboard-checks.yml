@@ -8,6 +8,9 @@ on:
       - railway-diagnostic/panel-stats-shell.mjs
       - railway-diagnostic/shadow-breakout20-dashboard.mjs
       - railway-diagnostic/shadow-breakout20-dashboard.test.mjs
+      - railway-diagnostic/novice-mix-core.mjs
+      - railway-diagnostic/novice-mix-core.test.mjs
+      - railway-diagnostic/novice-mix-shadow.mjs
       - .github/workflows/breakout20-shadow-dashboard-checks.yml
 permissions:
   contents: read
@@ -25,5 +28,8 @@ jobs:
           node --check railway-diagnostic/panel-stats-shell.mjs
           node --check railway-diagnostic/shadow-breakout20-dashboard.mjs
           node --check railway-diagnostic/shadow-breakout20-dashboard.test.mjs
+          node --check railway-diagnostic/novice-mix-core.mjs
+          node --check railway-diagnostic/novice-mix-shadow.mjs
+          node --check railway-diagnostic/novice-mix-core.test.mjs
       - name: Test shadow panel read-only isolation
-        run: node --test railway-diagnostic/shadow-breakout20-dashboard.test.mjs
+        run: node --test railway-diagnostic/shadow-breakout20-dashboard.test.mjs railway-diagnostic/novice-mix-core.test.mjs

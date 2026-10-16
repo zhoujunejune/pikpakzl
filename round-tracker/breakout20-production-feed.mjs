@@ -31,29 +31,52 @@ export function validateBreakout20Lock(body,{now=Date.now(),round=roundStart(now
 
 export function createBreakout20ProductionFeed({
   fetcher=globalThis.fetch,clock=Date.now,onDecision=()=>{},
-  endpoint=BREAKOUT20_URL,intervalMs=300,timeoutMs=900,
+  endpoint=BREAKOUT20_URL,intervalMs=160,timeoutMs=1800,
+  retrySpacingMs=300,maxPending=2,
 }={}){
-  let pending=false,stopped=false,interval=null,lastResult=null,lastError=null;
-  let acceptedRound=null,lastAttemptMs=null;
+  let pendingCount=0,stopped=false,interval=null,lastResult=null,lastError=null;
+  let acceptedRound=null,lastAttemptMs=null,lastAttemptRound=null,attemptsThisRound=0;
+  let lastFailure=null;
   async function checkOnce(){
-    if(stopped||pending)return null;
+    if(stopped||pendingCount>=maxPending)return null;
     const now=clock(),round=roundStart(now),elapsed=now-round;
-    // Do not burn free-tier requests for the other ~292 seconds of each round.
+    // Keep all network requests close to this round's 8-second deadline.
+    // Two staggered GETs tolerate one slow edge connection without extending the deadline.
     if(elapsed<5700||elapsed>=BREAKOUT20_DEADLINE_MS||acceptedRound===round)return null;
-    pending=true;lastAttemptMs=now;
+    if(lastAttemptRound===round && now-lastAttemptMs<retrySpacingMs)return null;
+    if(lastAttemptRound!==round)attemptsThisRound=0;
+    lastAttemptRound=round;lastAttemptMs=now;attemptsThisRound++;
+    pendingCount++;
+    const budgetMs=Math.min(timeoutMs,Math.max(100,round+BREAKOUT20_DEADLINE_MS-now-75));
     try{
       const response=await fetcher(endpoint,{method:'GET',cache:'no-store',
-        headers:{accept:'application/json'},signal:AbortSignal.timeout(timeoutMs)});
+        headers:{accept:'application/json'},signal:AbortSignal.timeout(budgetMs)});
       if(!response.ok)throw Error('SHADOW_HTTP_'+response.status);
       const body=await response.json();
       const tested=validateBreakout20Lock(body,{now:clock(),round});
-      if(!tested.ok){lastError=tested.reason;return null;}
+      if(!tested.ok){
+        if(acceptedRound!==round)lastError=tested.reason;
+        return null;
+      }
       if(acceptedRound===round)return null;
-      acceptedRound=round;lastError=null;lastResult=tested;
+      acceptedRound=round;lastError=null;lastFailure=null;lastResult=tested;
       onDecision(tested);
       return tested;
-    }catch(error){lastError=String(error?.message||error||'SHADOW_NETWORK_ERROR').slice(0,180);return null;}
-    finally{pending=false;}
+    }catch(error){
+      if(acceptedRound!==round){
+        const message=String(error?.message||error||'SHADOW_NETWORK_ERROR').slice(0,180);
+        lastError=message;
+        lastFailure={at:clock(),round,name:String(error?.name||'Error'),
+          causeCode:String(error?.cause?.code||''),message,budgetMs};
+        console.log(JSON.stringify({event:'breakout20_readonly_feed_failure',
+          round,elapsedMs:clock()-round,errorName:lastFailure.name,
+          errorCode:lastFailure.causeCode,message,budgetMs,
+          pendingRequests:pendingCount,attemptsThisRound}));
+      }
+      return null;
+    }finally{
+      pendingCount--;
+    }
   }
   return {
     start(){if(interval||stopped)return;interval=setInterval(()=>{void checkOnce();},intervalMs);interval.unref?.();void checkOnce();},
@@ -64,6 +87,7 @@ export function createBreakout20ProductionFeed({
         ?lastResult:null;
     },
     report(){return {enabled:!stopped,acceptedRound,lastAttemptMs,lastError,
+      pendingRequests:pendingCount,attemptsThisRound,lastFailure,
       latestRound:lastResult?.round??null,latestDirection:lastResult?.direction??null};}
   };
 }

@@ -5,6 +5,8 @@ import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
 import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,refreshDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
+import {BASE_MODEL,NOVICE_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
+  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal} from './production-signal-choice.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
@@ -19,6 +21,7 @@ const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
 const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
 const SIGNAL_WS_URL = String(process.env.SIGNAL_WS_URL || '').trim();
 const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MODEL_V1');
+const NOVICE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/novice-mix';
 
 
 let enabled = false;
@@ -244,6 +247,9 @@ function normalizePushedSignal(envelope, transport) {
 function handlePushedSignal(envelope, transport) {
   const signal = normalizePushedSignal(envelope, transport);
   if (!signal) return false;
+  // Pushes from the old source must not race the user-selected novice stream.
+  const choice=modelSelectionSnapshot();
+  if(choice.model!==BASE_MODEL||!selectionPermitsRound(signal.round,choice))return false;
   pushedSignal = signal;
   signalTransport.lastTransport = transport;
   signalTransport.lastSignalId = signal.signalId;
@@ -334,7 +340,32 @@ function startSignalWebSocket() {
 }
 
 async function getSignal({ forceHttp = false } = {}) {
-  if (!forceHttp && pushedSignal?.status === 'LOCKED' && pushedSignal.round === currentRoundMs()) {
+  // On any Redis or selector fault, stop trading rather than silently reverting.
+  let choice;
+  try{choice=await refreshModelSelection()}catch{return null}
+  const round=currentRoundMs();
+  if(!selectionPermitsRound(round,choice))return null;
+  if(choice.model===NOVICE_MODEL){
+    try{
+      const r=await fetch(NOVICE_LOCAL_URL,{cache:'no-store',
+        signal:AbortSignal.timeout(1100),headers:{accept:'application/json'}});
+      if(!r.ok)return null;
+      const parsed=validateNoviceSignal(await r.json());
+      if(!parsed.ok)return null;
+      // Reuse the existing per-side source mapping; the upstream model field
+      // ALWAYS identifies the novice experiment and is audited independently.
+      return {round:parsed.round,status:'LOCKED',direction:parsed.direction,
+        score:parsed.score,confidence:null,modelProbability:null,
+        model:SIGNAL_MODEL_NAME,upstreamModel:NOVICE_MODEL,
+        source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:parsed.lockedAt,
+        lockedAt:parsed.lockedAt,frozen:true,executionEligible:true,
+        qualityGate:'NOVICE_EXPERIMENTAL_NO_VALIDATED_EDGE',
+        signalId:SIGNAL_MODEL_NAME+':'+round+':'+NOVICE_MODEL,
+        transport:'novice_shadow_local_readonly'};
+    }catch{return null;}
+  }
+  if(choice.model!==BASE_MODEL)return null;
+  if (!forceHttp && pushedSignal?.status === 'LOCKED' && pushedSignal.round === round) {
     return pushedSignal;
   }
   if (!PRODUCTION_SIGNAL_ORIGIN) return null;
@@ -565,8 +596,13 @@ function publicPending() {
 
 async function prepareWorker(signalOverride = null, trigger = 'poll') {
   if (!enabled || !tradeAmountText || prepareInFlight || !directionSettingsSnapshot().ready) return;
+  let choice;
+  try{choice=await refreshModelSelection()}catch{return}
+  if(!selectionPermitsRound(currentRoundMs(),choice))return;
+  if(signalOverride && choice.model!==BASE_MODEL)return;
   const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
+  if(choice.model===NOVICE_MODEL&&signal.upstreamModel!==NOVICE_MODEL)return;
   // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
   if (signal.executionEligible===false) {
     console.log(JSON.stringify({event:'unverified_signal_order_blocked',
@@ -582,6 +618,10 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   prepareInFlight = true;
   lastPrepareAttemptAt = Date.now();
   try {
+    try { await refreshModelSelection(); } catch{return}
+    const verifiedChoice=modelSelectionSnapshot();
+    if(!selectionPermitsRound(Number(signal.round),verifiedChoice)||
+       verifiedChoice.model!==choice.model||verifiedChoice.revision!==choice.revision)return;
     try { await refreshDirectionSettings(); } catch(err) {
       console.error(JSON.stringify({event:'direction_mode_refresh_failed',error:String(err?.message||err)}));
       return;
@@ -606,6 +646,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
         signalId: signal.signalId ?? null,
         model: signal.model ?? SIGNAL_MODEL_NAME,
         upstreamModel: signal.upstreamModel ?? null,
+        signalModelChoice:choice.model,signalModelChoiceRevision:choice.revision,
         signalTransport: signal.transport ?? trigger,
         amount: tradeAmountText,
         error: intent.error,
@@ -631,6 +672,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       signalId: signal.signalId ?? null,
       model: signal.model ?? SIGNAL_MODEL_NAME,
       upstreamModel: signal.upstreamModel ?? null,
+      signalModelChoice:choice.model,signalModelChoiceRevision:choice.revision,
       signalTransport: signal.transport ?? trigger,
       signalGeneratedAt: signal.generatedAt ?? null,
       action: mapping.action,
@@ -774,6 +816,9 @@ async function refreshLastOrderStatus(force = false) {
   return orderStatusRefreshPromise;
 }
 
+void refreshModelSelection().catch(e=>console.error(JSON.stringify({
+  event:'production_signal_choice_hydrate_failed',error:String(e?.message||e)})));
+setInterval(()=>{if(!modelSelectionSnapshot().ready)void refreshModelSelection().catch(()=>{});},5000);
 void hydrateDirectionSettings().catch(e=>console.error(JSON.stringify({
   event:'direction_mode_hydrate_failed',error:String(e?.message||e)})));
 setInterval(()=>{if(!directionSettingsSnapshot().ready)void hydrateDirectionSettings().catch(()=>{});},5000);
@@ -830,12 +875,43 @@ http.createServer(async (req, res) => {
       hasPredictionWallet: Boolean(ENV_WALLET_ADDRESS),
       hasWalletId: Boolean(ENV_WALLET_ID),
       signalModel: SIGNAL_MODEL_NAME,
+      orderSignalModel: modelSelectionSnapshot().model,
+      orderSignalModelReady: modelSelectionSnapshot().ready,
+      orderSignalModelEffectiveAfterRound:modelSelectionSnapshot().effectiveAfterRound,
+      orderSignalModelRevision:modelSelectionSnapshot().revision,
       signalTransport: { ...signalTransport },
     });
   }
 
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) {
     return send(res, 200, page, 'text/html; charset=utf-8');
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/order-signal-model') {
+    try{
+      const data=await refreshModelSelection();
+      return send(res,200,{ok:true,...data,selectionControlsOrders:true});
+    }catch(error){return send(res,503,{ok:false,error:'下单信号配置不可用：'+String(error?.message||error)})}
+  }
+  if (req.method === 'POST' && url.pathname === '/api/order-signal-model') {
+    const body=await readBody(req);
+    if(!pinOK(body.pin))return send(res,401,{ok:false,error:'控制 PIN 错误'});
+    if(['SUBMITTING','QUOTING'].includes(pendingAction?.state))
+      return send(res,409,{ok:false,error:'已有订单正在提交，暂不能切换信号'});
+    try{
+      const data=await setModelSelection(body.model,body.expectedRevision);
+      if(data.changed){
+        // Next-round-only change. No historical lock or prepared order survives.
+        pendingAction=null;pushedSignal=null;startAfterRound=currentRoundMs();
+        lastPrepareAttemptAt=0;
+      }
+      console.log(JSON.stringify({event:'order_signal_model_changed',model:data.model,
+        revision:data.revision,changed:data.changed,effectiveFrom:'NEXT_ROUND'}));
+      return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
+    }catch(error){
+      const m=String(error?.message||error);
+      return send(res,/INVALID_/.test(m)?400:/CONFLICT|IN_PROGRESS/.test(m)?409:503,{ok:false,error:m});
+    }
   }
 
   if (req.method === 'GET' && url.pathname === '/api/direction-mode') {
@@ -938,6 +1014,8 @@ http.createServer(async (req, res) => {
 
     const p = pendingAction;
     if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
+    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置暂不可用'})}
+    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已切换，旧订单不可提交'});
     if (body.confirmationToken !== p.confirmationToken) return send(res, 409, { ok: false, error: '订单确认令牌已失效，请刷新页面' });
     if (submittedRounds.has(String(p.round))) return send(res, 409, { ok: false, error: '本轮已经提交过订单' });
 
@@ -953,6 +1031,8 @@ http.createServer(async (req, res) => {
       return send(res, 409, { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' });
     }
 
+    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置不可用'})}
+    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已变化，停止旧报价提交'});
     if (!freshQuote.ok) {
       p.state = 'READY';
       p.error = freshQuote.error;

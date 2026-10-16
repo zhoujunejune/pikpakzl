@@ -56,8 +56,8 @@ test('production dashboard identifies 8s Selective V2 + Edge Rescue, not retired
  assert.doesNotMatch(primary,/2026-10-10 固定训练版本/);
  assert.match(source,/SELECTIVE_V2_FAST8_THEN_EDGE_RESCUE_FAST8/);
  assert.match(source,/SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION/);
- assert.ok(source.includes('
- assert.ok(source.includes('
+ assert.match(source, /shadowCard/);
+ assert.match(source, /shadowScript/);
  assert.ok(!source.includes('$'+'{policyCard}'+'$'+'{previewCard}'+'$'+'{statsCard}'));
  new vm.Script(mainScript);new vm.Script(stats);
 });

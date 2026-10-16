@@ -660,7 +660,9 @@ function updateOrderSignal(){
   var expected=Math.floor(Date.now()/300000)*300000,live=j.signal||{};
   var ready=directionModeReady&&j.directionModeReady&&live.status==='LOCKED'&&
     Number(live.round)===expected&&j.orderDirectionPolicy===policy;
-  if(!ready){target.textContent='未锁定或配置未就绪';return}
+  if(!ready){target.textContent='未锁定或配置未就绪';
+   if(j.orderSignalModel==='NOVICE_MIX_LOW_V1')e('activeFast8Direction').textContent='新手错误混合：本轮未锁定 / 暂不可下单';
+   return}
   e('activeFast8Direction').textContent=live.direction+'（'+chosenModelName(j.orderSignalModel)+'）';
   var mode=j.orderMappingMode,src=sources.find(function(s){return s.id===j.orderProductionSource});
   if(j.orderSignal===null){target.textContent='不下单（'+(mode==='OFF'?'该方向已关闭':'不可执行')+'）';return}

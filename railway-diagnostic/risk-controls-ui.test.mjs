@@ -155,6 +155,6 @@ test('existing read/write risk API contract and page injection markers stay unch
  assert.match(source,/validPercent\(next\.takeProfitPercent\)/);
  assert.match(source,/validPercent\(next\.stopLossPercent\)/);
  assert.match(source,/\$\{riskCards\}\$\{marker\}/);
- assert.match(source,/\$\{riskScript\}<script src=/);
- assert.match(source,/\/risk-monitor-client\.js\?v=2/);
+ assert.match(source,/\$\{riskScript\}<\/body>/);
+ assert.doesNotMatch(source,/\/risk-monitor-client\.js/);
 });

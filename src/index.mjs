@@ -128,7 +128,8 @@ export class Breakout20 extends DurableObject {
     if(path==='/model-history'){
       // Read-only audit of previously persisted signal rows. No model changes.
       // firstUse is the first historical LOCKED signal, not the training-completion time.
-      const rows=s.rows.filter(r=>r.status==='LOCKED' &&
+      const rows=s.rows.filter(r=>(r.direction==='UP'||r.direction==='DOWN') &&
+        Number.isFinite(r.lockedAt) &&
         (r.model==='BASELINE'||r.model==='LOGISTIC_L2_V1'||r.model==='BASELINE_UNTRAINED'))
         .sort((a,b)=>a.t-b.t);
       const segments=[];

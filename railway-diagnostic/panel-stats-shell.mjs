@@ -341,6 +341,19 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="k">当前生产信号模型 · 8秒版</div>
 <div class="big" id="activeFast8Name">读取生产模型中...</div>
 <div class="muted" id="activeFast8Desc">生产模型清单以后台返回结果为准</div>
+<div style="border:1px solid #45546b;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
+  <div class="k" style="font-size:14px">实盘下单信号来源 · 模型选择</div>
+  <select id="orderSignalModelSelect" aria-label="选择真实下单信号模型"
+    style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
+    <option value="BREAKOUT20_RSI_MACD_RANGE_V1">突破20%即可（现有生产信号）</option>
+    <option value="NOVICE_MIX_LOW_V1">新手错误混合 NOVICE_MIX_LOW_V1</option>
+  </select>
+  <button id="orderSignalModelSave" type="button"
+    style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
+  <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
+  <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
+  <div class="muted" style="margin-top:7px">这里只切换下一轮真实下单使用的原始预测；现有 UP/DOWN 正向/反向模式继续生效。独立影子模型缺数据时不使用旧信号兜底。该模型尚未证明具有稳定胜率优势。</div>
+</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
 <div class="kv"><div class="k">下单信号（当前正向 / 反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
@@ -369,6 +382,69 @@ function e(x){return document.getElementById(x)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
 function escModel(v){return String(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 var policy='',revision='';
+var chosenOrderModel='BREAKOUT20_RSI_MACD_RANGE_V1';
+var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false;
+function chosenModelName(model){
+ return model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
+}
+async function loadOrderModelChoice(){
+ if(choiceBusy)return;
+ try{
+  var response=await fetch('/api/order-signal-model?ts='+Date.now(),{cache:'no-store'});
+  var data=await response.json();
+  if(!response.ok||data.ok!==true||data.ready!==true)throw Error(data.error||'下单源配置未就绪');
+  if(!Array.isArray(data.models)||!data.models.some(function(x){return x.id===data.model;}))
+   throw Error('下单模型白名单无效');
+  chosenOrderModel=data.model;choiceRevision=data.revision;choiceReady=true;
+  var select=e('orderSignalModelSelect');
+  if(select&&!choiceDirty)select.value=chosenOrderModel;
+  e('orderSignalModelState').textContent='当前真实下单信号：'+chosenModelName(chosenOrderModel)
+    +(data.effectiveAfterRound!=null&&Date.now()<Number(data.effectiveAfterRound)+300000?' · 下一轮生效':' · 已生效')
+    +' · 选择后请点保存';
+  loadOrderModelStats();
+ }catch(err){choiceReady=false;e('orderSignalModelState').textContent='下单信号配置读取失败，禁止切换：'+(err.message||err);}
+}
+async function loadOrderModelStats(){
+ try{
+  var endpoint=chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':'/api/shadow-breakout20/status';
+  var response=await fetch(endpoint+'?ts='+Date.now(),{cache:'no-store'});
+  var data=await response.json();
+  if(!response.ok||data.ok!==true)throw Error('读取失败');
+  var r=data.results||{},v=r.overall||{};
+  e('orderSignalModelStats').textContent='独立模型统计：'+
+   (v.samples?(Number(v.accuracy)*100).toFixed(2)+'% ('+v.hits+'/'+v.samples+')':'暂无已结算')+
+   ' · UP '+(r.up&&r.up.samples?(Number(r.up.accuracy)*100).toFixed(2)+'%':'暂无')+
+   ' · DOWN '+(r.down&&r.down.samples?(Number(r.down.accuracy)*100).toFixed(2)+'%':'暂无')+
+   ' · 锁定 '+Number(r.locked||0)+' 轮';
+ }catch(err){e('orderSignalModelStats').textContent='所选模型胜率读取失败（不改变下单选择）';}
+}
+async function saveOrderModelChoice(){
+ if(!choiceReady||choiceBusy)return;
+ var select=e('orderSignalModelSelect'),pin=e('pin');
+ if(!select||!pin||!pin.value){e('orderSignalModelState').textContent='请先在页面上方填写控制 PIN';return}
+ var next=select.value;
+ if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(next))return;
+ if(next===chosenOrderModel){choiceDirty=false;e('orderSignalModelState').textContent='当前已是所选模型，无需切换';return}
+ if(!window.confirm('确认从下一轮开始，用 '+chosenModelName(next)+' 作为真实下单信号？这会改变实际订单方向，当前轮次不切换。'))return;
+ choiceBusy=true;
+ var btn=e('orderSignalModelSave');if(btn)btn.disabled=true;
+ try{
+  var response=await fetch('/api/order-signal-model',{method:'POST',
+   headers:{'content-type':'application/json'},
+   body:JSON.stringify({model:next,expectedRevision:choiceRevision,pin:pin.value})});
+  var data=await response.json();
+  if(!response.ok||data.ok!==true)throw Error(data.error||'切换失败');
+  choiceDirty=false;chosenOrderModel=data.model;choiceRevision=data.revision;choiceReady=true;
+  e('orderSignalModelState').textContent='保存成功：'+chosenModelName(next)+'，下一轮才开始用于实盘下单';
+  await loadOrderModelChoice();
+ }catch(err){e('orderSignalModelState').textContent='保存失败：'+(err.message||err);choiceDirty=false;await loadOrderModelChoice();}
+ finally{choiceBusy=false;if(btn)btn.disabled=false;}
+}
+function bindOrderModelChoice(){
+ var sel=e('orderSignalModelSelect'),btn=e('orderSignalModelSave');
+ if(sel)sel.addEventListener('change',function(){choiceDirty=true;e('orderSignalModelState').textContent='尚未保存：'+chosenModelName(sel.value)+'。保存后下一轮生效。'});
+ if(btn)btn.addEventListener('click',saveOrderModelChoice);
+}
 var sources=[
  {id:'SELECTIVE_V2_FAST8_PRIMARY',name:'Selective V2（主策略）',modes:{UP:'OFF',DOWN:'OFF'}},
  {id:'EDGE_RESCUE_FAST8_PRIMARY',name:'Edge Rescue（兜底）',modes:{UP:'OFF',DOWN:'OFF'}},
@@ -517,7 +593,7 @@ function load(){
   e('activeFast8Name').textContent=activeCatalog.length
    ?activeCatalog.map(function(m){return m.name||m.id}).join(' + '):'当前没有活跃信号模型';
   e('activeFast8Desc').textContent='BTC 5分钟 · 8秒截止 · 模型列表由生产服务自动同步；低证据方向不代表预测优势；非活跃来源隐藏';
-  e('activeFast8Direction').textContent=dir;
+  if(chosenOrderModel!=='NOVICE_MIX_LOW_V1')e('activeFast8Direction').textContent=dir;
   var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
   var decided=settled.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'});
   var hits=decided.filter(function(z){return z.productionPrediction===z.productionActual}).length;
@@ -584,15 +660,17 @@ function updateOrderSignal(){
   var ready=directionModeReady&&j.directionModeReady&&live.status==='LOCKED'&&
     Number(live.round)===expected&&j.orderDirectionPolicy===policy;
   if(!ready){target.textContent='未锁定或配置未就绪';return}
+  e('activeFast8Direction').textContent=live.direction+'（'+chosenModelName(j.orderSignalModel)+'）';
   var mode=j.orderMappingMode,src=sources.find(function(s){return s.id===j.orderProductionSource});
   if(j.orderSignal===null){target.textContent='不下单（'+(mode==='OFF'?'该方向已关闭':'不可执行')+'）';return}
   var expectedSide=mode==='INVERSE'?(live.direction==='UP'?'DOWN':'UP'):mode==='FORWARD'?live.direction:null;
   target.textContent=j.orderSignal===expectedSide?
-    (j.orderSignal+'（'+modeLabel(mode)+' · '+(src?activeSourceName(src.id)||'生产模型待同步':'未知来源')+'）'):'方向映射校验失败';
+    (j.orderSignal+'（'+modeLabel(mode)+' · '+chosenModelName(j.orderSignalModel)+'）'):'方向映射校验失败';
  }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'})
 }
-function boot(){renderDirectionModes();loadDirectionModes();load();updateOrderSignal();
- setInterval(load,3000);setInterval(updateOrderSignal,2000);setInterval(loadDirectionModes,5000)}
+function boot(){bindOrderModelChoice();loadOrderModelChoice();renderDirectionModes();loadDirectionModes();load();updateOrderSignal();
+ setInterval(load,3000);setInterval(updateOrderSignal,2000);setInterval(loadDirectionModes,5000);
+ setInterval(loadOrderModelChoice,8000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot()
 })();</script>`;
 

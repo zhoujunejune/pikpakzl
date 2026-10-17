@@ -7,7 +7,7 @@ import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,h
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
 import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
   selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,RSI_INPUT_VERSION,
-  MAX_ORDER_SUBMIT_ATTEMPTS,claimOrderSubmitAttempt,closeOrderSubmitRound,retryableRejectedOrderPost} from './production-signal-choice.mjs';
+  MAX_ORDER_SUBMIT_ATTEMPTS,claimOrderSubmitAttempt,closeOrderSubmitRound,releaseRejectedOrderSubmitAttempt,retryableRejectedOrderPost} from './production-signal-choice.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');

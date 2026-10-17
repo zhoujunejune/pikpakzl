@@ -410,6 +410,15 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
        (p.signalModelChoice===NOVICE_MODEL&&currentRetry.upstreamModel!==NOVICE_MODEL)||
        (p.signalModelChoice===DYNAMIC_MODEL&&
           (currentRetry.upstreamModel!==DYNAMIC_MODEL||currentRetry.signalId!==p.signalId))||
+       (p.signalModelChoice===EDGE_MODEL&&
+          (currentRetry.upstreamModel!==EDGE_MODEL||currentRetry.signalId!==p.signalId||
+           currentRetry.executionEligible!==true||
+           !Number.isFinite(Number(nextQuote.quote?.chance))||
+           Number(nextQuote.quote.chance)>Number(process.env.EDGE5_MAX_ENTRY_PRICE||0.55)||
+           (Number(currentRetry.rawDirection===p.signal?currentRetry.modelProbability:1-currentRetry.modelProbability)-
+             Number(nextQuote.quote.chance)-Number(process.env.EDGE5_FEE_BUFFER||0.01)-
+             Number(process.env.EDGE5_SLIPPAGE_BUFFER||0.005))<
+             Number(process.env.EDGE5_MIN_EDGE||0.04)))||
        rejectExpiredOrderWindow(p,'before_retry_place_order')){
       p.state='RETRY_ABORTED';
       p.error='重试时信号、轮次或下单设置不再有效';

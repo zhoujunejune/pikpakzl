@@ -9,9 +9,9 @@ import {
 
 const ROUND=1792166400000;
 const good=(at=ROUND+6500)=>({
- ok:true,readOnly:true,orders:false,productionIntegration:false,model:NOVICE_MODEL,
+ ok:true,readOnly:true,orders:false,productionIntegration:false,model:NOVICE_MODEL,inputVersion:'RSI_ONLY_14_V1',
  generatedAt:at-40,
- latest:{model:NOVICE_MODEL,round:ROUND,direction:'DOWN',status:'LOCKED',
+ latest:{model:NOVICE_MODEL,inputVersion:'RSI_ONLY_14_V1',rsi:37,round:ROUND,direction:'DOWN',status:'LOCKED',
    lockedAt:ROUND+5190,marketSnapshotAt:ROUND+5150,score:-.42}
 });
 test('strict closed model whitelist and read-only shadow trust boundary',()=>{
@@ -27,6 +27,9 @@ test('strict closed model whitelist and read-only shadow trust boundary',()=>{
   {latest:{...good().latest,lockedAt:ROUND+8000}},
   {latest:{...good().latest,marketSnapshotAt:ROUND-1000}},
   {latest:{...good().latest,score:null}},
+  {inputVersion:'MIXED_7_FACTORS'},
+  {latest:{...good().latest,inputVersion:'MIXED_7_FACTORS'}},
+  {latest:{...good().latest,direction:'UP',rsi:37}},
   {generatedAt:ROUND-10000}
  ])assert.equal(validateNoviceSignal({...good(),...changed},ROUND+6500).ok,false,
    JSON.stringify(changed));

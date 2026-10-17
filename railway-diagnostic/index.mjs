@@ -5,8 +5,8 @@ import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
 import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,refreshDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
-import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
-  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,RSI_INPUT_VERSION,
+import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
+  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,validateEdgeSignal,RSI_INPUT_VERSION,
   MAX_ORDER_SUBMIT_ATTEMPTS,claimOrderSubmitAttempt,closeOrderSubmitRound,releaseRejectedOrderSubmitAttempt,retryableRejectedOrderPost} from './production-signal-choice.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -24,6 +24,7 @@ const SIGNAL_WS_URL = String(process.env.SIGNAL_WS_URL || '').trim();
 const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MODEL_V1');
 const NOVICE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/novice-mix';
 const DYNAMIC_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/dynamic-entry';
+const EDGE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/edge-5m';
 
 
 let enabled = false;
@@ -325,7 +326,30 @@ async function getSignal({ forceHttp = false } = {}) {
   try{choice=await refreshModelSelection()}catch{return null}
   const round=currentRoundMs();
   if(!selectionPermitsRound(round,choice))return null;
-  if(![NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL].includes(choice.model))return null;
+  if(![NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL,EDGE_MODEL].includes(choice.model))return null;
+  if(choice.model===EDGE_MODEL){
+    try{
+      const response=await fetch(EDGE_LOCAL_URL,{cache:'no-store',
+        signal:AbortSignal.timeout(1100),headers:{accept:'application/json'}});
+      if(!response.ok)return null;
+      const verified=validateEdgeSignal(await response.json());
+      if(!verified.ok)return null;
+      return {
+        round:verified.round,status:'LOCKED',direction:verified.direction,
+        rawDirection:verified.direction,randomFlipApplied:false,
+        signalOutputMode:'EDGE5_CAUSAL_PROBABILITY_V1',
+        inputVersion:'EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1',
+        score:verified.score,confidence:null,modelProbability:verified.modelProbability,
+        calibrationReady:verified.calibrationReady,calibrationSamples:verified.calibrationSamples,
+        model:SIGNAL_MODEL_NAME,upstreamModel:EDGE_MODEL,
+        source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:verified.lockedAt,
+        lockedAt:verified.lockedAt,marketAt:verified.marketAt,
+        frozen:true,executionEligible:verified.executionEligible,
+        qualityGate:verified.executionEligible?'EDGE5_OFFICIAL_CALIBRATED':'EDGE5_COLLECTING_UNCALIBRATED',
+        signalId:SIGNAL_MODEL_NAME+':'+verified.round+':'+EDGE_MODEL+':'+verified.modelVersion+':'+verified.direction,
+        transport:'railway_edge5m_readonly'};
+    }catch{return null;}
+  }
   if(choice.model===DYNAMIC_MODEL){
     try{
       const response=await fetch(DYNAMIC_LOCAL_URL,{cache:'no-store',
@@ -595,6 +619,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
   if(choice.model===NOVICE_MODEL&&signal.upstreamModel!==NOVICE_MODEL)return;
   if(choice.model===DYNAMIC_MODEL&&signal.upstreamModel!==DYNAMIC_MODEL)return;
+  if(choice.model===EDGE_MODEL&&signal.upstreamModel!==EDGE_MODEL)return;
   // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
   if (signal.executionEligible===false) {
     console.log(JSON.stringify({event:'unverified_signal_order_blocked',

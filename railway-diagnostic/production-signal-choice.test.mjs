@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
- BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,MODEL_CHOICE_KEY,ORDER_SIGNAL_MODELS,
- snapshot,selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,
+ BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL,MODEL_CHOICE_KEY,ORDER_SIGNAL_MODELS,
+ snapshot,selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,validateEdgeSignal,
  setModelSelection,invalidate,retryableRejectedOrderPost,MAX_ORDER_SUBMIT_ATTEMPTS
 } from './production-signal-choice.mjs';
 
@@ -15,7 +15,7 @@ const good=(at=ROUND+6500)=>({
    lockedAt:ROUND+5190,marketSnapshotAt:ROUND+5150,score:-.42}
 });
 test('strict closed model whitelist and read-only shadow trust boundary',()=>{
- assert.deepEqual(ORDER_SIGNAL_MODELS.map(x=>x.id),[BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL]);
+ assert.deepEqual(ORDER_SIGNAL_MODELS.map(x=>x.id),[BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL]);
  assert.equal(MODEL_CHOICE_KEY,'trade-control:order-signal-choice:v1');
  assert.equal(validateNoviceSignal(good(),ROUND+6500).ok,true);
  for(const changed of [
@@ -64,7 +64,7 @@ test('production implementation contains actual source switching, PIN and final 
  assert.match(index,/if\(!pinOK\(body\.pin\)\)/);
  assert.match(index,/NOVICE_LOCAL_URL/);
  assert.match(index,/validateNoviceSignal\(body\)/);
- assert.match(index,/\[NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL\]\.includes\(choice\.model\)/);
+ assert.match(index,/\[NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL,EDGE_MODEL\]\.includes\(choice\.model\)/);
  assert.match(index,/RSI_INPUT_VERSION/);
  assert.match(index,/railway_rsi14_readonly/);
  assert.match(index,/rawDirection:verified.direction,randomFlipApplied:false/);
@@ -169,4 +169,44 @@ test('retry in actual server always takes a fresh quote and a Redis POST slot',(
  assert.match(choice,/IN_FLIGHT:/);
  assert.match(choice,/CLAIM_POST_SCRIPT/);
  assert.match(choice,/redis\.call\('INCR',KEYS\[1\]\)/);
+});
+
+
+test('EDGE fourth model never reuses old predictions and rejects uncalibrated execution',()=>{
+ const now=ROUND+6400;
+ const baseline={ok:true,model:EDGE_MODEL,inputVersion:'EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1',
+   readOnly:true,orders:false,productionIntegration:false,
+   statsScope:'EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY',generatedAt:now-50,
+   health:{marketError:null},training:{ready:false,calibrationReady:false,samples:0,version:null},
+   latest:{round:ROUND,status:'LOCKED',direction:'UP',lockedAt:ROUND+6000,
+     marketAt:ROUND+5800,score:0.18,inputVersion:'EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1',
+     modelVersion:'EDGE5_UNCALIBRATED_PROBE',calibrationReady:false,
+     executionEligible:false,modelProbability:null}};
+ const observing=validateEdgeSignal(baseline,now);
+ assert.equal(observing.ok,true);assert.equal(observing.executionEligible,false);
+ assert.equal(observing.modelProbability,null);
+ for(const patch of [{orders:true},{readOnly:false},{latest:{...baseline.latest,round:ROUND-300000}},
+   {latest:{...baseline.latest,lockedAt:ROUND+8000}},
+   {latest:{...baseline.latest,marketAt:ROUND+10000}},
+   {health:{marketError:'HTTP_451'}}]){
+   assert.equal(validateEdgeSignal({...baseline,...patch},now).ok,false,JSON.stringify(patch));
+ }
+ const modelVersion='EDGE5_OFFICIAL_5000_'+(ROUND-300000);
+ const ready={...baseline,training:{ready:true,calibrationReady:true,samples:5000,version:modelVersion},
+  latest:{...baseline.latest,modelVersion,modelProbability:.68,
+   calibrationReady:true,executionEligible:true}};
+ assert.equal(validateEdgeSignal(ready,now).executionEligible,true);
+ assert.equal(validateEdgeSignal({...ready,latest:{...ready.latest,modelProbability:.45}},now).ok,false);
+});
+test('EDGE quote gating is independent of previous three model paths',()=>{
+ const read=f=>fs.readFileSync(new URL(f,import.meta.url),'utf8');
+ const wrapper=read('./wrapper.mjs'),panel=read('./panel-stats-shell.mjs'),service=read('./edge-5m-service.mjs');
+ assert.match(wrapper,/if \(p\.signalModelChoice===EDGE_MODEL\)/);
+ assert.match(wrapper,/EDGE_ORDER_DEADLINE_MS = 8000/);
+ assert.match(wrapper,/EDGE5_NOT_CALIBRATED/);
+ assert.match(panel,/<option value="EDGE_5M_V1">/);
+ assert.match(panel,/renderEdgePrimary/);
+ assert.match(panel,/renderEdgeRoundStats/);
+ assert.match(service,/verifiedOfficialRoundDirections/);
+ assert.doesNotMatch(service,/signedPost|place-order-bundle/);
 });

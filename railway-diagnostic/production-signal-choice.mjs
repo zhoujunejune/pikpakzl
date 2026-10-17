@@ -8,11 +8,14 @@ export const MODEL_CHOICE_KEY='trade-control:order-signal-choice:v1';
 export const BASE_MODEL='BREAKOUT20_RSI_MACD_RANGE_V1';
 export const NOVICE_MODEL='NOVICE_MIX_LOW_V1';
 export const DYNAMIC_MODEL='DYNAMIC_ENTRY_5M_SHADOW_V1';
+export const EDGE_MODEL='EDGE_5M_V1';
+export const EDGE_INPUT_VERSION='EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1';
 export const RSI_INPUT_VERSION='RSI_ONLY_14_V1';
 export const ORDER_SIGNAL_MODELS=Object.freeze([
  {id:BASE_MODEL,name:'BASELINE（RSI14单指标 · Railway 信号）'},
  {id:NOVICE_MODEL,name:'NOVICE（RSI14单指标 · 独立影子信号）'},
- {id:DYNAMIC_MODEL,name:'5分钟动态入场（本轮任意时点 · 触发后锁定）'}
+ {id:DYNAMIC_MODEL,name:'5分钟动态入场（本轮任意时点 · 触发后锁定）'},
+ {id:EDGE_MODEL,name:'EDGE_5M_V1（前8秒 · 概率校准与Edge过滤）'}
 ]);
 const isChoice=m=>ORDER_SIGNAL_MODELS.some(x=>x.id===m);
 const roundOf=t=>Math.floor(t/300000)*300000;
@@ -150,6 +153,41 @@ export function validateDynamicEntrySignal(body,now=Date.now()){
  return {ok:true,round,direction:entry.direction,model:DYNAMIC_MODEL,
    lockedAt:entry.at,marketAt:entry.marketAt,score:entry.score,
    strength:entry.strength,modelVersion:entry.modelVersion};
+}
+
+
+export function validateEdgeSignal(body,now=Date.now()){
+ const round=roundOf(now),lock=body?.latest;
+ if(body?.ok!==true||body.model!==EDGE_MODEL||body.inputVersion!==EDGE_INPUT_VERSION||
+    body.readOnly!==true||body.orders!==false||body.productionIntegration!==false||
+    body.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')
+   return {ok:false,reason:'UNTRUSTED_EDGE_SOURCE'};
+ if(!Number.isSafeInteger(body.generatedAt)||body.generatedAt>now+300||
+   now-body.generatedAt>3500||body.health?.marketError!=null)
+   return {ok:false,reason:'EDGE_MARKET_OR_STATUS_STALE'};
+ if(!lock||lock.round!==round||lock.status!=='LOCKED'||
+   !['UP','DOWN'].includes(lock.direction)||!Number.isSafeInteger(lock.lockedAt)||
+   lock.lockedAt<round||lock.lockedAt>=round+8000||lock.lockedAt>now+250||
+   lock.inputVersion!==EDGE_INPUT_VERSION||
+   !Number.isSafeInteger(lock.marketAt)||lock.marketAt>lock.lockedAt||
+   lock.lockedAt-lock.marketAt>4000||
+   typeof lock.score!=='number'||!Number.isFinite(lock.score)||
+   !/^EDGE5_(?:OFFICIAL_[0-9]+_[0-9]+|UNCALIBRATED_PROBE)$/.test(String(lock.modelVersion||'')))
+   return {ok:false,reason:'EDGE_LOCK_EVIDENCE_MISSING'};
+ const ready=lock.executionEligible===true&&lock.calibrationReady===true&&
+   body.training?.ready===true&&body.training?.calibrationReady===true&&
+   body.training?.version===lock.modelVersion&&
+   Number(body.training.samples)>=5000;
+ const probability=lock.modelProbability;
+ if(ready&&(!(typeof probability==='number'&&Number.isFinite(probability))||
+   probability<0.5||probability>1))
+   return {ok:false,reason:'EDGE_CALIBRATION_INVALID'};
+ // Uncalibrated directional probes are visible but explicitly barred from execution.
+ return {ok:true,round,direction:lock.direction,model:EDGE_MODEL,
+   lockedAt:lock.lockedAt,marketAt:lock.marketAt,score:lock.score,
+   modelVersion:lock.modelVersion,modelProbability:ready?probability:null,
+   calibrationReady:ready,calibrationSamples:Number(body.training?.samples||0),
+   executionEligible:ready};
 }
 
 

@@ -14,9 +14,11 @@ const AUTO_CONFIRM_COOLDOWN_MS = Math.max(0, Number(process.env.AUTO_CONFIRM_COO
 const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.env.AUTO_CONFIRM_STOP_ON_ERROR || 'true'));
 const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
 const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
+const EDGE_ORDER_DEADLINE_MS = 8000; // Edge model strictly ends at T+8 seconds.
 function orderSubmitWindowOpen(round, now = Date.now(), model = null) {
   const start = Number(round);
-  const cutoff = model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
+  const cutoff = model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS :
+    model === EDGE_MODEL ? EDGE_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
   return Number.isSafeInteger(start) && start > 0 && now >= start && now < start + cutoff;
 }
 function rejectExpiredOrderWindow(p, stage) {
@@ -25,10 +27,12 @@ function rejectExpiredOrderWindow(p, stage) {
   p.state = 'ORDER_WINDOW_EXPIRED';
   p.error = p?.signalModelChoice===DYNAMIC_MODEL
     ? '动态模型本轮交易窗口已截止，未发送下单请求'
+    : p?.signalModelChoice===EDGE_MODEL ? 'EDGE模型前8秒入场窗口已截止，未发送下单请求'
     : '本轮第15秒订单提交窗口已截止，未发送下单请求';
   console.log(JSON.stringify({ event:'order_submit_deadline_expired',
     round:p.round, elapsedMs, deadlineMs:p?.signalModelChoice===DYNAMIC_MODEL
-      ?DYNAMIC_ORDER_DEADLINE_MS:ORDER_SUBMIT_DEADLINE_MS, stage }));
+      ?DYNAMIC_ORDER_DEADLINE_MS:p?.signalModelChoice===EDGE_MODEL
+        ?EDGE_ORDER_DEADLINE_MS:ORDER_SUBMIT_DEADLINE_MS, stage }));
   return true;
 }
 
@@ -122,7 +126,10 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current) ||
       (p.signalModelChoice===NOVICE_MODEL&&current.upstreamModel!==NOVICE_MODEL) ||
       (p.signalModelChoice===DYNAMIC_MODEL&&
-        (current.upstreamModel!==DYNAMIC_MODEL||current.signalId!==p.signalId))) {
+        (current.upstreamModel!==DYNAMIC_MODEL||current.signalId!==p.signalId)) ||
+      (p.signalModelChoice===EDGE_MODEL&&
+        (current.upstreamModel!==EDGE_MODEL||current.signalId!==p.signalId||
+         current.executionEligible!==true))) {
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',
@@ -173,6 +180,40 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     triggerToQuoteMs: Date.now() - quoteRequestStartedAt,
     source,
   }));
+
+  // Independent execution criteria for EDGE_5M_V1 only.
+  // The other three model execution paths and global EV_FILTER_ENABLED stay untouched.
+  if (p.signalModelChoice===EDGE_MODEL) {
+    const prob=Number(current.modelProbability);
+    const cost=Math.max(0,Number(process.env.EDGE5_FEE_BUFFER||0.01))+
+      Math.max(0,Number(process.env.EDGE5_SLIPPAGE_BUFFER||0.005));
+    const minEdge=Math.max(0.03,Number(process.env.EDGE5_MIN_EDGE||0.04));
+    const maxPrice=Math.min(0.99,Number(process.env.EDGE5_MAX_ENTRY_PRICE||0.55));
+    const quotePrice=Number(quote.chance);
+    const trusted=current.calibrationReady===true&&current.executionEligible===true&&
+      Number(current.calibrationSamples)>=5000&&
+      Number.isFinite(prob)&&prob>=0.5&&prob<=1;
+    const buyProbability=(current.rawDirection===p.signal)?prob:1-prob;
+    const edge=buyProbability-quotePrice-cost;
+    if(!trusted||!Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1||
+       !Number.isFinite(edge)||quotePrice>maxPrice||edge<minEdge){
+      p.state=isAuto?'EV_FILTERED':'READY';
+      p.blockReason=!trusted?'EDGE5_NOT_CALIBRATED':
+        !Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1?'EDGE5_QUOTE_INVALID':
+        quotePrice>maxPrice?'EDGE5_PRICE_ABOVE_CAP':'EDGE5_INSUFFICIENT_EDGE';
+      p.error='EDGE模型未通过实时概率、买入价和成本校验，本轮不下单';
+      p.modelProbability=trusted?buyProbability:null;
+      p.quoteChance=Number.isFinite(quotePrice)?quotePrice:null;
+      p.edge=Number.isFinite(edge)?Number(edge.toFixed(6)):null;
+      p.minEdge=minEdge;
+      p.calibrationSamples=current.calibrationSamples||0;
+      console.log(JSON.stringify({event:'edge5_execution_filtered',round:p.round,
+        reason:p.blockReason,modelProbability:p.modelProbability,
+        quotePrice:p.quoteChance,edge:p.edge,minEdge,cost}));
+      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason,
+        modelProbability:p.modelProbability,quotePrice:p.quoteChance,edge:p.edge,minEdge}};
+    }
+  }
 
   if (EV_FILTER_ENABLED) {
     const modelProbability = Number(current?.modelProbability);
@@ -369,6 +410,15 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
        (p.signalModelChoice===NOVICE_MODEL&&currentRetry.upstreamModel!==NOVICE_MODEL)||
        (p.signalModelChoice===DYNAMIC_MODEL&&
           (currentRetry.upstreamModel!==DYNAMIC_MODEL||currentRetry.signalId!==p.signalId))||
+       (p.signalModelChoice===EDGE_MODEL&&
+          (currentRetry.upstreamModel!==EDGE_MODEL||currentRetry.signalId!==p.signalId||
+           currentRetry.executionEligible!==true||
+           !Number.isFinite(Number(nextQuote.quote?.chance))||
+           Number(nextQuote.quote.chance)>Number(process.env.EDGE5_MAX_ENTRY_PRICE||0.55)||
+           (Number(currentRetry.rawDirection===p.signal?currentRetry.modelProbability:1-currentRetry.modelProbability)-
+             Number(nextQuote.quote.chance)-Number(process.env.EDGE5_FEE_BUFFER||0.01)-
+             Number(process.env.EDGE5_SLIPPAGE_BUFFER||0.005))<
+             Number(process.env.EDGE5_MIN_EDGE||0.04)))||
        rejectExpiredOrderWindow(p,'before_retry_place_order')){
       p.state='RETRY_ABORTED';
       p.error='重试时信号、轮次或下单设置不再有效';

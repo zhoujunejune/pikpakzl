@@ -166,3 +166,38 @@ try{
    round:x.roundStartMs,error:String(e?.message||e).slice(0,150)}))}
  }
 }catch(e){console.log('RAILWAY_AUDIT_FAILURE',String(e?.message||e).slice(0,180))}
+
+
+// Independent public ticker check, plus historical per-round time consistency.
+try{
+ const [track,feed,ticker]=await Promise.all([
+  getSafe(LEDGER+'/api/round-stats'),
+  getSafe(BASE+'/api/shadow-market-data'),
+  getSafe('https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT')
+ ]);
+ const rows=(track.data.records||[]).slice(0,50);
+ const labeled=rows.filter(x=>['UP','DOWN'].includes(x.productionActual));
+ const audited=labeled.filter(x=>x.officialSettlementAudit?.detailPayloadSha256);
+ const exactTime=audited.filter(x=>{
+  const a=x.officialSettlementAudit,r=Number(x.roundStartMs);
+  return Number(a.topicStartDate)===r&&Number(a.topicEndDate)===r+300000
+ }).length;
+ const beforeClose=audited.filter(x=>{
+  const r=Number(x.roundStartMs),locked=Number(x.productionLockedAt);
+  const settled=Number(x.productionSettledAt);
+  return Number.isFinite(locked)&&locked>=r&&locked<r+300000&&
+    Number.isFinite(settled)&&settled>=r+300000
+ }).length;
+ const railwayPrice=Number(feed.data.latest?.lastPrice);
+ const independentPrice=Number(ticker.data.price);
+ const diffPct=Number.isFinite(railwayPrice)&&Number.isFinite(independentPrice)&&independentPrice>0?
+   Math.abs(railwayPrice-independentPrice)/independentPrice*100:null;
+ console.log('MARKET_PRICE_CROSSCHECK',JSON.stringify({
+   at:Date.now(),tickerHttp:ticker.status,tickerSymbol:ticker.data.symbol||null,
+   publicBinanceTicker:independentPrice,railwaySpot:railwayPrice,
+   deviationPct:diffPct,crosscheckWithin0_30Pct:diffPct!==null&&diffPct<0.30,
+   railwayFeedOk:feed.data.ok===true,
+   examinedLabeled:labeled.length,auditedRounds:audited.length,
+   auditedExactRoundTime:exactTime,auditedPredictionBeforeEndAndSettlementAfterEnd:beforeClose
+ }));
+}catch(e){console.log('MARKET_PRICE_CROSSCHECK_ERROR',String(e?.message||e).slice(0,180))}

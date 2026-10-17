@@ -1,0 +1,64 @@
+name: RSI only production read-only verification
+on:
+  push:
+    paths:
+      - .github/workflows/rsi-only-live-readonly-verify.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify RSI-only output source, new ledger, and side mapping without ordering
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const origin='https://trade-control-panel-production.up.railway.app';
+          async function read(path){
+            const r=await fetch(origin+path,{cache:'no-store',signal:AbortSignal.timeout(11000)});
+            const contentType=r.headers.get('content-type')||'';
+            assert.ok(contentType.includes('json'),path+' unexpected content type '+contentType);
+            const data=await r.json();
+            assert.equal(r.status,200,path+' HTTP '+r.status+' '+JSON.stringify(data).slice(0,250));
+            return data;
+          }
+          let last='';
+          for(let attempt=0;attempt<8;attempt++){
+            try{
+              const shadow=await read('/api/shadow-breakout20/novice-mix');
+              assert.equal(shadow.model,'NOVICE_MIX_LOW_V1');
+              assert.equal(shadow.inputVersion,'RSI_ONLY_14_V1');
+              assert.equal(shadow.training?.status,'RSI_ONLY_FIXED');
+              assert.deepEqual(shadow.training?.weights,[1]);
+              assert.equal(shadow.readOnly,true);
+              assert.equal(shadow.orders,false);
+              if(shadow.latest?.status==='LOCKED'){
+                assert.equal(shadow.latest.inputVersion,'RSI_ONLY_14_V1');
+                assert.deepEqual(Object.keys(shadow.latest.factors||{}),['rsi']);
+                assert.equal(shadow.latest.direction,shadow.latest.rsi>=50?'UP':'DOWN');
+              }
+              for(const model of ['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1']){
+                const stats=await read('/api/postflip-official-stats?model='+model);
+                assert.equal(stats.ok,true);
+                assert.equal(stats.model,model);
+                assert.equal(stats.statsVersion,'RSI_ONLY_14_OUTPUT_OFFICIAL_V1_20261017');
+                assert.equal(stats.statsScope,'POSTFLIP_EMITTED_SIGNAL_ONLY');
+                assert.ok(stats.recent.every(row=>row.round>=stats.resetAt));
+                assert.ok(stats.results.overall.hits<=stats.results.overall.samples);
+                console.log(JSON.stringify({model,newRounds:stats.results.rounds,settled:stats.results.overall}));
+              }
+              const modelChoice=await read('/api/order-signal-model');
+              assert.equal(modelChoice.ready,true);
+              assert.ok(['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(modelChoice.model));
+              const html=await (await fetch(origin+'/',{signal:AbortSignal.timeout(10000)})).text();
+              assert.ok(html.includes('RSI(14)单指标'));
+              console.log('PASS: RSI-only live data and separate results verified; no order POST calls');
+              process.exit(0);
+            }catch(e){last=String(e?.message||e);console.log('attempt '+attempt+': '+last);await new Promise(r=>setTimeout(r,7000));}
+          }
+          throw Error('RSI_ONLY_LIVE_VERIFICATION_FAILED: '+last);
+          NODE

@@ -28,10 +28,11 @@ export function weighted(factors){
 export function predictMarket(snapshot,history=[],weights=BASE_WEIGHTS,clock=Date.now()){
   const round=Math.floor(clock/300000)*300000;
   const one=snapshot?.candles?.['1m']?.rows;
-  const latest=snapshot?.latest;
-  const fresh=snapshot?.ok===true&&snapshot.readOnly===true&&
+  // Only 1-minute RSI observations may affect prediction/readiness. A
+  // failure of unrelated 5-minute candles or separate spot/volume feeds must
+  // not suppress an otherwise fresh RSI-only signal.
+  const fresh=snapshot?.readOnly===true&&
     safe(snapshot.generatedAtMs)&&snapshot.generatedAtMs<=clock&&clock-snapshot.generatedAtMs<5000&&
-    latest&&safe(latest.eventMs)&&clock-latest.eventMs<12000&&
     Array.isArray(one)&&one.length>=RSI_PERIOD+1;
   const fail=(reason)=>({model:MODEL,inputVersion:INPUT_VERSION,round,lockedAt:clock,
     direction:'UP',status:'NO_DATA_FALLBACK',score:null,rsi:null,factors:{},reason});

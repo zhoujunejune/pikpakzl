@@ -255,3 +255,25 @@ try{
   currentRound:round
  }));
 }catch(e){console.log('EDGE_PROD_ACCEPTANCE_FAILED',String(e?.message||e).slice(0,180))}
+
+
+// Render Free Singapore read-only gateway smoke check.
+// Sleep can cause a cold-start; no credentials or order requests.
+try{
+ const url='https://zl-binance-network-probe.onrender.com/api/network';
+ const started=Date.now();
+ const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(105000)});
+ const txt=await r.text();
+ let d={};try{d=JSON.parse(txt)}catch{}
+ console.log('RENDER_BINANCE_EGRESS',JSON.stringify({
+   status:r.status,elapsedMs:Date.now()-started,ok:d.ok===true,
+   orders:d.orders===false,readOnly:d.readOnly===true,
+   checks:Array.isArray(d.checks)?d.checks.map(x=>({
+     name:x.name,http:x.http,exchangeCode:x.exchangeCode??null,
+     regionBlocked:x.regionBlocked,transportReachable:x.transportReachable,error:x.error??null
+   })):[],nonJson:r.status!==200?txt.slice(0,160):null
+ }));
+}catch(e){
+ console.log('RENDER_BINANCE_EGRESS_ERROR',JSON.stringify({
+  name:String(e?.name||'ERROR'),message:String(e?.message||e).slice(0,160)}));
+}

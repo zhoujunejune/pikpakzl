@@ -6,7 +6,7 @@ import { reconcileOrderUpdate } from './order-status-state.mjs';
 import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,refreshDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
 import {BASE_MODEL,NOVICE_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
-  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal} from './production-signal-choice.mjs';
+  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,RSI_INPUT_VERSION} from './production-signal-choice.mjs';
 import {applyRandomSignalFlip} from './signal-random-flip.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -246,6 +246,9 @@ function normalizePushedSignal(envelope, transport) {
 }
 
 function handlePushedSignal(envelope, transport) {
+  // Cloudflare may still publish its historical mixed-feature model. NEVER
+  // allow that direction into the RSI-only trade/output selector.
+  return false;
   const rawSignal = normalizePushedSignal(envelope, transport);
   if (!rawSignal) return false;
   // Pushes from the old source must not race the user-selected novice stream.
@@ -351,44 +354,30 @@ async function getSignal({ forceHttp = false } = {}) {
   try{choice=await refreshModelSelection()}catch{return null}
   const round=currentRoundMs();
   if(!selectionPermitsRound(round,choice))return null;
-  if(choice.model===NOVICE_MODEL){
-    try{
-      const r=await fetch(NOVICE_LOCAL_URL,{cache:'no-store',
-        signal:AbortSignal.timeout(1100),headers:{accept:'application/json'}});
-      if(!r.ok)return null;
-      const parsed=validateNoviceSignal(await r.json());
-      if(!parsed.ok)return null;
-      // Reuse the existing per-side source mapping; the upstream model field
-      // ALWAYS identifies the novice experiment and is audited independently.
-      return applyRandomSignalFlip({round:parsed.round,status:'LOCKED',direction:parsed.direction,
-        score:parsed.score,confidence:null,modelProbability:null,
-        model:SIGNAL_MODEL_NAME,upstreamModel:NOVICE_MODEL,
-        source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:parsed.lockedAt,
-        lockedAt:parsed.lockedAt,frozen:true,executionEligible:true,
-        qualityGate:'NOVICE_EXPERIMENTAL_NO_VALIDATED_EDGE',
-        signalId:SIGNAL_MODEL_NAME+':'+round+':'+NOVICE_MODEL,
-        transport:'novice_shadow_local_readonly'},choice.model);
-    }catch{return null;}
-  }
-  if(choice.model!==BASE_MODEL)return null;
-  if (!forceHttp && pushedSignal?.status === 'LOCKED' && pushedSignal.round === round) {
-    return pushedSignal;
-  }
-  if (!PRODUCTION_SIGNAL_ORIGIN) return null;
+  if(choice.model!==NOVICE_MODEL&&choice.model!==BASE_MODEL)return null;
   try {
-    const r = await fetch(PRODUCTION_SIGNAL_ORIGIN + '/api/production-signal?ts=' + Date.now(), {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!r.ok) return null;
-    const json = await r.json();
-    const rawSignal = signalFromProductionLive(json?.live || null, 'http_fallback');
-    const signal = applyRandomSignalFlip(rawSignal,choice.model);
-    if (signal.status === 'LOCKED') pushedSignal = signal;
-    return signal;
-  } catch {
-    return null;
-  }
+    const r=await fetch(NOVICE_LOCAL_URL,{cache:'no-store',
+      signal:AbortSignal.timeout(1100),headers:{accept:'application/json'}});
+    if(!r.ok)return null;
+    const body=await r.json();
+    const verified=validateNoviceSignal(body);
+    if(!verified.ok||verified.inputVersion!==RSI_INPUT_VERSION)return null;
+    // The selector uses ONLY the RSI(14) value calculated from pre-lock 1m
+    // candles. Both selectable model labels read the same indicator; they
+    // retain independent round-by-round 50% flip outcomes and stats ledgers.
+    return applyRandomSignalFlip({
+      round:verified.round,status:'LOCKED',direction:verified.direction,
+      rsi:verified.rsi,inputVersion:RSI_INPUT_VERSION,
+      score:verified.score,confidence:null,modelProbability:null,
+      model:SIGNAL_MODEL_NAME,upstreamModel:choice.model,
+      source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:verified.lockedAt,
+      lockedAt:verified.lockedAt,frozen:true,executionEligible:true,
+      qualityGate:'RSI14_ONLY_NO_VALIDATED_EDGE',
+      signalId:SIGNAL_MODEL_NAME+':'+round+':'+choice.model+':'+RSI_INPUT_VERSION,
+      transport:'railway_rsi14_readonly'},
+      choice.model);
+  }catch{return null;}
+
 }
 
 async function getPaymentBalances() {

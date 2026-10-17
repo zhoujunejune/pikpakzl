@@ -304,6 +304,12 @@ async function renderPostflipRoundStats(){
   var actual=x.actual==='UP'||x.actual==='DOWN'?x.actual:null;
   var direction=x.eligible?x.emitted:'WAIT';
   var result=x.result||(!actual?'PENDING':direction===actual?'HIT':'MISS');
+  var pendingError=String(x.pendingReason||d.health?.lastOfficialError||'');
+  var settlementLabel=actual?'Binance Prediction 官方结算':
+    /451|REGION_RESTRICTED/i.test(pendingError)?'币安接口地区限制（HTTP 451）':
+    /TOPIC_NOT_FOUND|ROUND_NOT_IN_RECENT|EVIDENCE_MISMATCH|CONFLICT/i.test(pendingError)?'历史轮次待匹配':
+    /TIMEOUT|HTTP_5|FETCH_FAILED|UNAVAILABLE/i.test(pendingError)?'结算接口暂不可用':
+    '等待官方结算';
   var time=Number(x.lockedAt)-Number(x.round);
   return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.round)+'</td>'+
    '<td style="padding:9px 6px">'+badge(direction)+'</td>'+
@@ -312,7 +318,7 @@ async function renderPostflipRoundStats(){
    '<td style="padding:9px 6px">'+(Number.isFinite(time)?(time/1000).toFixed(2)+'s':'-')+'</td>'+
    '<td style="padding:9px 6px">'+badge(actual||'PENDING')+'</td>'+
    '<td style="padding:9px 6px">'+badge(result)+'</td>'+
-   '<td style="padding:9px 6px">'+(actual?'Binance Prediction 官方结算':'等待官方结算')+'</td></tr>';
+   '<td style="padding:9px 6px">'+esc(settlementLabel)+'</td></tr>';
  }).join(''):'<tr><td colspan="8" style="padding:10px 6px">新版本尚无正式信号记录，旧数据已从本表隐藏</td></tr>';
 }
 async function renderNoviceRoundStats(){

@@ -55,7 +55,9 @@ test('every selection change invalidates pre-existing orders and current round',
 });
 test('invalid model cannot modify Redis or the production configuration',async()=>{
  await assert.rejects(()=>setModelSelection('TRAINING_INTERNAL_UNUSED','revision'),/INVALID_MODEL_CHOICE/);
- await assert.rejects(()=>setModelSelection(NOVICE_MODEL,''),/INVALID_EXPECTED_REVISION/);
+ await assert.rejects(()=>setModelSelection(BASE_MODEL,''),/INVALID_EXPECTED_REVISION/);
+ await assert.rejects(()=>setModelSelection(NOVICE_MODEL,'any-valid-revision'),/INVALID_MODEL_CHOICE/);
+ await assert.rejects(()=>setModelSelection(DYNAMIC_MODEL,'any-valid-revision'),/INVALID_MODEL_CHOICE/);
 });
 test('production implementation contains actual source switching, PIN and final order guards',()=>{
  const read=f=>fs.readFileSync(new URL(f,import.meta.url),'utf8');

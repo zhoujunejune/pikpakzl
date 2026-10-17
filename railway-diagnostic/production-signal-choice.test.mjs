@@ -156,7 +156,7 @@ test('order attempts are capped at three real POSTs, never extra blind retries',
 test('retry in actual server always takes a fresh quote and a Redis POST slot',()=>{
  const read=f=>fs.readFileSync(new URL(f,import.meta.url),'utf8');
  const backend=read('./index.mjs'),wrapper=read('./wrapper.mjs'),choice=read('./production-signal-choice.mjs');
- assert.match(backend,/claimOrderSubmitAttempt,closeOrderSubmitRound,retryableRejectedOrderPost/);
+ assert.match(backend,/claimOrderSubmitAttempt,closeOrderSubmitRound,releaseRejectedOrderSubmitAttempt,retryableRejectedOrderPost/);
  assert.match(wrapper,/retryableRejectedOrderPost\(call\)/);
  assert.match(wrapper,/orderPostClaim\.attempt<MAX_ORDER_SUBMIT_ATTEMPTS/);
  assert.match(wrapper,/const nextQuote=await getFreshQuote\(intent\)/);
@@ -165,6 +165,8 @@ test('retry in actual server always takes a fresh quote and a Redis POST slot',(
  assert.match(wrapper,/claimOrderSubmitAttempt\(p\.round\)/);
  assert.match(wrapper,/closeOrderSubmitRound\(p\.round,'UNKNOWN'\)/);
  assert.match(wrapper,/closeOrderSubmitRound\(p\.round,'SUBMITTED'\)/);
+ assert.match(wrapper,/releaseRejectedOrderSubmitAttempt\(p\.round,orderPostClaim\.attempt\)/);
+ assert.match(choice,/IN_FLIGHT:/);
  assert.match(choice,/CLAIM_POST_SCRIPT/);
  assert.match(choice,/redis\.call\('INCR',KEYS\[1\]\)/);
 });

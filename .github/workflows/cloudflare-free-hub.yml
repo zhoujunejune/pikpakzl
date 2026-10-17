@@ -36,6 +36,7 @@ jobs:
       - name: Deploy only independent free hub
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing CLOUDFLARE_API_TOKEN'; exit 1; }
+          set -o pipefail
           npx --yes wrangler@4 deploy --config wrangler-free-hub.toml 2>&1 | tee /tmp/free-hub-deploy.log
       - name: Verify market and independent model links
         run: node verify-free-hub.mjs

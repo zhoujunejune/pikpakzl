@@ -18,7 +18,7 @@ const payload={ok:true,productionSignalSourceMode:'MARKET_FUSION_FAST8',
 function setup(script) {
  const els=new Map(),alerts=[],posts=[],seen=[];
  function el(id){
-   if(!els.has(id))els.set(id,{innerHTML:'',textContent:'',value:'',style:{}});
+   if(!els.has(id))els.set(id,{innerHTML:'',textContent:'',value:'',style:{},addEventListener(){}});
    return els.get(id);
  }
  el('pin').value='testing-pin';

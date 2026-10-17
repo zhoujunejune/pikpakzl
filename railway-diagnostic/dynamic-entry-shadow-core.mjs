@@ -68,13 +68,17 @@ export function decide(features,model=null){
    0.45*x[0]+0.7*x[1]+0.55*x[2]+0.8*x[3]+0.10*x[4];
  const strength=model?.weights?Math.abs(sigmoid(raw)-0.5)*2:
    Math.abs(Math.tanh(raw/1.4));
- const threshold=model?.weights?0.55:0.72;
+ // A 72% raw-strength gate was preventing nearly all simulated entries.
+ // This is an internal activation threshold, never a claimed probability of winning.
+ const threshold=model?.weights?0.045:0.08;
  const direction=raw>=0?'UP':'DOWN';
- const eligible=strength>=threshold &&
-   Math.sign(x[1])===Math.sign(raw) &&
+ const trendAligned=Math.sign(x[1])===Math.sign(raw) ||
    Math.sign(x[3])===Math.sign(raw);
+ const eligible=strength>=threshold && trendAligned;
+ const entryReason=eligible?'SIGNAL_READY':
+   strength<threshold?'LOW_SIGNAL_STRENGTH':'TREND_NOT_ALIGNED';
  return {direction,score:Number(raw.toFixed(5)),strength:Number(strength.toFixed(5)),
-   threshold,eligible,modelVersion:model?.version||'HEURISTIC_V1',
+   threshold,eligible,entryReason,modelVersion:model?.version||'HEURISTIC_V2_ADAPTIVE_GATE',
    strengthCalibrated:false};
 }
 const score=(rows)=>{const validRows=rows.filter(x=>valid(x.actual)&&valid(x.direction));

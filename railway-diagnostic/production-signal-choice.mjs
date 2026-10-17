@@ -157,7 +157,7 @@ export function validateDynamicEntrySignal(body,now=Date.now()){
 // authority already required for real-order model switching.
 export const MAX_ORDER_SUBMIT_ATTEMPTS=3;
 const ORDER_SUBMIT_PREFIX='trade-control:order-submit:v1:';
-const CLAIM_POST_SCRIPT="if redis.call('EXISTS',KEYS[2])==1 then return -2 end; local n=tonumber(redis.call('GET',KEYS[1]) or '0'); if n>=tonumber(ARGV[1]) then return -1 end; n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],7200) end; return n";
+const CLAIM_POST_SCRIPT="local marker=redis.call('GET',KEYS[2]); if marker and marker~='REJECTED' then return -2 end; local n=tonumber(redis.call('GET',KEYS[1]) or '0'); if n>=tonumber(ARGV[1]) then return -1 end; n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],7200) end; redis.call('SET',KEYS[2],'IN_FLIGHT:'..n,'EX',7200); return n";
 function checkedSubmitRound(round){
  if(!Number.isSafeInteger(round)||round<1||round%300000!==0)throw Error('INVALID_SUBMIT_ROUND');
  return ORDER_SUBMIT_PREFIX+round;
@@ -174,7 +174,17 @@ export async function claimOrderSubmitAttempt(round){
 export async function closeOrderSubmitRound(round,reason){
  if(!['SUBMITTED','UNKNOWN'].includes(reason))throw Error('INVALID_SUBMIT_CLOSE_REASON');
  const prefix=checkedSubmitRound(round),redis=await db();
- await redis.set(prefix+':closed',reason,{EX:7200,NX:true});
+ const script="local m=redis.call('GET',KEYS[1]); if not m or string.sub(m,1,10)~='IN_FLIGHT:' then return 'CONFLICT' end; return redis.call('SET',KEYS[1],ARGV[1],'EX',7200)";
+ const outcome=await redis.eval(script,{keys:[prefix+':closed'],arguments:[reason]});
+ if(outcome!=='OK')throw Error('ORDER_ROUND_CLOSE_CONFLICT');
+}
+export async function releaseRejectedOrderSubmitAttempt(round,attempt){
+ const prefix=checkedSubmitRound(round),redis=await db();
+ if(!Number.isSafeInteger(attempt)||attempt<1||attempt>MAX_ORDER_SUBMIT_ATTEMPTS)
+   throw Error('INVALID_ORDER_SUBMIT_ATTEMPT');
+ const script="if redis.call('GET',KEYS[1])~=ARGV[1] then return 'CONFLICT' end; return redis.call('SET',KEYS[1],'REJECTED','EX',7200)";
+ const outcome=await redis.eval(script,{keys:[prefix+':closed'],arguments:['IN_FLIGHT:'+attempt]});
+ if(outcome!=='OK')throw Error('ORDER_REJECTION_FENCE_CONFLICT');
 }
 // A network timeout, HTTP 5xx, and even an empty success response may have
 // created an order. Only a clear Binance quote/price rejection is retryable.

@@ -255,15 +255,3 @@ try{
   currentRound:round
  }));
 }catch(e){console.log('EDGE_PROD_ACCEPTANCE_FAILED',String(e?.message||e).slice(0,180))}
-
-
-// Zero-cost executor feasibility gate: Cloudflare egress to Binance.
-// No signature or API key is ever transmitted, and no order route is called.
-try{
- const r=await fetch('https://zl-free-market-hub.zl528094-3ba.workers.dev/api/binance-network-check',
-  {signal:AbortSignal.timeout(16000),cache:'no-store'});
- const d=await r.json();console.log('CLOUDFLARE_BINANCE_EGRESS',JSON.stringify({
-   http:r.status,ok:d.ok===true,
-   checks:(d.checks||[]).map(x=>({name:x.name,status:x.status,exchangeCode:x.exchangeCode,
-    accessRestricted:x.accessRestricted,error:x.error??null}))}));
-}catch(e){console.log('CLOUDFLARE_BINANCE_EGRESS_ERROR',String(e?.message||e).slice(0,140))}

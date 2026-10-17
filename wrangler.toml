@@ -1,12 +1,12 @@
-name = "breakout20-shadow"
-main = "src/index.mjs"
-compatibility_date = "2026-10-15"
+name = "edge-5m-v1"
+main = "src/edge-worker.mjs"
+compatibility_date = "2026-10-17"
 workers_dev = true
 
 [[durable_objects.bindings]]
-name = "BREAKOUT20"
-class_name = "Breakout20"
+name = "EDGE5"
+class_name = "Edge5"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["Breakout20"]
+new_sqlite_classes = ["Edge5"]

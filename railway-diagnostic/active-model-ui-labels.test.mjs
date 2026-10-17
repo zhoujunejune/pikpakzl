@@ -63,7 +63,7 @@ test('current-model direction switches, confirmation, save notice and mapped ord
  await flush();
  // The initial status poll may precede loading Redis direction settings.
  // Save completion triggers a fresh authoritative mapping check.
- assert.match(env.el('activeFast8OrderDirection').textContent,/Market Fusion V2（8秒趋势\+报价）/);
+ assert.match(env.el('activeFast8OrderDirection').textContent,/突破20%即可/);
  assert.doesNotMatch(env.el('activeFast8OrderDirection').textContent,/Selective V2/);
  assert.equal(env.posts.length,1);
  assert.equal(env.posts[0].source,'SELECTIVE_V2_FAST8_PRIMARY');

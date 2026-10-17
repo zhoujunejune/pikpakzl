@@ -7,9 +7,9 @@ const match = source.match(/function orderSubmitWindowOpen\(round, now = Date\.n
 if (!match) throw new Error('ORDER_SUBMIT_WINDOW_FUNCTION_NOT_FOUND');
 // Evaluate the exact standalone pure helper embedded into the production wrapper.
 const orderSubmitWindowOpen = new Function(
-  'ORDER_SUBMIT_DEADLINE_MS','DYNAMIC_ORDER_DEADLINE_MS','DYNAMIC_MODEL',
+  'ORDER_SUBMIT_DEADLINE_MS','DYNAMIC_ORDER_DEADLINE_MS','DYNAMIC_MODEL','EDGE_MODEL','EDGE_ORDER_DEADLINE_MS',
   match[0] + '\nreturn orderSubmitWindowOpen;',
-)(15000,285000,'DYNAMIC_ENTRY_5M_SHADOW_V1');
+)(15000,285000,'DYNAMIC_ENTRY_5M_SHADOW_V1','EDGE_5M_V1',8000);
 
 test('round-relative submit deadline is exactly 15 seconds', () => {
   assert.match(source, /const ORDER_SUBMIT_DEADLINE_MS = 15000;/);
@@ -25,6 +25,8 @@ test('round-relative submit deadline is exactly 15 seconds', () => {
   assert.equal(orderSubmitWindowOpen(round, round+16000, 'DYNAMIC_ENTRY_5M_SHADOW_V1'),true);
   assert.equal(orderSubmitWindowOpen(round, round+240000, 'DYNAMIC_ENTRY_5M_SHADOW_V1'),true);
   assert.equal(orderSubmitWindowOpen(round, round+285000, 'DYNAMIC_ENTRY_5M_SHADOW_V1'),false);
+  assert.equal(orderSubmitWindowOpen(round, round+7999,'EDGE_5M_V1'),true);
+  assert.equal(orderSubmitWindowOpen(round, round+8000,'EDGE_5M_V1'),false);
 });
 
 test('late orders are checked before quoting, before placement and before preparation', () => {

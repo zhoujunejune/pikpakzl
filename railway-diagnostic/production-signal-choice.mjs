@@ -7,9 +7,10 @@ import {createClient} from 'redis';
 export const MODEL_CHOICE_KEY='trade-control:order-signal-choice:v1';
 export const BASE_MODEL='BREAKOUT20_RSI_MACD_RANGE_V1';
 export const NOVICE_MODEL='NOVICE_MIX_LOW_V1';
+export const RSI_INPUT_VERSION='RSI_ONLY_14_V1';
 export const ORDER_SIGNAL_MODELS=Object.freeze([
- {id:BASE_MODEL,name:'突破20%即可（Cloudflare 生产信号）'},
- {id:NOVICE_MODEL,name:'新手错误混合（独立影子信号）'}
+ {id:BASE_MODEL,name:'BASELINE（RSI14单指标 · Railway 信号）'},
+ {id:NOVICE_MODEL,name:'NOVICE（RSI14单指标 · 独立影子信号）'}
 ]);
 const isChoice=m=>ORDER_SIGNAL_MODELS.some(x=>x.id===m);
 const roundOf=t=>Math.floor(t/300000)*300000;
@@ -95,7 +96,8 @@ export async function setModelSelection(model,expectedRevision,now=Date.now()){
 }
 export function validateNoviceSignal(body,now=Date.now()){
  const round=roundOf(now),lock=body?.latest;
- if(body?.ok!==true||body?.model!==NOVICE_MODEL||body?.readOnly!==true||
+ if(body?.ok!==true||body?.model!==NOVICE_MODEL||body?.inputVersion!==RSI_INPUT_VERSION||
+   lock?.inputVersion!==RSI_INPUT_VERSION||body?.readOnly!==true||
    body?.orders!==false||body?.productionIntegration!==false)
    return {ok:false,reason:'UNTRUSTED_NOVICE_MODEL'};
  if(lock?.model!==NOVICE_MODEL||lock?.status!=='LOCKED'||lock.round!==round||
@@ -104,11 +106,13 @@ export function validateNoviceSignal(body,now=Date.now()){
    return {ok:false,reason:'NOVICE_NOT_FROZEN_BEFORE_8S'};
  if(!Number.isFinite(Number(lock.marketSnapshotAt))||
    lock.marketSnapshotAt<round||lock.marketSnapshotAt>lock.lockedAt||
-   (typeof lock.score!=='number'||!Number.isFinite(lock.score)))
+   (typeof lock.score!=='number'||!Number.isFinite(lock.score))||
+   (typeof lock.rsi!=='number'||!Number.isFinite(lock.rsi)||lock.rsi<0||lock.rsi>100)||
+   lock.direction!==(lock.rsi>=50?'UP':'DOWN'))
    return {ok:false,reason:'NOVICE_MARKET_EVIDENCE_MISSING'};
  if(!Number.isSafeInteger(body.generatedAt)||body.generatedAt<lock.lockedAt||
    body.generatedAt>now+250||now-body.generatedAt>4000)
    return {ok:false,reason:'NOVICE_STATUS_STALE'};
  return {ok:true,round,direction:lock.direction,model:NOVICE_MODEL,
-   lockedAt:lock.lockedAt,score:lock.score};
+   lockedAt:lock.lockedAt,score:lock.score,rsi:lock.rsi,inputVersion:RSI_INPUT_VERSION};
 }

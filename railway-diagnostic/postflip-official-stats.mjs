@@ -3,11 +3,11 @@
 // Persist a separate Redis reporting key so redeploys do not reset measurements.
 import {createClient} from 'redis';
 import {applyRandomSignalFlip} from './signal-random-flip.mjs';
-import {BASE_MODEL,NOVICE_MODEL} from './production-signal-choice.mjs';
+import {BASE_MODEL,NOVICE_MODEL,RSI_INPUT_VERSION} from './production-signal-choice.mjs';
 
-export const POSTFLIP_START_ROUND=Date.parse('2026-10-17T03:40:00.000Z');
-export const POSTFLIP_STATS_VERSION='POSTFLIP_OUTPUT_OFFICIAL_V1_20261017';
-const REDIS_KEY='reporting:postflip-output-official:20261017:v1';
+export const POSTFLIP_START_ROUND=Date.parse('2026-10-17T05:35:00.000Z'); // RSI-only rollout window
+export const POSTFLIP_STATS_VERSION='RSI_ONLY_14_OUTPUT_OFFICIAL_V1_20261017';
+const REDIS_KEY='reporting:rsi-only14-output-official:20261017:v1'; // Never rewrite 11:40 mixed-feature history
 const MODELS=[BASE_MODEL,NOVICE_MODEL];
 const VALID=d=>d==='UP'||d==='DOWN';
 const ROUND_MS=300000;
@@ -102,29 +102,23 @@ export function createPostflipStatsService({
   if(busy||storageError)return;
   busy=true;
   try{
-   // Each source has an independent official-backed model ledger.
-   try{
-    const r=await fetcher(officialUrl,{cache:'no-store',signal:AbortSignal.timeout(4000)});
-    if(!r.ok)throw Error('BASELINE_OFFICIAL_HTTP_'+r.status);
-    const j=await r.json();
-    if(j?.ok!==true||j?.model!==BASE_MODEL||
-       j?.source!=='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'||
-       j?.statsScope!=='CURRENT_MODEL_VERSION_PRODUCTION_LOCKS_ONLY'||
-       !Array.isArray(j.recent))throw Error('BASELINE_OFFICIAL_PROVENANCE_INVALID');
-    for(const x of j.recent){
-     cache.ingest(BASE_MODEL,Number(x.t),x.direction,VALID(x.actual)?x.actual:null,{lockedAt:Number(x.lockedAt)});
-    }
-    lastOfficialAt=clock();lastError=null;
-   }catch(e){lastError=String(e?.message||e);}
+   // This version has one and only one signal feature: RSI(14).
+   // The upstream 7-factor and Cloudflare RSI/MACD models are EXCLUDED.
+   // Both selectable model identities use the same immutable RSI direction
+   // but independently flip 50% of rounds before downstream order mapping.
    try{
     const rows=noviceRows();
-    if(!Array.isArray(rows))throw Error('NOVICE_ROWS_UNAVAILABLE');
+    if(!Array.isArray(rows))throw Error('RSI_ONLY_ROWS_UNAVAILABLE');
     for(const x of rows){
-     if(x?.status!=='LOCKED'&&x?.status!=='PARTIAL_INPUT')continue;
-     cache.ingest(NOVICE_MODEL,Number(x.round),x.direction,
-       VALID(x.actual)?x.actual:null,{lockedAt:Number(x.lockedAt),eligible:true});
+     if(x?.inputVersion!==RSI_INPUT_VERSION || x?.status!=='LOCKED')continue;
+     const actual=VALID(x.actual)?x.actual:null;
+     for(const model of MODELS){
+      cache.ingest(model,Number(x.round),x.direction,actual,
+        {lockedAt:Number(x.lockedAt),eligible:true});
+     }
     }
     lastNoviceAt=clock();
+    lastError=null;
    }catch(e){lastError=String(e?.message||e);}
    if(cache.dirty()){
     await client.set(REDIS_KEY,JSON.stringify({version:POSTFLIP_STATS_VERSION,rows:cache.dump()}));

@@ -125,7 +125,7 @@ export function fitOnOfficialProbes(rows,previous=null){
   }
   const step=0.24/Math.sqrt(epoch/80+1);
   w[0]-=step*g[0]/train.length;
-  for(let j=1;j<w.length;j++)w[j+1]-=step*(g[j+1]/train.length+0.06*w[j+1]);
+  for(let j=1;j<w.length;j++)w[j]-=step*(g[j]/train.length+0.06*w[j]);
  }
  const checks=holdout.map(r=>({direction:dot(w,r.probe.values)>=0?'UP':'DOWN',actual:r.actual}));
  const validation=score(checks);

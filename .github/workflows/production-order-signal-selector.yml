@@ -4,7 +4,9 @@ on:
     paths:
       - railway-diagnostic/production-signal-choice.mjs
       - railway-diagnostic/production-signal-choice.test.mjs
-      - railway-diagnostic/order-model-separated-stats.test.mjs
+      - railway-diagnostic/signal-random-flip.mjs
+      - railway-diagnostic/signal-random-flip.test.mjs
+      - railway-diagnostic/order-model-separated-stats.test.mjs railway-diagnostic/signal-random-flip.test.mjs
       - railway-diagnostic/index.mjs
       - railway-diagnostic/wrapper.mjs
       - railway-diagnostic/panel-stats-shell.mjs
@@ -29,6 +31,8 @@ jobs:
         run: |
           node --check railway-diagnostic/production-signal-choice.mjs
           node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/signal-random-flip.mjs
+          node --check railway-diagnostic/signal-random-flip.test.mjs
           node --check railway-diagnostic/wrapper.mjs
           node --check railway-diagnostic/panel-stats-shell.mjs
       - name: Validate signal selection and side-direction guard

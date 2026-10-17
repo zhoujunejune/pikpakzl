@@ -1,0 +1,41 @@
+name: Deploy Cloudflare free market & signal hub
+on:
+  push:
+    branches: [cloudflare-free-market-hub-20261017]
+    paths:
+      - src/cloudflare-free-hub.mjs
+      - src/provider-market.mjs
+      - wrangler-free-hub.toml
+      - verify-free-hub.mjs
+      - .github/workflows/cloudflare-free-hub.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-free-market-hub-only
+  cancel-in-progress: false
+jobs:
+  deploy-free-hub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: 3ba148af3f98117d6b299158e20bf687
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate explicit free-tier read-only isolation
+        run: |
+          grep -q '^name = "zl-free-market-hub"$' wrangler-free-hub.toml
+          ! grep -Ei 'paid|kv_namespaces|r2_buckets|d1_databases|durable_objects' wrangler-free-hub.toml
+          node --check src/cloudflare-free-hub.mjs
+          node --check src/provider-market.mjs
+          node --check verify-free-hub.mjs
+      - name: Deploy only independent free hub
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing CLOUDFLARE_API_TOKEN'; exit 1; }
+          npx --yes wrangler@4 deploy --config wrangler-free-hub.toml 2>&1 | tee /tmp/free-hub-deploy.log
+      - name: Verify market and independent model links
+        run: node verify-free-hub.mjs

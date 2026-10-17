@@ -6,6 +6,7 @@ on:
       - src/edge-core.mjs
       - src/edge-core.test.mjs
       - src/edge-worker.mjs
+      - src/provider-market.mjs
       - wrangler.toml
       - verify-edge5m.mjs
       - .github/workflows/cloudflare-edge5m.yml
@@ -35,6 +36,7 @@ jobs:
       - name: Test causal features and official-only calibration
         run: |
           node --check src/edge-worker.mjs
+          node --check src/provider-market.mjs
           node --check src/edge-core.mjs
           node --test src/edge-core.test.mjs
       - name: Deploy only edge-5m-v1

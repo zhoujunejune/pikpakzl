@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { noviceMixShadow } from './novice-mix-shadow.mjs';
+import { dynamicEntryShadow } from './dynamic-entry-shadow.mjs';
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
 
@@ -1118,6 +1119,7 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
+  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/dynamic-entry') return dynamicEntryShadow.handler(res);
   if (req.method === 'GET' && url.pathname === '/api/postflip-official-stats') {
     const model=url.searchParams.get('model');
     if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(model)){
@@ -1133,6 +1135,7 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);
   return proxyInner(req, res, false);
 }).listen(PORT, '0.0.0.0', () => {
+  void dynamicEntryShadow.start().catch(error => log('dynamic_entry_shadow_start_error', { error: String(error?.message||error) }));
   void noviceMixShadow.start()
     .catch(error => log('novice_shadow_start_error', { error: String(error?.message||error) }))
     .finally(()=>{void postflipStats.start().catch(error=>

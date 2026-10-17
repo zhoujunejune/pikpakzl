@@ -39,7 +39,7 @@ function log(event, extra = {}) {
 const statsCard = `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
-<div class="muted" id="rsMeta">仅统计当前生产订单流模型的 Binance Prediction 官方结算，旧信号不参与本栏计算。</div>
+<div class="muted" id="rsMeta">仅统计当前模型原始方向的币安官方结算；50%信号层随机翻转后的胜率及实际成交盈亏须另行统计。</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">已结算</div><div class="v" id="rsSettled">-</div></div>
 <div class="kv"><div class="k">有效判断</div><div class="v" id="rsDecided">-</div></div>
@@ -401,13 +401,14 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
     style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
-  <div class="muted" style="margin-top:7px">这里只切换下一轮真实下单使用的原始预测；现有 UP/DOWN 正向/反向模式继续生效。独立影子模型缺数据时不使用旧信号兜底。该模型尚未证明具有稳定胜率优势。</div>
+  <div class="muted" style="margin-top:7px">两个模型的原始预测保持不变，锁定后各自独立以50%概率翻转正式信号（每轮固定）；最终下单继续走现有 UP/DOWN 正向/反向开关，不再二次随机。影子模型缺数据时不使用旧信号兜底。</div>
 </div>
 <div class="grid" style="margin-top:12px">
-<div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="activeFast8Direction">读取中</div></div>
+<div class="kv"><div class="k">模型原始预测</div><div class="v" id="activeFast8ModelRawDirection">读取中</div></div>
+<div class="kv"><div class="k">正式输出信号（50%随机翻转后）</div><div class="v" id="activeFast8Direction">读取中</div></div>
 <div class="kv"><div class="k">下单信号（当前正向 / 反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
-<div class="kv"><div class="k">本模型官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
-<div class="kv"><div class="k">开启方向的理论映射命中率（不代表实盘盈亏）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
+<div class="kv"><div class="k">本模型原始方向官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
+<div class="kv"><div class="k">历史原始方向的理论映射命中率（未计入随机翻转）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
 <div class="kv"><div class="k">开启方向理论命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
@@ -422,7 +423,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前 UP/DOWN 模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>按当前下单规则推算命中率</th></tr></thead>
 <tbody id="sourceRateRows"><tr><td colspan="6" style="padding:10px 6px">统计读取中...</td></tr></tbody>
 </table></div>
-<div class="muted" style="margin-top:7px">按 Binance Prediction 官方结算、当前方向映射规则分别回算。含规则切换前的历史方向时，不代表当时实际订单。不是成交胜率或收益率。</div>
+<div class="muted" style="margin-top:7px">按币安官方结算、历史模型原始预测及当前正/反向模式推算，未计入50%随机翻转。正式输出与实际下单需以当前状态和独立记录为准；这不是成交胜率或收益率。</div>
 <div class="muted" id="activeFast8Note" style="margin-top:10px">仅统计当前生产模型版本的官方结算；任何低证据方向都不代表具有预测优势。</div>
 </div>`;
 const primaryScript = `<script>(function(){
@@ -633,7 +634,7 @@ async function renderNovicePrimary(){
  var now=Math.floor(Date.now()/300000)*300000,latest=data.latest||{},valid=(latest.status==='LOCKED'||latest.status==='PARTIAL_INPUT')&&latest.round===now;
  e('activeFast8Name').textContent='新手错误混合 NOVICE_MIX_LOW_V1';
  e('activeFast8Desc').textContent='BTC 5分钟 · 独立影子预测 · 8秒内锁定 · 页面仅显示当前选择模型的历史；未验证有稳定优势';
- e('activeFast8Direction').textContent=valid?latest.direction:'本轮未锁定 / 暂不可下单';
+ e('activeFast8ModelRawDirection').textContent=valid?latest.direction:'本轮未锁定 / 暂不可下单';
  e('activeFast8Accuracy').textContent=n?pct(h*100/n):'暂无已确认官方结算';
  e('activeFast8HitMiss').textContent=h+' / '+(n-h)+'（'+n+'轮）';
  e('activeFast8Coverage').textContent=Number(r.locked||0)+' 轮锁定 · '+Number(r.dataGaps||0)+' 轮数据缺口';
@@ -667,7 +668,7 @@ function load(){
    e('activeFast8InverseAccuracy').textContent='-';
    e('activeFast8InverseHitMiss').textContent='-';
    e('activeFast8Coverage').textContent='-';
-   e('activeFast8Direction').textContent='新模型数据未就绪';
+   e('activeFast8ModelRawDirection').textContent='新模型数据未就绪';
    e('sourceRateRows').innerHTML='<tr><td colspan="6" style="padding:10px 6px">新模型数据不可用，禁止显示老模型胜率</td></tr>';
    e('activeFast8Note').textContent=err?.message||'新模型统计读取失败';
   });
@@ -707,7 +708,7 @@ function load(){
   e('activeFast8Name').textContent=activeCatalog.length
    ?activeCatalog.map(function(m){return m.name||m.id}).join(' + '):'当前没有活跃信号模型';
   e('activeFast8Desc').textContent='BTC 5分钟 · 8秒截止 · 模型列表由生产服务自动同步；低证据方向不代表预测优势；非活跃来源隐藏';
-  if(chosenOrderModel!=='NOVICE_MIX_LOW_V1')e('activeFast8Direction').textContent=dir;
+  if(chosenOrderModel!=='NOVICE_MIX_LOW_V1')e('activeFast8ModelRawDirection').textContent=dir;
   var settled=records.filter(function(z){return z.productionActual==='UP'||z.productionActual==='DOWN'});
   var decided=settled.filter(function(z){return z.productionPrediction==='UP'||z.productionPrediction==='DOWN'});
   var hits=decided.filter(function(z){return z.productionPrediction===z.productionActual}).length;
@@ -763,7 +764,7 @@ function load(){
   e('activeFast8Note').textContent='当前活跃 '+activeCatalog.length+' 类来源 · 已结算方向 '+(j.productionSignalSourceMode==='BREAKOUT20_FAST8'?(officialTotal?.samples??0):decided.length)+
    ' 轮 · 低置信度方向 '+fallback+' 轮 · 仅当前模型版本与币安官方结算计分；正反向理论映射仍基于页面最近100轮，不代表实际成交'+
    (j.stale?' · 统计缓存可能过期':'');
- }).catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
+ }).catch(function(err){e('activeFast8ModelRawDirection').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }
 function updateOrderSignal(){
  fetch('/api/status?ts='+Date.now(),{cache:'no-store'})
@@ -771,10 +772,12 @@ function updateOrderSignal(){
  .then(function(j){
   var target=e('activeFast8OrderDirection');if(!target)return;
   var expected=Math.floor(Date.now()/300000)*300000,live=j.signal||{};
-  var ready=directionModeReady&&j.directionModeReady&&live.status==='LOCKED'&&
-    Number(live.round)===expected&&j.orderDirectionPolicy===policy;
-  // The raw signal field has one writer: load() / renderNovicePrimary().
-  // The 2-second order-status poll must never overwrite it with a different label.
+  var locked=live.status==='LOCKED'&&Number(live.round)===expected;
+  var emitted=e('activeFast8Direction');
+  if(emitted)emitted.textContent=locked?
+    live.direction+'（'+(live.randomFlipApplied?'本轮随机翻转':'本轮保留原方向')+'）':'本轮未锁定';
+  var ready=directionModeReady&&j.directionModeReady&&locked&&j.orderDirectionPolicy===policy;
+  // Model-raw stats remain independent; this poll owns emitted and order side.
   if(!ready){target.textContent='未锁定或配置未就绪';return}
   var mode=j.orderMappingMode,src=sources.find(function(s){return s.id===j.orderProductionSource});
   if(j.orderSignal===null){target.textContent='不下单（'+(mode==='OFF'?'该方向已关闭':'不可执行')+'）';return}
@@ -797,7 +800,7 @@ const layoutStabilityStyle = `<style id="dashboard-layout-stability">
 .w .grid>.kv,.w .kv>.v,.w .kv>.k,.w .big,.w .muted{min-width:0;overflow-wrap:anywhere}
 .w .grid>.kv{box-sizing:border-box}
 #activeFast8ModelCard select{max-width:100%;min-width:0;box-sizing:border-box}
-#activeFast8Direction,#activeFast8OrderDirection{min-height:3.5em;line-height:1.4}
+#activeFast8ModelRawDirection,#activeFast8Direction,#activeFast8OrderDirection{min-height:3.5em;line-height:1.4}
 @media(max-width:540px){.w>.c{padding:14px}.w .kv{padding:10px}}
 </style>`;
 

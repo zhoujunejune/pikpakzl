@@ -2,7 +2,7 @@ import http from 'node:http';
 import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { noviceMixShadow } from './novice-mix-shadow.mjs';
 import { dynamicEntryShadow } from './dynamic-entry-shadow.mjs';
-import { edge5mService } from './edge-5m-service.mjs';
+// EDGE_5M_V1 runs in an isolated Cloudflare Free Worker; this panel only reads its status.
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
 
@@ -25,6 +25,8 @@ void (async () => {
 
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PANEL_PORT = Number(process.env.INNER_PANEL_PORT || 3002);
+const EDGE5_CF_STATUS_URL = String(process.env.EDGE5_CF_STATUS_URL||
+ 'https://edge-5m-v1.zl528094-3ba.workers.dev/status').trim();
 const ROUND_STATS_ORIGIN = String(process.env.ROUND_STATS_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');
 const ROUND_STATS_PUBLIC_ORIGIN = String(process.env.ROUND_STATS_PUBLIC_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');
 const STATS_PROXY_PRIMARY_TIMEOUT_MS = Math.max(1000, Number(process.env.STATS_PROXY_PRIMARY_TIMEOUT_MS || 2500));
@@ -1392,7 +1394,26 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/dynamic-entry') return dynamicEntryShadow.handler(res);
-  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/edge-5m') return edge5mService.handler(res);
+  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/edge-5m'){
+    void (async()=>{
+      try{
+        const r=await fetch(EDGE5_CF_STATUS_URL,{cache:'no-store',headers:{accept:'application/json'},
+          signal:AbortSignal.timeout(2400)});
+        if(!r.ok)throw Error('EDGE_CLOUDFLARE_HTTP_'+r.status);
+        const body=await r.json();
+        if(body?.ok!==true||body.model!=='EDGE_5M_V1'||body.readOnly!==true||
+           body.orders!==false||body.productionIntegration!==false||
+           body.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')
+          throw Error('EDGE_CLOUDFLARE_UNTRUSTED_SOURCE');
+        res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+        res.end(JSON.stringify(body));
+      }catch(e){
+        res.writeHead(502,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+        res.end(JSON.stringify({ok:false,model:'EDGE_5M_V1',error:'EDGE_CLOUDFLARE_READ_FAILED',
+          reason:String(e?.message||e).slice(0,150)}));
+      }
+    })();return;
+  }
   if (req.method === 'GET' && url.pathname === '/api/postflip-official-stats') {
     const model=url.searchParams.get('model');
     if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(model)){
@@ -1409,7 +1430,7 @@ http.createServer((req, res) => {
   return proxyInner(req, res, false);
 }).listen(PORT, '0.0.0.0', () => {
   void dynamicEntryShadow.start().catch(error => log('dynamic_entry_shadow_start_error', { error: String(error?.message||error) }));
-  void edge5mService.start().catch(error => log('edge5m_start_error', {error:String(error?.message||error)}));
+  // EDGE model collection/training is Cloudflare-only; no extra Railway polling process.
   void noviceMixShadow.start()
     .catch(error => log('novice_shadow_start_error', { error: String(error?.message||error) }))
     .finally(()=>{void postflipStats.start().catch(error=>

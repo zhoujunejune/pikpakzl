@@ -1,6 +1,7 @@
 // EDGE_5M_V1: Cloudflare Free isolated read-only predictor.
 // No Binance order API, no Railway mutation, no effect on existing Workers.
 import {DurableObject} from 'cloudflare:workers';
+import {bestMarket} from './provider-market.mjs';
 import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection,
   trainOnOfficial,MIN_TRAINING_ROUNDS} from './edge-core.mjs';
 
@@ -32,7 +33,7 @@ async function firstGood(urls,test){
  }
  throw Error('PROVIDERS_UNAVAILABLE_'+errors.join('|').slice(0,150));
 }
-async function observation(){
+async function binanceObservation(){
  const [spot,depth,trades,perp]=await Promise.all([
   firstGood([RAILWAY_MARKET_URL,'https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT'],
    p=>(p?.ok===true&&p?.readOnly===true&&Number(p?.latest?.lastPrice)>0)||
@@ -56,10 +57,11 @@ async function observation(){
  // we record the receipt timestamp, never invent an exchange event timestamp.
  if(fromRailway&&(receivedAt-spotAt>3500||spotAt>receivedAt+300))
    throw Error('RAILWAY_SPOT_EVENT_STALE');
- return {at:receivedAt,spotPrice,spotAt,perpPrice,perpAt:perp.receivedAt,
+ return {venue:'BINANCE',at:receivedAt,spotPrice,spotAt,perpPrice,perpAt:perp.receivedAt,
    bids:depth.payload.bids,asks:depth.payload.asks,trades:trades.payload,
    providers:{spot:spot.url,depth:depth.url,trades:trades.url,perp:perp.url}};
 }
+const observation=(venue=null)=>bestMarket(venue,binanceObservation);
 function officialRounds(payload){
  if(payload?.ok!==true||payload?.settlementSource!==OFFICIAL_SOURCE||
    !Array.isArray(payload?.records))throw Error('OFFICIAL_LEDGER_PROVENANCE_INVALID');
@@ -103,7 +105,7 @@ export class Edge5 extends DurableObject{
   model:null,training:{status:'COLLECTING',samples:0,required:MIN_TRAINING_ROUNDS,
     calibrationReady:false,ready:false},results:initialResults(),trail:[],
   lastTickAt:null,lastGoodDataAt:null,lastOfficialAt:null,
-  marketError:null,officialError:null,storage:'CLOUDFLARE_SQLITE_DURABLE_OBJECT'};
+  marketError:null,officialError:null,activeVenue:null,storage:'CLOUDFLARE_SQLITE_DURABLE_OBJECT'};
  }
  async schedule(){if(await this.ctx.storage.getAlarm()===null)
    await this.ctx.storage.setAlarm(nextTick(Date.now()));}
@@ -121,11 +123,14 @@ export class Edge5 extends DurableObject{
   m.lastTickAt=start;
   if(start-round>=8000&&start-round<ROUND_MS-16000)return;
   try{
-   const obs=await observation(),now=Date.now();
+   const obs=await observation(m.activeVenue),now=Date.now();
+   if(m.activeVenue&&m.activeVenue!==obs.venue)throw Error('MARKET_VENUE_CHANGED');
+   if(!m.activeVenue){m.activeVenue=obs.venue;m.trail=[];}
    if(roundAt(now)!==roundAt(start))return;
    m.lastGoodDataAt=now;m.marketError=null;
    const trail=m.trail.filter(x=>now-x.at<=20000);
    const f=extractFeatures(obs,trail,now);
+   if(f)f.venue=obs.venue;
    trail.push({at:now,spotPrice:obs.spotPrice,perpPrice:obs.perpPrice});
    m.trail=trail.slice(-30);
    const elapsed=now-roundAt(now);
@@ -214,7 +219,7 @@ export class Edge5 extends DurableObject{
    timed:{lastTickAt:m.lastTickAt,lastGoodDataAt:m.lastGoodDataAt,
     deadlineMs:8000,nextAlarm:await this.ctx.storage.getAlarm()},
    health:{marketError:m.marketError,officialError:m.officialError,
-    lastOfficialAt:m.lastOfficialAt,storage:m.storage,persisted:true}};
+    lastOfficialAt:m.lastOfficialAt,venue:m.activeVenue,storage:m.storage,persisted:true}};
   if(pathname==='/health')return json({ok:true,model:EDGE_MODEL,orders:false,readOnly:true,
    lastTickAt:m.lastTickAt,lastGoodDataAt:m.lastGoodDataAt,
    marketError:m.marketError,officialError:m.officialError,
@@ -222,8 +227,8 @@ export class Edge5 extends DurableObject{
    nextAlarm:payload.timed.nextAlarm});
   if(pathname==='/latest')return json({ok:true,model:EDGE_MODEL,latest});
   if(pathname==='/market-check'){
-   try{const o=await observation();
-    return json({ok:true,marketAt:o.at,
+   try{const o=await observation(m.activeVenue);
+    return json({ok:true,marketAt:o.at,venue:o.venue,
       spotPrice:o.spotPrice,perpPrice:o.perpPrice,
       providers:o.providers,realData:true,orders:false});
    }catch(e){return json({ok:false,error:msg(e),orders:false},502);}

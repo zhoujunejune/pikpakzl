@@ -352,16 +352,25 @@ async function renderNoviceRoundStats(){
  }).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">新手混合模型尚无独立轮次记录</td></tr>';
 }
 async function load(){
-try{await renderPostflipRoundStats();}
-catch(err){
- e('rsAccuracy').textContent='新版统计暂不可用';
- e('rsSettled').textContent='-';e('rsDecided').textContent='-';
- e('rsCorrect').textContent='-';e('rsWrong').textContent='-';
- e('rsWait').textContent='-';e('rsCoverage').textContent='-';
- e('rsMeta').textContent='仅展示2026-10-17 11:40起随机翻转后的新记录；'+(err?.message||err);
- e('rsRows').innerHTML='<tr><td colspan="8" style="padding:10px 6px">新统计暂不可用，不回退显示旧记录</td></tr>';
+ // Only the two currently selectable 8-second models use the reset ledger.
+ // Keep the historical legacy diagnostics runnable when testing other production modes.
+ if(globalThis.__orderModelStatsSelection!=='NOVICE_MIX_LOW_V1'){
+  try{
+   var old=await getStats();
+   if(old?.productionSignalSourceMode!=='BREAKOUT20_FAST8')return loadLegacy();
+  }catch(_){} // Never use legacy data as a fallback for an active breakout model.
+ }
+ try{await renderPostflipRoundStats();}
+ catch(err){
+  e('rsAccuracy').textContent='新版统计暂不可用';
+  e('rsSettled').textContent='-';e('rsDecided').textContent='-';
+  e('rsCorrect').textContent='-';e('rsWrong').textContent='-';
+  e('rsWait').textContent='-';e('rsCoverage').textContent='-';
+  e('rsMeta').textContent='仅展示2026-10-17 11:40起随机翻转后的新记录；'+(err?.message||err);
+  e('rsRows').innerHTML='<tr><td colspan="8" style="padding:10px 6px">新统计暂不可用，不回退显示旧记录</td></tr>';
+ }
 }
-return;
+async function loadLegacy(){
 if(globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'){
  try{await renderNoviceRoundStats()}
  catch(err){if(globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'){
@@ -740,6 +749,18 @@ async function renderNovicePrimary(){
  renderDirectionModes();
 }
 function load(){
+ // BASELINE / NOVICE use the reset ledger. Pre-existing legacy V2/VIP75
+ // modes retain their own diagnostics and never enter the new tally.
+ if(chosenOrderModel==='NOVICE_MIX_LOW_V1')return showResetPrimary();
+ fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'}).then(function(r){
+  if(!r.ok)throw Error('production-mode unavailable');
+  return r.json();
+ }).then(function(j){
+  if(j?.productionSignalSourceMode==='BREAKOUT20_FAST8')showResetPrimary();
+  else loadLegacyPrimary();
+ }).catch(function(){showResetPrimary();});
+}
+function showResetPrimary(){
  renderPostflipPrimary().catch(function(err){
   e('activeFast8Accuracy').textContent='新版统计暂不可用';
   e('activeFast8HitMiss').textContent='-';e('activeFast8InverseAccuracy').textContent='-';
@@ -747,8 +768,9 @@ function load(){
   e('sourceRateRows').innerHTML='<tr><td colspan="6" style="padding:10px">新版统计不可用，不展示旧胜率</td></tr>';
   e('activeFast8Note').textContent='只显示新统计；'+(err?.message||err);
  });
- return;
- if(chosenOrderModel==='NOVICE_MIX_LOW_V1'){
+}
+function loadLegacyPrimary(){
+if(chosenOrderModel==='NOVICE_MIX_LOW_V1'){
   renderNovicePrimary().catch(function(err){
    if(chosenOrderModel!=='NOVICE_MIX_LOW_V1')return;
    e('activeFast8Name').textContent='新手错误混合 NOVICE_MIX_LOW_V1';

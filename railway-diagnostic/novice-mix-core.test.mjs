@@ -33,6 +33,14 @@ test('RSI(14) computes from observations available by T+8 only',()=>{
  assert.equal(predictMarket(s,[],BASE_WEIGHTS,at).rsi,before.rsi);
  assert.ok(before.lockedAt<ROUND+8000);
 });
+test('RSI-only direction works even when unrelated 5m and last-price feeds are absent',()=>{
+ const at=ROUND+6200,one=snapshot(at);
+ one.ok=false;one.latest=null;one.candles['5m']=null;
+ const result=predictMarket(one,[],BASE_WEIGHTS,at);
+ assert.equal(result.status,'LOCKED');
+ assert.equal(result.direction,'UP');
+ assert.deepEqual(Object.keys(result.factors),['rsi']);
+});
 test('stale and absent RSI market input never inherits previous guessed direction',()=>{
  const at=ROUND+7400;
  const a=predictMarket(null,[{direction:'DOWN'}],BASE_WEIGHTS,at);

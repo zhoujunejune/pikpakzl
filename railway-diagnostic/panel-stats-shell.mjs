@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { noviceMixShadow } from './novice-mix-shadow.mjs';
+import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
 
 // RAILWAY_EGRESS_IP_READONLY_DIAG_20261014
@@ -27,6 +28,7 @@ const ROUND_STATS_PUBLIC_ORIGIN = String(process.env.ROUND_STATS_PUBLIC_ORIGIN |
 const STATS_PROXY_PRIMARY_TIMEOUT_MS = Math.max(1000, Number(process.env.STATS_PROXY_PRIMARY_TIMEOUT_MS || 2500));
 const STATS_PROXY_FALLBACK_TIMEOUT_MS = Math.max(3000, Number(process.env.STATS_PROXY_FALLBACK_TIMEOUT_MS || 7000));
 const STATS_PROXY_RETRY_MS = Math.max(100, Number(process.env.STATS_PROXY_RETRY_MS || 250));
+const postflipStats=createPostflipStatsService({noviceRows:()=>noviceMixShadow.rowsSince(POSTFLIP_START_ROUND)});
 let lastGoodStats = null;
 let lastGoodStatsAt = 0;
 let statsRefreshPromise = null;
@@ -1001,12 +1003,25 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
+  if (req.method === 'GET' && url.pathname === '/api/postflip-official-stats') {
+    const model=url.searchParams.get('model');
+    if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(model)){
+      res.writeHead(400,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      return res.end(JSON.stringify({ok:false,error:'INVALID_STATS_MODEL'}));
+    }
+    const data=postflipStats.snapshot(model);
+    res.writeHead(data.ok?200:503,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+    return res.end(JSON.stringify(data));
+  }
   if (req.method === 'GET' && url.pathname === '/api/round-stats') return proxyStats(res);
   if (req.method === 'GET' && url.pathname === '/api/training-status') return proxyTrainingStatus(res);
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);
   return proxyInner(req, res, false);
 }).listen(PORT, '0.0.0.0', () => {
-  void noviceMixShadow.start().catch(error => log('novice_shadow_start_error', { error: String(error?.message||error) }));
+  void noviceMixShadow.start()
+    .catch(error => log('novice_shadow_start_error', { error: String(error?.message||error) }))
+    .finally(()=>{void postflipStats.start().catch(error=>
+      log('postflip_accuracy_start_error',{error:String(error?.message||error)}));});
   log('panel_stats_shell_started', {
     port:PORT,
     innerPanelPort:INNER_PANEL_PORT,

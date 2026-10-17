@@ -7,7 +7,7 @@ import {
 } from './dynamic-entry-shadow-core.mjs';
 const ROUND=roundStart(1792248600000);
 function market(at=ROUND+1000){
- const first=ROUND-35*60000;
+ const first=Math.floor(at/60000)*60000-35*60000;
  const rows=Array.from({length:35},(_,i)=>({
   startMs:first+i*60000,open:59980+i*4,close:59984+i*4,
   high:60000+i*4,low:59960+i*4,closed:true

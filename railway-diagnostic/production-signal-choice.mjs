@@ -7,10 +7,12 @@ import {createClient} from 'redis';
 export const MODEL_CHOICE_KEY='trade-control:order-signal-choice:v1';
 export const BASE_MODEL='BREAKOUT20_RSI_MACD_RANGE_V1';
 export const NOVICE_MODEL='NOVICE_MIX_LOW_V1';
+export const DYNAMIC_MODEL='DYNAMIC_ENTRY_5M_SHADOW_V1';
 export const RSI_INPUT_VERSION='RSI_ONLY_14_V1';
 export const ORDER_SIGNAL_MODELS=Object.freeze([
  {id:BASE_MODEL,name:'BASELINE（RSI14单指标 · Railway 信号）'},
- {id:NOVICE_MODEL,name:'NOVICE（RSI14单指标 · 独立影子信号）'}
+ {id:NOVICE_MODEL,name:'NOVICE（RSI14单指标 · 独立影子信号）'},
+ {id:DYNAMIC_MODEL,name:'5分钟动态入场（本轮任意时点 · 触发后锁定）'}
 ]);
 const isChoice=m=>ORDER_SIGNAL_MODELS.some(x=>x.id===m);
 const roundOf=t=>Math.floor(t/300000)*300000;
@@ -115,4 +117,37 @@ export function validateNoviceSignal(body,now=Date.now()){
    return {ok:false,reason:'NOVICE_STATUS_STALE'};
  return {ok:true,round,direction:lock.direction,model:NOVICE_MODEL,
    lockedAt:lock.lockedAt,score:lock.score,rsi:lock.rsi,inputVersion:RSI_INPUT_VERSION};
+}
+
+// Promote only a frozen virtual entry as a separately selectable real-order signal.
+// NEVER promote an unfrozen directional preview or a stale/synthetic market reading.
+export function validateDynamicEntrySignal(body,now=Date.now()){
+ const round=roundOf(now),row=body?.latest,entry=row?.entry;
+ if(body?.ok!==true||body?.model!==DYNAMIC_MODEL||
+   body?.readOnly!==true||body?.orders!==false||body?.productionIntegration!==false||
+   body?.statsScope!=='STRICT_FORWARD_VIRTUAL_ENTRIES_OFFICIAL_RESOLUTION_ONLY')
+   return {ok:false,reason:'UNTRUSTED_DYNAMIC_MODEL'};
+ if(!Number.isSafeInteger(body.generatedAt)||body.generatedAt>now+250||
+   now-body.generatedAt>6000||body.health?.marketError!=null)
+   return {ok:false,reason:'DYNAMIC_STATUS_STALE'};
+ const goodAt=Number(body.timed?.lastGoodDataAt);
+ if(!Number.isSafeInteger(goodAt)||goodAt>now+250||now-goodAt>7500)
+   return {ok:false,reason:'DYNAMIC_MARKET_STALE'};
+ if(row?.round!==round||!entry||!['UP','DOWN'].includes(entry.direction)||
+   !Number.isSafeInteger(entry.at)||entry.at<round||entry.at>=round+300000||
+   !Number.isSafeInteger(entry.marketAt)||entry.marketAt>entry.at||
+   entry.at-entry.marketAt>10000||entry.at>now+250)
+   return {ok:false,reason:'DYNAMIC_ENTRY_MISSING_OR_UNFROZEN'};
+ // The 5-minute strategy may enter at any second, but old entry alerts cannot
+ // be replayed minutes later as new trades. Leave time for quote and settlement.
+ if(now-entry.at>45000||now>=round+285000)
+   return {ok:false,reason:'DYNAMIC_ENTRY_EXPIRED'};
+ if(typeof entry.score!=='number'||!Number.isFinite(entry.score)||
+   typeof entry.strength!=='number'||!Number.isFinite(entry.strength)||
+   entry.strength<0||entry.strength>1||
+   !/^HEURISTIC_V[0-9]+|^DYN5_FROZEN_[0-9]+_/.test(String(entry.modelVersion||'')))
+   return {ok:false,reason:'DYNAMIC_ENTRY_EVIDENCE_INVALID'};
+ return {ok:true,round,direction:entry.direction,model:DYNAMIC_MODEL,
+   lockedAt:entry.at,marketAt:entry.marketAt,score:entry.score,
+   strength:entry.strength,modelVersion:entry.modelVersion};
 }

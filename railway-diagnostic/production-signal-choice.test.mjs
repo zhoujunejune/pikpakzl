@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
- BASE_MODEL,NOVICE_MODEL,MODEL_CHOICE_KEY,ORDER_SIGNAL_MODELS,
- snapshot,selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,
+ BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,MODEL_CHOICE_KEY,ORDER_SIGNAL_MODELS,
+ snapshot,selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,
  setModelSelection,invalidate
 } from './production-signal-choice.mjs';
 
@@ -15,7 +15,7 @@ const good=(at=ROUND+6500)=>({
    lockedAt:ROUND+5190,marketSnapshotAt:ROUND+5150,score:-.42}
 });
 test('strict closed model whitelist and read-only shadow trust boundary',()=>{
- assert.deepEqual(ORDER_SIGNAL_MODELS.map(x=>x.id),[BASE_MODEL,NOVICE_MODEL]);
+ assert.deepEqual(ORDER_SIGNAL_MODELS.map(x=>x.id),[BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL]);
  assert.equal(MODEL_CHOICE_KEY,'trade-control:order-signal-choice:v1');
  assert.equal(validateNoviceSignal(good(),ROUND+6500).ok,true);
  for(const changed of [
@@ -64,7 +64,7 @@ test('production implementation contains actual source switching, PIN and final 
  assert.match(index,/if\(!pinOK\(body\.pin\)\)/);
  assert.match(index,/NOVICE_LOCAL_URL/);
  assert.match(index,/validateNoviceSignal\(body\)/);
- assert.match(index,/choice\.model!==NOVICE_MODEL&&choice\.model!==BASE_MODEL/);
+ assert.match(index,/\[NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL\]\.includes\(choice\.model\)/);
  assert.match(index,/RSI_INPUT_VERSION/);
  assert.match(index,/railway_rsi14_readonly/);
  assert.match(index,/rawDirection:verified.direction,randomFlipApplied:false/);
@@ -91,4 +91,44 @@ test('API status and UI resolve actual selected order model rather than missing 
  assert.match(ui,/chosenModelName\(chosenOrderModel\)/);
  assert.doesNotMatch(ui,/chosenModelName\(j\.orderSignalModel\)/);
  assert.doesNotMatch(ui,/if\(j\.orderSignalModel===/);
+});
+
+test('dynamic signal is selectable only for real frozen, fresh in-round entry',()=>{
+ const at=ROUND+132000,entryAt=ROUND+124000;
+ const valid={
+   ok:true,model:DYNAMIC_MODEL,readOnly:true,orders:false,productionIntegration:false,
+   statsScope:'STRICT_FORWARD_VIRTUAL_ENTRIES_OFFICIAL_RESOLUTION_ONLY',
+   generatedAt:at-50,health:{marketError:null},timed:{lastGoodDataAt:at-250},
+   latest:{model:DYNAMIC_MODEL,round:ROUND,entry:{direction:'DOWN',at:entryAt,
+      marketAt:entryAt-350,score:-0.3,strength:0.29,modelVersion:'HEURISTIC_V2_ADAPTIVE_GATE'}}
+ };
+ assert.equal(validateDynamicEntrySignal(valid,at).ok,true);
+ const invalid=[
+  {orders:true},{readOnly:false},{productionIntegration:true},{model:NOVICE_MODEL},
+  {generatedAt:at-7000},{health:{marketError:'STALE_OR_INCOMPLETE_LIVE_INPUT'}},
+  {timed:{lastGoodDataAt:at-10000}},
+  {latest:{...valid.latest,round:ROUND-300000}},
+  {latest:{...valid.latest,entry:null}},
+  {latest:{...valid.latest,entry:{...valid.latest.entry,direction:'WAIT'}}},
+  {latest:{...valid.latest,entry:{...valid.latest.entry,at:ROUND-1000}}},
+  {latest:{...valid.latest,entry:{...valid.latest.entry,marketAt:at+500}}},
+  {latest:{...valid.latest,entry:{...valid.latest.entry,score:NaN}}},
+ ];
+ for(const fields of invalid)assert.equal(validateDynamicEntrySignal({...valid,...fields},at).ok,false,JSON.stringify(fields));
+ assert.equal(validateDynamicEntrySignal(valid,entryAt+45001).ok,false);
+ assert.equal(validateDynamicEntrySignal(valid,ROUND+285000).ok,false);
+});
+test('dynamic selector honors PIN, next round and unchanged direction mapping',()=>{
+ const read=f=>fs.readFileSync(new URL(f,import.meta.url),'utf8');
+ const backend=read('./index.mjs'),wrapper=read('./wrapper.mjs'),panel=read('./panel-stats-shell.mjs');
+ assert.match(backend,/DYNAMIC_LOCAL_URL/);
+ assert.match(backend,/validateDynamicEntrySignal\(await response\.json\(\)\)/);
+ assert.match(backend,/if\(choice\.model===DYNAMIC_MODEL&&signal\.upstreamModel!==DYNAMIC_MODEL\)return/);
+ assert.match(wrapper,/DYNAMIC_ORDER_DEADLINE_MS = 285000/);
+ assert.match(wrapper,/current\.signalId!==p\.signalId/);
+ assert.match(panel,/<option value="DYNAMIC_ENTRY_5M_SHADOW_V1">/);
+ assert.match(panel,/DYNAMIC_ENTRY_5M_SHADOW_V1.*dynamic-entry/);
+ assert.match(panel,/renderDynamicRoundStats/);
+ assert.match(panel,/renderDynamicPrimary/);
+ assert.match(panel,/saveOrderModelChoice/);
 });

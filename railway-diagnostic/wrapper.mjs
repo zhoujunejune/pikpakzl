@@ -12,18 +12,23 @@ const AUTO_CONFIRM_AMOUNT = String(process.env.AUTO_CONFIRM_AMOUNT || '').trim()
 const AUTO_CONFIRM_MAX_ORDERS_PER_ROUND = Math.max(1, Number(process.env.AUTO_CONFIRM_MAX_ORDERS_PER_ROUND || 1));
 const AUTO_CONFIRM_COOLDOWN_MS = Math.max(0, Number(process.env.AUTO_CONFIRM_COOLDOWN_MS || 2500));
 const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.env.AUTO_CONFIRM_STOP_ON_ERROR || 'true'));
-const ORDER_SUBMIT_DEADLINE_MS = 15000; // Round-relative order POST cutoff; Cloudflare 8s lock remains unchanged.
-function orderSubmitWindowOpen(round, now = Date.now()) {
+const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
+const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
+function orderSubmitWindowOpen(round, now = Date.now(), model = null) {
   const start = Number(round);
-  return Number.isSafeInteger(start) && start > 0 && now >= start && now < start + ORDER_SUBMIT_DEADLINE_MS;
+  const cutoff = model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
+  return Number.isSafeInteger(start) && start > 0 && now >= start && now < start + cutoff;
 }
 function rejectExpiredOrderWindow(p, stage) {
-  if (orderSubmitWindowOpen(p?.round)) return false;
+  if (orderSubmitWindowOpen(p?.round, Date.now(), p?.signalModelChoice)) return false;
   const elapsedMs = Date.now() - Number(p?.round);
   p.state = 'ORDER_WINDOW_EXPIRED';
-  p.error = '本轮第15秒订单提交窗口已截止，未发送下单请求';
+  p.error = p?.signalModelChoice===DYNAMIC_MODEL
+    ? '动态模型本轮交易窗口已截止，未发送下单请求'
+    : '本轮第15秒订单提交窗口已截止，未发送下单请求';
   console.log(JSON.stringify({ event:'order_submit_deadline_expired',
-    round:p.round, elapsedMs, deadlineMs:ORDER_SUBMIT_DEADLINE_MS, stage }));
+    round:p.round, elapsedMs, deadlineMs:p?.signalModelChoice===DYNAMIC_MODEL
+      ?DYNAMIC_ORDER_DEADLINE_MS:ORDER_SUBMIT_DEADLINE_MS, stage }));
   return true;
 }
 
@@ -115,7 +120,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   ]);
   if (!selectedSignalMatches(p) || !current || current.status !== 'LOCKED' ||
       String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current) ||
-      (p.signalModelChoice===NOVICE_MODEL&&current.upstreamModel!==NOVICE_MODEL)) {
+      (p.signalModelChoice===NOVICE_MODEL&&current.upstreamModel!==NOVICE_MODEL) ||
+      (p.signalModelChoice===DYNAMIC_MODEL&&
+        (current.upstreamModel!==DYNAMIC_MODEL||current.signalId!==p.signalId))) {
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',
@@ -445,7 +452,7 @@ const submittedGuard = "  if (submittedRounds.has(String(signal.round))) return;
 if (!source.includes(submittedGuard)) throw new Error('SUBMITTED_GUARD_NOT_FOUND');
 source = source.replace(
   submittedGuard,
-  submittedGuard + "\n  if (!orderSubmitWindowOpen(signal.round)) return;\n  if (AUTO_CONFIRM_ENABLED && autoAttemptedRounds.has(String(signal.round))) return;"
+  submittedGuard + "\n  if (!orderSubmitWindowOpen(signal.round,Date.now(),choice.model)) return;\n  if (AUTO_CONFIRM_ENABLED && autoAttemptedRounds.has(String(signal.round))) return;"
 );
 
 const amountLine = '      const amount = cleanAmount(body.amount);';

@@ -280,7 +280,36 @@ try{
 throw new Error(errMsg||'统计服务暂不可用')
 }
 
+async function renderDynamicRoundStats(){
+ var res=await fetch('/api/shadow-breakout20/dynamic-entry?ts='+Date.now(),{cache:'no-store'});
+ var d=await res.json();
+ if(!res.ok||d?.ok!==true||d.model!=='DYNAMIC_ENTRY_5M_SHADOW_V1'||
+    d.statsScope!=='STRICT_FORWARD_VIRTUAL_ENTRIES_OFFICIAL_RESOLUTION_ONLY')
+    throw Error('动态模型独立统计不可用');
+ if(globalThis.__orderModelStatsSelection!=='DYNAMIC_ENTRY_5M_SHADOW_V1')return;
+ var v=d.results||{},all=v.overall||{},n=Number(all.samples||0),hits=Number(all.hits||0);
+ e('rsAccuracy').textContent=n?'5分钟动态入场官方方向命中率 '+(100*hits/n).toFixed(2)+'%':'5分钟动态入场暂无已结算';
+ e('rsSettled').textContent=n;e('rsDecided').textContent=n;
+ e('rsCorrect').textContent=hits;e('rsWrong').textContent=n-hits;
+ e('rsWait').textContent=Number(v.noEntryRounds||0);
+ e('rsCoverage').textContent=Number(v.observedRounds)?(100*Number(v.entryRounds||0)/v.observedRounds).toFixed(2)+'%':'-';
+ e('rsMeta').textContent='DYNAMIC_ENTRY_5M_SHADOW_V1 · 仅统计真正冻结的动态模拟入场与币安官方结果。不含未入场轮次，不代表实际成交收益；75%目标未经验证。';
+ var rows=Array.isArray(d.recent)?d.recent.slice(0,30):[];
+ e('rsRows').innerHTML=rows.length?rows.map(function(x){
+  var entry=x.status==='VIRTUAL_ENTRY',actual=x.actual==='UP'||x.actual==='DOWN'?x.actual:null;
+  var dir=entry?x.direction:null,delay=entry&&x.elapsedMs!=null?(Number(x.elapsedMs)/1000).toFixed(1)+'s':'-';
+  return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.round)+'</td>'+
+   '<td style="padding:9px 6px">'+badge(dir||'未入场')+'</td>'+
+   '<td style="padding:9px 6px">DYNAMIC_ENTRY_5M_SHADOW_V1</td>'+
+   '<td style="padding:9px 6px">'+(entry?'强度 '+(100*Number(x.strength||0)).toFixed(2)+'%（非概率）':'未触发')+'</td>'+
+   '<td style="padding:9px 6px">'+delay+'</td>'+
+   '<td style="padding:9px 6px">'+badge(actual||'PENDING')+'</td>'+
+   '<td style="padding:9px 6px">'+(entry&&actual?badge(actual===dir?'HIT':'MISS'):entry?'待结算':'未入场')+'</td>'+
+   '<td style="padding:9px 6px">'+(entry&&actual?'Binance Prediction 官方结算':esc(String(x.pendingReason||'等待官方结算')))+'</td></tr>';
+ }).join(''):'<tr><td colspan="8">动态模型还没有独立的模拟入场记录</td></tr>';
+}
 async function renderPostflipRoundStats(){
+ if(globalThis.__orderModelStatsSelection==='DYNAMIC_ENTRY_5M_SHADOW_V1')return renderDynamicRoundStats();
  var model=globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'
   ?'NOVICE_MIX_LOW_V1':'BREAKOUT20_RSI_MACD_RANGE_V1';
  var res=await fetch('/api/postflip-official-stats?model='+encodeURIComponent(model)+'&ts='+Date.now(),{cache:'no-store'});
@@ -361,6 +390,9 @@ async function renderNoviceRoundStats(){
 async function load(){
  // Only the two currently selectable 8-second models use the reset ledger.
  // Keep the historical legacy diagnostics runnable when testing other production modes.
+ if(globalThis.__orderModelStatsSelection==='DYNAMIC_ENTRY_5M_SHADOW_V1'){
+  return renderDynamicRoundStats();
+ }
  if(globalThis.__orderModelStatsSelection!=='NOVICE_MIX_LOW_V1'){
   try{
    var old=await getStats();
@@ -460,12 +492,13 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
     style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
     <option value="BREAKOUT20_RSI_MACD_RANGE_V1">BASELINE · RSI(14)单指标</option>
     <option value="NOVICE_MIX_LOW_V1">NOVICE · RSI(14)单指标</option>
+    <option value="DYNAMIC_ENTRY_5M_SHADOW_V1">5分钟动态入场 · 任意时点触发</option>
   </select>
   <button id="orderSignalModelSave" type="button"
     style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
-  <div class="muted" style="margin-top:7px">两套模型均直接输出 RSI(14) 判定的 UP/DOWN，不再做任何随机翻转；最终下单依旧由原有 UP/DOWN 正向/反向开关决定。缺少有效RSI数据时不采用旧信号兜底。</div>
+  <div class="muted" style="margin-top:7px">BASELINE/NOVICE 仍为8秒内 RSI(14)信号；5分钟动态模型仅在有效行情出现冻结入场后发出真实下单候选，本轮任意时间可触发，信号过期或未触发则不下单。全部沿用原有 UP/DOWN 正向/反向开关，无随机翻转；75%只是研究目标，不代表已经验证。</div>
 </div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">模型原始预测</div><div class="v" id="activeFast8Direction">读取中</div></div>
@@ -500,7 +533,8 @@ var chosenOrderModel='BREAKOUT20_RSI_MACD_RANGE_V1';
 var hasLiveOrderModelSelection=false;
 var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false;
 function chosenModelName(model){
- return model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
+ return model==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'5分钟动态入场 DYNAMIC_ENTRY_5M_SHADOW_V1':
+ model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
 }
 async function loadOrderModelChoice(){
  if(choiceBusy||!e('orderSignalModelSelect')||!e('orderSignalModelState'))return;
@@ -529,7 +563,8 @@ async function loadOrderModelChoice(){
 async function loadOrderModelStats(){
  if(!e('orderSignalModelStats'))return;
  try{
-  var endpoint=chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':'/api/shadow-breakout20/status';
+  var endpoint=chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'/api/shadow-breakout20/dynamic-entry':
+ chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':'/api/shadow-breakout20/status';
   var response=await fetch(endpoint+'?ts='+Date.now(),{cache:'no-store'});
   var data=await response.json();
   if(!response.ok||data.ok!==true)throw Error('读取失败');
@@ -538,7 +573,8 @@ async function loadOrderModelStats(){
    (v.samples?(Number(v.accuracy)*100).toFixed(2)+'% ('+v.hits+'/'+v.samples+')':'暂无已结算')+
    ' · UP '+(r.up&&r.up.samples?(Number(r.up.accuracy)*100).toFixed(2)+'%':'暂无')+
    ' · DOWN '+(r.down&&r.down.samples?(Number(r.down.accuracy)*100).toFixed(2)+'%':'暂无')+
-   ' · 锁定 '+Number(r.locked||0)+' 轮';
+   ' · '+(chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'模拟入场 '+Number(r.entryRounds||0):
+ '锁定 '+Number(r.locked||0))+' 轮';
  }catch(err){e('orderSignalModelStats').textContent='所选模型胜率读取失败（不改变下单选择）';}
 }
 async function saveOrderModelChoice(){
@@ -546,7 +582,7 @@ async function saveOrderModelChoice(){
  var select=e('orderSignalModelSelect'),pin=e('pin');
  if(!select||!pin||!pin.value){e('orderSignalModelState').textContent='请先在页面上方填写控制 PIN';return}
  var next=select.value;
- if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(next))return;
+ if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1','DYNAMIC_ENTRY_5M_SHADOW_V1'].includes(next))return;
  if(next===chosenOrderModel){choiceDirty=false;e('orderSignalModelState').textContent='当前已是所选模型，无需切换';return}
  if(!window.confirm('确认从下一轮开始，用 '+chosenModelName(next)+' 作为真实下单信号？这会改变实际订单方向，当前轮次不切换。'))return;
  choiceBusy=true;
@@ -689,6 +725,35 @@ function orderSide(z){
  return mode==='INVERSE'?(pred==='UP'?'DOWN':'UP'):mode==='FORWARD'?pred:null;
 }
 
+async function renderDynamicPrimary(){
+ var response=await fetch('/api/shadow-breakout20/dynamic-entry?ts='+Date.now(),{cache:'no-store'});
+ var d=await response.json();
+ if(!response.ok||d?.ok!==true||d.model!=='DYNAMIC_ENTRY_5M_SHADOW_V1')
+  throw Error('5分钟动态模型状态不可用');
+ if(chosenOrderModel!=='DYNAMIC_ENTRY_5M_SHADOW_V1')return;
+ var r=d.results||{},all=r.overall||{},n=Number(all.samples||0),hits=Number(all.hits||0);
+ var latest=d.latest||{},now=Math.floor(Date.now()/300000)*300000;
+ var entry=latest.round===now?latest.entry:null;
+ activeCatalog=[{id:'DYNAMIC_ENTRY_5M_SHADOW_V1',name:'5分钟动态入场',source:'SELECTIVE_V2_FAST8_PRIMARY',version:'DYNAMIC_ENTRY_5M_V1',active:true}];
+ e('activeFast8Name').textContent='5分钟动态入场 DYNAMIC_ENTRY_5M_SHADOW_V1';
+ e('activeFast8Desc').textContent='整轮内动态判断 · 有效模拟入场才冻结方向 · 入场45秒内可用于下单候选；沿用原 UP/DOWN 模式';
+ e('activeFast8Direction').textContent=entry?entry.direction:'本轮尚未触发入场';
+ e('activeFast8EmittedDirection').textContent=entry?entry.direction:'尚未冻结';
+ e('activeFast8Accuracy').textContent=n?pct(100*hits/n):'暂无已确认官方结果';
+ e('activeFast8HitMiss').textContent=hits+' / '+(n-hits)+'（'+n+'轮）';
+ e('activeFast8Coverage').textContent=Number(r.entryRounds||0)+' 轮模拟入场 / '+Number(r.observedRounds||0)+' 轮观察';
+ var src=sources.find(function(x){return x.id==='SELECTIVE_V2_FAST8_PRIMARY'});
+ var records=(Array.isArray(d.recent)?d.recent:[]).filter(function(x){return x.status==='VIRTUAL_ENTRY'&&(x.actual==='UP'||x.actual==='DOWN')});
+ var allowed=records.filter(function(x){return directionModeReady&&src&&src.modes[x.direction]!=='OFF'});
+ var mappedHits=allowed.filter(function(x){var m=src.modes[x.direction];return(m==='INVERSE'?(x.direction==='UP'?'DOWN':'UP'):x.direction)===x.actual}).length;
+ e('activeFast8InverseAccuracy').textContent=allowed.length?pct(100*mappedHits/allowed.length):'样本不足';
+ e('activeFast8InverseHitMiss').textContent=mappedHits+' / '+(allowed.length-mappedHits)+'（最近'+records.length+'轮映射）';
+ var modes=src&&directionModeReady?'UP：'+modeLabel(src.modes.UP)+' / DOWN：'+modeLabel(src.modes.DOWN):'模式未就绪';
+ function rate(side){var z=r[side]||{};return z.samples?z.hits+'/'+z.samples+' · '+pct(100*z.hits/z.samples):'暂无'}
+ e('sourceRateRows').innerHTML='<tr><td>5分钟动态入场</td><td>'+escModel(modes)+'</td><td>'+(n?hits+'/'+n+' · '+pct(100*hits/n):'暂无')+'</td><td>'+rate('up')+'</td><td>'+rate('down')+'</td><td>'+(allowed.length?pct(100*mappedHits/allowed.length):'暂无')+'</td></tr>';
+ e('activeFast8Note').textContent='本表只看动态模型影子模拟入场后的官方结果，非实际订单；真实下单以控制 PIN 选中、原有方向开关及订单有效期为准。';
+ renderDirectionModes();
+}
 async function renderPostflipPrimary(){
  var model=chosenOrderModel==='NOVICE_MIX_LOW_V1'?'NOVICE_MIX_LOW_V1':'BREAKOUT20_RSI_MACD_RANGE_V1';
  var response=await fetch('/api/postflip-official-stats?model='+model+'&ts='+Date.now(),{cache:'no-store'});
@@ -758,6 +823,13 @@ async function renderNovicePrimary(){
 function load(){
  // BASELINE / NOVICE use the reset ledger. Pre-existing legacy V2/VIP75
  // modes retain their own diagnostics and never enter the new tally.
+ if(chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'){
+  return renderDynamicPrimary().catch(function(err){if(chosenOrderModel!=='DYNAMIC_ENTRY_5M_SHADOW_V1')return;
+   e('activeFast8Name').textContent='5分钟动态入场 · 数据暂不可用';
+   e('activeFast8Accuracy').textContent='-';e('activeFast8Coverage').textContent='-';
+   e('activeFast8Note').textContent=String(err?.message||err);
+  });
+ }
  if(chosenOrderModel==='NOVICE_MIX_LOW_V1')return showResetPrimary();
  fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'}).then(function(r){
   if(!r.ok)throw Error('production-mode unavailable');

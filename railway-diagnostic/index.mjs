@@ -5,8 +5,8 @@ import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
 import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,refreshDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
-import {BASE_MODEL,NOVICE_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
-  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,RSI_INPUT_VERSION} from './production-signal-choice.mjs';
+import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
+  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,RSI_INPUT_VERSION} from './production-signal-choice.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
@@ -22,6 +22,7 @@ const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance
 const SIGNAL_WS_URL = String(process.env.SIGNAL_WS_URL || '').trim();
 const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MODEL_V1');
 const NOVICE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/novice-mix';
+const DYNAMIC_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/dynamic-entry';
 
 
 let enabled = false;
@@ -323,7 +324,30 @@ async function getSignal({ forceHttp = false } = {}) {
   try{choice=await refreshModelSelection()}catch{return null}
   const round=currentRoundMs();
   if(!selectionPermitsRound(round,choice))return null;
-  if(choice.model!==NOVICE_MODEL&&choice.model!==BASE_MODEL)return null;
+  if(![NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL].includes(choice.model))return null;
+  if(choice.model===DYNAMIC_MODEL){
+    try{
+      const response=await fetch(DYNAMIC_LOCAL_URL,{cache:'no-store',
+        signal:AbortSignal.timeout(1100),headers:{accept:'application/json'}});
+      if(!response.ok)return null;
+      const verified=validateDynamicEntrySignal(await response.json());
+      if(!verified.ok)return null;
+      return {
+        round:verified.round,status:'LOCKED',direction:verified.direction,
+        rawDirection:verified.direction,randomFlipApplied:false,
+        signalOutputMode:'DYNAMIC_ENTRY_FROZEN_V1',
+        inputVersion:'DYNAMIC_ENTRY_5M_V1',
+        score:verified.score,confidence:null,modelProbability:null,
+        model:SIGNAL_MODEL_NAME,upstreamModel:DYNAMIC_MODEL,
+        source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:verified.lockedAt,
+        lockedAt:verified.lockedAt,marketAt:verified.marketAt,
+        frozen:true,executionEligible:true,
+        qualityGate:'FROZEN_DYNAMIC_ENTRY_UNCALIBRATED',
+        signalId:SIGNAL_MODEL_NAME+':'+verified.round+':'+DYNAMIC_MODEL+':'+
+          verified.lockedAt+':'+verified.modelVersion+':'+verified.direction,
+        transport:'railway_dynamic5m_frozen_readonly'};
+    }catch{return null}
+  }
   try {
     const r=await fetch(NOVICE_LOCAL_URL,{cache:'no-store',
       signal:AbortSignal.timeout(1100),headers:{accept:'application/json'}});
@@ -569,6 +593,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
   if(choice.model===NOVICE_MODEL&&signal.upstreamModel!==NOVICE_MODEL)return;
+  if(choice.model===DYNAMIC_MODEL&&signal.upstreamModel!==DYNAMIC_MODEL)return;
   // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
   if (signal.executionEligible===false) {
     console.log(JSON.stringify({event:'unverified_signal_order_blocked',

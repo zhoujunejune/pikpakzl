@@ -64,6 +64,9 @@ export function createEdge5mService({fetcher=globalThis.fetch,clock=Date.now,
    if(busy)return;busy=true;
    try{
      const requestAt=clock();
+     const elapsed=requestAt-roundAt(requestAt);
+     // Collect pre-round and first 8 seconds only; avoids 24/7 REST bandwidth.
+     if(elapsed>8500&&elapsed<ROUND_MS-11000)return;
      const urls=[
        marketUrl,
        'https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=10',

@@ -33,3 +33,63 @@ for(let i=0;i<3;i++){
  catch(e){console.log(JSON.stringify({sample:i,at,error:String(e).slice(0,120)}));}
  if(i<2)await new Promise(resolve=>setTimeout(resolve,6000));
 }
+
+// Independent, READ-ONLY data-provenance audit of the user's Railway endpoints.
+// Do not print credentials, raw accounts or order data.
+const auditRead=async(url,timeout=9500)=>{
+ const r=await fetch(url,{method:'GET',cache:'no-store',signal:AbortSignal.timeout(timeout),
+ headers:{accept:'application/json'}});
+ const data=await r.json();return {status:r.status,data};
+};
+for(const [name,url]of [
+ ['RAILWAY_V3_HEALTH','https://signal-diagnostic-v3-production.up.railway.app/healthz'],
+ ['RAILWAY_V3_MARKET','https://signal-diagnostic-v3-production.up.railway.app/api/shadow-market-data'],
+ ['RAILWAY_V2_SETTLEMENT','https://signal-diagnostic-v2-production.up.railway.app/api/round-stats'],
+ ['BINANCE_REFERENCE_TICKER','https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT']
+]){
+ try{
+  const {status,data:d}=await auditRead(url);
+  if(name==='RAILWAY_V3_HEALTH'){
+   const h=d.dataIntegrity||{};
+   console.log('AUDIT '+JSON.stringify({name,http:status,ok:d.ok,source:d.source,model:d.model,
+    streamConnected:h.wsConnected,depthAgeMs:h.lastDepthAgeMs,tradeAgeMs:h.lastAggTradeAgeMs,
+    lastMarketTs:h.lastMarketTs,lastExchangeLagMs:h.lastExchangeEventLagMs,
+    predictionWsConnected:h.predictionOrderbookConnected,
+    predictionOrderbookFresh:h.predictionOrderbookFresh,
+    simulated:h.simulated,estimatedOrderBook:h.estimatedOrderBook,
+    ageMs:h.lastMessageAgeMs}));
+  }else if(name==='RAILWAY_V3_MARKET'){
+   const l=d.latest||{},h=d.integrity||{},c=d.candles||{};
+   console.log('AUDIT '+JSON.stringify({name,http:status,ok:d.ok,readOnly:d.readOnly,
+    source:d.source,generatedAt:d.generatedAtMs,spotPrice:l.lastPrice,
+    spotAt:l.eventMs,spotAgeMs:l.ageMs,spotSource:l.source,
+    oneMinuteRows:c['1m']?.rows?.length,fiveMinuteRows:c['5m']?.rows?.length,
+    oneMinuteProvider:c['1m']?.provider,fiveMinuteProvider:c['5m']?.provider,
+    complete:h.complete,errors:h.errors||[],symbol:d.symbol}));
+  }else if(name==='RAILWAY_V2_SETTLEMENT'){
+   const rows=(d.records||[]).filter(x=>x?.roundStartMs);
+   const settled=rows.filter(x=>['UP','DOWN'].includes(x.productionActual));
+   const strict=settled.filter(x=>x.actualSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION'&&
+      /STRICT_ROUND_ALIGNED_TOPIC/.test(String(x.resolutionEvidence||'')) &&
+      x.officialDirection===x.productionActual);
+   const samples=strict.slice(0,3).map(x=>({round:x.roundStartMs,actual:x.productionActual,
+    evidence:x.resolutionEvidence,topicId:x.predictionMarketTopicId,
+    topicStart:x.officialSettlementAudit?.topicStartDate,
+    topicEnd:x.officialSettlementAudit?.topicEndDate,
+    endpoint:x.officialSettlementAudit?.sourceEndpoint,
+    responseSha256Present:/^[a-f0-9]{64}$/.test(x.officialSettlementAudit?.detailPayloadSha256||''),
+    aligned:Number(x.officialSettlementAudit?.topicStartDate)===Number(x.roundStartMs)&&
+    Number(x.officialSettlementAudit?.topicEndDate)===Number(x.roundStartMs)+300000}));
+   console.log('AUDIT '+JSON.stringify({name,http:status,ok:d.ok,symbol:d.symbol,
+    settlementSource:d.settlementSource,records:rows.length,
+    settledRows:settled.length,strictVerifiedRows:strict.length,
+    pendingRows:rows.length-settled.length,
+    nonStrictSettled:settled.length-strict.length,
+    lastSettlementOkAt:d.health?.lastSettlementOkAt,
+    lastSettlementError:d.health?.lastSettlementError,
+    auditExamples:samples}));
+  }else if(name==='BINANCE_REFERENCE_TICKER'){
+   console.log('AUDIT '+JSON.stringify({name,http:status,symbol:d.symbol,price:Number(d.price)}));
+  }
+ }catch(e){console.log('AUDIT '+JSON.stringify({name,error:String(e.message||e).slice(0,160)}))}
+}

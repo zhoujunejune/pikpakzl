@@ -1,0 +1,20 @@
+name: Read-only probes for existing Cloudflare and Railway data
+on:
+  push:
+    branches: [cloudflare-free-market-hub-20261017]
+    paths:
+      - verify-existing-endpoints.mjs
+      - .github/workflows/cloudflare-existing-endpoints-probe.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify public data without secrets or mutation
+        run: node verify-existing-endpoints.mjs

@@ -2,3 +2,9 @@ name = "zl-free-market-hub"
 main = "src/cloudflare-free-hub.mjs"
 compatibility_date = "2026-10-17"
 workers_dev = true
+
+# Same-account Workers communicate only through this internal service binding.
+# This avoids blocked public Workers-to-Workers routes; no paid storage/resources.
+[[services]]
+binding = "EDGE5_SERVICE"
+service = "edge-5m-v1"

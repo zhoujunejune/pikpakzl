@@ -1,0 +1,57 @@
+name: Dynamic entry shadow live smoke
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/dynamic-entry-shadow-live-smoke.yml
+      - railway-diagnostic/dynamic-entry-shadow.mjs
+      - railway-diagnostic/dynamic-entry-shadow-core.mjs
+      - railway-diagnostic/shadow-breakout20-dashboard.mjs
+      - railway-diagnostic/panel-stats-shell.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: GET-only dashboard and dynamic shadow endpoint
+        run: |
+          node --input-type=module <<'NODE'
+          const origin='https://trade-control-panel-production.up.railway.app';
+          const get=path=>fetch(origin+path,{cache:'no-store',signal:AbortSignal.timeout(12000)});
+          for(let attempt=1;attempt<=6;attempt++){
+            try{
+              const page=await get('/');
+              if(!page.ok)throw Error('PANEL_HTTP_'+page.status);
+              const html=await page.text();
+              if(!html.includes('id="b20ModelSelector"') ||
+                 !html.includes('value="DYNAMIC_ENTRY_5M_SHADOW_V1"'))
+                 throw Error('NEW_SHADOW_OPTION_NOT_VISIBLE');
+              const response=await get('/api/shadow-breakout20/dynamic-entry');
+              const d=await response.json();
+              if(!response.ok||d?.ok!==true||d.model!=='DYNAMIC_ENTRY_5M_SHADOW_V1'||
+                 d.readOnly!==true||d.orders!==false||d.productionIntegration!==false||
+                 d.statsScope!=='STRICT_FORWARD_VIRTUAL_ENTRIES_OFFICIAL_RESOLUTION_ONLY')
+                 throw Error('DYNAMIC_SHADOW_NOT_READY_'+response.status);
+              if(!d.training||!d.results||!Array.isArray(d.recent))
+                 throw Error('SHADOW_STATUS_MISSING_TRAINING_OR_RESULTS');
+              console.log(JSON.stringify({ok:true,model:d.model,readOnly:d.readOnly,
+                generatedAt:d.generatedAt,latestDirection:d.currentDecision?.direction||null,
+                stats:d.results.overall,entryRounds:d.results.entryRounds,
+                lastTickAt:d.timed?.lastTickAt,health:d.health,
+                training:d.training.status,modelVersion:d.training.liveModelVersion},null,2));
+              process.exit(0);
+            }catch(err){
+              console.log('attempt='+attempt+' '+String(err?.message||err));
+              if(attempt===6)process.exit(1);
+              await new Promise(resolve=>setTimeout(resolve,5000));
+            }
+          }
+          NODE

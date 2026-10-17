@@ -22,7 +22,7 @@ export async function bybitMarket(){
  const url=['/v5/market/tickers?category=spot&symbol=BTCUSDT',
   '/v5/market/tickers?category=linear&symbol=BTCUSDT',
   '/v5/market/orderbook?category=spot&symbol=BTCUSDT&limit=25',
-  '/v5/market/recent-trade?category=spot&symbol=BTCUSDT&limit=60'];
+  '/v5/market/recent-trade?category=linear&symbol=BTCUSDT&limit=200'];
  const [spot,perp,book,trades]=await Promise.all(url.map((path,i)=>first(hosts,path,d=>
   d?.retCode===0&&(i===2?Array.isArray(d.result?.b)&&d.result.b.length>=5&&
     Array.isArray(d.result?.a)&&d.result.a.length>=5:
@@ -45,7 +45,7 @@ export async function okxMarket(){
  const url=['/api/v5/market/ticker?instId=BTC-USDT',
   '/api/v5/market/ticker?instId=BTC-USDT-SWAP',
   '/api/v5/market/books?instId=BTC-USDT&sz=10',
-  '/api/v5/market/trades?instId=BTC-USDT&limit=100'];
+  '/api/v5/market/trades?instId=BTC-USDT-SWAP&limit=100'];
  const [spot,perp,book,trades]=await Promise.all(url.map(path=>first([host],path,d=>
   d?.code==='0'&&Array.isArray(d.data)&&d.data.length>0)));
  const now=Date.now(),s=spot.data.data[0],p=perp.data.data[0],b=book.data.data[0];

@@ -13,8 +13,6 @@ export const EDGE_INPUT_VERSION='EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1';
 export const RSI_INPUT_VERSION='RSI_ONLY_14_V1';
 export const ORDER_SIGNAL_MODELS=Object.freeze([
  {id:BASE_MODEL,name:'BASELINE（RSI14单指标 · Railway 信号）'},
- {id:NOVICE_MODEL,name:'NOVICE（RSI14单指标 · 独立影子信号）'},
- {id:DYNAMIC_MODEL,name:'5分钟动态入场（本轮任意时点 · 触发后锁定）'},
  {id:EDGE_MODEL,name:'EDGE_5M_V1（前8秒 · 概率校准与Edge过滤）'}
 ]);
 const isChoice=m=>ORDER_SIGNAL_MODELS.some(x=>x.id===m);
@@ -75,6 +73,17 @@ export async function refreshModelSelection(){
      raw=created==='OK'?initial:await redis.get(MODEL_CHOICE_KEY);
    }
    if(!raw)throw Error('MODEL_CHOICE_NOT_PERSISTED');
+   // Retired selections are not re-enabled after a restart.
+   // Change revision to invalidate any pending order from the retired model,
+   // and only allow baseline from the following five-minute round.
+   const saved=JSON.parse(raw);
+   if(saved.model===NOVICE_MODEL||saved.model===DYNAMIC_MODEL){
+     const migrated=JSON.stringify({model:BASE_MODEL,revision:crypto.randomUUID(),
+       updatedAt:new Date().toISOString(),effectiveAfterRound:roundOf(Date.now())});
+     const swapped=await redis.eval(CAS,{keys:[MODEL_CHOICE_KEY],arguments:[raw,migrated]});
+     if(swapped==='OK')raw=migrated;
+     else raw=await redis.get(MODEL_CHOICE_KEY); // reread concurrent selected state
+   }
    return apply(raw);
  }catch(err){invalidate(String(err?.message||err).slice(0,150));throw err}
 }

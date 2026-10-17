@@ -1117,7 +1117,7 @@ async function updateOrderSignal(){
     var mapped=mode==='INVERSE'?(signal.direction==='UP'?'DOWN':'UP'):
        mode==='FORWARD'?signal.direction:null;
     side.textContent=j.orderSignal===mapped?
-      j.orderSignal+'（'+modeLabel(mode)+'，仅计划下单方向）':'方向映射校验失败 · 不下单';
+      chosenModelName(model)+' · '+j.orderSignal+'（'+modeLabel(mode)+'，仅计划下单方向）':'方向映射校验失败 · 不下单';
    }
   }
   put('flowPrepared',hasOrder?'已完成准备并进入提交流程':

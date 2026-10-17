@@ -1,0 +1,39 @@
+name: Verify zero-cost Render Binance network probe
+on:
+  push:
+    branches: [cloudflare-free-market-hub-20261017]
+    paths:
+      - free-executor-probe/**
+      - render.yaml
+      - .github/workflows/free-executor-probe-verify.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify free-only blueprint and no Binance orders
+        run: |
+          grep -q '^    plan: free$' render.yaml
+          grep -q '^    region: singapore$' render.yaml
+          grep -q '^    rootDir: free-executor-probe$' render.yaml
+          ! grep -E 'BINANCE_API_KEY|BINANCE_API_SECRET|ORDER_SUBMIT|/api/order' free-executor-probe/server.mjs
+          cd free-executor-probe
+          npm run check
+          PORT=10187 npm start > /tmp/probe.log 2>&1 &
+          echo $! > /tmp/probe.pid
+          for i in 1 2 3 4 5; do
+            sleep 1
+            if curl -fsS http://127.0.0.1:10187/healthz | grep -q '"orders":false'; then break; fi
+          done
+          curl -fsS http://127.0.0.1:10187/healthz | grep -q '"ok":true'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:10187/api/orders)
+          test "$code" = "405"
+          kill "$(cat /tmp/probe.pid)" || true
+          echo "RENDER_FREE_READONLY_PROBE_SYNTAX_AND_HTTP_PASS"

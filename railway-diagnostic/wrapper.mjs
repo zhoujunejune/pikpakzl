@@ -546,12 +546,11 @@ const prepareMarker = "async function prepareWorker(signalOverride = null, trigg
 if (!source.includes(prepareMarker)) throw new Error('PREPARE_WORKER_MARKER_NOT_FOUND');
 source = source.replace(prepareMarker, backendPatch + '\n' + prepareMarker);
 
-const submittedGuard = "  if (submittedRounds.has(String(signal.round))) return;
-  if(pendingAction?.state==='SUBMISSION_UNKNOWN'&&String(pendingAction.round)===String(signal.round))return;";
+const submittedGuard = "  if (submittedRounds.has(String(signal.round))) return;";
 if (!source.includes(submittedGuard)) throw new Error('SUBMITTED_GUARD_NOT_FOUND');
 source = source.replace(
   submittedGuard,
-  submittedGuard + "\n  if (!orderSubmitWindowOpen(signal.round,Date.now(),choice.model)) return;\n  if (AUTO_CONFIRM_ENABLED && autoAttemptedRounds.has(String(signal.round))) return;"
+  submittedGuard + "\n  if(pendingAction?.state==='SUBMISSION_UNKNOWN'&&String(pendingAction.round)===String(signal.round))return;\n  if (!orderSubmitWindowOpen(signal.round,Date.now(),choice.model)) return;\n  if (AUTO_CONFIRM_ENABLED && autoAttemptedRounds.has(String(signal.round))) return;"
 );
 
 const amountLine = '      const amount = cleanAmount(body.amount);';

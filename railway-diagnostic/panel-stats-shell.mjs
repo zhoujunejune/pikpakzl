@@ -750,7 +750,7 @@ async function renderDynamicPrimary(){
  e('activeFast8Name').textContent='5分钟动态入场 DYNAMIC_ENTRY_5M_SHADOW_V1';
  e('activeFast8Desc').textContent='整轮内动态判断 · 有效模拟入场才冻结方向 · 入场45秒内可用于下单候选；沿用原 UP/DOWN 模式';
  e('activeFast8Direction').textContent=entry?entry.direction:'本轮尚未触发入场';
- e('activeFast8EmittedDirection').textContent=entry?entry.direction:'尚未冻结';
+ // Only updateOrderSignal may display an execution-validated lock; never let a shadow preview overwrite it.
  e('activeFast8Accuracy').textContent=n?pct(100*hits/n):'暂无已确认官方结果';
  e('activeFast8HitMiss').textContent=hits+' / '+(n-hits)+'（'+n+'轮）';
  e('activeFast8Coverage').textContent=Number(r.entryRounds||0)+' 轮模拟入场 / '+Number(r.observedRounds||0)+' 轮观察';
@@ -1007,6 +1007,7 @@ async function updateOrderSignal(){
   put('flowRound','北京时间 '+roundTime+' 开始的5分钟轮次 · '+chosenModelName(model));
   put('flowPrediction',['UP','DOWN'].includes(preview)?preview+' · 仅方向，不代表已下单':'尚无可用方向参考');
   var lockMessage=locked?signal.direction+' · 有效实盘信号已锁定':
+   hasOrder?'本轮此前已产生真实订单 · 当前锁定信号可能已过期':
    !modelReady?'实盘模型配置未就绪':
    !modelEffective?'模型下一轮才生效，本轮不允许新模型下单':
    entry?(now-Number(entry.at)>45000||now>=round+285000?
@@ -1066,6 +1067,7 @@ async function updateOrderSignal(){
   }
   var summary=filled?'本轮已成交 · 币安确认 FILLED':
    failed?'本轮订单失败 · 未成交':
+   currentOrder?.state==='SUBMISSION_UNKNOWN'?'本轮订单提交结果不明 · 必须核对':
    hasOrder?'本轮已提交币安 · 尚待成交确认':
    currentPending?.state==='SUBMITTING'?'本轮订单提交中 · 未确认成交':
    ready?'订单已准备 · 尚未提交币安':

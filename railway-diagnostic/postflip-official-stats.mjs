@@ -5,9 +5,9 @@ import {BASE_MODEL,NOVICE_MODEL,RSI_INPUT_VERSION} from './production-signal-cho
 import {verifiedOfficialRoundDirections} from './novice-mix-shadow.mjs';
 
 export const POSTFLIP_START_ROUND=Date.parse('2026-10-17T05:35:00.000Z'); // earliest RSI-only version
-export const POSTFLIP_STATS_VERSION='RSI14_DIRECT_OFFICIAL_V1_20261017';
+export const POSTFLIP_STATS_VERSION='RSI14_DIRECT_OFFICIAL_V2_20261017_CLEAN_RESET';
 export const DIRECT_STATS_SCOPE='RSI14_DIRECT_OFFICIAL_ONLY';
-const REDIS_KEY='reporting:rsi14-direct-official:20261017:v1';
+const REDIS_KEY='reporting:rsi14-direct-official:20261017:v2-clean-reset';
 const MODELS=[BASE_MODEL,NOVICE_MODEL];
 const VALID=d=>d==='UP'||d==='DOWN';
 const ROUND_MS=300000;

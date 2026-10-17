@@ -18,6 +18,10 @@ if(!Number.isFinite(Number(status.body.timed?.nextAlarm)))
 console.log('EDGE Worker deployed:',url);
 console.log('Alarm:',new Date(status.body.timed.nextAlarm).toISOString());
 console.log('Training:',JSON.stringify(status.body.training));
+console.log('Latest immutable prediction:',JSON.stringify(status.body.latest));
+console.log('Recent observations:',JSON.stringify(status.body.recent?.slice(0,4)||[]));
+console.log('Official results:',JSON.stringify(status.body.results));
+console.log('Source & settlement health:',JSON.stringify(status.body.health));
 let probe;
 try{probe=await get('/market-check');}
 catch(e){probe={httpStatus:0,body:{ok:false,error:String(e)}};}

@@ -2,6 +2,7 @@
 // Never expose account credentials or balances. Does not mutate Railway or place trades.
 import {bestMarket} from './provider-market.mjs';
 const EDGE_URL='https://edge-5m-v1.zl528094-3ba.workers.dev/status';
+const EDGE_MARKET_URL='https://edge-5m-v1.zl528094-3ba.workers.dev/market-check';
 const BASE_URL='https://trade-control-panel-production.up.railway.app/api/postflip-official-stats?model=BREAKOUT20_RSI_MACD_RANGE_V1';
 const reply=(body,code=200)=>Response.json(body,{status:code,headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 const number=n=>typeof n==='number'&&Number.isFinite(n)?n:null;
@@ -9,14 +10,36 @@ const error=e=>String(e?.message||e).slice(0,140);
 async function read(url){const r=await fetch(url,{headers:{accept:'application/json'},cache:'no-store',signal:AbortSignal.timeout(4200)});
  if(!r.ok)throw Error('UPSTREAM_HTTP_'+r.status);
  return await r.json();}
-async function market(){try{
- const o=await bestMarket();const now=Date.now();
- if(now-o.at>3500||!Number.isFinite(o.spotPrice)||o.spotPrice<=0)throw Error('STALE_MARKET');
- return {ok:true,readOnly:true,realData:true,venue:o.venue,marketAt:o.at,
-  spotPrice:o.spotPrice,perpPrice:o.perpPrice,
-  depthLevels:{bids:o.bids.length,asks:o.asks.length},trades:o.trades.length,
-  providers:o.providers};
- }catch(e){return {ok:false,readOnly:true,error:error(e)};}}
+// Read-only: prefer the already-active APAC Durable Object's verified provider observation.
+// Our new Worker can run from an egress POP blocked by Bybit/OKX; never falsify quotes.
+async function market(){
+ const failures=[];
+ try{
+  const d=await read(EDGE_MARKET_URL),now=Date.now();
+  if(d.ok!==true||d.realData!==true||d.orders!==false||
+    !['BYBIT','OKX','BINANCE'].includes(d.venue)||
+    !Number.isFinite(Number(d.spotPrice))||Number(d.spotPrice)<=0||
+    !Number.isFinite(Number(d.marketAt))||now-Number(d.marketAt)>3500||
+    Number(d.marketAt)>now+300||
+    !d.providers?.spot||!d.providers?.depth||!d.providers?.trades||!d.providers?.perp)
+    throw Error('EDGE_MARKET_NOT_LIVE_OR_INVALID');
+  return {ok:true,readOnly:true,realData:true,venue:d.venue,marketAt:Number(d.marketAt),
+    spotPrice:Number(d.spotPrice),perpPrice:Number(d.perpPrice),
+    providers:d.providers,source:'EDGE5_VERIFIED_READONLY_MARKET',
+    depthLevels:null,trades:null};
+ }catch(e){failures.push('EDGE:'+error(e));}
+ try{
+  const o=await bestMarket(),now=Date.now();
+  if(now-o.at>3500||!Number.isFinite(o.spotPrice)||o.spotPrice<=0)
+    throw Error('STALE_MARKET');
+  return {ok:true,readOnly:true,realData:true,venue:o.venue,marketAt:o.at,
+    spotPrice:o.spotPrice,perpPrice:o.perpPrice,
+    depthLevels:{bids:o.bids.length,asks:o.asks.length},trades:o.trades.length,
+    providers:o.providers,source:'DIRECT_CLOUDFLARE_PUBLIC_READ'};
+ }catch(e){failures.push('DIRECT:'+error(e));}
+ return {ok:false,readOnly:true,error:failures.join(';').slice(0,280)};
+}
+
 async function edge(){try{
  const d=await read(EDGE_URL);
  if(d.ok!==true||d.model!=='EDGE_5M_V1'||d.readOnly!==true||d.orders!==false)

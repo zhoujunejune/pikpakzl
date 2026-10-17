@@ -35,14 +35,14 @@ const baseline={
 };
 const baseOfficial={ok:true,official:{available:true,results:{overall:{samples:193,hits:89,accuracy:89/193},locked:205}}};
 const postflip={
- ok:true,model:'NOVICE_MIX_LOW_V1',statsScope:'POSTFLIP_EMITTED_SIGNAL_ONLY',resetAt:1792218000000,
+ ok:true,model:'NOVICE_MIX_LOW_V1',statsScope:'RSI14_DIRECT_OFFICIAL_ONLY',resetAt:1792218000000,
  results:{rounds:2,locked:2,dataGaps:0,pending:0,
   overall:{samples:2,hits:1,accuracy:.5},up:{samples:1,hits:1,accuracy:1},
   down:{samples:1,hits:0,accuracy:0}},
- latest:{round:now,raw:'DOWN',emitted:'UP',direction:'UP',actual:'UP',flipped:true,eligible:true,lockedAt:now+5200},
+ latest:{round:now,raw:'UP',emitted:'UP',direction:'UP',actual:'UP',flipped:false,eligible:true,lockedAt:now+5200},
  recent:[
-  {round:now,raw:'DOWN',emitted:'UP',direction:'UP',actual:'UP',eligible:true,flipped:true,lockedAt:now+5200,result:'HIT'},
-  {round:now-300000,raw:'UP',emitted:'DOWN',direction:'DOWN',actual:'UP',eligible:true,flipped:true,lockedAt:now-300000+5100,result:'MISS'}
+  {round:now,raw:'UP',emitted:'UP',direction:'UP',actual:'UP',eligible:true,flipped:false,lockedAt:now+5200,result:'HIT'},
+  {round:now-300000,raw:'DOWN',emitted:'DOWN',direction:'DOWN',actual:'UP',eligible:true,flipped:false,lockedAt:now-300000+5100,result:'MISS'}
  ]
 };
 const modes={SELECTIVE_V2_FAST8_PRIMARY:{UP:'FORWARD',DOWN:'INVERSE'},

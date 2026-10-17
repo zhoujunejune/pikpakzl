@@ -32,20 +32,23 @@ export function extractFeatures(snapshot,now){
    finite(Number(x.close))&&Number(x.close)>0&&x.startMs%60000===0)
    .sort((a,b)=>a.startMs-b.startMs);
  if(candles.length<16||now-candles.at(-1).startMs>120000)return null;
- const closes=candles.map(x=>Number(x.close));
- // Replace current minute candle close with the contemporaneous trade price.
- const bars=closes.slice(0,-1).concat(price);
- const rsi=rsi14(bars);
+ // Use fully completed earlier minutes, plus a fresh contemporaneous trade print.
+ // This also allows an entry at T+1s before the first current-minute candle exists.
+ const minute=Math.floor(now/60000)*60000;
+ const past=candles.filter(x=>x.startMs<minute);
+ if(past.length<15)return null;
+ const closes=past.map(x=>Number(x.close));
+ const rsi=rsi14(closes.slice(-14).concat(price));
  if(!finite(rsi))return null;
  const round=roundStart(now);
- // The round opening print must be available, otherwise no fabricated round move.
- const current=candles.find(x=>x.startMs===Math.floor(now/60000)*60000);
+ // Prefer the source collector's round-open print when it is round-aligned.
+ const roundOpen=latest.roundStartMs===round?Number(latest.roundOpenPrice):null;
  const first=candles.find(x=>x.startMs===round);
- const open=Number(first?.open);
- if(!current||!finite(open)||open<=0)return null;
+ const open=finite(roundOpen)&&roundOpen>0?roundOpen:Number(first?.open);
+ if(!finite(open)||open<=0)return null;
  const bps=(a,b)=>clip((a-b)/b*10000/35);
- const m1=bps(price,closes.at(-2));
- const m3=bps(price,closes.at(-4));
+ const m1=bps(price,closes.at(-1));
+ const m3=bps(price,closes.at(-3));
  const roundMove=bps(price,open);
  const remaining=clip((ROUND_MS-(now-round))/ROUND_MS*2-1);
  return {

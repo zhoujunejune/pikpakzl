@@ -156,8 +156,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     return { status: 502, body: freshQuote };
   }
 
-  const quote = freshQuote.quote;
-  const expireAt = Number(quote.expireAt || 0);
+  let quote = freshQuote.quote;
+  let expireAt = Number(quote.expireAt || 0);
   const remainingMs = expireAt > 0 ? expireAt - Date.now() : null;
   console.log(JSON.stringify({
     event: 'fresh_quote_ready',
@@ -299,9 +299,92 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
 
   const startedAt = new Date().toISOString();
-  const placeStartedAtMs = Date.now();
-  const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
-  const placeFinishedAtMs = Date.now();
+  let orderPostClaim;
+  try {
+    // A single atomic Redis counter is shared across restarts, browser tabs
+    // and controller instances. Never POST if the counter cannot be claimed.
+    orderPostClaim=await claimOrderSubmitAttempt(p.round);
+  } catch (error) {
+    p.state='PLACE_ERROR';
+    p.error=String(error?.message||error);
+    console.log(JSON.stringify({event:'order_submit_attempt_denied',round:p.round,error:p.error}));
+    return {status:409,body:{ok:false,error:p.error,attempts:p.orderAttempts??0,
+      maxAttempts:MAX_ORDER_SUBMIT_ATTEMPTS}};
+  }
+  p.orderAttempts=orderPostClaim.attempt;
+  p.maxOrderAttempts=MAX_ORDER_SUBMIT_ATTEMPTS;
+  console.log(JSON.stringify({event:'api_order_submit_attempt',round:p.round,
+    attempt:orderPostClaim.attempt,maxAttempts:MAX_ORDER_SUBMIT_ATTEMPTS,source}));
+  let placeStartedAtMs = Date.now();
+  let call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
+  let placeFinishedAtMs = Date.now();
+
+  // Retry ONLY explicitly rejected quote/price requests. Ambiguous transport,
+  // HTTP 5xx, missing orderId, HTTP 451 and other business errors never POST again.
+  while (!call.ok&&retryableRejectedOrderPost(call)&&
+      orderPostClaim.attempt<MAX_ORDER_SUBMIT_ATTEMPTS) {
+    if(p!==pendingAction||!enabled||submittedRounds.has(String(p.round))||
+      !orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice)){
+      p.state='RETRY_ABORTED';
+      p.error='重试前已停止跟随、切换订单或超过本轮时限';
+      return {status:409,body:{ok:false,error:p.error,attempts:p.orderAttempts}};
+    }
+    // New quote for each retry. Never reuse a quote rejected by Binance.
+    const nextQuote=await getFreshQuote(intent);
+    if(!nextQuote.ok){
+      p.state=isAuto?'AUTO_FAILED':'PLACE_ERROR';
+      p.error=nextQuote.error||'重试报价失败，未再次提交订单';
+      console.log(JSON.stringify({event:'order_retry_requote_failed',round:p.round,
+        attempts:p.orderAttempts,error:p.error,httpStatus:nextQuote.httpStatus}));
+      return {status:502,body:{ok:false,error:p.error,attempts:p.orderAttempts,
+        maxAttempts:MAX_ORDER_SUBMIT_ATTEMPTS}};
+    }
+    const nextExpiry=Number(nextQuote.quote?.expireAt||0);
+    if(nextExpiry>0&&nextExpiry-Date.now()<1200){
+      p.state=isAuto?'AUTO_FAILED':'PLACE_ERROR';
+      p.error='重试报价有效期不足，未再次提交订单';
+      return {status:409,body:{ok:false,error:p.error,attempts:p.orderAttempts}};
+    }
+    // All authorities and the actual source signal are re-validated immediately
+    // before each new irreversible POST; never bypass the dynamic 45-second TTL.
+    try{await Promise.all([refreshDirectionSettings(),refreshModelSelection()]);}
+    catch{
+      pendingAction=null;
+      return {status:503,body:{ok:false,error:'重试前读取交易设置失败，停止下单'}};
+    }
+    const currentRetry=await getSignal({forceHttp:true});
+    if(p!==pendingAction||!enabled||!selectedSignalMatches(p)||
+       !directionSettingsSnapshot().ready||
+       p.orderDirectionPolicy!==directionSettingsSnapshot().policy||
+       !currentRetry||currentRetry.status!=='LOCKED'||
+       !pendingOrderMatchesProduction(p,currentRetry)||
+       (p.signalModelChoice===NOVICE_MODEL&&currentRetry.upstreamModel!==NOVICE_MODEL)||
+       (p.signalModelChoice===DYNAMIC_MODEL&&
+          (currentRetry.upstreamModel!==DYNAMIC_MODEL||currentRetry.signalId!==p.signalId))||
+       rejectExpiredOrderWindow(p,'before_retry_place_order')){
+      p.state='RETRY_ABORTED';
+      p.error='重试时信号、轮次或下单设置不再有效';
+      return {status:409,body:{ok:false,error:p.error,attempts:p.orderAttempts}};
+    }
+    try{orderPostClaim=await claimOrderSubmitAttempt(p.round);}
+    catch(error){
+      p.state='PLACE_ERROR';
+      p.error=String(error?.message||error);
+      return {status:409,body:{ok:false,error:p.error,attempts:p.orderAttempts,
+        maxAttempts:MAX_ORDER_SUBMIT_ATTEMPTS}};
+    }
+    p.orderAttempts=orderPostClaim.attempt;
+    quote=nextQuote.quote;
+    expireAt=nextExpiry;
+    placeBody.quoteId=quote.quoteId;
+    p.state='SUBMITTING';
+    console.log(JSON.stringify({event:'api_order_retry',round:p.round,
+      attempt:p.orderAttempts,maxAttempts:MAX_ORDER_SUBMIT_ATTEMPTS,
+      retryReason:call.data?.code??call.data?.msg??null,source}));
+    placeStartedAtMs=Date.now();
+    call=await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle',placeBody);
+    placeFinishedAtMs=Date.now();
+  }
 
   if (!call.ok) {
     const err = asError(call, 'PREDICTION_PLACE_ORDER_FAILED');
@@ -323,6 +406,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       error: err.error,
       code: err.code,
       startedAt,
+      orderAttempts:p.orderAttempts,
+      maxOrderAttempts:MAX_ORDER_SUBMIT_ATTEMPTS,
     };
     console.log(JSON.stringify({
       event: 'api_order_failed',
@@ -340,6 +425,10 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     }));
 
     if (unknown) {
+      submittedRounds.add(String(p.round));
+      try{await closeOrderSubmitRound(p.round,'UNKNOWN');}
+      catch(error){console.log(JSON.stringify({event:'order_unknown_fence_failed',
+        round:p.round,error:String(error?.message||error)}));}
       const audit = await inspectOrdersAfterUnknown(intent.wallet.walletAddress);
       console.log(JSON.stringify({
         event: 'submission_unknown',
@@ -368,6 +457,10 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (!orderId) {
     p.state = 'SUBMISSION_UNKNOWN';
     p.error = 'Binance 返回成功但缺少 orderId，状态未知，请勿重复提交';
+    submittedRounds.add(String(p.round));
+    try{await closeOrderSubmitRound(p.round,'UNKNOWN');}
+    catch(error){console.log(JSON.stringify({event:'order_unknown_fence_failed',
+      round:p.round,error:String(error?.message||error)}));}
     const audit = await inspectOrdersAfterUnknown(intent.wallet.walletAddress);
     console.log(JSON.stringify({
       event: 'submission_unknown',
@@ -402,6 +495,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   }
 
   submittedRounds.add(String(p.round));
+  try{await closeOrderSubmitRound(p.round,'SUBMITTED');}
+  catch(error){console.log(JSON.stringify({event:'order_submitted_fence_failed',
+    round:p.round,error:String(error?.message||error)}));}
   p.state = 'SUBMITTED_PENDING_CONFIRMATION';
   p.quoteExpireAt = quote.expireAt ?? null;
   p.quoteChance = quote.chance ?? null;
@@ -422,6 +518,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     quoteExpireAt: quote.expireAt ?? null,
     quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
     submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
+    orderAttempts:p.orderAttempts,
+    maxOrderAttempts:MAX_ORDER_SUBMIT_ATTEMPTS,
   };
 
   console.log(JSON.stringify({
@@ -448,7 +546,8 @@ const prepareMarker = "async function prepareWorker(signalOverride = null, trigg
 if (!source.includes(prepareMarker)) throw new Error('PREPARE_WORKER_MARKER_NOT_FOUND');
 source = source.replace(prepareMarker, backendPatch + '\n' + prepareMarker);
 
-const submittedGuard = "  if (submittedRounds.has(String(signal.round))) return;";
+const submittedGuard = "  if (submittedRounds.has(String(signal.round))) return;
+  if(pendingAction?.state==='SUBMISSION_UNKNOWN'&&String(pendingAction.round)===String(signal.round))return;";
 if (!source.includes(submittedGuard)) throw new Error('SUBMITTED_GUARD_NOT_FOUND');
 source = source.replace(
   submittedGuard,

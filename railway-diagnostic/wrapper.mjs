@@ -323,6 +323,14 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   // HTTP 5xx, missing orderId, HTTP 451 and other business errors never POST again.
   while (!call.ok&&retryableRejectedOrderPost(call)&&
       orderPostClaim.attempt<MAX_ORDER_SUBMIT_ATTEMPTS) {
+    // Release the in-flight Redis marker ONLY after an explicit no-order
+    // rejection. A crash, timeout or 5xx retains the in-flight fence.
+    try{await releaseRejectedOrderSubmitAttempt(p.round,orderPostClaim.attempt);}
+    catch(error){
+      p.state='RETRY_ABORTED';
+      p.error='无法确认上次订单已拒绝，禁止再次提交：'+String(error?.message||error);
+      return {status:409,body:{ok:false,error:p.error,attempts:p.orderAttempts}};
+    }
     if(p!==pendingAction||!enabled||submittedRounds.has(String(p.round))||
       !orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice)){
       p.state='RETRY_ABORTED';

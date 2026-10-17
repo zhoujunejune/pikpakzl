@@ -1,3 +1,4 @@
+// Deployment-only marker: Cloudflare EDGE status is read by the existing Railway trade-control-panel; no trade rules altered.
 // Real-order model selection: separate from research-model viewing selection.
 // PIN is enforced at the HTTP layer. Redis CAS guards concurrent browser tabs.
 // This module never places orders or edits the upstream Cloudflare/production V2 signal.

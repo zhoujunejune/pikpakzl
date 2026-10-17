@@ -1,0 +1,34 @@
+name: Dynamic 5m shadow isolation
+on:
+  push:
+    branches:
+      - feature/dynamic-entry-5m-shadow-20261017
+  pull_request:
+    paths:
+      - railway-diagnostic/dynamic-entry-shadow-core.mjs
+      - railway-diagnostic/dynamic-entry-shadow.mjs
+      - railway-diagnostic/dynamic-entry-shadow-core.test.mjs
+      - railway-diagnostic/panel-stats-shell.mjs
+      - railway-diagnostic/shadow-breakout20-dashboard.mjs
+      - .github/workflows/dynamic-entry-shadow.yml
+permissions:
+  contents: read
+jobs:
+  shadow-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check shadow and panel syntax
+        run: |
+          node --check railway-diagnostic/dynamic-entry-shadow-core.mjs
+          node --check railway-diagnostic/dynamic-entry-shadow.mjs
+          node --check railway-diagnostic/dynamic-entry-shadow-core.test.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check railway-diagnostic/shadow-breakout20-dashboard.mjs
+      - name: Read-only model and dashboard regression tests
+        run: |
+          node --test railway-diagnostic/dynamic-entry-shadow-core.test.mjs railway-diagnostic/shadow-breakout20-dashboard.test.mjs

@@ -118,7 +118,7 @@ async function load(){
       :'生产模型未确认';
     globalThis.__active15sCandidateIds=[];
     if(routeStages)routeStages.innerHTML='<span class="on">唯一生产模型 · '+esc(name)+'</span>'
-      +(breakout20Mode?'<span>Cloudflare T+6.25秒采样，8秒截止</span>':'<span>目标第1秒锁定，8秒截止</span>')
+      +(breakout20Mode?'<span>RSI(14)单指标 · 8秒截止</span>':'<span>目标第1秒锁定，8秒截止</span>')
       +'<span>旧策略不参与生产</span>';
     e('spQualified').textContent=currentModels.length?'1 类活跃来源':'未确认';
     e('spObserve').textContent='其他旧策略暂停';
@@ -126,7 +126,7 @@ async function load(){
     e('spTitle').textContent=name+(breakout20Mode?' · RSI/MACD 8秒影子方向':' · 8秒行情融合');
     e('spRows').innerHTML='<tr><td colspan="7" style="padding:12px 6px">当前生产仅使用 '+esc(name)+'；旧策略不参与实时生产预测。</td></tr>';
     e('spRule').textContent=breakout20Mode
-      ?'生产信号采用突破20%即可的 RSI、MACD、价格区间和高低位，Cloudflare 原轮次 T+6.25秒附近锁定，Railway 仅接受本轮8秒内有效方向。历史影子预测不补录生产，失联或超时不伪造方向。'
+      ?'当前正式方向仅由Railway的RSI(14)计算；旧Cloudflare多指标原始方向已从下单链路退出。数据缺失不伪装成有效RSI方向。'
       :'仅使用趋势评分与本轮有效市场报价；历史80%、实时20%，目标第1秒锁定，8秒截止。动量、OFI、成交压力均不参与；无真实数据不伪造信号。';
     e('spNotice').textContent=breakout20Mode
       ?'生产采用独立云端模型方向，正反向开关沿用 SELECTIVE_V2_FAST8_PRIMARY 既有配置。生产命中率以币安官方结算独立计算，不混用影子模型现货代理结果。'
@@ -297,7 +297,7 @@ async function renderPostflipRoundStats(){
  e('rsWrong').innerHTML='<span class="bad">'+(n-hits)+'</span>';
  e('rsWait').textContent=Number(v.dataGaps||0);
  e('rsCoverage').textContent=Number(v.rounds||0)?(100*Number(v.locked||0)/Number(v.rounds)).toFixed(2)+'%':'-';
- e('rsMeta').textContent='从 2026-10-17 11:40（北京时间）重新累计 · '+model
+ e('rsMeta').textContent='从 2026-10-17 13:35（北京时间）重新累计 · '+model
   +' · 只按8秒内有效锁定、50%随机翻转后的正式信号和币安预测市场官方结算计算，不混入旧轮次；不代表实盘成交胜率';
  var rows=Array.isArray(d.recent)?d.recent.slice(0,50):[];
  e('rsRows').innerHTML=rows.length?rows.map(function(x){
@@ -366,7 +366,7 @@ async function load(){
   e('rsSettled').textContent='-';e('rsDecided').textContent='-';
   e('rsCorrect').textContent='-';e('rsWrong').textContent='-';
   e('rsWait').textContent='-';e('rsCoverage').textContent='-';
-  e('rsMeta').textContent='仅展示2026-10-17 11:40起随机翻转后的新记录；'+(err?.message||err);
+  e('rsMeta').textContent='仅展示2026-10-17 13:35起随机翻转后的新记录；'+(err?.message||err);
   e('rsRows').innerHTML='<tr><td colspan="8" style="padding:10px 6px">新统计暂不可用，不回退显示旧记录</td></tr>';
  }
 }
@@ -451,8 +451,8 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
   <div class="k" style="font-size:14px">实盘下单信号来源 · 模型选择</div>
   <select id="orderSignalModelSelect" aria-label="选择真实下单信号模型"
     style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
-    <option value="BREAKOUT20_RSI_MACD_RANGE_V1">突破20%即可（现有生产信号）</option>
-    <option value="NOVICE_MIX_LOW_V1">新手错误混合 NOVICE_MIX_LOW_V1</option>
+    <option value="BREAKOUT20_RSI_MACD_RANGE_V1">BASELINE · RSI(14)单指标</option>
+    <option value="NOVICE_MIX_LOW_V1">NOVICE · RSI(14)单指标</option>
   </select>
   <button id="orderSignalModelSave" type="button"
     style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
@@ -480,7 +480,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前 UP/DOWN 模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>按当前下单规则推算命中率</th></tr></thead>
 <tbody id="sourceRateRows"><tr><td colspan="6" style="padding:10px 6px">统计读取中...</td></tr></tbody>
 </table></div>
-<div class="muted" style="margin-top:7px">只统计2026-10-17 11:40起的随机翻转正式信号。当前方向开关仅模拟最近记录，不代表当时实际订单。</div>
+<div class="muted" style="margin-top:7px">只统计2026-10-17 13:35起的随机翻转正式信号。当前方向开关仅模拟最近记录，不代表当时实际订单。</div>
 <div class="muted" id="activeFast8Note" style="margin-top:10px">仅统计当前生产模型版本的官方结算；任何低证据方向都不代表具有预测优势。</div>
 </div>`;
 const primaryScript = `<script>(function(){
@@ -693,7 +693,7 @@ async function renderPostflipPrimary(){
  var r=data.results||{},v=r.overall||{},n=Number(v.samples||0),hits=Number(v.hits||0);
  var now=Math.floor(Date.now()/300000)*300000,latest=data.latest||{},rows=Array.isArray(data.recent)?data.recent:[];
  e('activeFast8Name').textContent=name;
- e('activeFast8Desc').textContent='8秒内锁定 · 自2026-10-17 11:40起重新累计翻转后正式信号 · 模型训练参数保持不变';
+ e('activeFast8Desc').textContent='8秒内锁定 · 自2026-10-17 13:35起重新累计翻转后正式信号 · 其它MACD/趋势/量价因素已退出方向判断，RSI(14)固定';
  e('activeFast8Direction').textContent=latest.round===now?latest.raw:'本轮尚无原始预测';
  e('activeFast8Accuracy').textContent=n?pct(hits*100/n):'暂无新版官方结算';
  e('activeFast8HitMiss').textContent=hits+' / '+(n-hits)+'（'+n+'轮）';
@@ -711,7 +711,7 @@ async function renderPostflipPrimary(){
   '<td style="text-align:center">'+(n?hits+'/'+n+' · '+pct(hits*100/n):'暂无新版官方结果')+'</td>'+
   '<td style="text-align:center">'+side('up')+'</td><td style="text-align:center">'+side('down')+'</td>'+
   '<td style="text-align:center">'+(allowed.length?mappedHits+'/'+allowed.length+' · '+pct(mappedHits*100/allowed.length):'样本不足')+'</td></tr>';
- e('activeFast8Note').textContent='2026-10-17 11:40起，独立统计 '+n+
+ e('activeFast8Note').textContent='2026-10-17 13:35起，独立统计 '+n+
  ' 轮正式信号官方结算；正反向模拟仅用最近'+rows.length+'条新数据和当前开关，不代表当时实盘成交。旧统计已隐藏。';
  renderDirectionModes();
 }

@@ -20,7 +20,7 @@ void (async () => {
         signal: AbortSignal.timeout(4500),
       });
       const body = response.ok ? (await response.text()).trim() : '';
-      const ipv4 = /^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(body) ? body : null;
+      const ipv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(body) ? body : null;
       console.log(JSON.stringify({
         event: 'v3_egress_public_ip_readonly_probe',
         service: 'signal-diagnostic-v3',

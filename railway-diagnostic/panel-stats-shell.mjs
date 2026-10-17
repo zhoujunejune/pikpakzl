@@ -455,8 +455,8 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="kv"><div class="k">模型原始预测</div><div class="v" id="activeFast8Direction">读取中</div></div>
 <div class="kv"><div class="k">正式输出信号（50%随机翻转后）</div><div class="v" id="activeFast8EmittedDirection">读取中</div></div>
 <div class="kv"><div class="k">下单信号（当前正向 / 反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
-<div class="kv"><div class="k">本模型原始方向官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
-<div class="kv"><div class="k">历史原始方向的理论映射命中率（未计入随机翻转）</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
+<div class="kv"><div class="k">本模型新版正式信号官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
+<div class="kv"><div class="k">新版正式信号按当前开关推算命中率</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
 <div class="kv"><div class="k">开启方向理论命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
 <div class="kv"><div class="k">命中 / 未中</div><div class="v" id="activeFast8HitMiss">-</div></div>
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
@@ -471,7 +471,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <thead style="color:#8f98a8"><tr><th style="padding:9px 6px;text-align:left">信号来源</th><th>当前 UP/DOWN 模式</th><th>总胜率</th><th>UP胜率</th><th>DOWN胜率</th><th>按当前下单规则推算命中率</th></tr></thead>
 <tbody id="sourceRateRows"><tr><td colspan="6" style="padding:10px 6px">统计读取中...</td></tr></tbody>
 </table></div>
-<div class="muted" style="margin-top:7px">按币安官方结算、历史模型原始预测及当前正/反向模式推算，未计入50%随机翻转。正式输出与实际下单需以当前状态和独立记录为准；这不是成交胜率或收益率。</div>
+<div class="muted" style="margin-top:7px">只统计2026-10-17 11:40起的随机翻转正式信号。当前方向开关仅模拟最近记录，不代表当时实际订单。</div>
 <div class="muted" id="activeFast8Note" style="margin-top:10px">仅统计当前生产模型版本的官方结算；任何低证据方向都不代表具有预测优势。</div>
 </div>`;
 const primaryScript = `<script>(function(){
@@ -673,6 +673,39 @@ function orderSide(z){
  return mode==='INVERSE'?(pred==='UP'?'DOWN':'UP'):mode==='FORWARD'?pred:null;
 }
 
+async function renderPostflipPrimary(){
+ var model=chosenOrderModel==='NOVICE_MIX_LOW_V1'?'NOVICE_MIX_LOW_V1':'BREAKOUT20_RSI_MACD_RANGE_V1';
+ var response=await fetch('/api/postflip-official-stats?model='+model+'&ts='+Date.now(),{cache:'no-store'});
+ var data=await response.json();
+ if(!response.ok||data?.ok!==true||data.statsScope!=='POSTFLIP_EMITTED_SIGNAL_ONLY')throw Error(data?.error||'新版统计不可用');
+ if((chosenOrderModel==='NOVICE_MIX_LOW_V1'?'NOVICE_MIX_LOW_V1':'BREAKOUT20_RSI_MACD_RANGE_V1')!==model)return;
+ var name=model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可 BASELINE';
+ activeCatalog=[{id:model,name:name,source:'SELECTIVE_V2_FAST8_PRIMARY',version:model,active:true}];
+ var r=data.results||{},v=r.overall||{},n=Number(v.samples||0),hits=Number(v.hits||0);
+ var now=Math.floor(Date.now()/300000)*300000,latest=data.latest||{},rows=Array.isArray(data.recent)?data.recent:[];
+ e('activeFast8Name').textContent=name;
+ e('activeFast8Desc').textContent='8秒内锁定 · 自2026-10-17 11:40起重新累计翻转后正式信号 · 模型训练参数保持不变';
+ e('activeFast8Direction').textContent=latest.round===now?latest.raw:'本轮尚无原始预测';
+ e('activeFast8Accuracy').textContent=n?pct(hits*100/n):'暂无新版官方结算';
+ e('activeFast8HitMiss').textContent=hits+' / '+(n-hits)+'（'+n+'轮）';
+ e('activeFast8Coverage').textContent=Number(r.locked||0)+' 轮锁定 · '+Number(r.dataGaps||0)+' 轮缺口';
+ var src=sources.find(function(x){return x.id==='SELECTIVE_V2_FAST8_PRIMARY'})||null;
+ var settled=rows.filter(function(x){return x.eligible&&(x.actual==='UP'||x.actual==='DOWN')});
+ var allowed=settled.filter(function(x){return directionModeReady&&src?.modes&&src.modes[x.emitted]!=='OFF'});
+ var mappedHits=allowed.filter(function(x){var mode=src.modes[x.emitted];return (mode==='INVERSE'?(x.emitted==='UP'?'DOWN':'UP'):x.emitted)===x.actual;}).length;
+ e('activeFast8InverseAccuracy').textContent=allowed.length?pct(mappedHits*100/allowed.length):'可用样本不足';
+ e('activeFast8InverseHitMiss').textContent=mappedHits+' / '+(allowed.length-mappedHits)+'（最近'+rows.length+'条按当前开关模拟）';
+ function side(k){var x=r[k]||{};return x.samples?x.hits+'/'+x.samples+' · '+pct(100*x.hits/x.samples):'无新版官方结果';}
+ var modes=src&&directionModeReady?'UP：'+modeLabel(src.modes.UP)+' / DOWN：'+modeLabel(src.modes.DOWN):'开关未就绪';
+ e('sourceRateRows').innerHTML='<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+escModel(name)+'</td>'+
+  '<td style="text-align:center">'+escModel(modes)+'</td>'+
+  '<td style="text-align:center">'+(n?hits+'/'+n+' · '+pct(hits*100/n):'暂无新版官方结果')+'</td>'+
+  '<td style="text-align:center">'+side('up')+'</td><td style="text-align:center">'+side('down')+'</td>'+
+  '<td style="text-align:center">'+(allowed.length?mappedHits+'/'+allowed.length+' · '+pct(mappedHits*100/allowed.length):'样本不足')+'</td></tr>';
+ e('activeFast8Note').textContent='2026-10-17 11:40起，独立统计 '+n+
+ ' 轮正式信号官方结算；正反向模拟仅用最近'+rows.length+'条新数据和当前开关，不代表当时实盘成交。旧统计已隐藏。';
+ renderDirectionModes();
+}
 async function renderNovicePrimary(){
  var response=await fetch('/api/shadow-breakout20/novice-mix?ts='+Date.now(),{cache:'no-store'});
  var data=await response.json();
@@ -707,6 +740,14 @@ async function renderNovicePrimary(){
  renderDirectionModes();
 }
 function load(){
+ renderPostflipPrimary().catch(function(err){
+  e('activeFast8Accuracy').textContent='新版统计暂不可用';
+  e('activeFast8HitMiss').textContent='-';e('activeFast8InverseAccuracy').textContent='-';
+  e('activeFast8InverseHitMiss').textContent='-';e('activeFast8Coverage').textContent='-';
+  e('sourceRateRows').innerHTML='<tr><td colspan="6" style="padding:10px">新版统计不可用，不展示旧胜率</td></tr>';
+  e('activeFast8Note').textContent='只显示新统计；'+(err?.message||err);
+ });
+ return;
  if(chosenOrderModel==='NOVICE_MIX_LOW_V1'){
   renderNovicePrimary().catch(function(err){
    if(chosenOrderModel!=='NOVICE_MIX_LOW_V1')return;

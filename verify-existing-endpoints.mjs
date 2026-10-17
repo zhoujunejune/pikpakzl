@@ -93,3 +93,76 @@ for(const [name,url]of [
   }
  }catch(e){console.log('AUDIT '+JSON.stringify({name,error:String(e.message||e).slice(0,160)}))}
 }
+
+
+// Strictly read-only Railway data integrity audit. Does not print credentials, orders or user fields.
+const BASE='https://signal-diagnostic-v3-production.up.railway.app';
+const LEDGER='https://signal-diagnostic-v2-production.up.railway.app';
+const getSafe=async u=>{const r=await fetch(u,{cache:'no-store',signal:AbortSignal.timeout(13000)});
+ const d=await r.json();return {status:r.status,data:d};};
+const auditNow=Date.now();
+try{
+ const [{status:v3Http,data:v3},{status:marketHttp,data:feed},
+        {status:v2Http,data:v2}]=await Promise.all([
+    getSafe(BASE+'/healthz'),getSafe(BASE+'/api/shadow-market-data'),
+    getSafe(LEDGER+'/api/round-stats')]);
+ const ageKey=v3.dataIntegrity||{};
+ const recent=(Array.isArray(v2.records)?v2.records:[]).slice(0,50);
+ const official=recent.filter(x=>['UP','DOWN'].includes(x.productionActual));
+ const sourceRecords=official.filter(x=>x.actualSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION'&&
+  String(x.resolutionEvidence||'').startsWith('OFFICIAL_'));
+ const audits=official.filter(x=>x.officialSettlementAudit?.sourceEndpoint===
+  '/sapi/v1/w3w/wallet/prediction/market/detail'&&
+  /^[a-f0-9]{64}$/.test(String(x.officialSettlementAudit?.detailPayloadSha256||'')));
+ const different=official.filter(x=>x.actual&&x.actual!==x.productionActual);
+ const actualFuture=official.filter(x=>Number(x.roundStartMs)+300000>auditNow+1000);
+ const nowRound=Math.floor(auditNow/300000)*300000;
+ console.log('RAILWAY_AUDIT',JSON.stringify({
+  at:auditNow, v3Http,v3Ok:v3.ok,wsConnected:ageKey.wsConnected??null,
+  messageAgeMs:ageKey.lastMessageAgeMs??null,depthAgeMs:ageKey.lastDepthAgeMs??null,
+  tradeAgeMs:ageKey.lastAggTradeAgeMs??null,realDepth:ageKey.ofiUsesRealDepth??null,
+  simulated:ageKey.simulated??null,marketHttp,marketOk:feed.ok===true,
+  source:feed.source||null,spotSource:feed.latest?.source||null,
+  spotAgeMs:feed.latest?.ageMs??null,spotEventAgeMs:Number.isFinite(Number(feed.latest?.eventMs))?auditNow-Number(feed.latest.eventMs):null,
+  candle1m:feed.candles?.['1m']?.rows?.length??0,
+  candle5m:feed.candles?.['5m']?.rows?.length??0,
+  candleProviders:{m1:feed.candles?.['1m']?.provider||null,
+    m5:feed.candles?.['5m']?.provider||null},
+  feedErrors:feed.integrity?.errors||[],
+  v2Http,v2Ok:v2.ok,settlementSource:v2.settlementSource||null,
+  totalRecentRows:recent.length,officialRows:official.length,
+  taggedOfficialRows:sourceRecords.length,detailShaAuditRows:audits.length,
+  officialActualMismatch:different.length,futureLabeled:actualFuture.length,
+  lastSettlementOkAt:v2.health?.lastSettlementOkAt||null,
+  lastSettlementError:v2.health?.lastSettlementError||null,
+  latest5:recent.slice(0,5).map(x=>({
+    round:x.roundStartMs,actual:x.productionActual||null, prediction:x.productionPrediction||null,
+    result:x.productionResult||null,
+    source:x.actualSource||null,evidence:String(x.resolutionEvidence||'').slice(0,140),
+    topic:x.predictionMarketTopicId||null,
+    auditTopic:x.officialSettlementAudit?.marketTopicId||null,
+    auditTsStart:x.officialSettlementAudit?.topicStartDate||null,
+    auditTsEnd:x.officialSettlementAudit?.topicEndDate||null,
+    auditSha:audits.includes(x),
+    predictionTime:x.productionLockedAt||x.productionLockAt||x.lockedAt||null,
+    settledAt:x.productionSettledAt||x.settledAt||null
+  }))
+ }));
+ const two=audits.filter(x=>x.predictionMarketTopicId&&
+   x.roundStartMs+300000<auditNow).slice(0,2);
+ for(const x of two){
+  try{const {status,data:d}=await getSafe(BASE+'/api/prediction-resolution?round='+x.roundStartMs+
+   '&marketTopicId='+encodeURIComponent(String(x.predictionMarketTopicId)));
+   console.log('INDEPENDENT_RESOLUTION_CHECK',JSON.stringify({
+    round:x.roundStartMs,http:status,resolved:d.resolved===true,
+    direction:d.direction||null,archivedDirection:x.productionActual,
+    matches:d.resolved===true&&d.direction===x.productionActual,
+    matchingTopic:d.marketTopicId==x.predictionMarketTopicId,
+    detailShaPresent:!!d.auditEvidence?.detailPayloadSha256,
+    topicStart:d.auditEvidence?.topicStartDate||null,topicEnd:d.auditEvidence?.topicEndDate||null,
+    error:d.error||null
+   }));
+  }catch(e){console.log('INDEPENDENT_RESOLUTION_CHECK',JSON.stringify({
+   round:x.roundStartMs,error:String(e?.message||e).slice(0,150)}))}
+ }
+}catch(e){console.log('RAILWAY_AUDIT_FAILURE',String(e?.message||e).slice(0,180))}

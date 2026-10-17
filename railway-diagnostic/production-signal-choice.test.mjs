@@ -67,6 +67,10 @@ test('production implementation contains actual source switching, PIN and final 
  assert.match(index,/choice\.model!==NOVICE_MODEL&&choice\.model!==BASE_MODEL/);
  assert.match(index,/RSI_INPUT_VERSION/);
  assert.match(index,/railway_rsi14_readonly/);
+ assert.match(index,/rawDirection:verified.direction,randomFlipApplied:false/);
+ assert.match(index,/signalOutputMode:'RSI14_DIRECT_V1'/);
+ assert.match(index,/signalRandomFlipApplied: signal\\?\\.status==='LOCKED'\\?false:null/);
+ assert.doesNotMatch(index,/applyRandomSignalFlip|shouldFlipSignal/);
  assert.match(index,/if\(signalOverride && choice\.model!==BASE_MODEL\)return/);
  assert.match(index,/startAfterRound=currentRoundMs\(\)/);
  assert.match(index,/signalModelChoice:choice\.model/);

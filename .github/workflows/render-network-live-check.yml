@@ -1,0 +1,23 @@
+name: Check live Render Free Binance egress
+on:
+  push:
+    branches: [cloudflare-free-market-hub-20261017]
+    paths:
+      - .github/workflows/render-network-live-check.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Read-only check of live Render Free probe
+        env:
+          URL: https://zl-binance-network-probe.onrender.com
+        run: |
+          set -e
+          echo "Live Render public health (no secrets, no orders)"
+          curl --silent --show-error --fail --max-time 75 "$URL/healthz" | python3 -c 'import json,sys; d=json.load(sys.stdin); print({k:d.get(k) for k in ["ok","service","mode","orders"]})'
+          echo "Live Render to Binance connectivity statuses"
+          curl --silent --show-error --fail --max-time 75 "$URL/api/network" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({"ok":d.get("ok"),"checkedAt":d.get("at"),"checks":d.get("checks")},ensure_ascii=False))'

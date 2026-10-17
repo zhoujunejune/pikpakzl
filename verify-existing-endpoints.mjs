@@ -201,3 +201,21 @@ try{
    auditedExactRoundTime:exactTime,auditedPredictionBeforeEndAndSettlementAfterEnd:beforeClose
  }));
 }catch(e){console.log('MARKET_PRICE_CROSSCHECK_ERROR',String(e?.message||e).slice(0,180))}
+
+// Investigate rows excluded by conservative timestamp validity gate.
+try{
+ const {data:d}=await getSafe(LEDGER+'/api/round-stats');
+ const missing=(d.records||[]).slice(0,50).filter(x=>{
+  if(!['UP','DOWN'].includes(x.productionActual)||!x.officialSettlementAudit?.detailPayloadSha256)return false;
+  const r=Number(x.roundStartMs),locked=Number(x.productionLockedAt),settled=Number(x.productionSettledAt);
+  return !(Number.isFinite(locked)&&locked>=r&&locked<r+300000&&
+     Number.isFinite(settled)&&settled>=r+300000);
+ }).map(x=>({round:x.roundStartMs,
+   lock:x.productionLockedAt??null,settled:x.productionSettledAt??null,
+   otherLockKeys:Object.keys(x).filter(k=>/lock|signalat|predictionat|settledat/i.test(k)).slice(0,20),
+   firstObserved:x.shadowObservedAt??null,
+   generated:x.productionGeneratedAt??null,
+   source:String(x.productionSource||'').slice(0,65),
+   evidence:String(x.resolutionEvidence||'').slice(0,90)}));
+ console.log('AUDIT_TIMESTAMP_EXCEPTIONS',JSON.stringify({count:missing.length,rows:missing}));
+}catch(e){console.log('AUDIT_TIMESTAMP_EXCEPTIONS_ERROR',String(e?.message||e).slice(0,150))}

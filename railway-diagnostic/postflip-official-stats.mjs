@@ -106,7 +106,7 @@ export function createPostflipStatsService({
  redisUrl=String(process.env.SIGNAL_REDIS_URL||'')
 }={}){
  let cache=null,client=null,started=false,busy=false,storageError='STARTING';
- let lastSyncAt=null,lastNoviceAt=null,lastError=null,lastOfficialAt=null,lastOfficialError=null,timer=null;
+ let lastSyncAt=null,lastNoviceAt=null,lastError=null,lastOfficialAt=null,lastOfficialError=null,timer=null,lastDiagnosticKey=null;
  async function start(){
   if(started)return;
   started=true;
@@ -160,6 +160,18 @@ export function createPostflipStatsService({
     cache.reconcileOfficial(verified);
     lastOfficialAt=clock();lastOfficialError=verified.upstreamError||null;
    }catch(e){lastOfficialError=String(e?.message||e).slice(0,120);}
+   // Low-volume read-only diagnostics: compare locked, matched and still-pending rounds.
+   // No account data or API credentials are included.
+   const summary=cache.view(BASE_MODEL).results;
+   const signature=[summary.rounds,summary.overall.samples,summary.pending,
+     String(lastOfficialError||'')].join(':');
+   if(signature!==lastDiagnosticKey){
+    console.log(JSON.stringify({event:'postflip_official_stats_sync',
+      rounds:summary.rounds,settled:summary.overall.samples,
+      pending:summary.pending,lastOfficialAt,
+      officialError:lastOfficialError,source:'ROUND_TRACKER_VERIFIED_LEDGER'}));
+    lastDiagnosticKey=signature;
+   }
    if(cache.dirty()){
     const resetAt=cache.view(BASE_MODEL).resetAt;
     await client.set(REDIS_KEY,JSON.stringify({version:POSTFLIP_STATS_VERSION,

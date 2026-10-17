@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import {
  BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,MODEL_CHOICE_KEY,ORDER_SIGNAL_MODELS,
  snapshot,selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,
- setModelSelection,invalidate
+ setModelSelection,invalidate,retryableRejectedOrderPost,MAX_ORDER_SUBMIT_ATTEMPTS
 } from './production-signal-choice.mjs';
 
 const ROUND=1792166400000;
@@ -131,4 +131,40 @@ test('dynamic selector honors PIN, next round and unchanged direction mapping',(
  assert.match(panel,/renderDynamicRoundStats/);
  assert.match(panel,/renderDynamicPrimary/);
  assert.match(panel,/saveOrderModelChoice/);
+});
+
+test('order attempts are capped at three real POSTs, never extra blind retries',()=>{
+ assert.equal(MAX_ORDER_SUBMIT_ATTEMPTS,3);
+ const accepted=(reason,status=400)=>({ok:false,status,data:{msg:reason}});
+ for(const reason of ['QUOTE_EXPIRED','INVALID_QUOTE','PRICE_CHANGED','REQUOTE_REQUIRED','SLIPPAGE_EXCEEDED'])
+   assert.equal(retryableRejectedOrderPost(accepted(reason)),true,reason);
+ for(const request of [
+   {ok:true,status:200,data:{}},
+   {ok:false,network:true,status:0,data:{msg:'QUOTE_EXPIRED'}},
+   {ok:false,status:0,data:{msg:'QUOTE_EXPIRED'}},
+   {ok:false,status:500,data:{msg:'QUOTE_EXPIRED'}},
+   {ok:false,status:502,data:{msg:'PRICE_CHANGED'}},
+   {ok:false,status:451,data:{msg:'QUOTE_EXPIRED'}},
+   {ok:false,status:403,data:{msg:'PRICE_CHANGED'}},
+   accepted('Service unavailable from a restricted location'),
+   accepted('INSUFFICIENT_BALANCE'),accepted('UNAUTHORIZED'),
+   accepted('Generic order failure'),accepted('NOT_ENOUGH_FUNDS'),
+   {ok:false,status:429,data:{msg:'QUOTE_EXPIRED'}}
+ ]) assert.equal(retryableRejectedOrderPost(request),false,JSON.stringify(request));
+});
+
+test('retry in actual server always takes a fresh quote and a Redis POST slot',()=>{
+ const read=f=>fs.readFileSync(new URL(f,import.meta.url),'utf8');
+ const backend=read('./index.mjs'),wrapper=read('./wrapper.mjs'),choice=read('./production-signal-choice.mjs');
+ assert.match(backend,/claimOrderSubmitAttempt,closeOrderSubmitRound,retryableRejectedOrderPost/);
+ assert.match(wrapper,/retryableRejectedOrderPost\(call\)/);
+ assert.match(wrapper,/orderPostClaim\.attempt<MAX_ORDER_SUBMIT_ATTEMPTS/);
+ assert.match(wrapper,/const nextQuote=await getFreshQuote\(intent\)/);
+ assert.match(wrapper,/placeBody\.quoteId=quote\.quoteId/);
+ assert.match(wrapper,/currentRetry\.signalId!==p\.signalId/);
+ assert.match(wrapper,/claimOrderSubmitAttempt\(p\.round\)/);
+ assert.match(wrapper,/closeOrderSubmitRound\(p\.round,'UNKNOWN'\)/);
+ assert.match(wrapper,/closeOrderSubmitRound\(p\.round,'SUBMITTED'\)/);
+ assert.match(choice,/CLAIM_POST_SCRIPT/);
+ assert.match(choice,/redis\.call\('INCR',KEYS\[1\]\)/);
 });

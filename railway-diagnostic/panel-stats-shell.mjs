@@ -2,6 +2,7 @@ import http from 'node:http';
 import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { noviceMixShadow } from './novice-mix-shadow.mjs';
 import { dynamicEntryShadow } from './dynamic-entry-shadow.mjs';
+import { edge5mService } from './edge-5m-service.mjs';
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
 
@@ -493,12 +494,13 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
     <option value="BREAKOUT20_RSI_MACD_RANGE_V1">BASELINE · RSI(14)单指标</option>
     <option value="NOVICE_MIX_LOW_V1">NOVICE · RSI(14)单指标</option>
     <option value="DYNAMIC_ENTRY_5M_SHADOW_V1">5分钟动态入场 · 任意时点触发</option>
+    <option value="EDGE_5M_V1">EDGE_5M_V1 · 8秒内概率优势</option>
   </select>
   <button id="orderSignalModelSave" type="button"
     style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
-  <div class="muted" style="margin-top:7px">BASELINE/NOVICE 仍为8秒内 RSI(14)信号；5分钟动态模型仅在有效行情出现冻结入场后发出真实下单候选，本轮任意时间可触发，信号过期或未触发则不下单。全部沿用原有 UP/DOWN 正向/反向开关，无随机翻转；75%只是研究目标，不代表已经验证。</div>
+  <div class="muted" style="margin-top:7px">BASELINE/NOVICE及5分钟动态规则保持不变。新增 EDGE_5M_V1 前8秒观察方向，只有独立官方样本达到5000轮且概率校准通过、买入价和Edge均达标才允许提交订单；数据不足或行情异常只显示观察、不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
 </div>
 <div id="liveOrderFlowCard" role="region" aria-label="本轮交易进度" style="border:1px solid #4e6079;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
  <div style="font-size:16px;font-weight:800">本轮交易进度 · 不等于模型胜率</div>
@@ -545,7 +547,8 @@ var chosenOrderModel='BREAKOUT20_RSI_MACD_RANGE_V1';
 var hasLiveOrderModelSelection=false;
 var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false;
 function chosenModelName(model){
- return model==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'5分钟动态入场 DYNAMIC_ENTRY_5M_SHADOW_V1':
+ return model==='EDGE_5M_V1'?'EDGE_5M_V1 · 8秒概率优势':
+ model==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'5分钟动态入场 DYNAMIC_ENTRY_5M_SHADOW_V1':
  model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
 }
 async function loadOrderModelChoice(){
@@ -575,7 +578,8 @@ async function loadOrderModelChoice(){
 async function loadOrderModelStats(){
  if(!e('orderSignalModelStats'))return;
  try{
-  var endpoint=chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'/api/shadow-breakout20/dynamic-entry':
+  var endpoint=chosenOrderModel==='EDGE_5M_V1'?'/api/shadow-breakout20/edge-5m':
+ chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'/api/shadow-breakout20/dynamic-entry':
  chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':'/api/shadow-breakout20/status';
   var response=await fetch(endpoint+'?ts='+Date.now(),{cache:'no-store'});
   var data=await response.json();
@@ -585,7 +589,8 @@ async function loadOrderModelStats(){
    (v.samples?(Number(v.accuracy)*100).toFixed(2)+'% ('+v.hits+'/'+v.samples+')':'暂无已结算')+
    ' · UP '+(r.up&&r.up.samples?(Number(r.up.accuracy)*100).toFixed(2)+'%':'暂无')+
    ' · DOWN '+(r.down&&r.down.samples?(Number(r.down.accuracy)*100).toFixed(2)+'%':'暂无')+
-   ' · '+(chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'模拟入场 '+Number(r.entryRounds||0):
+   ' · '+(chosenOrderModel==='EDGE_5M_V1'?'训练 '+Number(data.training?.samples||0)+'/5000 · '+(data.training?.ready?'已校准':'尚未校准 · 不发实盘订单'):
+ chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'模拟入场 '+Number(r.entryRounds||0):
  '锁定 '+Number(r.locked||0))+' 轮';
  }catch(err){e('orderSignalModelStats').textContent='所选模型胜率读取失败（不改变下单选择）';}
 }
@@ -594,7 +599,7 @@ async function saveOrderModelChoice(){
  var select=e('orderSignalModelSelect'),pin=e('pin');
  if(!select||!pin||!pin.value){e('orderSignalModelState').textContent='请先在页面上方填写控制 PIN';return}
  var next=select.value;
- if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1','DYNAMIC_ENTRY_5M_SHADOW_V1'].includes(next))return;
+ if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1','DYNAMIC_ENTRY_5M_SHADOW_V1','EDGE_5M_V1'].includes(next))return;
  if(next===chosenOrderModel){choiceDirty=false;e('orderSignalModelState').textContent='当前已是所选模型，无需切换';return}
  if(!window.confirm('确认从下一轮开始，用 '+chosenModelName(next)+' 作为真实下单信号？这会改变实际订单方向，当前轮次不切换。'))return;
  choiceBusy=true;
@@ -1307,6 +1312,7 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/dynamic-entry') return dynamicEntryShadow.handler(res);
+  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/edge-5m') return edge5mService.handler(res);
   if (req.method === 'GET' && url.pathname === '/api/postflip-official-stats') {
     const model=url.searchParams.get('model');
     if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(model)){
@@ -1323,6 +1329,7 @@ http.createServer((req, res) => {
   return proxyInner(req, res, false);
 }).listen(PORT, '0.0.0.0', () => {
   void dynamicEntryShadow.start().catch(error => log('dynamic_entry_shadow_start_error', { error: String(error?.message||error) }));
+  void edge5mService.start().catch(error => log('edge5m_start_error', {error:String(error?.message||error)}));
   void noviceMixShadow.start()
     .catch(error => log('novice_shadow_start_error', { error: String(error?.message||error) }))
     .finally(()=>{void postflipStats.start().catch(error=>

@@ -1,0 +1,45 @@
+name: Deploy independent EDGE_5M_V1 to Cloudflare Free
+on:
+  push:
+    branches: [cloudflare-edge5m-20261017]
+    paths:
+      - src/edge-core.mjs
+      - src/edge-core.test.mjs
+      - src/edge-worker.mjs
+      - wrangler.toml
+      - verify-edge5m.mjs
+      - .github/workflows/cloudflare-edge5m.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-edge5m-v1-isolated
+  cancel-in-progress: false
+jobs:
+  deploy-edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: 3ba148af3f98117d6b299158e20bf687
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Assert Worker identity is isolated and no paid features
+        run: |
+          grep -q '^name = "edge-5m-v1"$' wrangler.toml
+          grep -q 'new_sqlite_classes = \["Edge5"\]' wrangler.toml
+          ! grep -E 'breakout20-shadow|zl-fast8-adaptive-shadow|place-order-bundle|signedPost' src/edge-worker.mjs
+      - name: Test causal features and official-only calibration
+        run: |
+          node --check src/edge-worker.mjs
+          node --check src/edge-core.mjs
+          node --test src/edge-core.test.mjs
+      - name: Deploy only edge-5m-v1
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing CLOUDFLARE_API_TOKEN repository secret'; exit 1; }
+          npx --yes wrangler@4 deploy 2>&1 | tee /tmp/edge5m-deploy.log
+      - name: Verify isolated status and real feed
+        run: node verify-edge5m.mjs

@@ -31,6 +31,18 @@ test('any in-round second including T+1 is eligible for evaluating fresh prices'
   assert.equal(typeof d.eligible,'boolean');
  }
 });
+test('moderate aligned shadow direction enters while genuinely weak evidence stays unentered',()=>{
+ const aligned={values:[0.10,0.13,0.15,0.17,0],elapsedMs:62000};
+ const ready=decide(aligned);
+ assert.equal(ready.direction,'UP');
+ assert.equal(ready.eligible,true);
+ assert.equal(ready.entryReason,'SIGNAL_READY');
+ assert.equal(ready.modelVersion,'HEURISTIC_V2_ADAPTIVE_GATE');
+ const weak=decide({values:[0.005,0.005,0.005,0.005,0],elapsedMs:85000});
+ assert.equal(weak.eligible,false);
+ assert.equal(weak.entryReason,'LOW_SIGNAL_STRENGTH');
+});
+
 test('does not invent trade entries from stale or unauthenticated market data',()=>{
  const at=ROUND+11000;
  assert.equal(extractFeatures({...market(at),readOnly:false},at),null);

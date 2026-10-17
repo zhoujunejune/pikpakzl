@@ -27,7 +27,25 @@ export function createDynamicEntryShadow({
   storage:'MEMORY_ONLY',persisted:false
  };
  let client=null,timer=null,running=false,officialBusy=false,marketBusy=false;
- let lastOfficialPoll=0,starting=null;
+ let lastOfficialPoll=0,starting=null,lastDiagnosticAt=0;
+ function reportHealth(now){
+  if(now-lastDiagnosticAt<60000)return;
+  lastDiagnosticAt=now;
+  const recent=state.rows.slice(-24);
+  console.log(JSON.stringify({
+   event:'dynamic_entry_shadow_health',model:MODEL,at:now,
+   observedRecentRounds:recent.length,
+   probedRecentRounds:recent.filter(r=>r.probe).length,
+   enteredRecentRounds:recent.filter(r=>r.entry).length,
+   currentDirection:state.latestDecision?.direction||null,
+   currentStrength:state.latestDecision?.strength??null,
+   currentEligibility:state.latestDecision?.eligible??null,
+   currentEntryReason:state.latestDecision?.entryReason||null,
+   marketError:state.marketError,officialError:state.officialError,
+   lastGoodMarketAt:state.lastGoodMarketAt,lastOfficialAt:state.lastOfficialAt,
+   trainingSamples:state.training.samples,storage:state.storage
+  }));
+ }
  const save=async()=>{
   if(!client)return;
   try{
@@ -159,7 +177,7 @@ export function createDynamicEntryShadow({
     void resolveOfficial().catch(()=>{});
    }
    await scan();
-  }finally{running=false;}
+  }finally{running=false;reportHealth(clock());}
  }
  function snapshot(){
   const stats=aggregate(state.rows);

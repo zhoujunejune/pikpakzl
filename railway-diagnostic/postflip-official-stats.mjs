@@ -72,7 +72,7 @@ export function createPostflipAccumulator(initial=[]){
 }
 export function createPostflipStatsService({
  fetcher=globalThis.fetch,clock=Date.now,
- officialUrl=String(process.env.ROUND_STATS_ORIGIN||'https://signal-diagnostic-v2-production.up.railway.app').replace(/\\/+$/,'')+'/api/breakout20-official-accuracy',
+ officialUrl=String(process.env.ROUND_STATS_ORIGIN||'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/,'')+'/api/breakout20-official-accuracy',
  noviceRows=()=>[],
  redisUrl=String(process.env.SIGNAL_REDIS_URL||'')
 }={}){

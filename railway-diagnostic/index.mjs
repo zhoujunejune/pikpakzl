@@ -330,7 +330,7 @@ async function getSignal({ forceHttp = false } = {}) {
   if(choice.model===EDGE_MODEL){
     try{
       const response=await fetch(EDGE_LOCAL_URL,{cache:'no-store',
-        signal:AbortSignal.timeout(1100),headers:{accept:'application/json'}});
+        signal:AbortSignal.timeout(2400),headers:{accept:'application/json'}});
       if(!response.ok)return null;
       const verified=validateEdgeSignal(await response.json());
       if(!verified.ok)return null;

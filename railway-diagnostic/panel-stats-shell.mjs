@@ -500,10 +500,22 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
   <div class="muted" style="margin-top:7px">BASELINE/NOVICE 仍为8秒内 RSI(14)信号；5分钟动态模型仅在有效行情出现冻结入场后发出真实下单候选，本轮任意时间可触发，信号过期或未触发则不下单。全部沿用原有 UP/DOWN 正向/反向开关，无随机翻转；75%只是研究目标，不代表已经验证。</div>
 </div>
+<div id="liveOrderFlowCard" role="region" aria-label="本轮交易进度" style="border:1px solid #4e6079;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
+ <div style="font-size:16px;font-weight:800">本轮交易进度 · 不等于模型胜率</div>
+ <div class="muted" id="flowRound">正在读取轮次...</div>
+ <div id="flowOverall" role="status" aria-live="polite" style="font-size:17px;font-weight:800;margin:10px 0">核对交易状态中...</div>
+ <div class="muted" style="margin-bottom:9px">UP/DOWN 是方向，不是成交证明。只有币安确认 FILLED 才算已成交。</div>
+ <div class="trade-flow-step"><div class="k">① 模型方向（仅预测）</div><div class="v" id="flowPrediction">读取中...</div></div>
+ <div class="trade-flow-step"><div class="k">② 有效信号锁定</div><div class="v" id="flowLocked">读取中...</div></div>
+ <div class="trade-flow-step"><div class="k">③ 订单准备</div><div class="v" id="flowPrepared">读取中...</div></div>
+ <div class="trade-flow-step"><div class="k">④ 向币安提交</div><div class="v" id="flowSubmitted">读取中...</div></div>
+ <div class="trade-flow-step"><div class="k">⑤ 币安确认成交</div><div class="v" id="flowFilled">读取中...</div></div>
+ <div style="padding:10px;margin-top:9px;border:1px solid #333e50;border-radius:9px"><div class="k">最近真实订单（明确区分历史轮次）</div><div class="muted" id="flowLastOrder">读取中...</div></div>
+</div>
 <div class="grid" style="margin-top:12px">
-<div class="kv"><div class="k">模型原始预测</div><div class="v" id="activeFast8Direction">读取中</div></div>
-<div class="kv"><div class="k">正式输出信号（RSI直接输出）</div><div class="v" id="activeFast8EmittedDirection">读取中</div></div>
-<div class="kv"><div class="k">下单信号（当前正向 / 反向）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
+<div class="kv"><div class="k">模型方向参考（不代表已下单）</div><div class="v" id="activeFast8Direction">读取中</div></div>
+<div class="kv"><div class="k">本轮有效锁定信号</div><div class="v" id="activeFast8EmittedDirection">读取中</div></div>
+<div class="kv"><div class="k">映射后下单方向（非成交证明）</div><div class="v" id="activeFast8OrderDirection">读取中</div></div>
 <div class="kv"><div class="k">本模型新版正式信号官方命中率</div><div class="v" id="activeFast8Accuracy">-</div></div>
 <div class="kv"><div class="k">新版正式信号按当前开关推算命中率</div><div class="v" id="activeFast8InverseAccuracy">-</div></div>
 <div class="kv"><div class="k">开启方向理论命中 / 未中</div><div class="v" id="activeFast8InverseHitMiss">-</div></div>
@@ -956,25 +968,123 @@ if(chosenOrderModel==='NOVICE_MIX_LOW_V1'){
    (j.stale?' · 统计缓存可能过期':'');
  }).catch(function(err){e('activeFast8Direction').textContent='状态未确认';e('activeFast8Note').textContent=err&&err.message?err.message:String(err)})
 }
-function updateOrderSignal(){
- fetch('/api/status?ts='+Date.now(),{cache:'no-store'})
- .then(function(r){if(!r.ok)throw Error('交易控制状态 HTTP '+r.status);return r.json()})
- .then(function(j){
-  var target=e('activeFast8OrderDirection');if(!target)return;
-  var expected=Math.floor(Date.now()/300000)*300000,live=j.signal||{};
-  var locked=live.status==='LOCKED'&&Number(live.round)===expected;
-  var emitted=e('activeFast8EmittedDirection');
-  if(emitted)emitted.textContent=locked?
-    live.direction+'（RSI直接输出，无随机翻转）':'本轮未锁定';
-  var ready=directionModeReady&&j.directionModeReady&&locked&&j.orderDirectionPolicy===policy;
-  // Model-raw stats remain independent; this poll owns emitted and order side.
-  if(!ready){target.textContent='未锁定或配置未就绪';return}
-  var mode=j.orderMappingMode,src=sources.find(function(s){return s.id===j.orderProductionSource});
-  if(j.orderSignal===null){target.textContent='不下单（'+(mode==='OFF'?'该方向已关闭':'不可执行')+'）';return}
-  var expectedSide=mode==='INVERSE'?(live.direction==='UP'?'DOWN':'UP'):mode==='FORWARD'?live.direction:null;
-  target.textContent=j.orderSignal===expectedSide?
-    (j.orderSignal+'（'+modeLabel(mode)+' · '+chosenModelName(chosenOrderModel)+'）'):'方向映射校验失败';
- }).catch(function(){var target=e('activeFast8OrderDirection');if(target)target.textContent='下单方向状态不可用'})
+// UI-only lifecycle: never infer a Binance trade from an UP/DOWN prediction.
+var orderFlowPollBusy=false;
+async function updateOrderSignal(){
+ if(orderFlowPollBusy)return;
+ orderFlowPollBusy=true;
+ function put(id,value){var node=e(id);if(node)node.textContent=value;}
+ try{
+  var r=await fetch('/api/status?ts='+Date.now(),{cache:'no-store'});
+  if(!r.ok)throw Error('交易控制接口 HTTP '+r.status);
+  var j=await r.json();
+  if(j.ok!==true)throw Error('交易控制状态未就绪');
+  var now=Date.now(),round=Math.floor(now/300000)*300000;
+  var model=j.orderSignalModel||chosenOrderModel,dynamicMode=model==='DYNAMIC_ENTRY_5M_SHADOW_V1';
+  var signal=j.signal||{},locked=signal.status==='LOCKED'&&Number(signal.round)===round&&
+    ['UP','DOWN'].includes(signal.direction);
+  var modelReady=j.orderSignalModelReady!==false;
+  var modelEffective=modelReady&&(j.orderSignalModelEffectiveAfterRound==null||
+    round>Number(j.orderSignalModelEffectiveAfterRound));
+  var settingsReady=directionModeReady&&j.directionModeReady&&j.orderDirectionPolicy===policy;
+  var dynamic=null;
+  if(dynamicMode){
+   try{
+    var d=await fetch('/api/shadow-breakout20/dynamic-entry?ts='+Date.now(),{cache:'no-store'});
+    if(d.ok){var body=await d.json();if(body.ok===true&&body.model===model)dynamic=body;}
+   }catch(_){}
+  }
+  var entry=dynamicMode&&dynamic?.latest?.round===round?dynamic.latest.entry:null;
+  var preview=dynamicMode?(dynamic?.currentDecision?.round===round?
+    dynamic.currentDecision.direction:entry?.direction):signal.rawDirection??signal.direction;
+  var currentPending=j.pendingAction&&Number(j.pendingAction.round)===round?j.pendingAction:null;
+  var last=j.lastOrder||null,currentOrder=last&&Number(last.round)===round?last:null;
+  var hasOrder=!!currentOrder?.orderId;
+  var filled=hasOrder&&currentOrder.state==='CONFIRMED_FILLED';
+  var failed=currentOrder?.state==='CONFIRMED_FAILED';
+  var ready=currentPending?.state==='READY';
+  var roundTime=new Date(round).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Shanghai'});
+  put('flowRound','北京时间 '+roundTime+' 开始的5分钟轮次 · '+chosenModelName(model));
+  put('flowPrediction',['UP','DOWN'].includes(preview)?preview+' · 仅方向，不代表已下单':'尚无可用方向参考');
+  var lockMessage=locked?signal.direction+' · 有效实盘信号已锁定':
+   !modelReady?'实盘模型配置未就绪':
+   !modelEffective?'模型下一轮才生效，本轮不允许新模型下单':
+   entry?(now-Number(entry.at)>45000||now>=round+285000?
+     '动态入场曾冻结，但已过45秒有效期或临近收盘':
+     '动态入场有冻结候选，但未通过实盘有效性校验'):
+   dynamicMode&&dynamic?.health?.marketError?'动态行情异常：'+String(dynamic.health.marketError):
+   dynamicMode?'等待动态入场触发（方向不是锁定信号）':
+   '等待本轮8秒有效锁定';
+  put('flowLocked',lockMessage);
+  put('activeFast8EmittedDirection',locked?
+   signal.direction+'（'+(dynamicMode?'5分钟动态冻结':'RSI 8秒锁定')+'）':lockMessage);
+  if(dynamicMode&&dynamic)put('activeFast8Direction',
+    ['UP','DOWN'].includes(preview)?preview+' · 动态模型方向参考':'尚无当前轮次方向');
+  var side=e('activeFast8OrderDirection'),mode=j.orderMappingMode;
+  if(side){
+   if(!modelReady)side.textContent='下单模型配置未就绪 · 不下单';
+   else if(!modelEffective)side.textContent='模型下轮才生效 · 本轮不下单';
+   else if(!locked)side.textContent='未产生有效锁定 · 不下单';
+   else if(!settingsReady)side.textContent='方向开关未就绪或版本不同步 · 不下单';
+   else if(j.orderSignal===null)side.textContent='该方向已关闭或不可执行 · 不下单';
+   else {
+    var mapped=mode==='INVERSE'?(signal.direction==='UP'?'DOWN':'UP'):
+       mode==='FORWARD'?signal.direction:null;
+    side.textContent=j.orderSignal===mapped?
+      j.orderSignal+'（'+modeLabel(mode)+'，仅计划下单方向）':'方向映射校验失败 · 不下单';
+   }
+  }
+  put('flowPrepared',hasOrder?'已完成准备并进入提交流程':
+   ready?'订单准备完成，但尚未提交币安':
+   currentPending?.state==='PREPARE_ERROR'?'订单准备失败：'+String(currentPending.error||'市场/余额校验失败'):
+   currentPending?.state==='QUOTING'?'正在获取报价，未确认提交':
+   currentPending?.state==='SUBMITTING'?'正在提交订单，尚未收到确认':
+   !j.enabled?'跟随未开启 · 不会自动准备订单':
+   !modelEffective?'本轮模型未生效，不准备订单':
+   !locked?'等待有效锁定后准备订单':
+   !settingsReady||j.orderSignal===null?'方向配置未就绪或已关闭，不准备订单':
+   '本轮已锁定 · 等待订单准备结果');
+  put('flowSubmitted',hasOrder?'已向币安提交 · 订单号 '+String(currentOrder.orderId):
+   currentOrder?.state==='SUBMISSION_UNKNOWN'?'提交结果不明确 · 需核对，不能当作失败重试':
+   currentPending?.state==='SUBMITTING'?'正在提交 · 尚未确认成功':
+   currentPending?.state==='QUOTING'?'报价中，尚未提交':'本轮尚未提交币安');
+  put('flowFilled',filled?'已成交 · Binance FILLED（已核验）':
+   failed?'币安确认下单失败 · 未成交':
+   currentOrder?.state==='RECONCILIATION_REQUIRED'?'订单状态冲突 · 暂不能确认成交':
+   hasOrder?'已提交，但币安尚未确认成交':'本轮没有已确认成交订单');
+  if(!last)put('flowLastOrder','暂无真实订单记录');
+  else{
+   var prevRound=Number(last.round);
+   var orderWhen=Number.isSafeInteger(prevRound)&&prevRound>0?
+    new Date(prevRound).toLocaleString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'}):'未知轮次';
+   var lastState=last.state==='CONFIRMED_FILLED'?'币安确认已成交':
+    last.state==='CONFIRMED_FAILED'?'币安确认失败':
+    last.state==='RECONCILIATION_REQUIRED'?'状态冲突需核查':
+    last.state==='SUBMISSION_UNKNOWN'?'提交结果不明':'等待币安确认成交';
+   put('flowLastOrder',orderWhen+' · '+(prevRound===round?'本轮':'历史订单，不是本轮')+
+     ' · '+lastState+(last.orderId?' · 订单号 '+String(last.orderId):''));
+  }
+  var summary=filled?'本轮已成交 · 币安确认 FILLED':
+   failed?'本轮订单失败 · 未成交':
+   hasOrder?'本轮已提交币安 · 尚待成交确认':
+   currentPending?.state==='SUBMITTING'?'本轮订单提交中 · 未确认成交':
+   ready?'订单已准备 · 尚未提交币安':
+   !modelReady?'模型配置未就绪 · 本轮不下单':
+   !modelEffective?'模型下一轮生效 · 本轮不按新模型下单':
+   !j.enabled?'跟随未开启 · 有 UP/DOWN 也不会自动下单':
+   !locked?'尚无有效锁定 · 有 UP/DOWN 不代表已下单':
+   !settingsReady?'方向开关未就绪 · 本轮尚未下单':
+   j.orderSignal===null?'当前方向已关闭 · 本轮不下单':
+   '已锁定下单方向 · 尚未提交币安';
+  put('flowOverall',summary);
+  var node=e('flowOverall');
+  if(node&&node.style)node.style.color=filled?'#7ff0b0':failed?'#ff9999':'#f0b90b';
+ }catch(_){
+  put('activeFast8OrderDirection','交易状态读取失败 · 无法确认是否下单');
+  put('flowOverall','交易状态读取失败 · 不能视为已经成交');
+  for(var id of ['flowPrediction','flowLocked','flowPrepared','flowSubmitted','flowFilled'])
+   put(id,'状态不可用 · 请检查后台');
+ }finally{orderFlowPollBusy=false;}
 }
 function boot(){bindOrderModelChoice();loadOrderModelChoice();renderDirectionModes();loadDirectionModes();load();updateOrderSignal();
  setInterval(load,3000);setInterval(updateOrderSignal,2000);setInterval(loadDirectionModes,5000);
@@ -991,6 +1101,9 @@ const layoutStabilityStyle = `<style id="dashboard-layout-stability">
 .w .grid>.kv{box-sizing:border-box}
 #activeFast8ModelCard select{max-width:100%;min-width:0;box-sizing:border-box}
 #activeFast8Direction,#activeFast8EmittedDirection,#activeFast8OrderDirection{min-height:3.5em;line-height:1.4}
+#liveOrderFlowCard .trade-flow-step{padding:9px 0;border-top:1px solid #303a4b;overflow-wrap:anywhere}
+#liveOrderFlowCard .trade-flow-step .v{font-size:14px;line-height:1.5;font-weight:650}
+#liveOrderFlowCard #flowOverall{line-height:1.4;overflow-wrap:anywhere}
 @media(max-width:540px){.w>.c{padding:14px}.w .kv{padding:10px}}
 </style>`;
 

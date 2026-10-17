@@ -15,7 +15,8 @@ const good=(at=ROUND+6500)=>({
    lockedAt:ROUND+5190,marketSnapshotAt:ROUND+5150,score:-.42}
 });
 test('strict closed model whitelist and read-only shadow trust boundary',()=>{
- assert.deepEqual(ORDER_SIGNAL_MODELS.map(x=>x.id),[BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL]);
+ assert.deepEqual(ORDER_SIGNAL_MODELS.map(x=>x.id),[BASE_MODEL,EDGE_MODEL]);
+ assert.ok(!ORDER_SIGNAL_MODELS.some(x=>x.id===NOVICE_MODEL||x.id===DYNAMIC_MODEL));
  assert.equal(MODEL_CHOICE_KEY,'trade-control:order-signal-choice:v1');
  assert.equal(validateNoviceSignal(good(),ROUND+6500).ok,true);
  for(const changed of [
@@ -126,8 +127,10 @@ test('dynamic selector honors PIN, next round and unchanged direction mapping',(
  assert.match(backend,/if\(choice\.model===DYNAMIC_MODEL&&signal\.upstreamModel!==DYNAMIC_MODEL\)return/);
  assert.match(wrapper,/DYNAMIC_ORDER_DEADLINE_MS = 285000/);
  assert.match(wrapper,/current\.signalId!==p\.signalId/);
- assert.match(panel,/<option value="DYNAMIC_ENTRY_5M_SHADOW_V1">/);
- assert.match(panel,/DYNAMIC_ENTRY_5M_SHADOW_V1.*dynamic-entry/);
+ assert.doesNotMatch(panel,/<option value="DYNAMIC_ENTRY_5M_SHADOW_V1">/);
+ assert.doesNotMatch(panel,/<option value="NOVICE_MIX_LOW_V1">/);
+ assert.doesNotMatch(panel,/dynamicEntryShadow\.start\(\)/);
+ assert.match(panel,/<option value="EDGE_5M_V1">/);
  assert.match(panel,/renderDynamicRoundStats/);
  assert.match(panel,/renderDynamicPrimary/);
  assert.match(panel,/saveOrderModelChoice/);

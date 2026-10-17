@@ -7,7 +7,6 @@ import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,h
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
 import {BASE_MODEL,NOVICE_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
   selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,RSI_INPUT_VERSION} from './production-signal-choice.mjs';
-import {applyRandomSignalFlip} from './signal-random-flip.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const SITE_ORIGIN = (process.env.SITE_ORIGIN || '').replace(/\/+$/, '');
@@ -245,40 +244,10 @@ function normalizePushedSignal(envelope, transport) {
   };
 }
 
-function handlePushedSignal(envelope, transport) {
-  // Cloudflare may still publish its historical mixed-feature model. NEVER
-  // allow that direction into the RSI-only trade/output selector.
+function handlePushedSignal(_envelope, _transport) {
+  // Legacy multi-indicator pubsub/WS is not an RSI(14) signal source.
+  // It must never replace or modify direct RSI output, regardless of user model.
   return false;
-  const rawSignal = normalizePushedSignal(envelope, transport);
-  if (!rawSignal) return false;
-  // Pushes from the old source must not race the user-selected novice stream.
-  const choice=modelSelectionSnapshot();
-  if(choice.model!==BASE_MODEL||!selectionPermitsRound(rawSignal.round,choice))return false;
-  // Output layer ONLY: freeze a reproducible random decision before downstream
-  // forward/inverse mapping. HTTP retries cannot change the output direction.
-  const signal=applyRandomSignalFlip(rawSignal,choice.model);
-  pushedSignal = signal;
-  signalTransport.lastTransport = transport;
-  signalTransport.lastSignalId = signal.signalId;
-  signalTransport.lastEventAt = Date.now();
-  signalTransport.lastError = null;
-
-  const duplicate = lastPushedSignalId === signal.signalId;
-  lastPushedSignalId = signal.signalId;
-  console.log(JSON.stringify({
-    event: duplicate ? 'locked_signal_push_duplicate' : 'locked_signal_push_received',
-    transport,
-    signalId: signal.signalId,
-    round: signal.round,
-    direction: signal.direction,
-    rawDirection: signal.rawDirection,
-    randomFlipApplied: signal.randomFlipApplied,
-    upstreamModel: signal.upstreamModel,
-    eventLatencyMs: Number.isFinite(Number(signal.lockedAt)) ? Math.max(0, Date.now() - Number(signal.lockedAt)) : null,
-  }));
-
-  if (!duplicate) void prepareWorker(signal, transport);
-  return true;
 }
 
 async function startSignalRedisSubscriber() {
@@ -362,20 +331,21 @@ async function getSignal({ forceHttp = false } = {}) {
     const body=await r.json();
     const verified=validateNoviceSignal(body);
     if(!verified.ok||verified.inputVersion!==RSI_INPUT_VERSION)return null;
-    // The selector uses ONLY the RSI(14) value calculated from pre-lock 1m
-    // candles. Both selectable model labels read the same indicator; they
-    // retain independent round-by-round 50% flip outcomes and stats ledgers.
-    return applyRandomSignalFlip({
+    // Pass the RSI(14) direction through verbatim. No probabilistic / random
+    // transformation; per-side FORWARD/INVERSE is applied ONLY downstream.
+    return {
       round:verified.round,status:'LOCKED',direction:verified.direction,
+      rawDirection:verified.direction,randomFlipApplied:false,
+      randomFlipProbability:0,randomFlipVersion:null,
+      signalOutputMode:'RSI14_DIRECT_V1',
       rsi:verified.rsi,inputVersion:RSI_INPUT_VERSION,
       score:verified.score,confidence:null,modelProbability:null,
       model:SIGNAL_MODEL_NAME,upstreamModel:choice.model,
       source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:verified.lockedAt,
       lockedAt:verified.lockedAt,frozen:true,executionEligible:true,
       qualityGate:'RSI14_ONLY_NO_VALIDATED_EDGE',
-      signalId:SIGNAL_MODEL_NAME+':'+round+':'+choice.model+':'+RSI_INPUT_VERSION,
-      transport:'railway_rsi14_readonly'},
-      choice.model);
+      signalId:SIGNAL_MODEL_NAME+':'+round+':'+choice.model+':'+RSI_INPUT_VERSION+':DIRECT',
+      transport:'railway_rsi14_readonly'};
   }catch{return null;}
 
 }
@@ -961,7 +931,8 @@ http.createServer(async (req, res) => {
       signal:displaySignal,
       productionSignal: signal?.status==='LOCKED'?signal.direction:null,
       modelOriginalSignal: signal?.status==='LOCKED'?signal.rawDirection??null:null,
-      signalRandomFlipApplied: signal?.status==='LOCKED'?signal.randomFlipApplied??false:null,
+      signalRandomFlipApplied: signal?.status==='LOCKED'?false:null,
+      signalOutputMode: signal?.status==='LOCKED'?'RSI14_DIRECT_V1':null,
       orderSignal: displayOnly?null:mapping.orderSignal,
       orderMappingMode: mapping.mappingMode,
       orderProductionSource: mapping.productionSource,

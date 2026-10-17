@@ -88,7 +88,7 @@ test('the UI renders only observational data and independent forward accuracy',a
       requested.push(String(url));
       if(String(url).includes('/api/postflip-official-stats')){
         return {ok:true,json:async()=>({
-          ok:true,model:'BREAKOUT20_RSI_MACD_RANGE_V1',statsScope:'POSTFLIP_EMITTED_SIGNAL_ONLY',
+          ok:true,model:'BREAKOUT20_RSI_MACD_RANGE_V1',statsScope:'RSI14_DIRECT_OFFICIAL_ONLY',
           resetAt:1792218000000,source:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
           results:officialResult.results,
           latest:{round:Date.now()-300000,raw:'DOWN',emitted:'UP',direction:'UP',actual:null,lockedAt:Date.now()-293000},

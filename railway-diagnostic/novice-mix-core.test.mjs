@@ -1,50 +1,51 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MODEL,BASE_WEIGHTS,predictMarket,weighted,summarize,fitExperimentalWeights} from './novice-mix-core.mjs';
+import {MODEL,INPUT_VERSION,BASE_WEIGHTS,FACTORS,predictMarket,weighted,summarize,fitExperimentalWeights} from './novice-mix-core.mjs';
 
 const ROUND=1792166400000;
-function market(at=ROUND+6200){
-  const one=Array.from({length:80},(_,i)=>{
-    const startMs=ROUND-(79-i)*60000,open=60000+i*4,close=open+2;
-    return {startMs,endMs:startMs+59999,open,close,high:close+8,low:open-8,volume:100+i};
-  });
-  const five=Array.from({length:40},(_,i)=>{
-    const startMs=ROUND-(40-i)*300000,open=60000+i*15,close=open+5;
-    return {startMs,endMs:startMs+299999,open,close,high:close+10,low:open-10,volume:1000+i};
-  });
-  return {ok:true,readOnly:true,generatedAtMs:at-100,source:'READONLY_TEST',
-    latest:{lastPrice:one.at(-1).close,eventMs:at-100},
-    candles:{'1m':{rows:one},'5m':{rows:five}}};
+function snapshot(at=ROUND+6200,step=2){
+ const one=Array.from({length:60},(_,i)=>{const startMs=ROUND-(59-i)*60000;
+  const close=60000+i*step;
+  return {startMs,open:close-step,close,high:close+10,low:close-10,volume:i+500};
+ });
+ return {ok:true,readOnly:true,generatedAtMs:at-100,source:'RSI_TEST',
+  latest:{lastPrice:one.at(-1).close,eventMs:at-100},
+  candles:{'1m':{rows:one},'5m':null}};
 }
-test('8-second independent prediction uses only pre-lock price features',()=>{
-  const at=ROUND+6200;
-  const m=market(at);
-  const one=predictMarket(m,[{direction:'DOWN'}],BASE_WEIGHTS,at);
-  assert.equal(one.model,MODEL);
-  assert.ok(['UP','DOWN'].includes(one.direction));
-  assert.ok(['LOCKED','PARTIAL_INPUT'].includes(one.status));
-  assert.ok(one.lockedAt<ROUND+8000);
-  assert.equal(one.factors.previous,-1);
-  const before=one.score;
-  m.candles['1m'].rows.push({startMs:ROUND+60000,open:60000,close:1,high:60000,low:1,volume:1});
-  assert.equal(predictMarket(m,[{direction:'DOWN'}],BASE_WEIGHTS,at).score,before);
+test('RSI(14) alone determines direction: no MACD, price, range, volume or previous-direction feature',()=>{
+ assert.deepEqual(FACTORS,['rsi']);
+ assert.deepEqual(BASE_WEIGHTS,[1]);
+ const at=ROUND+6200,s=snapshot(at);
+ const first=predictMarket(s,[{direction:'DOWN',factors:{technical:-100}}],BASE_WEIGHTS,at);
+ assert.equal(first.model,MODEL);assert.equal(first.inputVersion,INPUT_VERSION);
+ assert.equal(first.status,'LOCKED');assert.equal(first.direction,'UP');
+ assert.equal(first.rsi,100);
+ assert.deepEqual(Object.keys(first.factors),['rsi']);
+ assert.equal(first.score,1);
+ const reversed=predictMarket(snapshot(at,-2),[{direction:'UP'}],BASE_WEIGHTS,at);
+ assert.equal(reversed.direction,'DOWN');assert.equal(reversed.rsi,0);
+ assert.equal(reversed.score,-1);
 });
-test('no valid input outputs a directional but explicitly unscored fallback',()=>{
-  const r=predictMarket(null,[{direction:'DOWN'}],BASE_WEIGHTS,ROUND+7500);
-  assert.equal(r.direction,'DOWN');assert.equal(r.status,'NO_DATA_FALLBACK');
-  assert.equal(r.score,null);
-  const stats=summarize([{...r,actual:'UP'},{model:MODEL,round:ROUND+300000,status:'LOCKED',direction:'UP',actual:null},
-    {model:MODEL,round:ROUND+600000,status:'LOCKED',direction:'DOWN',actual:'UP'}]);
-  assert.equal(stats.overall.samples,1);
-  assert.equal(stats.overall.hits,0);
-  assert.equal(stats.dataGaps,1);
-  assert.equal(stats.pending,1);
+test('RSI(14) computes from observations available by T+8 only',()=>{
+ const at=ROUND+6200,s=snapshot(at);
+ const before=predictMarket(s,[],BASE_WEIGHTS,at);
+ s.candles['1m'].rows.push({startMs:ROUND+60000,close:1,volume:99999});
+ assert.equal(predictMarket(s,[],BASE_WEIGHTS,at).rsi,before.rsi);
+ assert.ok(before.lockedAt<ROUND+8000);
 });
-test('training never invents labels or selects weights before 80 actual settlements',()=>{
-  assert.equal(fitExperimentalWeights([],BASE_WEIGHTS).status,'COLLECTING');
-  assert.equal(fitExperimentalWeights(Array.from({length:80},(_,i)=>({
-    model:MODEL,round:ROUND+i*300000,direction:'UP',status:'LOCKED',actual:null,
-    factors:{price:1,kline:1,technical:-1,previous:null,gambler:-1,volume:1,range:0}
-  })),BASE_WEIGHTS).samples,0);
-  assert.ok(Math.abs(weighted({price:1,kline:-1}).available-.48)<1e-12);
+test('stale and absent RSI market input never inherits previous guessed direction',()=>{
+ const at=ROUND+7400;
+ const a=predictMarket(null,[{direction:'DOWN'}],BASE_WEIGHTS,at);
+ assert.equal(a.direction,'UP');assert.equal(a.status,'NO_DATA_FALLBACK');assert.equal(a.score,null);
+ assert.equal(a.inputVersion,INPUT_VERSION);
+ const sum=summarize([{...a,actual:'DOWN'},
+  {...predictMarket(snapshot(ROUND+6200),[],BASE_WEIGHTS,ROUND+6200),round:ROUND+300000,actual:'UP'}]);
+ assert.equal(sum.overall.samples,1);assert.equal(sum.overall.hits,1);
+ assert.equal(sum.dataGaps,1);
+});
+test('all seven legacy factors and weight-search optimizer are retired',()=>{
+ assert.equal(weighted({price:1,kline:1,technical:1,previous:1,gambler:1,volume:1,range:1}).score,null);
+ const fit=fitExperimentalWeights([]);
+ assert.equal(fit.status,'RSI_ONLY_FIXED');assert.deepEqual(fit.weights,[1]);
+ assert.equal(fit.required,0);
 });

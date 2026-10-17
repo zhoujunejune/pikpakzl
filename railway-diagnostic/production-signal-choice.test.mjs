@@ -63,7 +63,10 @@ test('production implementation contains actual source switching, PIN and final 
  assert.match(index,/setModelSelection\(body\.model,body\.expectedRevision\)/);
  assert.match(index,/if\(!pinOK\(body\.pin\)\)/);
  assert.match(index,/NOVICE_LOCAL_URL/);
- assert.match(index,/validateNoviceSignal\(await r\.json\(\)\)/);
+ assert.match(index,/validateNoviceSignal\(body\)/);
+ assert.match(index,/choice\.model!==NOVICE_MODEL&&choice\.model!==BASE_MODEL/);
+ assert.match(index,/RSI_INPUT_VERSION/);
+ assert.match(index,/railway_rsi14_readonly/);
  assert.match(index,/if\(signalOverride && choice\.model!==BASE_MODEL\)return/);
  assert.match(index,/startAfterRound=currentRoundMs\(\)/);
  assert.match(index,/signalModelChoice:choice\.model/);

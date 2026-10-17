@@ -2,7 +2,9 @@ import {readFileSync,appendFileSync} from 'node:fs';
 const log=readFileSync('/tmp/edge5m-deploy.log','utf8');
 const url=log.match(/https:\/\/edge-5m-v1\.[a-zA-Z0-9-]+\.workers\.dev/)?.[0];
 if(!url)throw Error('Missing EDGE Worker URL from Wrangler output');
-const get=async(path)=>{const r=await fetch(url+path);return {httpStatus:r.status,body:await r.json()};};
+const get=async(path)=>{const r=await fetch(url+path);const raw=await r.text();
+ let body;try{body=JSON.parse(raw)}catch{throw Error(path+' HTTP '+r.status+' received non-JSON: '+raw.slice(0,1200))}
+ return {httpStatus:r.status,body};};
 const health=await get('/health'),status=await get('/status');
 if(health.httpStatus!==200||status.httpStatus!==200||
  health.body.ok!==true||health.body.orders!==false||

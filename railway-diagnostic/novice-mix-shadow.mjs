@@ -8,10 +8,39 @@ const OFFICIAL_ORIGIN=String(process.env.ROUND_STATS_ORIGIN||'https://signal-dia
 const REDIS_KEY='breakout20:research:rsi_only_14_v1:state'; // new model epoch; preserve old mixed-feature history
 const valid=d=>d==='UP'||d==='DOWN';
 const summaryClock=()=>Date.now();
+const OFFICIAL_SOURCE='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
+// Read only the round-tracker's persisted Binance Prediction results. Never infer an
+// outcome from spot candles, or from a different model's prediction or score.
+export function verifiedOfficialRoundDirections(payload){
+  if(payload?.ok!==true||payload.settlementSource!==OFFICIAL_SOURCE||
+     !Array.isArray(payload.records))throw Error('INVALID_OFFICIAL_ROUND_LEDGER');
+  const byRound=new Map(),pending=new Map();
+  for(const row of payload.records){
+    const round=Number(row?.roundStartMs);
+    if(!Number.isSafeInteger(round)||round%ROUND_MS!==0)continue;
+    const direction=valid(row?.productionActual)?row.productionActual:null;
+    const evidence=String(row?.resolutionEvidence||'');
+    const match=/^OFFICIAL_(UP|DOWN)(?::|$)/.exec(evidence);
+    const hasProof=row?.actualSource==='BINANCE_PREDICTION_OFFICIAL_RESOLUTION'||!!match;
+    const explicit=valid(row?.officialDirection)?row.officialDirection:null;
+    if(direction&&hasProof&&(!match||match[1]===direction)&&
+       (!explicit||explicit===direction)&&
+       (!valid(row?.actual)||row.actual===direction)){
+      if(byRound.has(round)&&byRound.get(round)!==direction)
+        throw Error('OFFICIAL_ROUND_CONFLICT');
+      byRound.set(round,direction);
+    }else{
+      pending.set(round,direction?'OFFICIAL_EVIDENCE_MISMATCH':
+        (typeof row?.resolutionEvidence==='string'&&row.resolutionEvidence
+          ?row.resolutionEvidence.slice(0,100):'OFFICIAL_RESULT_PENDING'));
+    }
+  }
+  return {byRound,pending,upstreamError:String(payload?.health?.lastSettlementError||'').slice(0,120)};
+}
 export function createNoviceMixShadow({
   fetcher=globalThis.fetch,clock=summaryClock,
   marketUrl=DATA_ORIGIN+'/api/shadow-market-data',
-  officialUrl=OFFICIAL_ORIGIN+'/api/breakout20-official-accuracy',
+  officialUrl=OFFICIAL_ORIGIN+'/api/round-stats',
   redisUrl=String(process.env.SIGNAL_REDIS_URL||''),
   setTimer=setInterval,clearTimer=clearInterval,
 }={}){
@@ -84,16 +113,18 @@ export function createNoviceMixShadow({
       const response=await fetcher(officialUrl,{method:'GET',cache:'no-store',signal:AbortSignal.timeout(2800)});
       if(!response.ok)throw Error('OFFICIAL_HTTP_'+response.status);
       const data=await response.json();
-      if(data?.ok!==true||data?.source!=='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'||
-        data?.statsScope!=='CURRENT_MODEL_VERSION_PRODUCTION_LOCKS_ONLY'||
-        !Array.isArray(data?.recent))throw Error('INVALID_OFFICIAL_SOURCE');
+      const verified=verifiedOfficialRoundDirections(data);
       let changed=false;
-      for(const official of data.recent){
-        if(!valid(official.actual)||!Number.isSafeInteger(official.t))continue;
-        const row=state.rows.find(x=>x.round===official.t);
-        if(row&&!valid(row.actual)){
-          row.actual=official.actual;row.result=row.direction===row.actual?'HIT':'MISS';
-          row.settledAt=now;changed=true;
+      for(const row of state.rows){
+        if(!Number.isSafeInteger(row?.round)||valid(row.actual))continue;
+        const actual=verified.byRound.get(row.round);
+        if(valid(actual)){
+          row.actual=actual;row.result=row.direction===actual?'HIT':'MISS';
+          row.pendingReason=null;row.settledAt=now;changed=true;
+        }else{
+          const reason=verified.pending.get(row.round)||
+            (verified.upstreamError||'OFFICIAL_ROUND_NOT_IN_RECENT_LEDGER');
+          if(row.pendingReason!==reason){row.pendingReason=reason;changed=true;}
         }
       }
       state.lastOfficialAt=now;state.officialError=null;
@@ -132,7 +163,7 @@ export function createNoviceMixShadow({
     return {ok:true,model:MODEL,inputVersion:INPUT_VERSION,name:'RSI单指标 · 新手模型标识',
       readOnly:true,orders:false,productionIntegration:false,
       official:{source:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
-        availability:state.lastOfficialAt!==null,limitation:'ONLY_ROUNDS_PRESENT_IN_BREAKOUT20_PRODUCTION_OFFICIAL_LEDGER'},
+        availability:state.lastOfficialAt!==null,limitation:'READ_ONLY_VERIFIED_ROUNDS_IN_TRACKER_RECENT_100'},
       results:sums,
       latest:state.rows.at(-1)||null,recent:state.rows.slice(-30).reverse(),
       training:{...state.training,model:MODEL,inputVersion:INPUT_VERSION,weights:[1],
@@ -151,7 +182,7 @@ export function createNoviceMixShadow({
   // This never changes the local locked direction consumed by the order selector.
   const rowsSince=(startRound)=>state.rows.filter(x=>Number.isSafeInteger(x?.round)&&x.round>=startRound)
     .map(x=>({model:x.model,inputVersion:x.inputVersion,round:x.round,direction:x.direction,actual:x.actual,
-      status:x.status,lockedAt:x.lockedAt}));
+      status:x.status,lockedAt:x.lockedAt,pendingReason:x.pendingReason||null}));
   return {start,stop,poll,snapshot,handler,rowsSince};
 }
 export const noviceMixShadow=createNoviceMixShadow();

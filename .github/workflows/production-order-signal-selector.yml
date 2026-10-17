@@ -6,6 +6,8 @@ on:
       - railway-diagnostic/production-signal-choice.test.mjs
       - railway-diagnostic/signal-random-flip.mjs
       - railway-diagnostic/signal-random-flip.test.mjs
+      - railway-diagnostic/postflip-official-stats.mjs
+      - railway-diagnostic/postflip-official-stats.test.mjs
       - railway-diagnostic/order-model-separated-stats.test.mjs
       - railway-diagnostic/index.mjs
       - railway-diagnostic/wrapper.mjs
@@ -33,11 +35,13 @@ jobs:
           node --check railway-diagnostic/index.mjs
           node --check railway-diagnostic/signal-random-flip.mjs
           node --check railway-diagnostic/signal-random-flip.test.mjs
+          node --check railway-diagnostic/postflip-official-stats.mjs
+          node --check railway-diagnostic/postflip-official-stats.test.mjs
           node --check railway-diagnostic/wrapper.mjs
           node --check railway-diagnostic/panel-stats-shell.mjs
       - name: Validate signal selection and side-direction guard
         run: |
-          node --test railway-diagnostic/production-signal-choice.test.mjs railway-diagnostic/order-direction-policy.test.mjs railway-diagnostic/order-submit-window.test.mjs railway-diagnostic/shadow-breakout20-dashboard.test.mjs railway-diagnostic/order-model-separated-stats.test.mjs railway-diagnostic/signal-random-flip.test.mjs
+          node --test railway-diagnostic/production-signal-choice.test.mjs railway-diagnostic/order-direction-policy.test.mjs railway-diagnostic/order-submit-window.test.mjs railway-diagnostic/shadow-breakout20-dashboard.test.mjs railway-diagnostic/order-model-separated-stats.test.mjs railway-diagnostic/signal-random-flip.test.mjs railway-diagnostic/postflip-official-stats.test.mjs
       - name: Assert live order path is limited to already-approved files
         run: |
           git diff --name-only origin/main...HEAD || true

@@ -84,7 +84,18 @@ test('the UI renders only observational data and independent forward accuracy',a
   };
   element('breakout20ShadowCard');
   const env={document:{readyState:'complete',getElementById:element},
-    fetch:async(url)=>{requested.push(String(url));return {ok:true,json:async()=>({...sample,ok:true,fetchedAt:Date.now(),
+    fetch:async(url)=>{
+      requested.push(String(url));
+      if(String(url).includes('/api/postflip-official-stats')){
+        return {ok:true,json:async()=>({
+          ok:true,model:'BREAKOUT20_RSI_MACD_RANGE_V1',statsScope:'POSTFLIP_EMITTED_SIGNAL_ONLY',
+          resetAt:1792218000000,source:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
+          results:officialResult.results,
+          latest:{round:Date.now()-300000,raw:'DOWN',emitted:'UP',direction:'UP',actual:null,lockedAt:Date.now()-293000},
+          recent:[{round:Date.now()-300000,raw:'DOWN',emitted:'UP',direction:'UP',actual:null,lockedAt:Date.now()-293000}]
+        })};
+      }
+      return {ok:true,json:async()=>({...sample,ok:true,fetchedAt:Date.now(),
       official:{available:true},results:officialResult.results,latest:officialResult.latest,
       recent:officialResult.recent})};},
     setInterval:()=>0,Date,Array,Math,Number,String,Object,Error,Promise,isFinite};
@@ -95,7 +106,9 @@ test('the UI renders only observational data and independent forward accuracy',a
   assert.match(element('b20DownAccuracy').textContent,/100\.00%/);
   assert.match(element('b20Training').textContent,/保留基线/);
   assert.match(element('b20Rows').innerHTML,/待官方结算/);
-  assert.ok(requested.every(u=>u.startsWith('/api/shadow-breakout20/status?ts=')));
+  assert.ok(requested.some(u=>u.startsWith('/api/shadow-breakout20/status?ts=')));
+  assert.ok(requested.some(u=>u.startsWith('/api/postflip-official-stats?model=')));
+  assert.doesNotMatch(element('b20Meta').textContent,/193|旧模型胜率/);
 });
 
 test('production shell only imports and mounts isolated UI and GET route',()=>{

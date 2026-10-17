@@ -219,3 +219,39 @@ try{
    evidence:String(x.resolutionEvidence||'').slice(0,90)}));
  console.log('AUDIT_TIMESTAMP_EXCEPTIONS',JSON.stringify({count:missing.length,rows:missing}));
 }catch(e){console.log('AUDIT_TIMESTAMP_EXCEPTIONS_ERROR',String(e?.message||e).slice(0,150))}
+
+
+// Production EDGE acceptance (read-only): state, current live selector, model maturity.
+// Do not trigger order routes, retry, or change production selection.
+try{
+ const [edge,hub,panel]=await Promise.all([
+  getSafe('https://edge-5m-v1.zl528094-3ba.workers.dev/status'),
+  getSafe('https://zl-free-market-hub.zl528094-3ba.workers.dev/api/status'),
+  getSafe('https://trade-control-panel-production.up.railway.app/api/status')
+ ]);
+ const d=edge.data, h=hub.data,p=panel.data,now=Date.now(),round=Math.floor(now/300000)*300000;
+ console.log('EDGE_PROD_ACCEPTANCE',JSON.stringify({
+  checkedAt:now,edgeHttp:edge.status,edgeOk:d.ok===true,edgeReadOnly:d.readOnly===true,
+  edgeProductionIntegration:d.productionIntegration===true,edgeOrders:d.orders===true,
+  edgeVenue:d.health?.venue,edgeMarketError:d.health?.marketError??null,
+  edgeOfficialError:d.health?.officialError??null,edgeLastMarketAgeMs: d.timed?.lastGoodDataAt?now-d.timed.lastGoodDataAt:null,
+  edgeLastTickAgeMs:d.timed?.lastTickAt?now-d.timed.lastTickAt:null,
+  edgeLastOfficialAgeMs:d.health?.lastOfficialAt?now-d.health.lastOfficialAt:null,
+  edgeSamples:d.results?.overall?.samples??null,
+  edgeLocked:d.results?.locked??null,
+  edgeTrainingSamples:d.training?.samples??null,
+  edgeTrainingRequired:d.training?.required??null,
+  edgeCalibrated:d.training?.calibrationReady===true,
+  edgeReady:d.training?.ready===true,
+  edgeLatest:d.latest?{round:d.latest.round,direction:d.latest.direction,
+   executionEligible:d.latest.executionEligible,lockedAt:d.latest.lockedAt}:null,
+  edgeLastHistorical:Array.isArray(d.recent)?d.recent.slice(0,3).map(x=>({
+   round:x.round,direction:x.direction,actual:x.actual,lockedAt:x.lockedAt
+  })):[],
+  hubHttp:hub.status,hubMarketOk:h.market?.ok===true,
+  hubBaselineOk:h.baseline?.ok===true,hubEdgeOk:h.edge?.ok===true,
+  panelHttp:panel.status,panelModel:p.orderSignalModel??p.modelSelection?.model??null,
+  panelTopKeys:Object.keys(p||{}).filter(k=>/signal|model|choice|order|select|production/i.test(k)).slice(0,30),
+  currentRound:round
+ }));
+}catch(e){console.log('EDGE_PROD_ACCEPTANCE_FAILED',String(e?.message||e).slice(0,180))}

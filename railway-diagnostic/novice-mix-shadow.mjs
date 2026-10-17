@@ -150,6 +150,11 @@ export function createNoviceMixShadow({
       'x-content-type-options':'nosniff'});
     res.end(JSON.stringify(snapshot()));
   }
-  return {start,stop,poll,snapshot,handler};
+  // Read-only internal reporting history. Keep original training & official ledgers intact.
+  // This never changes the local locked direction consumed by the order selector.
+  const rowsSince=(startRound)=>state.rows.filter(x=>Number.isSafeInteger(x?.round)&&x.round>=startRound)
+    .map(x=>({model:x.model,round:x.round,direction:x.direction,actual:x.actual,
+      status:x.status,lockedAt:x.lockedAt}));
+  return {start,stop,poll,snapshot,handler,rowsSince};
 }
 export const noviceMixShadow=createNoviceMixShadow();

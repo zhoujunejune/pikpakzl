@@ -1,0 +1,76 @@
+name: RSI direct output live read-only verification
+on:
+  push:
+    paths:
+      - .github/workflows/rsi-direct-live-readonly-verify.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Confirm direct signal, official-ledger separation, RSI-only source without placing orders
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const origin='https://trade-control-panel-production.up.railway.app';
+          const selected=['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'];
+          const read=async path=>{
+            const r=await fetch(origin+path,{method:'GET',cache:'no-store',
+              signal:AbortSignal.timeout(10000)});
+            const j=await r.json();
+            assert.equal(r.status,200,path+' returned '+r.status+' '+JSON.stringify(j).slice(0,400));
+            return j;
+          };
+          let lastErr='';
+          for(let attempt=0;attempt<14;attempt++){
+            try{
+              const stats=[];
+              for(const model of selected){
+                const j=await read('/api/postflip-official-stats?model='+model);
+                assert.equal(j.ok,true);
+                assert.equal(j.statsScope,'RSI14_DIRECT_OFFICIAL_ONLY');
+                assert.equal(j.statsVersion,'RSI14_DIRECT_OFFICIAL_V1_20261017');
+                assert.equal(j.signalOutputMode,'RSI14_DIRECT_V1');
+                assert.ok(j.resetAt>=Date.parse('2026-10-17T05:55:00.000Z'));
+                assert.equal(j.health?.storage,'REDIS_SEPARATE_DIRECT_REPORTING_KEY');
+                assert.ok(Array.isArray(j.recent));
+                assert.ok(j.recent.every(x=>x.round>=j.resetAt&&
+                  x.raw===x.emitted&&x.direction===x.emitted&&x.flipped===false));
+                assert.ok(j.results.overall.hits<=j.results.overall.samples);
+                stats.push({model,resetAt:j.resetAt,newRounds:j.results.rounds,
+                  settled:j.results.overall,latest:j.latest});
+              }
+              assert.equal(stats[0].resetAt,stats[1].resetAt);
+              const status=await read('/api/status');
+              assert.equal(status.ok,true);
+              if(status.signal?.status==='LOCKED'){
+                assert.equal(status.signal.inputVersion,'RSI_ONLY_14_V1');
+                assert.equal(status.signal.randomFlipApplied,false);
+                assert.equal(status.signal.randomFlipProbability,0);
+                assert.equal(status.signal.rawDirection,status.signal.direction);
+                assert.equal(status.productionSignal,status.signal.direction);
+                assert.equal(status.modelOriginalSignal,status.signal.direction);
+                assert.equal(status.signalRandomFlipApplied,false);
+                assert.equal(status.signalOutputMode,'RSI14_DIRECT_V1');
+              }
+              const shadow=await read('/api/shadow-breakout20/novice-mix');
+              assert.equal(shadow.inputVersion,'RSI_ONLY_14_V1');
+              assert.equal(shadow.training?.status,'RSI_ONLY_FIXED');
+              assert.deepEqual(shadow.training?.weights,[1]);
+              const html=await (await fetch(origin+'/',{method:'GET',signal:AbortSignal.timeout(10000)})).text();
+              assert.ok(html.includes('RSI直接输出'));
+              assert.ok(!html.includes('50%随机翻转'));
+              console.log(JSON.stringify({verified:'RSI14_DIRECT_LIVE_READONLY',stats,
+                liveLocked:status.signal?.status==='LOCKED',selectedModel:status.orderSignalModel,
+                productionSignal:status.productionSignal,orderSignal:status.orderSignal}));
+              process.exit(0);
+            }catch(e){lastErr=String(e?.message||e);console.log('retry '+attempt+': '+lastErr);
+              await new Promise(r=>setTimeout(r,6000));}
+          }
+          throw Error('RSI_DIRECT_LIVE_VERIFY_FAILED '+lastErr);
+          NODE

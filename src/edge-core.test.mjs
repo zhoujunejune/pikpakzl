@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EDGE_MODEL,INPUT_VERSION,MIN_TRAINING_ROUNDS,roundAt,extractFeatures,
-  scoreDirection,trainOnOfficial,summarize} from './edge-5m-core.mjs';
+  scoreDirection,trainOnOfficial,summarize} from './edge-core.mjs';
 const ROUND=1792166400000;
 const t=ROUND+6000;
 const trail=[

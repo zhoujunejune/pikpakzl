@@ -281,6 +281,31 @@ try{
 throw new Error(errMsg||'统计服务暂不可用')
 }
 
+async function renderEdgeRoundStats(){
+ var res=await fetch('/api/shadow-breakout20/edge-5m?ts='+Date.now(),{cache:'no-store'});
+ var d=await res.json();
+ if(!res.ok||d?.ok!==true||d.model!=='EDGE_5M_V1'||
+   d.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')throw Error('EDGE独立统计不可用');
+ if(globalThis.__orderModelStatsSelection!=='EDGE_5M_V1')return;
+ var r=d.results||{},v=r.overall||{},n=Number(v.samples||0),hits=Number(v.hits||0);
+ e('rsAccuracy').textContent=n?'EDGE_5M_V1 官方预测命中率 '+(100*hits/n).toFixed(2)+'%':'EDGE_5M_V1 尚无官方已结算样本';
+ e('rsSettled').textContent=n;e('rsDecided').textContent=n;
+ e('rsCorrect').textContent=hits;e('rsWrong').textContent=n-hits;
+ e('rsWait').textContent=Number(r.observedRounds||0)-Number(r.locked||0);
+ e('rsCoverage').textContent=r.observedRounds?(100*Number(r.locked||0)/r.observedRounds).toFixed(2)+'%':'-';
+ e('rsMeta').textContent='EDGE_5M_V1 · 官方结算独立统计 · '+Number(d.training?.samples||0)+'/5000轮训练 · '+
+   (d.training?.ready?'概率已校准，实际下单仍须核对价格与Edge':'概率未校准，方向仅研究观察，不执行实盘');
+ var rows=Array.isArray(d.recent)?d.recent.slice(0,30):[];
+ e('rsRows').innerHTML=rows.length?rows.map(function(x){
+  var actual=x.actual==='UP'||x.actual==='DOWN'?x.actual:null,dir=x.direction;
+  return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.round)+'</td>'+
+   '<td style="padding:9px 6px">'+badge(dir||'未锁定')+'</td>'+
+   '<td>EDGE_5M_V1</td><td>'+(x.calibrationReady?'已校准':'未校准')+'</td>'+
+   '<td>'+(x.lockedAt==null?'-':((x.lockedAt-x.round)/1000).toFixed(1)+'s')+'</td>'+
+   '<td>'+badge(actual||'PENDING')+'</td><td>'+(dir&&actual?badge(dir===actual?'HIT':'MISS'):'待结算')+'</td>'+
+   '<td>'+esc(actual?'Binance Prediction 官方结算':x.pendingReason||'待官方结算')+'</td></tr>';
+ }).join(''):'<tr><td colspan="8">EDGE第四套刚建立，尚无本模型独立记录</td></tr>';
+}
 async function renderDynamicRoundStats(){
  var res=await fetch('/api/shadow-breakout20/dynamic-entry?ts='+Date.now(),{cache:'no-store'});
  var d=await res.json();
@@ -310,6 +335,7 @@ async function renderDynamicRoundStats(){
  }).join(''):'<tr><td colspan="8">动态模型还没有独立的模拟入场记录</td></tr>';
 }
 async function renderPostflipRoundStats(){
+ if(globalThis.__orderModelStatsSelection==='EDGE_5M_V1')return renderEdgeRoundStats();
  if(globalThis.__orderModelStatsSelection==='DYNAMIC_ENTRY_5M_SHADOW_V1')return renderDynamicRoundStats();
  var model=globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'
   ?'NOVICE_MIX_LOW_V1':'BREAKOUT20_RSI_MACD_RANGE_V1';
@@ -742,6 +768,43 @@ function orderSide(z){
  return mode==='INVERSE'?(pred==='UP'?'DOWN':'UP'):mode==='FORWARD'?pred:null;
 }
 
+async function renderEdgePrimary(){
+ var response=await fetch('/api/shadow-breakout20/edge-5m?ts='+Date.now(),{cache:'no-store'});
+ var d=await response.json();
+ if(!response.ok||d?.ok!==true||d.model!=='EDGE_5M_V1')throw Error('EDGE行情或统计不可用');
+ if(chosenOrderModel!=='EDGE_5M_V1')return;
+ var r=d.results||{},v=r.overall||{},n=Number(v.samples||0),hits=Number(v.hits||0);
+ var now=Math.floor(Date.now()/300000)*300000,latest=d.latest?.round===now?d.latest:null;
+ activeCatalog=[{id:'EDGE_5M_V1',name:'EDGE 5分钟概率优势',source:'SELECTIVE_V2_FAST8_PRIMARY',version:'EDGE5_CAUSAL_V1',active:true}];
+ e('activeFast8Name').textContent='EDGE_5M_V1 · 第四套独立策略';
+ e('activeFast8Desc').textContent='前8秒真实现货/合约订单簿和主动成交特征 · 官方结果训练 '+
+   Number(d.training?.samples||0)+'/5000 · '+
+   (d.training?.ready?'已校准，实盘须再通过实时价格和Edge':'未通过校准：只显示方向，不提交实盘订单');
+ e('activeFast8Direction').textContent=latest?latest.direction+'（'+(latest.executionEligible?'已校准':'仅观察')+'）':
+   '本轮行情不足或未锁定';
+ e('activeFast8Accuracy').textContent=n?pct(100*hits/n):'暂无官方结算';
+ e('activeFast8HitMiss').textContent=hits+' / '+(n-hits)+'（'+n+'轮）';
+ e('activeFast8Coverage').textContent=Number(r.locked||0)+' / '+Number(r.observedRounds||0)+' 轮特征完整';
+ var src=sources.find(function(x){return x.id==='SELECTIVE_V2_FAST8_PRIMARY'});
+ var mapped=(Array.isArray(d.recent)?d.recent:[]).filter(function(x){
+   return (x.actual==='UP'||x.actual==='DOWN')&&(x.direction==='UP'||x.direction==='DOWN')&&
+     src&&directionModeReady&&src.modes[x.direction]!=='OFF';
+ });
+ var mh=mapped.filter(function(x){return (src.modes[x.direction]==='INVERSE'?
+   (x.direction==='UP'?'DOWN':'UP'):x.direction)===x.actual;}).length;
+ e('activeFast8InverseAccuracy').textContent=mapped.length?pct(100*mh/mapped.length):'暂无';
+ e('activeFast8InverseHitMiss').textContent=mh+' / '+(mapped.length-mh)+'（'+mapped.length+'轮）';
+ var side=function(side){var g=r[side]||{};return g.samples?g.hits+'/'+g.samples+' · '+pct(100*g.hits/g.samples):'暂无';};
+ var modes=src&&directionModeReady?'UP：'+modeLabel(src.modes.UP)+' / DOWN：'+modeLabel(src.modes.DOWN):'开关未就绪';
+ e('sourceRateRows').innerHTML='<tr><td>EDGE_5M_V1</td><td>'+escModel(modes)+'</td><td>'+
+   (n?hits+'/'+n+' · '+pct(100*hits/n):'暂无')+'</td><td>'+side('up')+
+   '</td><td>'+side('down')+'</td><td>'+(mapped.length?pct(100*mh/mapped.length):'暂无')+'</td></tr>';
+ e('activeFast8Note').textContent='独立预测与官方结算统计；'+
+   (d.health?.marketError?'行情问题：'+d.health.marketError+'；':'')+
+   (d.health?.officialError?'官方结算问题：'+d.health.officialError+'；':'')+
+   '并非真实订单收益。只在你选择第四套后影响当前下单信号选择。';
+ renderDirectionModes();
+}
 async function renderDynamicPrimary(){
  var response=await fetch('/api/shadow-breakout20/dynamic-entry?ts='+Date.now(),{cache:'no-store'});
  var d=await response.json();
@@ -840,6 +903,13 @@ async function renderNovicePrimary(){
 function load(){
  // BASELINE / NOVICE use the reset ledger. Pre-existing legacy V2/VIP75
  // modes retain their own diagnostics and never enter the new tally.
+ if(chosenOrderModel==='EDGE_5M_V1'){
+  return renderEdgePrimary().catch(function(err){if(chosenOrderModel!=='EDGE_5M_V1')return;
+   e('activeFast8Name').textContent='EDGE_5M_V1 · 数据暂不可用';
+   e('activeFast8Accuracy').textContent='-';e('activeFast8Coverage').textContent='-';
+   e('activeFast8Note').textContent=String(err?.message||err);
+  });
+ }
  if(chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'){
   return renderDynamicPrimary().catch(function(err){if(chosenOrderModel!=='DYNAMIC_ENTRY_5M_SHADOW_V1')return;
    e('activeFast8Name').textContent='5分钟动态入场 · 数据暂不可用';
@@ -985,9 +1055,9 @@ async function updateOrderSignal(){
   var j=await r.json();
   if(j.ok!==true)throw Error('交易控制状态未就绪');
   var now=Date.now(),round=Math.floor(now/300000)*300000;
-  var model=j.orderSignalModel||chosenOrderModel,dynamicMode=model==='DYNAMIC_ENTRY_5M_SHADOW_V1';
+  var model=j.orderSignalModel||chosenOrderModel,dynamicMode=model==='DYNAMIC_ENTRY_5M_SHADOW_V1',edgeMode=model==='EDGE_5M_V1';
   var signal=j.signal||{},locked=signal.status==='LOCKED'&&Number(signal.round)===round&&
-    ['UP','DOWN'].includes(signal.direction);
+    ['UP','DOWN'].includes(signal.direction)&&signal.executionEligible!==false;
   var modelReady=j.orderSignalModelReady!==false;
   var modelEffective=modelReady&&(j.orderSignalModelEffectiveAfterRound==null||
     round>Number(j.orderSignalModelEffectiveAfterRound));
@@ -999,8 +1069,14 @@ async function updateOrderSignal(){
     if(d.ok){var body=await d.json();if(body.ok===true&&body.model===model)dynamic=body;}
    }catch(_){}
   }
+  var edge=null;
+  if(edgeMode){try{var er=await fetch('/api/shadow-breakout20/edge-5m?ts='+Date.now(),{cache:'no-store'});
+   if(er.ok){var ej=await er.json();if(ej.ok===true&&ej.model===model)edge=ej;}}
+   catch(_){}
+  }
   var entry=dynamicMode&&dynamic?.latest?.round===round?dynamic.latest.entry:null;
-  var preview=dynamicMode?(dynamic?.currentDecision?.round===round?
+  var preview=edgeMode?(edge?.latest?.round===round?edge.latest.direction:null):
+   dynamicMode?(dynamic?.currentDecision?.round===round?
     dynamic.currentDecision.direction:entry?.direction):signal.rawDirection??signal.direction;
   var currentPending=j.pendingAction&&Number(j.pendingAction.round)===round?j.pendingAction:null;
   var last=j.lastOrder||null,currentOrder=last&&Number(last.round)===round?last:null;
@@ -1020,10 +1096,14 @@ async function updateOrderSignal(){
      '动态入场有冻结候选，但未通过实盘有效性校验'):
    dynamicMode&&dynamic?.health?.marketError?'动态行情异常：'+String(dynamic.health.marketError):
    dynamicMode?'等待动态入场触发（方向不是锁定信号）':
+   edgeMode?(edge?.latest?.round===round?'EDGE已有方向，但未完成校准或风控，不下单':
+     'EDGE数据不足或未锁定，不下单'):
    '等待本轮8秒有效锁定';
   put('flowLocked',lockMessage);
   put('activeFast8EmittedDirection',locked?
-   signal.direction+'（'+(dynamicMode?'5分钟动态冻结':'RSI 8秒锁定')+'）':lockMessage);
+   signal.direction+'（'+(dynamicMode?'5分钟动态冻结':edgeMode?'EDGE已校准8秒锁定':'RSI 8秒锁定')+'）':lockMessage);
+  if(edgeMode)put('activeFast8Direction',
+    ['UP','DOWN'].includes(preview)?preview+' · '+(edge?.latest?.executionEligible?'已校准':'未校准，仅参考'):'没有有效EDGE方向');
   if(dynamicMode&&dynamic)put('activeFast8Direction',
     ['UP','DOWN'].includes(preview)?preview+' · 动态模型方向参考':'尚无当前轮次方向');
   var side=e('activeFast8OrderDirection'),mode=j.orderMappingMode;

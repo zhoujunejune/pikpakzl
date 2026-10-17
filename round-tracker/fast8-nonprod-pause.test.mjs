@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 const source=readFileSync(fileURLToPath(new URL('./index-rest.mjs',import.meta.url)),'utf8');
 test('pause flag scoped to 8-second production routes, reversible for legacy mode',()=>{
-  assert.match(source,/const PAUSE_NONPROD_SHADOWS = \[FAST8_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE\]\.includes\(PRODUCTION_SIGNAL_SOURCE_MODE\)/);
+  assert.match(source,/const PAUSE_NONPROD_SHADOWS = \[FAST8_MODE, SELECTIVE_V2_FAST8_MODE, MARKET_FUSION_FAST8_MODE, BREAKOUT20_MODE\]\.includes\(PRODUCTION_SIGNAL_SOURCE_MODE\)/);
   assert.match(source,/process\.env\.PAUSE_NONPROD_SHADOWS \|\| '1'/);
   assert.match(source,/if \(PAUSE_NONPROD_SHADOWS\) \{\s*\/\/ Retain topic hints/);
   assert.match(source,/if \(!PAUSE_NONPROD_SHADOWS\) \{\s*loadShadowModelArtifact\(\)/);

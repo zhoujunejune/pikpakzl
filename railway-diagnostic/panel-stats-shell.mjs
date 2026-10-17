@@ -279,6 +279,42 @@ try{
 throw new Error(errMsg||'统计服务暂不可用')
 }
 
+async function renderPostflipRoundStats(){
+ var model=globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'
+  ?'NOVICE_MIX_LOW_V1':'BREAKOUT20_RSI_MACD_RANGE_V1';
+ var res=await fetch('/api/postflip-official-stats?model='+encodeURIComponent(model)+'&ts='+Date.now(),{cache:'no-store'});
+ var d=await res.json();
+ if(!res.ok||d?.ok!==true||d.statsScope!=='POSTFLIP_EMITTED_SIGNAL_ONLY')
+   throw Error(d?.error||'新版正式信号统计不可用');
+ if(model==='BREAKOUT20_RSI_MACD_RANGE_V1'&&globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1')return;
+ if(model==='NOVICE_MIX_LOW_V1'&&globalThis.__orderModelStatsSelection!=='NOVICE_MIX_LOW_V1')return;
+ var v=d.results||{},all=v.overall||{},n=Number(all.samples||0),hits=Number(all.hits||0);
+ e('rsAccuracy').innerHTML=n?'随机翻转后正式信号准确率：<span class="on">'+(hits*100/n).toFixed(2)+'%</span>'
+   :'随机翻转后正式信号准确率：暂无已结算';
+ e('rsSettled').textContent=n;
+ e('rsDecided').textContent=n;
+ e('rsCorrect').innerHTML='<span class="on">'+hits+'</span>';
+ e('rsWrong').innerHTML='<span class="bad">'+(n-hits)+'</span>';
+ e('rsWait').textContent=Number(v.dataGaps||0);
+ e('rsCoverage').textContent=Number(v.rounds||0)?(100*Number(v.locked||0)/Number(v.rounds)).toFixed(2)+'%':'-';
+ e('rsMeta').textContent='从 2026-10-17 11:40（北京时间）重新累计 · '+model
+  +' · 只按8秒内有效锁定、50%随机翻转后的正式信号和币安预测市场官方结算计算，不混入旧轮次；不代表实盘成交胜率';
+ var rows=Array.isArray(d.recent)?d.recent.slice(0,50):[];
+ e('rsRows').innerHTML=rows.length?rows.map(function(x){
+  var actual=x.actual==='UP'||x.actual==='DOWN'?x.actual:null;
+  var direction=x.eligible?x.emitted:'WAIT';
+  var result=x.result||(!actual?'PENDING':direction===actual?'HIT':'MISS');
+  var time=Number(x.lockedAt)-Number(x.round);
+  return '<tr style="border-top:1px solid #2b313d"><td style="padding:9px 6px">'+tm(x.round)+'</td>'+
+   '<td style="padding:9px 6px">'+badge(direction)+'</td>'+
+   '<td style="padding:9px 6px">'+esc(model+(x.flipped?' · 随机翻转':' · 保留方向')+'（原'+x.raw+'）')+'</td>'+
+   '<td style="padding:9px 6px">正式输出</td>'+
+   '<td style="padding:9px 6px">'+(Number.isFinite(time)?(time/1000).toFixed(2)+'s':'-')+'</td>'+
+   '<td style="padding:9px 6px">'+badge(actual||'PENDING')+'</td>'+
+   '<td style="padding:9px 6px">'+badge(result)+'</td>'+
+   '<td style="padding:9px 6px">'+(actual?'Binance Prediction 官方结算':'等待官方结算')+'</td></tr>';
+ }).join(''):'<tr><td colspan="8" style="padding:10px 6px">新版本尚无正式信号记录，旧数据已从本表隐藏</td></tr>';
+}
 async function renderNoviceRoundStats(){
  var response=await fetch('/api/shadow-breakout20/novice-mix?ts='+Date.now(),{cache:'no-store'});
  var data=await response.json();
@@ -316,6 +352,16 @@ async function renderNoviceRoundStats(){
  }).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">新手混合模型尚无独立轮次记录</td></tr>';
 }
 async function load(){
+try{await renderPostflipRoundStats();}
+catch(err){
+ e('rsAccuracy').textContent='新版统计暂不可用';
+ e('rsSettled').textContent='-';e('rsDecided').textContent='-';
+ e('rsCorrect').textContent='-';e('rsWrong').textContent='-';
+ e('rsWait').textContent='-';e('rsCoverage').textContent='-';
+ e('rsMeta').textContent='仅展示2026-10-17 11:40起随机翻转后的新记录；'+(err?.message||err);
+ e('rsRows').innerHTML='<tr><td colspan="8" style="padding:10px 6px">新统计暂不可用，不回退显示旧记录</td></tr>';
+}
+return;
 if(globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'){
  try{await renderNoviceRoundStats()}
  catch(err){if(globalThis.__orderModelStatsSelection==='NOVICE_MIX_LOW_V1'){

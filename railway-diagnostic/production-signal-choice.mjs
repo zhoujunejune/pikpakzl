@@ -151,3 +151,49 @@ export function validateDynamicEntrySignal(body,now=Date.now()){
    lockedAt:entry.at,marketAt:entry.marketAt,score:entry.score,
    strength:entry.strength,modelVersion:entry.modelVersion};
 }
+
+
+// Per-round, cross-restart limit for real Binance POSTs. Redis is the same
+// authority already required for real-order model switching.
+export const MAX_ORDER_SUBMIT_ATTEMPTS=3;
+const ORDER_SUBMIT_PREFIX='trade-control:order-submit:v1:';
+const CLAIM_POST_SCRIPT="local marker=redis.call('GET',KEYS[2]); if marker and marker~='REJECTED' then return -2 end; local n=tonumber(redis.call('GET',KEYS[1]) or '0'); if n>=tonumber(ARGV[1]) then return -1 end; n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],7200) end; redis.call('SET',KEYS[2],'IN_FLIGHT:'..n,'EX',7200); return n";
+function checkedSubmitRound(round){
+ if(!Number.isSafeInteger(round)||round<1||round%300000!==0)throw Error('INVALID_SUBMIT_ROUND');
+ return ORDER_SUBMIT_PREFIX+round;
+}
+export async function claimOrderSubmitAttempt(round){
+ const prefix=checkedSubmitRound(round),redis=await db();
+ const count=Number(await redis.eval(CLAIM_POST_SCRIPT,{keys:[prefix+':count',prefix+':closed'],arguments:[String(MAX_ORDER_SUBMIT_ATTEMPTS)]}));
+ if(count===-2)throw Error('ROUND_SUBMISSION_ALREADY_PLACED_OR_UNKNOWN');
+ if(count===-1)throw Error('ROUND_SUBMISSION_ATTEMPTS_EXHAUSTED');
+ if(!Number.isSafeInteger(count)||count<1||count>MAX_ORDER_SUBMIT_ATTEMPTS)
+   throw Error('ROUND_SUBMISSION_ATTEMPT_CLAIM_FAILED');
+ return {attempt:count,maxAttempts:MAX_ORDER_SUBMIT_ATTEMPTS};
+}
+export async function closeOrderSubmitRound(round,reason){
+ if(!['SUBMITTED','UNKNOWN'].includes(reason))throw Error('INVALID_SUBMIT_CLOSE_REASON');
+ const prefix=checkedSubmitRound(round),redis=await db();
+ const script="local m=redis.call('GET',KEYS[1]); if not m or string.sub(m,1,10)~='IN_FLIGHT:' then return 'CONFLICT' end; return redis.call('SET',KEYS[1],ARGV[1],'EX',7200)";
+ const outcome=await redis.eval(script,{keys:[prefix+':closed'],arguments:[reason]});
+ if(outcome!=='OK')throw Error('ORDER_ROUND_CLOSE_CONFLICT');
+}
+export async function releaseRejectedOrderSubmitAttempt(round,attempt){
+ const prefix=checkedSubmitRound(round),redis=await db();
+ if(!Number.isSafeInteger(attempt)||attempt<1||attempt>MAX_ORDER_SUBMIT_ATTEMPTS)
+   throw Error('INVALID_ORDER_SUBMIT_ATTEMPT');
+ const script="if redis.call('GET',KEYS[1])~=ARGV[1] then return 'CONFLICT' end; return redis.call('SET',KEYS[1],'REJECTED','EX',7200)";
+ const outcome=await redis.eval(script,{keys:[prefix+':closed'],arguments:['IN_FLIGHT:'+attempt]});
+ if(outcome!=='OK')throw Error('ORDER_REJECTION_FENCE_CONFLICT');
+}
+// A network timeout, HTTP 5xx, and even an empty success response may have
+// created an order. Only a clear Binance quote/price rejection is retryable.
+// HTTP 451, authentication, balance and generic trade errors must never retry.
+export function retryableRejectedOrderPost(call){
+ if(call?.ok===true||call?.network===true)return false;
+ if(![400,409,422].includes(Number(call?.status)))return false;
+ const data=call?.data||{};
+ const reason=[data.code??'',data.msg??'',data.message??''].map(String).join(' ').toUpperCase();
+ if(/RESTRICTED|ELIGIBILITY|UNAUTHORIZED|INSUFFICIENT|BALANCE|PERMISSION|SIGNATURE/.test(reason))return false;
+ return /QUOTE[_ -]?(?:EXPIRED|INVALID|STALE|NOT_FOUND)|(?:EXPIRED|INVALID|STALE)[_ -]?QUOTE|PRICE[_ -]?(?:CHANGED|MOVED|OUTDATED)|REQUOTE|SLIPPAGE[_ -]?EXCEEDED/.test(reason);
+}

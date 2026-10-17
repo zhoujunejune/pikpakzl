@@ -106,7 +106,7 @@ test('the UI renders only observational data and independent forward accuracy',a
   assert.match(element('b20DownAccuracy').textContent,/100\.00%/);
   assert.match(element('b20Training').textContent,/RSI\(14\).*唯一判断/);
   assert.match(element('b20Rows').innerHTML,/待官方结算/);
-  assert.ok(requested.some(u=>u.startsWith('/api/shadow-breakout20/status?ts=')));
+  assert.ok(requested.some(u=>u.startsWith('/api/shadow-breakout20/novice-mix?ts=')));
   assert.ok(requested.some(u=>u.startsWith('/api/postflip-official-stats?model=')));
   assert.doesNotMatch(element('b20Meta').textContent,/193|旧模型胜率/);
 });

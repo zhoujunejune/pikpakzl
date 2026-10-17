@@ -12,10 +12,17 @@ async function read(url){const r=await fetch(url,{headers:{accept:'application/j
  return await r.json();}
 // Read-only: prefer the already-active APAC Durable Object's verified provider observation.
 // Our new Worker can run from an egress POP blocked by Bybit/OKX; never falsify quotes.
-async function market(){
+async function readEdge(env,path){
+ if(!env?.EDGE5_SERVICE)throw Error('EDGE_SERVICE_BINDING_MISSING');
+ const url='https://edge-5m-v1.zl528094-3ba.workers.dev'+path;
+ const r=await env.EDGE5_SERVICE.fetch(new Request(url,{method:'GET',headers:{accept:'application/json'}}));
+ if(!r.ok)throw Error('EDGE_SERVICE_HTTP_'+r.status);
+ return await r.json();
+}
+async function market(env){
  const failures=[];
  try{
-  const d=await read(EDGE_MARKET_URL),now=Date.now();
+  const d=await readEdge(env,'/market-check'),now=Date.now();
   if(d.ok!==true||d.realData!==true||d.orders!==false||
     !['BYBIT','OKX','BINANCE'].includes(d.venue)||
     !Number.isFinite(Number(d.spotPrice))||Number(d.spotPrice)<=0||
@@ -40,8 +47,8 @@ async function market(){
  return {ok:false,readOnly:true,error:failures.join(';').slice(0,280)};
 }
 
-async function edge(){try{
- const d=await read(EDGE_URL);
+async function edge(env){try{
+ const d=await readEdge(env,'/status');
  if(d.ok!==true||d.model!=='EDGE_5M_V1'||d.readOnly!==true||d.orders!==false)
    throw Error('EDGE_READ_ONLY_CONTRACT_MISMATCH');
  const r=d.results?.overall||{};
@@ -64,7 +71,7 @@ async function baseline(){try{
   samples:Number(all.samples)||0,hits:Number(all.hits)||0,
   resetAt:d.resetAt||null,readOnly:true};
  }catch(e){return {ok:false,model:'BREAKOUT20_RSI_MACD_RANGE_V1',error:error(e)};}}
-export default {async fetch(request){
+export default {async fetch(request,env){
  const u=new URL(request.url);
  if(request.method!=='GET')return reply({ok:false,error:'READ_ONLY_NO_MUTATION'},405);
  if(u.pathname==='/')return new Response(HTML,{headers:{'content-type':'text/html; charset=utf-8',
@@ -72,15 +79,15 @@ export default {async fetch(request){
    'content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"}});
  if(u.pathname==='/health')return reply({ok:true,readOnly:true,orders:false,service:'zl-free-market-hub',backend:'Cloudflare Workers Free'});
  if(u.pathname==='/api/market'||u.pathname==='/api/shadow-market-data'){
-  const m=await market();
+  const m=await market(env);
   if(u.pathname==='/api/shadow-market-data'&&m.ok)return reply({...m,
    latest:{lastPrice:m.spotPrice,eventMs:m.marketAt},
    compatibility:'RESEARCH_READ_ONLY_BYBIT_OR_OKX_NOT_BINANCE_ORIGINAL'},200);
   return reply(m,m.ok?200:503);}
- if(u.pathname==='/api/edge'){const d=await edge();return reply(d,d.ok?200:502);}
+ if(u.pathname==='/api/edge'){const d=await edge(env);return reply(d,d.ok?200:502);}
  if(u.pathname==='/api/baseline'){const d=await baseline();return reply(d,d.ok?200:502);}
  if(u.pathname==='/api/status'){
-  const [m,b,e]=await Promise.all([market(),baseline(),edge()]);
+  const [m,b,e]=await Promise.all([market(env),baseline(),edge(env)]);
   return reply({ok:true,readOnly:true,orders:false,checkedAt:Date.now(),market:m,baseline:b,edge:e});
  }
  return reply({ok:false,error:'NOT_FOUND'},404);

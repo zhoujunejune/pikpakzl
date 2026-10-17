@@ -88,8 +88,9 @@ test('read-only UI route does not alter order execution paths',()=>{
  const shell=fs.readFileSync(new URL('./panel-stats-shell.mjs',import.meta.url),'utf8');
  const service=fs.readFileSync(new URL('./dynamic-entry-shadow.mjs',import.meta.url),'utf8');
  const ui=fs.readFileSync(new URL('./shadow-breakout20-dashboard.mjs',import.meta.url),'utf8');
- assert.match(shell,/dynamicEntryShadow\.handler\(res\)/);
- assert.match(shell,/dynamicEntryShadow\.start\(\)/);
+ assert.doesNotMatch(shell,/dynamicEntryShadow\.handler\(res\)/);
+ assert.doesNotMatch(shell,/dynamicEntryShadow\.start\(\)/);
+ assert.doesNotMatch(shell,/<option value="DYNAMIC_ENTRY_5M_SHADOW_V1">/);
  assert.match(ui,/DYNAMIC_ENTRY_5M_SHADOW_V1/);
  assert.doesNotMatch(service,/fetcher\([^)]*method:\s*['"]POST/);
  assert.doesNotMatch(service,/\/api\/confirm|\/api\/order\/submit/);

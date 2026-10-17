@@ -1,7 +1,6 @@
 import http from 'node:http';
 import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { noviceMixShadow } from './novice-mix-shadow.mjs';
-import { dynamicEntryShadow } from './dynamic-entry-shadow.mjs';
 // EDGE_5M_V1 runs in an isolated Cloudflare Free Worker; this panel only reads its status.
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
@@ -520,15 +519,13 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
   <select id="orderSignalModelSelect" aria-label="选择真实下单信号模型"
     style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
     <option value="BREAKOUT20_RSI_MACD_RANGE_V1">BASELINE · RSI(14)单指标</option>
-    <option value="NOVICE_MIX_LOW_V1">NOVICE · RSI(14)单指标</option>
-    <option value="DYNAMIC_ENTRY_5M_SHADOW_V1">5分钟动态入场 · 任意时点触发</option>
     <option value="EDGE_5M_V1">EDGE_5M_V1 · 8秒内概率优势</option>
   </select>
   <button id="orderSignalModelSave" type="button"
     style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
-  <div class="muted" style="margin-top:7px">BASELINE/NOVICE及5分钟动态规则保持不变。新增 EDGE_5M_V1 前8秒观察方向，只有独立官方样本达到5000轮且概率校准通过、买入价和Edge均达标才允许提交订单；数据不足或行情异常只显示观察、不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
+  <div class="muted" style="margin-top:7px">生产下拉框仅保留 BASELINE 与 EDGE_5M_V1。基线复用原 RSI 行情输入，不再展示退役 NOVICE/DYNAMIC 策略。EDGE 目前前8秒观察方向，只有独立官方样本达到5000轮且概率校准通过、买入价和Edge均达标才允许提交订单；数据不足或行情异常只显示观察、不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
 </div>
 <div id="liveOrderFlowCard" role="region" aria-label="本轮交易进度" style="border:1px solid #4e6079;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
  <div style="font-size:16px;font-weight:800">本轮交易进度 · 不等于模型胜率</div>
@@ -627,7 +624,7 @@ async function saveOrderModelChoice(){
  var select=e('orderSignalModelSelect'),pin=e('pin');
  if(!select||!pin||!pin.value){e('orderSignalModelState').textContent='请先在页面上方填写控制 PIN';return}
  var next=select.value;
- if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1','DYNAMIC_ENTRY_5M_SHADOW_V1','EDGE_5M_V1'].includes(next))return;
+ if(!['BREAKOUT20_RSI_MACD_RANGE_V1','EDGE_5M_V1'].includes(next))return;
  if(next===chosenOrderModel){choiceDirty=false;e('orderSignalModelState').textContent='当前已是所选模型，无需切换';return}
  if(!window.confirm('确认从下一轮开始，用 '+chosenModelName(next)+' 作为真实下单信号？这会改变实际订单方向，当前轮次不切换。'))return;
  choiceBusy=true;
@@ -1393,7 +1390,6 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
-  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/dynamic-entry') return dynamicEntryShadow.handler(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/edge-5m'){
     void (async()=>{
       try{
@@ -1416,7 +1412,7 @@ http.createServer((req, res) => {
   }
   if (req.method === 'GET' && url.pathname === '/api/postflip-official-stats') {
     const model=url.searchParams.get('model');
-    if(!['BREAKOUT20_RSI_MACD_RANGE_V1','NOVICE_MIX_LOW_V1'].includes(model)){
+    if(model!=='BREAKOUT20_RSI_MACD_RANGE_V1'){
       res.writeHead(400,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
       return res.end(JSON.stringify({ok:false,error:'INVALID_STATS_MODEL'}));
     }
@@ -1429,7 +1425,7 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);
   return proxyInner(req, res, false);
 }).listen(PORT, '0.0.0.0', () => {
-  void dynamicEntryShadow.start().catch(error => log('dynamic_entry_shadow_start_error', { error: String(error?.message||error) }));
+  // DYNAMIC_ENTRY_5M_SHADOW_V1 retired: no independent timer, REST polling or training.
   // EDGE model collection/training is Cloudflare-only; no extra Railway polling process.
   void noviceMixShadow.start()
     .catch(error => log('novice_shadow_start_error', { error: String(error?.message||error) }))

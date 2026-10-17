@@ -87,6 +87,33 @@ export default {async fetch(request,env){
    'cache-control':'no-store','x-content-type-options':'nosniff',
    'content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"}});
  if(u.pathname==='/health')return reply({ok:true,readOnly:true,orders:false,service:'zl-free-market-hub',backend:'Cloudflare Workers Free'});
+ if(u.pathname==='/api/binance-network-check'){
+  // Non-authenticated, read-only transport probe. Never include signatures or credentials.
+  const sites=[
+   ['binance_spot','https://api.binance.com/api/v3/time'],
+   ['binance_prediction','https://api.binance.com/sapi/v1/w3w/wallet/prediction/market/list?limit=1'],
+   ['binance_public_data','https://data-api.binance.vision/api/v3/time'],
+   ['binance_futures','https://fapi.binance.com/fapi/v1/time'],
+  ];
+  const checks=await Promise.all(sites.map(async ([name,url])=>{
+   try{const r=await fetch(url,{method:'GET',headers:{accept:'application/json'},
+     signal:AbortSignal.timeout(3200),redirect:'manual'});
+     let responseCode=null;
+     // Distinguish HTTP gateway 451 from auth-required (401/403/400).
+     // Do not expose bodies, request URLs, headers, or account information.
+     try{const d=await r.clone().json();responseCode=
+        typeof d?.code==='number'&&Number.isFinite(d.code)?d.code:null;}catch{}
+     return {name,status:r.status,exchangeCode:responseCode,
+       transportReachable:r.status!==451&&r.status!==0,
+       accessRestricted:r.status===451};
+   }catch(e){return {name,status:null,error:String(e?.name||'NETWORK_ERROR').slice(0,45),
+     transportReachable:false,accessRestricted:null};}
+  }));
+  return reply({ok:true,readOnly:true,orders:false,checkedAt:Date.now(),
+    verdict:'NETWORK_ONLY_NOT_AUTHORIZATION_OR_ORDER_TEST',
+    checks},200);
+ }
+
  if(u.pathname==='/api/market'||u.pathname==='/api/shadow-market-data'){
   const m=await market(env);
   if(u.pathname==='/api/shadow-market-data'&&m.ok)return reply({...m,

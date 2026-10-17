@@ -724,7 +724,7 @@ const clientJs = String.raw`(function(){
         var failed=o.state==='CONFIRMED_FAILED'||o.state==='PLACE_ERROR';
         var unknown=o.state==='SUBMISSION_UNKNOWN';
         html('orderTitle',filled?'<span class="ok">已成交</span>':(failed?'<span class="bad">下单失败</span>':(unknown?'<span class="warn">状态未知，禁止重发</span>':'<span class="warn">已提交，核验中</span>')));
-        text('orderMeta','orderId '+(o.orderId||'-')+' · 生产 '+(o.productionSignal||'-')+' → '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:''));
+        text('orderMeta','orderId '+(o.orderId||'-')+' · 生产 '+(o.productionSignal||'-')+' → '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.orderAttempts?' · 已提交 '+o.orderAttempts+'/'+(o.maxOrderAttempts||3)+' 次':'')+(o.error?' · '+o.error:''));
       }else{
         text('orderTitle','暂无'); text('orderMeta','-');
       }

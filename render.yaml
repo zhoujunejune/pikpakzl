@@ -1,0 +1,14 @@
+# Zero-monthly-fee read-only connectivity test. NOT an order execution service.
+# Select only Render Free. No storage, no database, no cron job, no paid resources.
+services:
+  - type: web
+    name: zl-binance-network-probe
+    runtime: node
+    plan: free
+    region: singapore
+    branch: cloudflare-free-market-hub-20261017
+    rootDir: free-executor-probe
+    buildCommand: npm run check
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: 'off'

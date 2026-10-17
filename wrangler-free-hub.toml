@@ -1,0 +1,4 @@
+name = "zl-free-market-hub"
+main = "src/cloudflare-free-hub.mjs"
+compatibility_date = "2026-10-17"
+workers_dev = true

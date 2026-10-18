@@ -1,3 +1,4 @@
+import {verifiedDirectOfficialResolution} from './edge-official-backfill.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {bybitMarket} from './provider-market.mjs';
@@ -102,4 +103,21 @@ test('BYBIT trade adapter retries second host when first returns stale spot trad
   assert.match(m.providers.trades,/api.bytick.com.*category=spot/);
   assert.ok(m.trades.every(t=>t.T>=now-3500));
  }finally{globalThis.fetch=prior}
+});
+
+test('direct official backfill requires authenticated Binance detail evidence and exact 5m timing',()=>{
+ const r=ROUND+20*300000;
+ const evidence={ok:true,resolved:true,direction:'UP',
+   evidence:'variantData.startPrice_endPrice:STRICT_ROUND_ALIGNED_TOPIC',
+   auditEvidence:{sourceEndpoint:'/sapi/v1/w3w/wallet/prediction/market/detail',
+    detailPayloadSha256:'a'.repeat(64),evidenceSchemaVersion:1,
+    marketTopicId:'topic',resolutionField:'variantData.startPrice_endPrice',
+    topicStartDate:r,topicEndDate:r+300000}};
+ assert.equal(verifiedDirectOfficialResolution(evidence,r),'UP');
+ assert.equal(verifiedDirectOfficialResolution({...evidence,direction:'WAIT'},r),null);
+ assert.equal(verifiedDirectOfficialResolution({...evidence,resolved:false},r),null);
+ assert.equal(verifiedDirectOfficialResolution({...evidence,auditEvidence:{
+   ...evidence.auditEvidence,topicStartDate:r+300000}},r),null);
+ assert.equal(verifiedDirectOfficialResolution({...evidence,auditEvidence:{
+   ...evidence.auditEvidence,detailPayloadSha256:'bad'}},r),null);
 });

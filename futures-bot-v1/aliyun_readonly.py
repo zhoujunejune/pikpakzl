@@ -23,11 +23,23 @@ def main():
         return 3
     client=Client(openapi_models.Config(access_key_id=key,access_key_secret=secret,endpoint=ENDPOINT,region_id=REGION))
     try:
-        req=swas_models.ListInstancesRequest(region_id=REGION,instance_name=TARGET,page_size=20)
+        # Do not filter by name in the API. The supplied 32-character value
+        # might be a label rather than a canonical SWAS instance ID.
+        req=swas_models.ListInstancesRequest(region_id=REGION,page_size=100,page_number=1)
         result=client.list_instances(req)
-        matches=[x for x in (result.body.instances or []) if TARGET in (getattr(x,"instance_id",None),getattr(x,"instance_name",None))]
+        rows=result.body.instances or []
+        print("VISIBLE_SERVER_COUNT_FIRST_PAGE:",len(rows))
+        # Only report server identifiers and status, never public IP, credentials, or passwords.
+        for idx, entry in enumerate(rows[:15]):
+            print("SERVER_%02d_ID:" % idx, str(getattr(entry,"instance_id","unknown"))[:95])
+            print("SERVER_%02d_NAME:" % idx, str(getattr(entry,"instance_name","unknown"))[:95])
+            print("SERVER_%02d_STATUS:" % idx, str(getattr(entry,"status","unknown"))[:40])
+        matches=[x for x in rows if TARGET in (getattr(x,"instance_id",None),getattr(x,"instance_name",None))]
+        if not matches and len(rows)==1:
+            print("PREFLIGHT_WARNING: only one instance in region but provided label does not match; ask user to confirm before any write")
+            return 4
         if not matches:
-            print("PREFLIGHT_ERROR: no matching server visible; verify name/ID and RAM scope")
+            print("PREFLIGHT_ERROR: no exact match in first 100 instances; region/instance name needs confirmation")
             return 4
         if len(matches)!=1:
             print("PREFLIGHT_ERROR: multiple matching servers")

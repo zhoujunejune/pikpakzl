@@ -59,6 +59,13 @@ if(process.env.CF_REPAIR_STAGE==='edge-official'){
     console.warn(JSON.stringify({event:'cloudflare_edge_repair_import_failed',
       reason:String(e?.message||e).slice(0,100)})));
 }
+// One-shot, public-only WebSocket klines experiment to recover spot history
+// without using REST on the banned Render shared egress.
+if(process.env.RENDER_WS_KLINE_HISTORY_PROBE==='true'){
+  void import('./binance-ws-history-probe.mjs').catch(e=>
+    console.log(JSON.stringify({event:'binance_ws_history_probe_module_error',
+      errorType:String(e?.name||'UNKNOWN').slice(0,70)})));
+}
 // One-shot signed GET verification after startup; never invokes order-writing APIs.
 // Only status codes/counts returned by the existing redacted diagnostic endpoint are logged.
 if (process.env.RENDER_MIGRATION_PREVIEW === 'true' &&

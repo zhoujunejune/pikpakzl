@@ -138,8 +138,8 @@ test('dynamic selector honors PIN, next round and unchanged direction mapping',(
  assert.match(panel,/saveOrderModelChoice/);
 });
 
-test('order attempts are capped at three real POSTs, never extra blind retries',()=>{
- assert.equal(MAX_ORDER_SUBMIT_ATTEMPTS,3);
+test('order attempts enforce one real POST per round and no blind retries',()=>{
+ assert.equal(MAX_ORDER_SUBMIT_ATTEMPTS,1);
  const accepted=(reason,status=400)=>({ok:false,status,data:{msg:reason}});
  for(const reason of ['QUOTE_EXPIRED','INVALID_QUOTE','PRICE_CHANGED','REQUOTE_REQUIRED','SLIPPAGE_EXCEEDED'])
    assert.equal(retryableRejectedOrderPost(accepted(reason)),true,reason);

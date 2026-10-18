@@ -11,6 +11,7 @@ import traceback
 import bot
 from controls import read_control, change
 from dashboard import PAGE
+from market_health import snapshot as market_snapshot
 from preflight import assess
 
 BOOT_AT=dt.datetime.now(dt.timezone.utc).isoformat()
@@ -45,6 +46,10 @@ def public_snapshot():
         trades=current.get("history") or []
         balance=float(current.get("balance",bot.PAPER_BALANCE))
         days=[round(float(t.get("net",0)),6) for t in trades]
+        market=market_snapshot(WORKER["running"])
+        # A worker thread is not by itself evidence of fresh Binance prices.
+        if WORKER["error"] and any(x in WORKER["error"] for x in ("418","429","451")):
+            market["status"]="exchange_restricted"
         return {
             "app":"zl-futures-bot-v1",
             "mode":"paper",
@@ -65,7 +70,8 @@ def public_snapshot():
             "workerError":WORKER["error"],
             "preflight":WORKER["preflight"],
             "control":read_control(),
-            "exchangeAccess": "blocked" if WORKER["error"] and any(x in WORKER["error"] for x in ("418", "451", "429")) else ("engine_running_no_recent_error" if WORKER["running"] else "unverified"),
+            "marketHealth":market,
+            "exchangeAccess":market["status"],
             "leverageConfigured":bot.LEVERAGE,
             "leverageMaximum":20,
             "riskPerTradePercent":round(bot.RISK_FRACTION*100,2),

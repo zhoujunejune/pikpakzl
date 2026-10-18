@@ -5,8 +5,12 @@ import crypto from 'node:crypto';
 import { createClient } from 'redis';
 
 if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
-  if (process.env.AUTO_CONFIRM_ENABLED !== 'false') {
-    throw Error('RENDER_PREVIEW_REQUIRES_AUTO_CONFIRM_DISABLED');
+  // Keep the default fully OFF. Explicit owner permission is needed for
+  // automatic submission, and the UI must still be manually switched ON.
+  if (process.env.AUTO_CONFIRM_ENABLED !== 'false' &&
+      !(process.env.RENDER_TRADING_USER_ARMED === 'true' &&
+        process.env.AUTO_CONFIRM_ENABLED === 'true')) {
+    throw Error('RENDER_PREVIEW_AUTO_CONFIRM_NOT_AUTHORIZED');
   }
   // Read-only authenticated queries can be checked in preview.
   // The public panel gateway blocks every mutation and masks balances.

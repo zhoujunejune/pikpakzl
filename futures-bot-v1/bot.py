@@ -87,7 +87,9 @@ class API:
                                data=params if method!="GET" else None,
                                headers=headers,timeout=TIMEOUT)
         if r.status_code in (418, 429, 451):
-            raise RuntimeError(f"Exchange refused request HTTP {r.status_code}; no retry/no bypass")
+            # Fail closed: 418 may indicate an IP ban. NEVER poll repeatedly or rotate egress.
+            retry_after=str(r.headers.get("Retry-After", "unknown"))[:40]
+            raise RuntimeError(f"Exchange refused request HTTP {r.status_code}; Retry-After={retry_after}; no retry/no bypass")
         if not r.ok:
             raise RuntimeError(f"Exchange error HTTP {r.status_code}: {r.text[:250]}")
         return r.json()
@@ -386,11 +388,20 @@ def main():
         try:
             tick(api,state)
         except Exception as e:
-            log("cycle_error",error=str(e))
+            msg=str(e)
+            log("cycle_error",error=msg)
+            if any(f"HTTP {code}" in msg for code in (418,429,451)):
+                # Stop *all* further API calls on denied/banned egress, even in paper mode.
+                state["halt"]=True
+                save(state)
+                log("exchange_access_blocked_engine_stopped",error=msg)
+                raise RuntimeError(msg)
             if MODE=="live":
-                state["halt"]=True;save(state)
-            # No rapid retry or bypass on Binance HTTP 451, clock, or order problems.
-        time.sleep(LOOP_SECONDS)
+                # Never continue trading after an uncertain error.
+                state["halt"]=True
+                save(state)
+                raise RuntimeError(f"Live engine halted: {msg}")
+            time.sleep(LOOP_SECONDS)
 
 if __name__=="__main__":
     main()

@@ -4,7 +4,7 @@ export const EDGE_MODEL='EDGE_5M_V1';
 export const INPUT_VERSION='EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1';
 export const FEATURE_NAMES=Object.freeze(['spot_perp_lead','book_imbalance','aggressive_flow','basis_change','short_volatility']);
 export const MIN_TRAINING_ROUNDS=5000; // statistical validation target, not a signal gate
-export const MIN_FIT_ROUNDS=300; // begin provisional weight fitting before validation
+export const MIN_FIT_ROUNDS=30; // small-sample provisional fit only; never a calibrated win probability
 export const ROUND_MS=300000;
 const good=n=>typeof n==='number'&&Number.isFinite(n);
 const clamp=(v,lo=-4,hi=4)=>Math.max(lo,Math.min(hi,v));

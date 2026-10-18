@@ -13,12 +13,37 @@ export function createReadOnlyMarketFeed({
   fetchImpl = globalThis.fetch,
   live = () => null,
   now = () => Date.now(),
+  wsCandles = () => [],
+  allowRest = () => true,
 } = {}) {
   let cache = null;
   let inFlight = null;
 
   async function getCandles(interval) {
     const errors = [];
+    // Prefer Binance's actual *closed* spot WebSocket klines, recorded by V3.
+    // Never interpolate missing periods, substitute futures, or use synthetic OHLCV.
+    const duration = interval === '1m' ? 60000 : 300000;
+    try {
+      const rows = wsCandles(interval);
+      if (Array.isArray(rows) && rows.length >= 35) {
+        const valid = rows.every((r,i) => r?.closed === true &&
+          [r.startMs,r.open,r.high,r.low,r.close,r.volume,r.endMs].every(v =>
+            Number.isFinite(Number(v))) &&
+          (i===0 || r.startMs-rows[i-1].startMs===duration));
+        const last=rows.at(-1);
+        const age=now()-last.startMs;
+        if(valid && age>=0 && age<=(interval==='1m'?125000:610000)) {
+          return {interval,provider:'BINANCE_SPOT_WEBSOCKET_CLOSED_KLINES',
+            rows,lastCandleStartMs:last.startMs,ageMs:age};
+        }
+        errors.push('WS_KLINES_DISCONTINUOUS_OR_STALE');
+      } else {
+        errors.push('WS_WARMING_UP_'+(Array.isArray(rows)?rows.length:0)+'_OF_35');
+      }
+    } catch(e){errors.push('WS_ERROR_'+errorMessage(e));}
+    // Render Free egress Spot REST returned 418; do not repeatedly probe banned IP.
+    if (!allowRest()) throw new Error(interval+'_WS_ONLY_'+errors.join('|').slice(0,180));
     for (const origin of PROVIDERS) {
       try {
         const endpoint = origin + '/api/v3/klines?symbol=' + SYMBOL + '&interval=' + interval + '&limit=' + LIMITS[interval];
@@ -65,7 +90,7 @@ export function createReadOnlyMarketFeed({
       throw new Error('RAILWAY_SPOT_DATA_MISSING_OR_STALE');
     }
     return {
-      source: 'EXISTING_RAILWAY_BINANCE_SPOT_COLLECTOR',
+      source: 'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',
       eventMs: at, ageMs: age, lastPrice: price,
       roundStartMs: finite(snapshot?.signal?.roundStartMs),
       roundOpenPrice: finite(facts?.roundOpenPrice),
@@ -86,7 +111,10 @@ export function createReadOnlyMarketFeed({
     return {
       ok, schemaVersion: 1, service: 'breakout20-shadow-market-readonly',
       symbol: SYMBOL, readOnly: true, generatedAtMs: now(),
-      source: 'BINANCE_PUBLIC_CANDLES_AND_EXISTING_RAILWAY_SPOT_COLLECTOR',
+      source: one?.provider==='BINANCE_SPOT_WEBSOCKET_CLOSED_KLINES' &&
+        five?.provider==='BINANCE_SPOT_WEBSOCKET_CLOSED_KLINES'
+        ? 'BINANCE_OFFICIAL_SPOT_WEBSOCKET_KLINES'
+        : 'BINANCE_PUBLIC_CANDLES_AND_LIVE_SPOT_COLLECTOR',
       latest,
       candles: { '1m': one, '5m': five },
       integrity: {

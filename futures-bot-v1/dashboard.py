@@ -27,7 +27,8 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 <div class="metric"><small>已平仓 / 盈利笔数</small><strong id="wins">—</strong></div>
 <div class="metric"><small>模拟胜率</small><strong id="winrate">—</strong></div></div>
 <div class="row" style="margin-top:12px"><small>开仓状态</small><b id="entry-status">—</b></div>
-<div class="row"><small>行情诊断</small><span id="exchange">—</span></div>
+<div class="row"><small>行情诊断</small><b id="exchange">检测中</b></div>
+<div class="row" style="align-items:start"><small>最后获取成功</small><span id="market-age" style="text-align:right;max-width:70%;font-size:12px">—</span></div>
 <div id="error" class="warn" style="display:none"></div></section>
 <section class="card"><h2>交易控制</h2>
 <div class="buttons">
@@ -61,7 +62,23 @@ async function refresh(){
   el("winrate").textContent=s.closedTrades?((s.wins||0)*100/s.closedTrades).toFixed(1)+"%":"—";
   el("worker").textContent=s.workerRunning?"行情任务运行中":"行情任务未运行";
   el("entry-status").textContent=c.emergency_stop?"紧急锁定":c.entry_enabled?"允许模拟开仓":"暂停新开仓";
-  el("exchange").textContent=s.exchangeAccess||"未确认";
+  const m=s.marketHealth||{};
+  const labels={
+    market_data_received:"行情数据更新正常",
+    market_data_stale:"行情超时未刷新",
+    waiting_first_market_data:"等待首次有效行情",
+    request_failed:"行情接口请求异常",
+    exchange_restricted:"交易所访问受限",
+    engine_stopped:"行情任务已停止"
+  };
+  const state=m.status||s.exchangeAccess||"unverified";
+  el("exchange").textContent=labels[state]||"行情未验证";
+  el("exchange").className=state==="market_data_received"?"good":state==="waiting_first_market_data"?"":"bad";
+  el("market-age").textContent=m.lastSuccessAt?
+    (new Date(m.lastSuccessAt).toLocaleString("zh-CN",{hour12:false})+
+      " · "+m.lastSuccessAgeSeconds+"秒前 · "+(m.symbol||"")+" "+(m.source||"")):
+    "尚未收到有效行情";
+  if(m.lastRequestError){el("market-age").textContent+=" · 最近请求错误："+m.lastRequestError}
   el("error").style.display=s.workerError?"block":"none";el("error").textContent=s.workerError||"";
   el("pause").disabled=working||!c.entry_enabled||c.emergency_stop;
   el("resume").disabled=working||c.entry_enabled||c.emergency_stop;

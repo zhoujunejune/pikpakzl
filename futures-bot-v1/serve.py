@@ -9,13 +9,26 @@ import time
 import traceback
 
 import bot
+from preflight import assess
 
 BOOT_AT=dt.datetime.now(dt.timezone.utc).isoformat()
-WORKER={"running":False,"error":None,"finished_at":None}
+WORKER={"running":False,"error":None,"finished_at":None,"preflight":None}
 
 def worker():
     WORKER["running"]=True
     try:
+        # No outbound requests during Binance 418 cooldown. After expiry, allow a
+        # one-off test order permission check (does not enter matching engine).
+        check=assess(allow_trade_test=True)
+        WORKER["preflight"]={
+            "outboundAllowed":check.get("outboundAllowed",False),
+            "credentialNamesPresent":check.get("keyPresent",False) and check.get("secretPresent",False),
+            "authenticated":check.get("authenticated",False),
+            "testOrderPermission":check.get("tradePermissionTested",False),
+            "blocker":check.get("blocker"),
+        }
+        if not check.get("outboundAllowed"):
+            raise RuntimeError("Exchange ban/cooldown until "+str(check.get("retryNotBefore")))
         bot.main()
     except Exception as e:
         WORKER["error"]=str(e)[:200]
@@ -48,6 +61,7 @@ def public_snapshot():
             "halted":bool(current.get("halt",False)),
             "workerRunning":WORKER["running"],
             "workerError":WORKER["error"],
+            "preflight":WORKER["preflight"],
             "exchangeAccess": "blocked" if WORKER["error"] and any(x in WORKER["error"] for x in ("418", "451", "429")) else ("available" if WORKER["running"] else "unverified"),
             "leverageConfigured":bot.LEVERAGE,
             "leverageMaximum":20,

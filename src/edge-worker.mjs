@@ -190,10 +190,9 @@ export class Edge5 extends DurableObject{
   const m=await this.meta(),start=Date.now(),round=roundAt(start);
   m.lastTickAt=start;
   if(start-round>=8000&&start-round<ROUND_MS-16000)return;
-  // V2 shadow must sample its true Binance/PM inputs before the 8-second
-  // deadline; V1 production signals and score remain exactly as before.
-  const v2Late=start-round>=5600&&start-round<8000;
-  if(v2Late)await this.observeV2(m,start);
+  // Start both independent input reads at the same alarm tick.
+  // Never await the research candidate before the original live V1 lock.
+  const v2Work=this.observeV2(m,start);
   try{
    const obs=await observation(m.activeVenue),now=Date.now();
    if(m.activeVenue&&m.activeVenue!==obs.venue)throw Error('MARKET_VENUE_CHANGED');
@@ -224,7 +223,7 @@ export class Edge5 extends DurableObject{
    }
   }catch(e){m.marketError=msg(e);}
   finally{
-   if(!v2Late)await this.observeV2(m,start);
+   await v2Work;
    await this.ctx.storage.put('meta',m);
   }
  }

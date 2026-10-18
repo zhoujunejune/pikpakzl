@@ -22,4 +22,4 @@ jobs:
         run: pip install -r futures-bot-v1/requirements.txt
       - name: Run unit tests without network or trading keys
         working-directory: futures-bot-v1
-        run: python -m unittest -v test_bot.py
+        run: python -m unittest discover -v -p 'test_*.py'

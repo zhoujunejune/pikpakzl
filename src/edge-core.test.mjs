@@ -2,6 +2,7 @@ import {verifiedDirectOfficialResolution} from './edge-official-backfill.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {bybitMarket} from './provider-market.mjs';
+import {predictionSnapshot,v2Features,v2Summary,V2_INPUT_VERSION,V2_FEATURE_NAMES} from './edge-v2-shadow.mjs';
 import {EDGE_MODEL,INPUT_VERSION,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS,roundAt,extractFeatures,
   scoreDirection,trainOnOfficial,summarize} from './edge-core.mjs';
 const ROUND=1792166400000;
@@ -120,4 +121,58 @@ test('direct official backfill requires authenticated Binance detail evidence an
    ...evidence.auditEvidence,topicStartDate:r+300000}},r),null);
  assert.equal(verifiedDirectOfficialResolution({...evidence,auditEvidence:{
    ...evidence.auditEvidence,detailPayloadSha256:'bad'}},r),null);
+});
+
+test('V2 refuses stale, cross-round or direction-ambiguous Prediction books',()=>{
+ const round=ROUND+4*300000,now=round+6600;
+ const f={predictionMarketRound:round,predictionMarketRoundAligned:true,
+  predictionMarketMappingReliable:true,predictionMarketYesDirection:'UP',
+  predictionMarketId:16719381,predictionMarketBookAgeMs:90,
+  predictionMarketUpBid:.47,predictionMarketUpAsk:.48,
+  predictionMarketUpMid:.475,predictionMarketDepthImbalance5:.11};
+ const data={ok:true,signal:{roundStartMs:round,factsCalculatedAt:now-130,facts:f},
+  dataIntegrity:{predictionOrderbookConnected:true,predictionOrderbookFresh:true}};
+ const valid=predictionSnapshot(data,round,now);
+ assert.equal(valid.round,round);assert.equal(valid.upMid,.475);
+ assert.equal(predictionSnapshot({...data,signal:{...data.signal,
+   facts:{...f,predictionMarketRound:round-300000}}},round,now),null);
+ assert.equal(predictionSnapshot({...data,signal:{...data.signal,
+   facts:{...f,predictionMarketMappingReliable:false}}},round,now),null);
+ assert.equal(predictionSnapshot({...data,signal:{...data.signal,
+   facts:{...f,predictionMarketBookAgeMs:4000}}},round,now),null);
+ assert.equal(predictionSnapshot({...data,signal:{...data.signal,
+   facts:{...f,predictionMarketUpBid:.5}}},round,now),null);
+ assert.equal(predictionSnapshot({...data,signal:{...data.signal,
+   factsCalculatedAt:now+700}},round,now),null);
+});
+test('V2 uses nonredundant Binance spot and PM price/depth, not Binance Futures',()=>{
+ const round=ROUND+4*300000,now=round+6700;
+ const obs={venue:'BINANCE',spotPrice:82210,spotAt:now-90,
+  bids:Array.from({length:5},(_,i)=>[82209-i,'2']),
+  asks:Array.from({length:5},(_,i)=>[82211+i,'1.5']),
+  trades:[{T:now-800,q:'1',m:false},{T:now-620,q:'2',m:true},
+    {T:now-400,q:'1',m:false},{T:now-200,q:'1',m:false}]};
+ const trail=[{at:now-17000,spotPrice:82040,venue:'BINANCE'},
+   {at:now-11000,spotPrice:82100,venue:'BINANCE'},
+   {at:now-5000,spotPrice:82150,venue:'BINANCE'}];
+ const pm={round,at:now-110,marketId:321,upBid:.69,upAsk:.70,
+   upMid:.695,yesDirection:'DOWN',depthImbalance:.12};
+ const f=v2Features(obs,trail,pm,now);
+ assert.equal(f.inputVersion,V2_INPUT_VERSION);
+ assert.equal(V2_FEATURE_NAMES.length,6);
+ assert.equal(f.values.length,6);
+ assert.equal(f.baselineDirection,'UP');
+ assert.equal(f.pmMarketId,321);
+ assert.equal(f.modelProbability,null);
+ assert.ok(['UP','DOWN'].includes(f.blendDirection));
+ assert.equal(v2Features({...obs,venue:'BYBIT'},trail,pm,now),null);
+ assert.equal(v2Features(obs,[],pm,now),null);
+ assert.equal(v2Features(obs,trail,{...pm,round:round-300000},now),null);
+ const stats=v2Summary([
+  {features:'{}',pmDirection:'UP',blendDirection:'DOWN',actual:'UP'},
+  {features:'{}',pmDirection:'DOWN',blendDirection:'DOWN',actual:'DOWN'},
+  {features:'{}',pmDirection:'UP',blendDirection:'DOWN',actual:null}]);
+ assert.equal(stats.pmOnly.hits,2);
+ assert.equal(stats.blend.hits,1);
+ assert.equal(stats.pending,1);
 });

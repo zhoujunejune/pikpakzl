@@ -3,13 +3,15 @@
 import {DurableObject} from 'cloudflare:workers';
 import {bestMarket} from './provider-market.mjs';
 import {verifiedDirectOfficialResolution} from './edge-official-backfill.mjs';
+import {predictionSnapshot,v2Features,v2Summary} from './edge-v2-shadow.mjs';
 import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection,
   trainOnOfficial,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS} from './edge-core.mjs';
 
 const OFFICIAL_URL='https://zl-signal-v2-migration.onrender.com/api/round-stats';
 const RAILWAY_MARKET_URL='https://zl-signal-v3-migration.onrender.com/api/shadow-market-data';
+const V2_PM_URL='https://zl-signal-v3-migration.onrender.com/api/signal';
 const OFFICIAL_SOURCE='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
-const PHASES=[-15000,-12000,-9000,-6000,-3000,1900,4500,6600,25000];
+const PHASES=[-15000,-12000,-9000,-6000,-3000,1900,4500,6050,6800,7450,25000];
 const TTL=ROUND_MS*25;
 const valid=d=>d==='UP'||d==='DOWN';
 const msg=e=>String(e?.message||e).slice(0,180);
@@ -63,6 +65,33 @@ async function binanceObservation(){
    providers:{spot:spot.url,depth:depth.url,trades:trades.url,perp:perp.url}};
 }
 const observation=(venue=null)=>bestMarket(venue,binanceObservation);
+// The V2 research candidate avoids Binance Futures HTTP 451 entirely.
+// It requires independent real Binance spot price, L5 book and signed trades.
+async function binanceV2SpotObservation(){
+ const [spot,depth,trade]=await Promise.all([
+  firstGood([RAILWAY_MARKET_URL,
+    'https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT'],
+    p=>(p?.ok===true&&p?.readOnly===true&&
+      Number(p?.latest?.lastPrice)>0&&Number(p?.latest?.eventMs)>0)||
+      (p?.symbol==='BTCUSDT'&&Number(p?.price)>0)),
+  firstGood(['https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=10'],
+    p=>Array.isArray(p?.bids)&&p.bids.length>=5&&
+      Array.isArray(p?.asks)&&p.asks.length>=5),
+  firstGood(['https://data-api.binance.vision/api/v3/aggTrades?symbol=BTCUSDT&limit=200'],
+    p=>Array.isArray(p)&&p.length>=3)
+ ]);
+ const at=Date.now(),fromV3=spot.payload?.ok===true;
+ const spotPrice=fromV3?Number(spot.payload.latest.lastPrice):Number(spot.payload.price);
+ const spotAt=fromV3?Number(spot.payload.latest.eventMs):spot.receivedAt;
+ if(!(spotPrice>0&&spotAt<=at+300&&at-spotAt<=2500))
+  throw Error('V2_BINANCE_SPOT_STALE');
+ const rows=trade.payload.map(t=>({T:Number(t.T),q:t.q,m:t.m}));
+ if(rows.filter(t=>Number(t.q)>0&&at-t.T>=-300&&at-t.T<=4000).length<3)
+  throw Error('V2_BINANCE_TRADES_STALE');
+ return {venue:'BINANCE',spotPrice,spotAt,
+  bids:depth.payload.bids,asks:depth.payload.asks,trades:rows,
+  at,source:fromV3?'BINANCE_WS_EVENT':'BINANCE_SPOT_REST_RECEIPT'};
+}
 function officialRounds(payload){
  if(payload?.ok!==true||payload?.settlementSource!==OFFICIAL_SOURCE||
    !Array.isArray(payload?.records))throw Error('OFFICIAL_LEDGER_PROVENANCE_INVALID');
@@ -101,6 +130,12 @@ export class Edge5 extends DurableObject{
    "round INTEGER PRIMARY KEY,direction TEXT,lockedAt INTEGER,marketAt INTEGER,"+
    "score REAL,modelVersion TEXT,modelProbability REAL,calibrationReady INTEGER,"+
    "features TEXT,actual TEXT,settledAt INTEGER,pendingReason TEXT)");
+  // V1 SQL history and direction stay completely unchanged. V2 is shadow-only.
+  this.ctx.storage.sql.exec(
+   "CREATE TABLE IF NOT EXISTS edge_v2_shadow ("+
+   "round INTEGER PRIMARY KEY,pmDirection TEXT,blendDirection TEXT,"+
+   "lockedAt INTEGER,marketAt INTEGER,pmMarketId INTEGER,pmUpMid REAL,"+
+   "features TEXT,actual TEXT,settledAt INTEGER)");
  }
  async meta(){return await this.ctx.storage.get('meta')||{
   model:null,training:{status:'COLLECTING',samples:0,required:MIN_TRAINING_ROUNDS,
@@ -119,10 +154,45 @@ export class Edge5 extends DurableObject{
     calibrationReady:!!r.calibrationReady,actual:r.actual,settledAt:r.settledAt,
     pendingReason:r.pendingReason,status:r.direction?'LOCKED':'MISSING'}));
  }
+ async observeV2(m,startedAt){
+  try{
+   const obs=await binanceV2SpotObservation(),at=Date.now();
+   const trail=Array.isArray(m.v2Trail)?m.v2Trail.filter(
+     t=>at-t.at<=25000&&t.venue==='BINANCE'):[];
+   if(roundAt(at)!==roundAt(startedAt))return;
+   const elapsed=at-roundAt(at);
+   if(elapsed>=5600&&elapsed<8000){
+    const old=this.ctx.storage.sql.exec(
+     'SELECT round FROM edge_v2_shadow WHERE round=?',roundAt(at)).toArray()[0];
+    if(!old){
+     const source=await readJson(V2_PM_URL,1900),freezeAt=Date.now(),
+       round=roundAt(freezeAt),pm=predictionSnapshot(source,round,freezeAt);
+     if(round===roundAt(startedAt)&&freezeAt-round<8000&&pm){
+      const f=v2Features(obs,trail,pm,freezeAt);
+      if(f){
+       this.ctx.storage.sql.exec(
+        'INSERT INTO edge_v2_shadow(round,pmDirection,blendDirection,lockedAt,'+
+        'marketAt,pmMarketId,pmUpMid,features,actual,settledAt) '+
+        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+        f.round,f.baselineDirection,f.blendDirection,freezeAt,
+        f.marketAt,f.pmMarketId,f.pmUpMid,JSON.stringify(f),null,null);
+       m.v2LastGoodAt=freezeAt;
+       m.v2Error=null;
+      }else m.v2Error='V2_REAL_FEATURES_INCOMPLETE';
+     }else m.v2Error='V2_PM_MARKET_NOT_READY_OR_TOO_LATE';
+    }
+   }
+   trail.push({at,spotPrice:obs.spotPrice,venue:'BINANCE'});
+   m.v2Trail=trail.slice(-20);
+  }catch(e){m.v2Error=msg(e);}
+ }
  async scan(){
   const m=await this.meta(),start=Date.now(),round=roundAt(start);
   m.lastTickAt=start;
   if(start-round>=8000&&start-round<ROUND_MS-16000)return;
+  // Start both independent input reads at the same alarm tick.
+  // Never await the research candidate before the original live V1 lock.
+  const v2Work=this.observeV2(m,start);
   try{
    const obs=await observation(m.activeVenue),now=Date.now();
    if(m.activeVenue&&m.activeVenue!==obs.venue)throw Error('MARKET_VENUE_CHANGED');
@@ -152,7 +222,10 @@ export class Edge5 extends DurableObject{
     }
    }
   }catch(e){m.marketError=msg(e);}
-  finally{await this.ctx.storage.put('meta',m);}
+  finally{
+   await v2Work;
+   await this.ctx.storage.put('meta',m);
+  }
  }
  async resolveOfficial(){
   const m=await this.meta();
@@ -197,6 +270,17 @@ export class Edge5 extends DurableObject{
     m.results=updatedResults({...row,actual},m.results);
     additions++;
    }
+   // Independently settle only V2 predictions frozen before outcome.
+   // Reuse exclusively authenticated, round-aligned official directions.
+   const v2Pending=this.ctx.storage.sql.exec(
+    'SELECT round FROM edge_v2_shadow WHERE actual IS NULL ORDER BY round DESC LIMIT 120').toArray();
+   for(const row of v2Pending){
+    const actual=map.get(row.round);
+    if(!valid(actual)||row.round+ROUND_MS>Date.now())continue;
+    this.ctx.storage.sql.exec(
+     'UPDATE edge_v2_shadow SET actual=?,settledAt=? WHERE round=? AND actual IS NULL',
+     actual,Date.now(),row.round);
+   }
    m.lastOfficialAt=Date.now();m.officialError=null;
    const settled=m.results.overall.samples;
    m.training.samples=settled;
@@ -228,6 +312,12 @@ export class Edge5 extends DurableObject{
   await this.schedule();
   const m=await this.meta(),now=Date.now(),round=roundAt(now);
   const recent=this.latestRows(pathname==='/status'?40:1);
+  const v2Rows=this.ctx.storage.sql.exec(
+   'SELECT round,pmDirection,blendDirection,lockedAt,marketAt,pmMarketId,'+
+   'pmUpMid,features,actual,settledAt FROM edge_v2_shadow '+
+   'ORDER BY round DESC LIMIT 500').toArray();
+  const v2Results=v2Summary(v2Rows);
+  const v2Latest=v2Rows[0]||null;
   const row=recent.find(r=>r.round===round);
   const execOk=Boolean(row&&valid(row.direction)&&
     Number.isFinite(row.lockedAt)&&row.lockedAt>=round&&row.lockedAt<round+8000&&
@@ -239,7 +329,19 @@ export class Edge5 extends DurableObject{
    readOnly:true,orders:false,productionIntegration:false,
    statsScope:'EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY',
    generatedAt:now,latest,
-   recent,results:m.results,training:{...m.training,
+   recent,results:m.results,
+   shadowV2:{name:'EDGE5_BINANCE_PM_V2_SHADOW',productionEffect:'NONE',
+     lockTargetMs:6800,featureNames:[
+      'binance_spot_momentum','binance_spot_book_imbalance',
+      'binance_aggressive_flow','binance_spot_realized_vol',
+      'prediction_up_mid_logodds','prediction_book_depth_imbalance'],
+     results:v2Results,
+     latest:v2Latest?{round:v2Latest.round,pmDirection:v2Latest.pmDirection,
+       blendDirection:v2Latest.blendDirection,lockedAt:v2Latest.lockedAt,
+       pmUpMid:v2Latest.pmUpMid,actual:v2Latest.actual,
+       pmMarketId:v2Latest.pmMarketId}:null,
+     error:m.v2Error||null,lastGoodAt:m.v2LastGoodAt||null},
+   training:{...m.training,
     remaining:Math.max(0,MIN_TRAINING_ROUNDS-(m.training?.samples||0)),
     ready:m.training?.ready===true,
     fitRequired:MIN_FIT_ROUNDS,signalIndependentOfCalibration:true,
@@ -285,7 +387,14 @@ export default{
     'executionEligible:l?.executionEligible===true,trainingSamples:t.samples,'+
     'required:5000,calibrationReady:t.ready,accuracy:r.overall,'+
     'UP:r.up,DOWN:r.down,marketError:h.marketError,'+
-    'officialError:h.officialError,latest:l},null,2)}catch(e){'+
+    'officialError:h.officialError,latest:l,'+
+    'V2_shadow_no_orders:{source:"BINANCE_SPOT_AND_PREDICTION",'+
+    'locked:d.shadowV2?.results?.locked||0,'+
+    'pending:d.shadowV2?.results?.pending||0,'+
+    'PM_only:d.shadowV2?.results?.pmOnly,'+
+    'binance_PM_blend:d.shadowV2?.results?.blend,'+
+    'latest:d.shadowV2?.latest,'+
+    'dataError:d.shadowV2?.error}},null,2)}catch(e){'+
     'document.querySelector("#state").textContent=String(e)}}go();setInterval(go,5000)</script>'+
     '</body></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
   }

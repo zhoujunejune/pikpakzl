@@ -43,9 +43,27 @@ if(!token||!(/^[a-f0-9]{32}$/i).test(accountId)){
           textData.split(origin).length-1]));
         const lineNos=Object.fromEntries(origins.map(origin=>[origin,
           textData.split('\n').flatMap((line,index)=>line.includes(origin)?[index+1]:[]).slice(0,15)]));
+        const contexts=[];
+        if (!part.endsWith('.map')) {
+          for(const oldOrigin of origins.slice(0,2)){
+            let pos=textData.indexOf(oldOrigin);
+            if(pos>=0){
+              const segment=textData.slice(Math.max(0,pos-520),Math.min(textData.length,pos+oldOrigin.length+520));
+              contexts.push({origin:oldOrigin,codeAroundOrigin:segment.replace(
+                /(?:Bearer\\s+)[A-Za-z0-9._-]{20,}/g,'Bearer [REDACTED]')});
+            }
+          }
+        }
         entries.push({part:part.slice(0,100),size:textData.length,
           sha256:createHash('sha256').update(textData).digest('hex').slice(0,16),
-          originMatches:candidates,originLines:lineNos});
+          originMatches:candidates,originLines:lineNos,
+          contentType:typeof value==='string'?'text':value.type,
+          scriptShape:(!part.endsWith('.map'))?{
+            esModule:textData.includes('export{')||textData.includes('export default'),
+            workerFetch:textData.includes('async fetch(')||textData.includes('fetch(e,'),
+            ends:textData.slice(-145)
+          }:null,
+          contexts});
       }
     }else{
       const textData=await res.text();
@@ -82,6 +100,28 @@ if(!token||!(/^[a-f0-9]{32}$/i).test(accountId)){
       say('cloudflare_worker_inspection_failed',{name,
         errorType:String(error?.name||'UNKNOWN').slice(0,60)});
     }
+  }
+  for(const target of [
+    {name:'render_v2_round_stats',url:'https://zl-signal-v2-migration.onrender.com/api/round-stats'},
+    {name:'render_v3_market_feed',url:'https://zl-signal-v3-migration.onrender.com/api/shadow-market-data'}
+  ]){
+    try{
+      const r=await fetch(target.url,{cache:'no-store',signal:AbortSignal.timeout(14000)});
+      const data=await r.json();
+      const rows=Array.isArray(data?.records)?data.records:null;
+      const first=rows?.[0];
+      const candle=data?.candles;
+      const candles=Object.fromEntries(['1m','5m'].map(i=>[i,{
+        count:Array.isArray(candle?.[i]?.rows)?candle[i].rows.length:null,
+        provider:candle?.[i]?.provider||null,ageMs:candle?.[i]?.ageMs??null
+      }]));
+      say('cloudflare_target_origin_probe',{name:target.name,httpStatus:r.status,
+        ok:data?.ok===true,rootKeys:Object.keys(data||{}).slice(0,35),
+        recordCount:rows?.length??null,recordKeys:first?Object.keys(first).slice(0,35):null,
+        latestFields:data?.latest?Object.keys(data.latest).slice(0,20):null,
+        candles,errors:data?.integrity?.errors?.slice(0,8)??null});
+    }catch(error){say('cloudflare_target_origin_probe_failed',{
+      name:target.name,errorType:String(error?.name||'UNKNOWN').slice(0,40)});}
   }
   say('cloudflare_repair_audit_complete',{workers,
     operations:'GET_ONLY',changes:'NONE',trading:'UNCHANGED'});

@@ -42,4 +42,7 @@ void (async () => {
   }
 })();
 
+// Migration-branch-only diagnostics; results are read-only and independent of signal decisions.
+void import('./render-migration-readonly-preflight.mjs').catch(e=>
+  console.warn(JSON.stringify({event:'render_migration_preflight_load_failed',error:String(e?.message||e).slice(0,120)})));
 await import('./index.mjs');

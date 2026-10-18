@@ -1251,6 +1251,33 @@ function proxyInner(req, res, transformHtml = false) {
   req.pipe(p);
 }
 
+// Read-only public-preview boundary. Never expose wallet balances, orders or
+// API credentials on a public onrender.com hostname without authentication.
+function proxyPreviewStatus(req,res){
+  const p=http.request({hostname:'127.0.0.1',port:INNER_PANEL_PORT,
+    path:'/api/status',method:'GET',headers:{accept:'application/json'}}, inner=>{
+    const chunks=[];let total=0;
+    inner.on('data',buf=>{total+=buf.length;if(total<=1048576)chunks.push(buf);});
+    inner.on('end',()=>{
+      if(total>1048576){res.writeHead(502);return res.end();}
+      let data;
+      try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'))}
+      catch{res.writeHead(502,{'content-type':'application/json'});return res.end(JSON.stringify({ok:false,error:'PREVIEW_STATUS_UNAVAILABLE'}));}
+      const verified=data?.balance?.ok===true;
+      const safe={...data,
+        balance:{ok:verified,items:[],previewConnectionOk:verified,
+          error:verified?null:'READONLY_BALANCE_CHECK_FAILED'},
+        pendingAction:null,lastOrder:null};
+      res.writeHead(inner.statusCode||502,{
+        'content-type':'application/json; charset=utf-8','cache-control':'no-store',
+        'x-content-type-options':'nosniff'});
+      res.end(JSON.stringify(safe));
+    });
+  });
+  p.on('error',()=>{res.writeHead(502,{'content-type':'application/json'});res.end(JSON.stringify({ok:false,error:'PREVIEW_STATUS_UNAVAILABLE'}))});
+  p.end();
+}
+
 async function fetchStatsOrigin(origin, timeoutMs, label) {
   const startedAt = Date.now();
   try {
@@ -1409,6 +1436,19 @@ async function binanceOfficialReadOnlyProbe(req, res) {
 startInner();
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    // No externally accessible mutating route in the Render free-tier preview.
+    // The trading keys are used exclusively for backend read-only GET checks.
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(403,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      return res.end(JSON.stringify({ok:false,error:'RENDER_PREVIEW_READONLY_NO_ORDER_ACTIONS'}));
+    }
+    if (url.pathname === '/api/balance') {
+      res.writeHead(403,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      return res.end(JSON.stringify({ok:false,error:'BALANCE_PROTECTED_ON_PUBLIC_PREVIEW'}));
+    }
+    if (url.pathname === '/api/status') return proxyPreviewStatus(req,res);
+  }
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);

@@ -5,11 +5,13 @@ const probes = [
   ['binance_data','https://data-api.binance.vision/api/v3/time'],
   ['binance_futures','https://fapi.binance.com/fapi/v1/time'],
   ['cloudflare_edge','https://edge-5m-v1.zl528094-3ba.workers.dev/status'],
-  ['cloudflare_breakout20','https://breakout20-shadow.zl528094-3ba.workers.dev/status']
+  ['cloudflare_breakout20','https://breakout20-shadow.zl528094-3ba.workers.dev/status'],
+  ['render_v2_official','https://zl-signal-v2-migration.onrender.com/api/round-stats']
 ];
 // Never repeatedly probe Spot REST from a banned/shared Render egress.
 const tests = probes.filter(([target]) =>
-  process.env.BINANCE_REST_PREFLIGHT === 'true' || target.startsWith('cloudflare_'));
+  process.env.BINANCE_REST_PREFLIGHT === 'true' ||
+  target.startsWith('cloudflare_') || target==='render_v2_official');
 console.log(JSON.stringify({event:'render_binance_rest_probes_config',
   enabled:process.env.BINANCE_REST_PREFLIGHT === 'true',skipped:probes.length-tests.length}));
 await Promise.all(tests.map(async ([target,url]) => {
@@ -84,6 +86,15 @@ await Promise.all(tests.map(async ([target,url]) => {
         body.latest.modelVersion:null;
 
 
+    } else if(target==='render_v2_official'){
+      const rows=Array.isArray(body?.records)?body.records:[];
+      result.apiOk=body?.ok===true;
+      result.rows=rows.length;
+      result.officialRows=rows.filter(r=>
+        ['UP','DOWN'].includes(r?.actual) &&
+        String(r?.resolutionEvidence||r?.officialSettlementAudit?.source||'').length>0).length;
+      result.freshestRound=rows.reduce((n,r)=>Math.max(n,Number(r?.round)||0),0)||null;
+      result.dataError=typeof body?.error==='string'?body.error.slice(0,90):null;
     }else {
       result.exchangeCode=typeof body?.code==='number'?body.code:null;
     }

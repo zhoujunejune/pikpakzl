@@ -57,3 +57,13 @@ The initial version polls REST endpoints and has no live dashboard, mobile kill 
 Independent of leverage, with a 200 USDT wallet and a 1.5% target price risk, **3 USDT** is the approximate planned *price-based* loss per trade before fees, slippage, gaps and liquidation. 20x leverage does not make that a guaranteed maximum.
 
 Source: [Binance USD-M trading API](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade).
+
+## 2026-10-18 audit (do not use live)
+
+- Render free Singapore service `zl-futures-bot-v1-paper` deployed successfully but Binance USDT-M REST access returned **HTTP 418** with `Retry-After: 103412`. The engine now **stops** on 418/429/451; no IP rotation, repeated probing or access restriction circumvention.
+- Read-only Binance futures candlesticks (2026-10-03 through 2026-10-18) were used for an **illustrative** strategy backtest with a 200 USDT starting wallet *for each symbol separately*, 10x position cap, 0.05% per-side fees and 0.03% per-side assumed adverse slippage.
+- BTCUSDT: 42 closed, 14 profitable, estimated 180.40 USDT ending balance, **-19.60 USDT**.
+- ETHUSDT: 53 closed, 17 profitable, estimated 173.94 USDT ending balance, **-26.06 USDT**.
+- Those exploratory results are not independently audited and omit funding, liquidation, exchange order quantity constraints and some opening-bar fill complexities. They **do not establish profitability** and are a reason to **not** authorize live execution with this prototype.
+- Free Render web services sleep after inactivity and discard local files on redeploy; **no durable 24/7 production order manager is possible with this exact setup**.
+- No authenticated Binance futures account/permission probe was completed: the Render connector does not expose the existing secret environment variables and the separate new service does not inherit them.

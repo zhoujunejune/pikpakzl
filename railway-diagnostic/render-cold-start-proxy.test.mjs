@@ -87,13 +87,13 @@ async function checkProxy(path,begin,end,fnName,portSymbol,options){
 test('Render control proxy waits through port 3001 startup but never retries order POST',async()=>{
  await checkProxy('./control-shell.mjs',
   'function proxy(req, res, { transformHtml = false } = {}) {',
-  '\\n\\nstartInner();',
+  String.fromCharCode(10,10)+'startInner();',
   'proxy','INNER_PORT',{transformHtml:true});
 });
 
 test('Render public panel proxy waits for port 3002 startup and rejects non-idempotent retries',async()=>{
  await checkProxy('./panel-stats-shell.mjs',
   'function proxyInner(req, res, transformHtml = false) {',
-  '\\n\\nasync function fetchStatsOrigin',
+  String.fromCharCode(10,10)+'async function fetchStatsOrigin',
   'proxyInner','INNER_PANEL_PORT',null);
 });

@@ -190,6 +190,10 @@ test('EDGE fourth model never reuses old predictions and rejects uncalibrated ex
  const observing=validateEdgeSignal(baseline,now);
  assert.equal(observing.ok,true);assert.equal(observing.executionEligible,false);
  assert.equal(observing.modelProbability,null);
+ const uncalibratedUsable={...baseline,latest:{...baseline.latest,executionEligible:true}};
+ const accepted=validateEdgeSignal(uncalibratedUsable,now);
+ assert.equal(accepted.ok,true);assert.equal(accepted.executionEligible,true);
+ assert.equal(accepted.calibrationReady,false);assert.equal(accepted.modelProbability,null);
  for(const patch of [{orders:true},{readOnly:false},{latest:{...baseline.latest,round:ROUND-300000}},
    {latest:{...baseline.latest,lockedAt:ROUND+8000}},
    {latest:{...baseline.latest,marketAt:ROUND+10000}},
@@ -208,7 +212,8 @@ test('EDGE quote gating is independent of previous three model paths',()=>{
  const wrapper=read('./wrapper.mjs'),panel=read('./panel-stats-shell.mjs'),service=read('./edge-5m-service.mjs');
  assert.match(wrapper,/if \(p\.signalModelChoice===EDGE_MODEL\)/);
  assert.match(wrapper,/EDGE_ORDER_DEADLINE_MS = 8000/);
- assert.match(wrapper,/EDGE5_NOT_CALIBRATED/);
+ assert.doesNotMatch(wrapper,/EDGE5_NOT_CALIBRATED/);
+ assert.match(wrapper,/EDGE5_QUOTE_INVALID/);
  assert.match(panel,/<option value="EDGE_5M_V1">/);
  assert.match(panel,/renderEdgePrimary/);
  assert.match(panel,/renderEdgeRoundStats/);

@@ -184,20 +184,20 @@ export function validateEdgeSignal(body,now=Date.now()){
    typeof lock.score!=='number'||!Number.isFinite(lock.score)||
    !/^EDGE5_(?:OFFICIAL_[0-9]+_[0-9]+|UNCALIBRATED_PROBE)$/.test(String(lock.modelVersion||'')))
    return {ok:false,reason:'EDGE_LOCK_EVIDENCE_MISSING'};
- const ready=lock.executionEligible===true&&lock.calibrationReady===true&&
-   body.training?.ready===true&&body.training?.calibrationReady===true&&
-   body.training?.version===lock.modelVersion&&
-   Number(body.training.samples)>=5000;
+ // Upstream must explicitly mark a real-data, eight-second locked direction as eligible.
+ // Training progress is informational and is never used as an order permission check.
+ const eligible=lock.executionEligible===true;
+ const calibrated=lock.calibrationReady===true&&body.training?.calibrationReady===true&&
+   body.training?.version===lock.modelVersion&&Number(body.training?.samples)>=5000;
  const probability=lock.modelProbability;
- if(ready&&(!(typeof probability==='number'&&Number.isFinite(probability))||
+ if(calibrated&&(!(typeof probability==='number'&&Number.isFinite(probability))||
    probability<0.5||probability>1))
    return {ok:false,reason:'EDGE_CALIBRATION_INVALID'};
- // Uncalibrated directional probes are visible but explicitly barred from execution.
  return {ok:true,round,direction:lock.direction,model:EDGE_MODEL,
    lockedAt:lock.lockedAt,marketAt:lock.marketAt,score:lock.score,
-   modelVersion:lock.modelVersion,modelProbability:ready?probability:null,
-   calibrationReady:ready,calibrationSamples:Number(body.training?.samples||0),
-   executionEligible:ready};
+   modelVersion:lock.modelVersion,modelProbability:calibrated?probability:null,
+   calibrationReady:calibrated,calibrationSamples:Number(body.training?.samples||0),
+   executionEligible:eligible};
 }
 
 

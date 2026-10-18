@@ -47,7 +47,7 @@ def public_snapshot():
             "app":"zl-futures-bot-v1",
             "mode":"paper",
             "liveTradingEnabled":False,
-            "ephemeralStorageWarning":"Render free local state disappears after restart, redeploy, or sleep. Statistics reset; do not treat as a persistent performance record.",
+            "storageNote":("Local state file: "+str(bot.STATE_FILE)+". On a persistent server disk, it survives service restarts; disk replacement or deletion loses data; no backup configured." if bot.STATE_FILE.is_absolute() else "Relative local state on ephemeral hosting may disappear after redeploy or restart; not a durable performance record."),
             "strategy":"5m breakout + 1h EMA trend",
             "startingBalance":bot.PAPER_BALANCE,
             "simulatedBalance":round(balance,4),
@@ -62,7 +62,7 @@ def public_snapshot():
             "workerRunning":WORKER["running"],
             "workerError":WORKER["error"],
             "preflight":WORKER["preflight"],
-            "exchangeAccess": "blocked" if WORKER["error"] and any(x in WORKER["error"] for x in ("418", "451", "429")) else ("available" if WORKER["running"] else "unverified"),
+            "exchangeAccess": "blocked" if WORKER["error"] and any(x in WORKER["error"] for x in ("418", "451", "429")) else ("engine_running_no_recent_error" if WORKER["running"] else "unverified"),
             "leverageConfigured":bot.LEVERAGE,
             "leverageMaximum":20,
             "riskPerTradePercent":round(bot.RISK_FRACTION*100,2),
@@ -85,7 +85,7 @@ small{color:#aebbcf}table{width:100%;border-collapse:collapse}td,th{padding:8px;
 <div><small>策略任务</small><h2 id="task">—</h2></div></div></section>
 <section><h2>当前模拟仓位</h2><pre id="position">—</pre></section>
 <section><h2>最近模拟交易</h2><div id="history">—</div></section>
-<section class="warn"><h2>重要限制</h2>Render 免费 Web 服务闲置会休眠；重启会丢失本地统计。模拟行情采用标记价格，不模拟真实成交滑点，不能据此声称策略盈利。
+<section class="warn"><h2>重要限制</h2>当前模拟记录保存在服务器本地文件，服务器磁盘删除或重装系统后可能丢失，暂未配置备份。模拟成交使用标记价格，不模拟真实滑点，不能据此声称策略盈利。
 这是独立研究服务，不连接预测市场生产，也不具备真实下单按钮。</section>
 <script>
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}

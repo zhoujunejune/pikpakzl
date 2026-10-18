@@ -5,6 +5,11 @@ import { noviceMixShadow } from './novice-mix-shadow.mjs';
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
 
+// Explicitly tagged Render free preview only: seed missing OFF settings, never overwrite.
+if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+  await import('./render-preview-seed.mjs');
+}
+
 // RAILWAY_EGRESS_IP_READONLY_DIAG_20261014
 // One-shot startup diagnostic: no credentials, no trading API writes, no order changes.
 void (async () => {

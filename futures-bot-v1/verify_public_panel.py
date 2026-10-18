@@ -27,9 +27,9 @@ def probe(path, password=None, data=None,origin=None):
     req=urllib.request.Request(URL+path,data=payload,headers=headers)
     try:
         with urllib.request.urlopen(req,timeout=14) as r:
-            return r.status,r.read(2500)
+            return r.status,r.read(25000)
     except urllib.error.HTTPError as e:
-        return e.code,e.read(2500)
+        return e.code,e.read(25000)
 
 def main():
     pw=os.environ.get("ZL_PANEL_PASSWORD","")
@@ -65,8 +65,23 @@ def main():
         data=json.loads(raw)
         print("HTTPS_REAL_TRADING_ENABLED:",data.get("liveTradingEnabled"))
         print("HTTPS_HAS_CONTROL:",isinstance(data.get("control"),dict))
+        health=data.get("marketHealth")
+        print("MARKET_DIAG_SCHEMA_OK:",isinstance(health,dict))
+        if isinstance(health,dict):
+            print("MARKET_DIAG_STATUS:",health.get("status"))
+            print("MARKET_DIAG_SYMBOL:",health.get("symbol"))
+            print("MARKET_DIAG_SOURCE:",health.get("source"))
+            print("MARKET_DIAG_LAST_AGE_SEC:",health.get("lastSuccessAgeSeconds"))
         if data.get("liveTradingEnabled") is not False or not isinstance(data.get("control"),dict):
             return 7
+        if not isinstance(health,dict) or health.get("status") not in (
+            "market_data_received","market_data_stale","waiting_first_market_data",
+            "request_failed","engine_stopped","exchange_restricted"):
+            print("PANEL_VERIFY_FAILED: unknown/missing market diagnostic")
+            return 14
+        if health.get("status")=="market_data_received" and (health.get("lastSuccessAt") is None or health.get("lastSuccessAgeSeconds") is None):
+            print("PANEL_VERIFY_FAILED: claimed fresh market without observation")
+            return 15
         status,raw=probe("/api/control",pw,data={"action":"invalid-non-mutating-test"},origin=URL)
         print("HTTPS_INVALID_COMMAND_REJECTED:",status)
         if status!=400:return 8

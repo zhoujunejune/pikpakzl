@@ -716,7 +716,10 @@ const clientJs = String.raw`(function(){
       for(i=0;i<items.length;i++){ if(items[i].enabled&&Number(items[i].availableBalanceDisplay)>0){ first=items[i]; break; } }
       if(!first){ for(i=0;i<items.length;i++){ if(items[i].enabled){ first=items[i]; break; } } }
       if(!first&&items.length) first=items[0];
-      if(b.ok&&first){
+      if(b.previewConnectionOk===true){
+        html('walletBalance','<span class="ok">API 已连接（只读）</span>');
+        text('walletMeta','Render 公开测试环境不显示账户余额和资金数据');
+      }else if(b.ok&&first){
         html('walletBalance','<span class="ok">'+first.availableBalanceDisplay+' USDT</span>');
         text('walletMeta','账户：'+first.accountType+' · Binance Prediction 实时可用余额');
       }else{

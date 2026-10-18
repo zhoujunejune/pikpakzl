@@ -1,4 +1,5 @@
 name: Alibaba SWAS futures paper-only install
+# Publish updated route handlers and restart the existing Python service.
 # Install the tested phone control UI locally; external HTTPS disabled until password is configured.
 on:
   push:

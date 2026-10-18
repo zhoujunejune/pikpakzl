@@ -34,6 +34,22 @@ await Promise.all(tests.map(async ([target,url]) => {
       result.timedLastTickAt=Number.isFinite(Number(body?.timed?.lastTickAt))?Number(body.timed.lastTickAt):null;
       result.latestDirection=['UP','DOWN'].includes(body?.latest?.direction)?body.latest.direction:null;
       result.latestRound=Number.isFinite(Number(body?.latest?.round))?Number(body.latest.round):null;
+      // Read-only health evidence for whether the Cloudflare worker can emit a usable
+      // direction. These counters are not a backtested / official accuracy claim.
+      result.serviceOk=body?.ok===true;
+      result.latestReason=typeof body?.latest?.reason==='string'?body.latest.reason:null;
+      result.latestAt=Number.isFinite(Number(body?.latest?.at))?Number(body.latest.at):null;
+      result.latestAgeMs=Number.isFinite(result.latestLockedAt)?
+        Math.max(0,Date.now()-result.latestLockedAt):null;
+      result.trainingOfficialResolved=Number.isFinite(Number(body?.training?.officialResolved))?
+        Number(body.training.officialResolved):null;
+      result.trainingKeys=body?.training && typeof body.training==='object'?
+        Object.keys(body.training).slice(0,18):[];
+      result.latestKeys=body?.latest && typeof body.latest==='object'?
+        Object.keys(body.latest).slice(0,24):[];
+      result.latestLocked=body?.latest?.status==='LOCKED' &&
+        ['UP','DOWN'].includes(body?.latest?.direction);
+
     }else {
       result.exchangeCode=typeof body?.code==='number'?body.code:null;
     }

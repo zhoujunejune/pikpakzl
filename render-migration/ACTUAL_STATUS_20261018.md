@@ -53,3 +53,14 @@ Migration branch: `migration/render-blueprint-20261018` (PR #167). The original 
 - Deploy `dep-dba48l7btjjs73dns7ng` is **live** with smoke log `render_pin_gateway_smoke ok:true,anonymousFront:303,anonymousStatus:401,login:200,health:200`.
 - Binance balance query succeeded with **3 account options**, but values are deliberately omitted from logs.
 - No live trading action was made. Remaining blockers: real settlement history and Z3 source migration, official settlement `PREDICTION_TOPIC_NOT_FOUND`, Render Free reliability and durable funds/order state.
+
+
+## 2026-10-18 Cloudflare API owner-authorized repair: EDGE verified, breakout deferred
+
+- Cloudflare account owner supplied temporary API token and account id exclusively in Render V3 encrypted environment. No token or secret printed or committed.
+- Audited `edge-5m-v1` and `breakout20-shadow` with authenticated GET-only API. Both retain their original SQLite Durable Object namespace bindings (`EDGE5`, `BREAKOUT20`). Both still had Railway origins. Script and source map SHA-256 prefixes checked before any change.
+- Deployed **only one precise URL modification** to the existing `edge-5m-v1` script via Cloudflare official `PUT /workers/scripts/edge-5m-v1/content`: settlement `OFFICIAL_URL` from `https://signal-diagnostic-v2-production.up.railway.app/api/round-stats` to `https://zl-signal-v2-migration.onrender.com/api/round-stats`. Source map URL updated too. Model algorithm, 8-second cutoff, CF compatibility date and `EDGE5` binding unchanged. After-code SHA prefix `25bfbaa1b01c719c`.
+- **Live independent proof at 2026-10-18 05:30:59 UTC**: Cloudflare `training.samples` increased **23 → 31 (+8 official validated rounds)**; `health.officialError` changed from old Railway HTTP 404 to `null`, `lastOfficialAt` refreshed, recent previous pending predictions acquired exact-round OFFICIAL UP/DOWN labels, SQLite persisted. This validates repair, not a win-rate claim or calibration. 5000 labeled samples are required for model calibration; execution still ineligible.
+- Do **not** switch `breakout20-shadow` market origin yet. Render V3 `/api/shadow-market-data` responds HTTP **503** with `WS_WARMING_UP_0_OF_35` for both 1m and 5m after restart. Replacing its dead Railway URL with an unready Render source would not fix predictions and violates the requirement to ensure fresh, complete history first.
+- An additional public Binance Spot WebSocket API `klines` historical query through `wss://ws-api.binance.com:443/ws-api/v3` was independently tested from Render V3 and returned **HTTP 418** on upgrade; do not retry on the banned shared egress. The already-connected Spot market WebSocket remains the only verified real-time spot Kline stream.
+- **Real trading remains OFF**. Render Free startup/idle/ephemeral state limitations persist. Cloudflare API Token should be revoked in Cloudflare after both Worker changes are complete.

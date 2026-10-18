@@ -338,7 +338,7 @@ async function signedPredictionGet(path, params = {}) {
     // verifies the percent-encoded representation. Sign and transmit identical bytes.
     const rawQuery = q.toString();
     const unsignedQuery = path.endsWith('/market/search')
-      ? rawQuery.replace(/\\+/g, '%20')
+      ? rawQuery.split('+').join('%20')
       : rawQuery;
     const signedQuery = unsignedQuery + '&signature=' + predictionSign(unsignedQuery);
     const r = await fetch(PREDICTION_API + path + '?' + signedQuery, {

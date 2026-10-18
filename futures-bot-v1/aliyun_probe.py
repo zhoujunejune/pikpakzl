@@ -3,6 +3,7 @@
 import os
 import sys
 import time
+import base64
 
 REGION="ap-southeast-1"
 INSTANCE_ID="b67374069bb3457ba6a3a2ede9305d3f"
@@ -20,6 +21,14 @@ git --version || true
 df -h / | tail -n 1
 id -u
 echo "PROBE_END"
+echo "SERVICE_CHECK_BEGIN"
+systemctl is-active zl-futures-bot-paper.service || true
+systemctl is-enabled zl-futures-bot-paper.service || true
+curl -fsS --max-time 5 http://127.0.0.1:10000/status || true
+echo
+echo "SERVICE_RECENT_EVENTS"
+journalctl -u zl-futures-bot-paper.service --since "20 minutes ago" --no-pager -o cat 2>/dev/null | grep -E 'worker_failed|cycle_error|exchange_|render_paper_http_ready|started|paper_open|paper_closed' | tail -n 12 || true
+echo "SERVICE_CHECK_END"
 """
 
 def main():
@@ -56,7 +65,12 @@ def main():
                          "ClientNotRunning","InstanceNotRunning","CommandNotApplicable"):
                 print("PROBE_STATUS:",state)
                 print("PROBE_EXIT:",inv.exit_code)
-                print("PROBE_OUTPUT:",(inv.output or "")[:2400])
+                out=inv.output or ""
+                try:
+                    out=base64.b64decode(out,validate=True).decode("utf-8","replace")
+                except Exception:
+                    pass
+                print("PROBE_OUTPUT:",out[-4400:])
                 return 0 if state=="Success" and int(inv.exit_code)==0 else 6
         print("FAILED: command status was not final")
         return 7

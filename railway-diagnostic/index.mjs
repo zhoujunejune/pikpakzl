@@ -1011,6 +1011,9 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/control') {
     const body = await readBody(req);
+    if (process.env.RENDER_MIGRATION_PREVIEW === 'true' && body.enabled === true) {
+      return send(res, 403, {ok:false,error:'Render 免费测试环境：实盘跟随未启用。请先完成持久化和交易链路验证。'});
+    }
     if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
     const nextEnabled = Boolean(body.enabled);
     if (nextEnabled) {

@@ -1,0 +1,28 @@
+name: Read-only EDGE5 deployed Worker audit
+on:
+  push:
+    branches: [cloudflare-edge5m-20261017]
+    paths: ['.github/workflows/edge5-readonly-audit.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect existing edge-5m-v1 script metadata (no writes)
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const account = '3ba148af3f98117d6b299158e20bf687';
+          const endpoint = 'https://api.cloudflare.com/client/v4/accounts/'+account+'/workers/scripts/edge-5m-v1';
+          const response = await fetch(endpoint,{headers:{Authorization:'Bearer '+process.env.CF_TOKEN}});
+          const body = await response.text();
+          console.log('Worker read HTTP status:',response.status,'content-type:',response.headers.get('content-type'));
+          if (!response.ok) { console.log('Worker API returned non-200; no source exposed.'); process.exit(1); }
+          const markers = ['signal-diagnostic-v2-production.up.railway.app','signal-diagnostic-v3-production.up.railway.app',
+            'zl-signal-v2-migration.onrender.com','zl-signal-v3-migration.onrender.com',
+            'MIN_TRAINING_ROUNDS','executionEligible','EDGE5','edge_rounds'];
+          for (const marker of markers) console.log('Contains '+marker+':',body.includes(marker));
+          console.log('Worker content length:',body.length);
+          NODE

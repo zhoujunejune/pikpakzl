@@ -58,6 +58,13 @@ if(!token||!(/^[a-f0-9]{32}$/i).test(accountId)){
           sha256:createHash('sha256').update(textData).digest('hex').slice(0,16),
           originMatches:candidates,originLines:lineNos,
           contentType:typeof value==='string'?'text':value.type,
+          functionContexts:(!part.endsWith('.map')&&name==='edge-5m-v1')?
+            ['OFFICIAL_URL','resolveOfficial','officialDirections','verifiedOfficial','RAILWAY_MARKET_URL']
+              .map(term=>{const positions=[];let pos=0;while((pos=textData.indexOf(term,pos))>=0){
+                positions.push(pos);pos+=term.length;if(positions.length>=7)break;}
+                return {term,uses:positions.length,
+                  snippets:positions.slice(-4).map(k=>textData.slice(Math.max(0,k-230),Math.min(textData.length,k+750)))};
+              }):null,
           scriptShape:(!part.endsWith('.map'))?{
             esModule:textData.includes('export{')||textData.includes('export default'),
             workerFetch:textData.includes('async fetch(')||textData.includes('fetch(e,'),
@@ -123,6 +130,26 @@ if(!token||!(/^[a-f0-9]{32}$/i).test(accountId)){
     }catch(error){say('cloudflare_target_origin_probe_failed',{
       name:target.name,errorType:String(error?.name||'UNKNOWN').slice(0,40)});}
   }
+  try{
+    const [e,v]=await Promise.all([
+      fetch('https://edge-5m-v1.zl528094-3ba.workers.dev/status',{signal:AbortSignal.timeout(12000)}).then(r=>r.json()),
+      fetch('https://zl-signal-v2-migration.onrender.com/api/round-stats',{signal:AbortSignal.timeout(12000)}).then(r=>r.json())
+    ]);
+    const cfPending=(e?.recent||[]).filter(r=>!['UP','DOWN'].includes(r?.actual))
+      .map(r=>Number(r?.round));
+    const official=(v?.records||[]).filter(r=>['UP','DOWN'].includes(r?.actual) &&
+      typeof r?.resolutionEvidence==='string'&&r.resolutionEvidence.startsWith('OFFICIAL_'));
+    const officialByRound=new Map(official.map(r=>[Number(r.roundStartMs),r.actual]));
+    const overlap=cfPending.filter(r=>officialByRound.has(r));
+    say('cloudflare_edge_official_overlap',{pendingInRecent:cfPending.length,
+      renderRecords:v?.records?.length||0,
+      renderOfficialVerified:official.length,
+      sameRoundAvailable:overlap.length,
+      roundSamples:overlap.slice(0,5),
+      missingInRender:cfPending.filter(r=>!officialByRound.has(r)).length,
+      officialEvidenceSample:official[0]?.resolutionEvidence?.slice(0,80)||null});
+  }catch(e){say('cloudflare_edge_official_overlap_failed',{
+    type:String(e?.name||'UNKNOWN').slice(0,50)})}
   say('cloudflare_repair_audit_complete',{workers,
     operations:'GET_ONLY',changes:'NONE',trading:'UNCHANGED'});
 }

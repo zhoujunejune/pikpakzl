@@ -106,12 +106,17 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self.send_json({"error":"control update failed"},500)
     def do_GET(self):
-        if self.path in ("/healthz","/health"):
+        # Mobile browsers and password managers may append query strings or use
+        # /index.html after completing their HTTP Basic-Auth prompt.
+        # Parse only the path; never log query strings or credentials.
+        from urllib.parse import urlsplit
+        path=urlsplit(self.path).path
+        if path in ("/healthz","/health"):
             payload={"ok":True,"mode":"paper","workerRunning":WORKER["running"],"bootAt":BOOT_AT}
             self.send_json(payload)
-        elif self.path=="/status":
+        elif path=="/status":
             self.send_json(public_snapshot())
-        elif self.path=="/":
+        elif path in ("/","/index.html","/dashboard","/dashboard/"):
             payload=PAGE.encode()
             self.send_response(200)
             self.send_header("Content-Type","text/html; charset=utf-8")

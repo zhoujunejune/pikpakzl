@@ -4,6 +4,7 @@ import { noviceMixShadow } from './novice-mix-shadow.mjs';
 // EDGE_5M_V1 runs in an isolated Cloudflare Free Worker; this panel only reads its status.
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
+import { handleRenderPreviewAuth } from './render-preview-auth.mjs';
 
 // Explicitly tagged Render free preview only: seed missing OFF settings, never overwrite.
 if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
@@ -50,7 +51,7 @@ function log(event, extra = {}) {
 }
 
 const statsCard = (process.env.RENDER_MIGRATION_PREVIEW === 'true' ?
-  '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费测试环境｜实盘下单关闭</strong><div style="color:#ccd4e0;margin-top:6px">Redis 仅用于临时测试；原订单账本、交易凭据与 Z3 采集器未迁移。Cloudflare EDGE 为只读信号，突破20%模型有数据缺口。方向不代表币安成交。</div></div>' : '') + `<div class="c" id="roundStatsCard">
+  '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费测试环境｜实盘下单关闭</strong><div style="color:#ccd4e0;margin-top:6px">PIN 登录后可查看只读余额与信号；原订单账本和 Z3 采集器尚未迁移。免费 Redis 不持久化，禁止实盘下单。</div></div>' : '') + `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
 <div class="muted" id="rsMeta">仅统计新版RSI(14)直接输出方向与币安预测市场官方结算的准确率；实际订单盈亏另行统计。</div>
@@ -1208,10 +1209,11 @@ function injectStats(html) {
   let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${shadowCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}${shadowCard}</body>`);
   if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
     const notice = '<h2>5分钟 · Render 信号测试台</h2>' +
+      '<form method="POST" action="/auth/logout"><button type="submit" style="padding:8px;max-width:150px;background:#344155;color:#fff;font-size:13px">退出登录</button></form>' +
       '<div class="c" role="status" style="border:1px solid #eab308">' +
       '<div class="big" style="color:#eab308;font-size:19px">Render 免费预览 · 实盘未启用</div>' +
-      '<div class="muted" style="margin-top:8px">V3 的新币安 API 已通过预测市场只读查询，但交易前台没有配置账户密钥，因此余额暂不可读取。' +
-      '原 Railway 订单历史尚未迁移。当前可以查看预测和模型数据，不能代表下单成功。' +
+      '<div class="muted" style="margin-top:8px">已启用 PIN 登录，可查看实际币安只读余额。实盘交易仍保持关闭。' +
+      '原 Railway 订单历史尚未迁移。预测信号和模型数据不代表交易已成交。' +
       '免费实例会休眠，免费 Redis 不持久化，暂不能承担实盘。</div></div>';
     out = out.replace('<h2>5分钟 API 实盘确认控制台</h2>', notice);
     out = out.replace('<span class="bad">读取失败</span>', '<span class="warn">交易账户未接入</span>');
@@ -1249,33 +1251,6 @@ function proxyInner(req, res, transformHtml = false) {
   });
   p.on('error', err => { res.writeHead(502, { 'content-type':'application/json; charset=utf-8' }); res.end(JSON.stringify({ ok:false, error:`内部控制台未就绪：${err.message}` })); });
   req.pipe(p);
-}
-
-// Read-only public-preview boundary. Never expose wallet balances, orders or
-// API credentials on a public onrender.com hostname without authentication.
-function proxyPreviewStatus(req,res){
-  const p=http.request({hostname:'127.0.0.1',port:INNER_PANEL_PORT,
-    path:'/api/status',method:'GET',headers:{accept:'application/json'}}, inner=>{
-    const chunks=[];let total=0;
-    inner.on('data',buf=>{total+=buf.length;if(total<=1048576)chunks.push(buf);});
-    inner.on('end',()=>{
-      if(total>1048576){res.writeHead(502);return res.end();}
-      let data;
-      try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'))}
-      catch{res.writeHead(502,{'content-type':'application/json'});return res.end(JSON.stringify({ok:false,error:'PREVIEW_STATUS_UNAVAILABLE'}));}
-      const verified=data?.balance?.ok===true;
-      const safe={...data,
-        balance:{ok:verified,items:[],previewConnectionOk:verified,
-          error:verified?null:'READONLY_BALANCE_CHECK_FAILED'},
-        pendingAction:null,lastOrder:null};
-      res.writeHead(inner.statusCode||502,{
-        'content-type':'application/json; charset=utf-8','cache-control':'no-store',
-        'x-content-type-options':'nosniff'});
-      res.end(JSON.stringify(safe));
-    });
-  });
-  p.on('error',()=>{res.writeHead(502,{'content-type':'application/json'});res.end(JSON.stringify({ok:false,error:'PREVIEW_STATUS_UNAVAILABLE'}))});
-  p.end();
 }
 
 async function fetchStatsOrigin(origin, timeoutMs, label) {
@@ -1436,6 +1411,7 @@ async function binanceOfficialReadOnlyProbe(req, res) {
 startInner();
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (handleRenderPreviewAuth(req,res,url)) return;
   if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
     // No externally accessible mutating route in the Render free-tier preview.
     // The trading keys are used exclusively for backend read-only GET checks.
@@ -1443,11 +1419,8 @@ http.createServer((req, res) => {
       res.writeHead(403,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
       return res.end(JSON.stringify({ok:false,error:'RENDER_PREVIEW_READONLY_NO_ORDER_ACTIONS'}));
     }
-    if (url.pathname === '/api/balance') {
-      res.writeHead(403,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
-      return res.end(JSON.stringify({ok:false,error:'BALANCE_PROTECTED_ON_PUBLIC_PREVIEW'}));
-    }
-    if (url.pathname === '/api/status') return proxyPreviewStatus(req,res);
+    // PIN-authenticated read-only requests return actual account data.
+    // All state-changing methods remain blocked above.
   }
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);

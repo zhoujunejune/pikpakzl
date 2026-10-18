@@ -192,18 +192,20 @@ export function validateEdgeSignal(body,now=Date.now()){
  if(ready&&(!(typeof probability==='number'&&Number.isFinite(probability))||
    probability<0.5||probability>1))
    return {ok:false,reason:'EDGE_CALIBRATION_INVALID'};
- // Uncalibrated directional probes are visible but explicitly barred from execution.
+ // Execution eligibility depends on a genuine, timely, immutable locked
+ // direction, NOT on statistical calibration. Uncalibrated score is not a
+ // probability or evidence of predictive advantage.
  return {ok:true,round,direction:lock.direction,model:EDGE_MODEL,
    lockedAt:lock.lockedAt,marketAt:lock.marketAt,score:lock.score,
    modelVersion:lock.modelVersion,modelProbability:ready?probability:null,
    calibrationReady:ready,calibrationSamples:Number(body.training?.samples||0),
-   executionEligible:ready};
+   executionEligible:true};
 }
 
 
 // Per-round, cross-restart limit for real Binance POSTs. Redis is the same
 // authority already required for real-order model switching.
-export const MAX_ORDER_SUBMIT_ATTEMPTS=3;
+export const MAX_ORDER_SUBMIT_ATTEMPTS=1;
 const ORDER_SUBMIT_PREFIX='trade-control:order-submit:v1:';
 const CLAIM_POST_SCRIPT="local marker=redis.call('GET',KEYS[2]); if marker and marker~='REJECTED' then return -2 end; local n=tonumber(redis.call('GET',KEYS[1]) or '0'); if n>=tonumber(ARGV[1]) then return -1 end; n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],7200) end; redis.call('SET',KEYS[2],'IN_FLIGHT:'..n,'EX',7200); return n";
 function checkedSubmitRound(round){

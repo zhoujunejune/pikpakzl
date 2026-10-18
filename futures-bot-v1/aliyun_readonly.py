@@ -54,6 +54,8 @@ def main():
         print("SERVER_NAME_MATCH:",getattr(found,"instance_name",None)==TARGET)
         print("SERVER_ID:",real_id)
         print("SERVER_STATUS:",getattr(found,"status","unknown"))
+        # Public IP is needed to provision a no-purchase HTTPS hostname later.
+        print("SERVER_PUBLIC_IP:",getattr(found,"public_ip_address","not-returned"))
         print("READ_ONLY: true")
         print("DEPLOYMENT: not started")
         return 0

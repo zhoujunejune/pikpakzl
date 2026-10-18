@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 
 import requests
 from controls import read_control
+from market_health import record as record_market_response, record_error as record_market_error
 
 def env_float(k, d):
     return float(os.getenv(k, d))
@@ -100,16 +101,30 @@ class API:
             query=urlencode(params)
             params["signature"]=hmac.new(self.secret.encode(), query.encode(), hashlib.sha256).hexdigest()
         headers={"X-MBX-APIKEY":self.key} if signed else {}
-        r=self.session.request(method,BASE_URL+path,params=params if method=="GET" else None,
-                               data=params if method!="GET" else None,
-                               headers=headers,timeout=TIMEOUT)
+        market_request=(not signed and path in ("/fapi/v1/klines","/fapi/v1/premiumIndex"))
+        try:
+            r=self.session.request(method,BASE_URL+path,params=params if method=="GET" else None,
+                                   data=params if method!="GET" else None,
+                                   headers=headers,timeout=TIMEOUT)
+        except requests.RequestException:
+            if market_request:
+                record_market_error("network")
+            raise
         if r.status_code in (418, 429, 451):
+            if market_request:
+                record_market_error(r.status_code)
             # Fail closed: 418 may indicate an IP ban. NEVER poll repeatedly or rotate egress.
             retry_after=str(r.headers.get("Retry-After", "unknown"))[:40]
             raise RuntimeError(f"Exchange refused request HTTP {r.status_code}; Retry-After={retry_after}; no retry/no bypass")
         if not r.ok:
+            if market_request:
+                record_market_error(r.status_code)
             raise RuntimeError(f"Exchange error HTTP {r.status_code}: {r.text[:250]}")
-        return r.json()
+        payload=r.json()
+        if market_request:
+            if not record_market_response(path,params,payload):
+                record_market_error("stale_payload")
+        return payload
     def server_time(self):
         self.offset=int(self.call("GET","/fapi/v1/time")["serverTime"])-int(time.time()*1000)
     def positions(self):
@@ -465,6 +480,10 @@ def main():
                 state["halt"]=True
                 save(state)
                 raise RuntimeError(f"Live engine halted: {msg}")
+            time.sleep(LOOP_SECONDS)
+        else:
+            # Always enforce pacing after a successful cycle. Previously this
+            # branch looped immediately and could flood public Binance endpoints.
             time.sleep(LOOP_SECONDS)
 
 if __name__=="__main__":

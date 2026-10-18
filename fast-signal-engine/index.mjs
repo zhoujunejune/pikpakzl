@@ -333,8 +333,15 @@ async function signedPredictionGet(path, params = {}) {
     }
     q.append('timestamp', String(Date.now()));
     q.append('recvWindow', '5000');
-    q.append('signature', predictionSign(q.toString()));
-    const r = await fetch(PREDICTION_API + path + '?' + q.toString(), {
+    // Binance's 2026 signed endpoints expect percent-encoded signed payloads.
+    // URLSearchParams encodes a space as '+', but Prediction market/search
+    // verifies the percent-encoded representation. Sign and transmit identical bytes.
+    const rawQuery = q.toString();
+    const unsignedQuery = path.endsWith('/market/search')
+      ? rawQuery.replace(/\\+/g, '%20')
+      : rawQuery;
+    const signedQuery = unsignedQuery + '&signature=' + predictionSign(unsignedQuery);
+    const r = await fetch(PREDICTION_API + path + '?' + signedQuery, {
       headers: { 'X-MBX-APIKEY': PREDICTION_API_KEY },
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),

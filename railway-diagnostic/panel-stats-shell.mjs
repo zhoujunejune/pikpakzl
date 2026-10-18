@@ -1206,6 +1206,19 @@ function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${shadowCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}${shadowCard}</body>`);
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    const notice = '<h2>5分钟 · Render 信号测试台</h2>' +
+      '<div class="c" role="status" style="border:1px solid #eab308">' +
+      '<div class="big" style="color:#eab308;font-size:19px">Render 免费预览 · 实盘未启用</div>' +
+      '<div class="muted" style="margin-top:8px">V3 的新币安 API 已通过预测市场只读查询，但交易前台没有配置账户密钥，因此余额暂不可读取。' +
+      '原 Railway 订单历史尚未迁移。当前可以查看预测和模型数据，不能代表下单成功。' +
+      '免费实例会休眠，免费 Redis 不持久化，暂不能承担实盘。</div></div>';
+    out = out.replace('<h2>5分钟 API 实盘确认控制台</h2>', notice);
+    out = out.replace('<span class="bad">读取失败</span>', '<span class="warn">交易账户未接入</span>');
+    out = out.replace('<button class="start" onclick="setV(true)">开始跟随新信号</button>',
+      '<button class="start" disabled title="Render 预览期禁止实盘" style="opacity:.5;cursor:not-allowed">开始跟随（测试期禁用）</button>');
+    out = out.replace('检测 Railway 出口 IP（只读）', '检测 Render 出口 IP（只读）');
+  }
   out = out.replace('</head>', layoutStabilityStyle+'</head>');
   return out.replace('</body>', `${primaryScript}${statsScript}${shadowScript}</body>`);
 }

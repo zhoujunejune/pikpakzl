@@ -304,8 +304,12 @@ async function renderEdgeRoundStats(){
  e('rsCorrect').textContent=hits;e('rsWrong').textContent=n-hits;
  e('rsWait').textContent=Number(r.observedRounds||0)-Number(r.locked||0);
  e('rsCoverage').textContent=r.observedRounds?(100*Number(r.locked||0)/r.observedRounds).toFixed(2)+'%':'-';
- e('rsMeta').textContent='EDGE_5M_V1 · 官方结算独立统计 · '+Number(d.training?.samples||0)+'/5000轮训练 · '+
-   (d.training?.ready?'概率已校准，实际下单仍须核对价格与Edge':'概率未校准，方向仅研究观察，不执行实盘');
+ var up=r.up||{},down=r.down||{};
+ var percentOf=function(group){var count=Number(group.samples||0),hit=Number(group.hits||0);
+   return count?(100*hit/count).toFixed(2)+'%（'+hit+'/'+count+'）':'暂无结算';};
+ e('rsMeta').textContent='EDGE_5M_V1 · 已停止训练，固定模型参数 · 继续逐轮预测、记录和官方结算 · '+
+   '总胜率 '+percentOf(v)+' · UP '+percentOf(up)+' · DOWN '+percentOf(down)+
+   ' · 待结算 '+Number(r.pending||0)+' 轮 · 实盘未启用';
  var rows=Array.isArray(d.recent)?d.recent.slice(0,30):[];
  e('rsRows').innerHTML=rows.length?rows.map(function(x){
   var actual=x.actual==='UP'||x.actual==='DOWN'?x.actual:null,dir=x.direction;
@@ -624,7 +628,7 @@ async function loadOrderModelStats(){
    (v.samples?(Number(v.accuracy)*100).toFixed(2)+'% ('+v.hits+'/'+v.samples+')':'暂无已结算')+
    ' · UP '+(r.up&&r.up.samples?(Number(r.up.accuracy)*100).toFixed(2)+'%':'暂无')+
    ' · DOWN '+(r.down&&r.down.samples?(Number(r.down.accuracy)*100).toFixed(2)+'%':'暂无')+
-   ' · '+(chosenOrderModel==='EDGE_5M_V1'?'训练 '+Number(data.training?.samples||0)+'/5000 · '+(data.training?.ready?'已校准':'尚未校准 · 不发实盘订单'):
+   ' · '+(chosenOrderModel==='EDGE_5M_V1'?'训练已停止 · 固定模型 · 已结算 '+Number(v.samples||0)+' 轮 · 实盘未启用':
  chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'模拟入场 '+Number(r.entryRounds||0):
  '锁定 '+Number(r.locked||0))+' 轮';
  }catch(err){e('orderSignalModelStats').textContent='所选模型胜率读取失败（不改变下单选择）';}
@@ -786,9 +790,8 @@ async function renderEdgePrimary(){
  var now=Math.floor(Date.now()/300000)*300000,latest=d.latest?.round===now?d.latest:null;
  activeCatalog=[{id:'EDGE_5M_V1',name:'EDGE 5分钟概率优势',source:'SELECTIVE_V2_FAST8_PRIMARY',version:'EDGE5_CAUSAL_V1',active:true}];
  e('activeFast8Name').textContent='EDGE_5M_V1 · 第四套独立策略';
- e('activeFast8Desc').textContent='前8秒真实现货/合约订单簿和主动成交特征 · 官方结果训练 '+
-   Number(d.training?.samples||0)+'/5000 · '+
-   (d.training?.ready?'已校准，实盘须再通过实时价格和Edge':'未通过校准：只显示方向，不提交实盘订单');
+ e('activeFast8Desc').textContent='前8秒真实行情预测 · 训练已停止，模型参数固定 · 已结算 '+
+   n+' 轮 · 继续记录总胜率、UP和DOWN胜率 · 实盘未启用';
  e('activeFast8Direction').textContent=latest?latest.direction+'（'+(latest.executionEligible?'已校准':'仅观察')+'）':
    '本轮行情不足或未锁定';
  e('activeFast8Accuracy').textContent=n?pct(100*hits/n):'暂无官方结算';

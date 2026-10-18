@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EDGE_MODEL,INPUT_VERSION,MIN_TRAINING_ROUNDS,roundAt,extractFeatures,
+import {EDGE_MODEL,INPUT_VERSION,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS,roundAt,extractFeatures,
   scoreDirection,trainOnOfficial,summarize} from './edge-5m-core.mjs';
 const ROUND=1792166400000;
 const t=ROUND+6000;
@@ -33,12 +33,12 @@ test('all five causal features require real synchronized book, trades, spot and 
  }
  assert.equal(extractFeatures(observation,[],t),null);
 });
-test('direction is observable before calibration but never executable',()=>{
+test('real-feature direction is independent of calibration eligibility',()=>{
  const features=extractFeatures(observation,trail,t);
  const raw=scoreDirection(features,null);
  assert.ok(['UP','DOWN'].includes(raw.direction));
  assert.equal(raw.calibrationReady,false);
- assert.equal(raw.executionEligible,false);
+ assert.equal(raw.executionEligible,true);
  assert.equal(raw.modelProbability,null);
  const calibrated=scoreDirection(features,{weights:[0,1,0,0,0,0],
    calibration:[0,1],calibrationReady:true});
@@ -47,6 +47,7 @@ test('direction is observable before calibration but never executable',()=>{
 });
 test('training cannot borrow predictions from unverified or un-settled rounds',()=>{
  assert.equal(MIN_TRAINING_ROUNDS,5000);
+ assert.equal(MIN_FIT_ROUNDS,300);
  const probe=extractFeatures(observation,trail,t);
  const rows=[{round:ROUND,direction:'UP',probe,actual:'UP',
    settledAt:ROUND+300000+100},{round:ROUND+300000,direction:'UP',probe,

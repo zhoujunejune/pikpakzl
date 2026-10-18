@@ -49,6 +49,16 @@ await Promise.all(tests.map(async ([target,url]) => {
         Object.keys(body.latest).slice(0,24):[];
       result.latestLocked=body?.latest?.status==='LOCKED' &&
         ['UP','DOWN'].includes(body?.latest?.direction);
+      result.calibrationReady=body?.training?.calibrationReady===true;
+      result.trainingReady=body?.training?.ready===true;
+      result.trainingRequired=Number.isFinite(Number(body?.training?.required))?
+        Number(body.training.required):null;
+      result.trainingRemaining=Number.isFinite(Number(body?.training?.remaining))?
+        Number(body.training.remaining):null;
+      result.executionEligible=body?.latest?.executionEligible===true;
+      result.latestModelVersion=typeof body?.latest?.modelVersion==='string'?
+        body.latest.modelVersion:null;
+
 
     }else {
       result.exchangeCode=typeof body?.code==='number'?body.code:null;

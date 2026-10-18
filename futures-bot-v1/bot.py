@@ -34,6 +34,17 @@ LOOP_SECONDS = max(20, int(os.getenv("LOOP_SECONDS", "30")))
 STATE_FILE = pathlib.Path(os.getenv("STATE_FILE", "./futures-state.json"))
 KILL_FILE = pathlib.Path(os.getenv("KILL_FILE", "./KILL"))
 TIMEOUT = 8
+# Exchange cooldown must persist across Render restarts (via environment configuration).
+BINANCE_RETRY_NOT_BEFORE_UTC = os.getenv("BINANCE_RETRY_NOT_BEFORE_UTC", "").strip()
+
+def seconds_until_binance_retry():
+    if not BINANCE_RETRY_NOT_BEFORE_UTC:
+        return 0
+    t=dt.datetime.fromisoformat(BINANCE_RETRY_NOT_BEFORE_UTC.replace("Z","+00:00"))
+    if not t.tzinfo:
+        raise ValueError("BINANCE_RETRY_NOT_BEFORE_UTC needs a timezone")
+    return max(0,int((t-dt.datetime.now(dt.timezone.utc)).total_seconds()))
+
 assert MODE in ("paper", "live"), "MODE must be paper or live"
 assert 1 <= LEVERAGE <= 20, "This bot caps leverage at 20x"
 assert 0 < RISK_FRACTION <= .03 and 0 < MARGIN_FRACTION <= .20
@@ -43,7 +54,7 @@ assert BASE_URL in ("https://fapi.binance.com", "https://testnet.binancefuture.c
 if MODE == "live":
     assert os.getenv("ALLOW_REAL_TRADING") == "I_ACCEPT_REAL_TRADING"
     assert os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET")
-    assert os.getenv("DURABLE_STORAGE_CONFIRMED") == "YES", "Live mode needs a persistent Railway volume"
+    assert os.getenv("DURABLE_STORAGE_CONFIRMED") == "YES", "Live mode needs verified durable storage (not Render free local disk)"
     assert STATE_FILE.is_absolute(), "Use STATE_FILE on a persistent volume in live mode"
 
 def log(event, **kwargs):
@@ -74,6 +85,11 @@ class API:
         self.secret=os.getenv("BINANCE_API_SECRET", "")
         self.offset=0
     def call(self, method, path, params=None, signed=False):
+        remaining=seconds_until_binance_retry()
+        if remaining>0:
+            raise RuntimeError(
+                f"Binance requested IP cooldown; no outbound request before "
+                f"{BINANCE_RETRY_NOT_BEFORE_UTC} ({remaining}s remaining)")
         params=dict(params or {})
         if signed:
             if not (self.key and self.secret):
@@ -380,6 +396,10 @@ def tick(api,state):
 def main():
     api=API()
     state=load()
+    remaining=seconds_until_binance_retry()
+    if remaining>0:
+        log("exchange_cooldown_active",notBefore=BINANCE_RETRY_NOT_BEFORE_UTC,remainingSeconds=remaining)
+        raise RuntimeError(f"Exchange ban/cooldown until {BINANCE_RETRY_NOT_BEFORE_UTC}")
     api.server_time()
     log("started",mode=MODE,symbols=SYMBOLS,leverage=LEVERAGE,real_trading=MODE=="live")
     if MODE=="live" and state.get("pending"):

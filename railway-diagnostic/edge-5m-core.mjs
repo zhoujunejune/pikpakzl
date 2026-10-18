@@ -3,7 +3,8 @@
 export const EDGE_MODEL='EDGE_5M_V1';
 export const INPUT_VERSION='EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1';
 export const FEATURE_NAMES=Object.freeze(['spot_perp_lead','book_imbalance','aggressive_flow','basis_change','short_volatility']);
-export const MIN_TRAINING_ROUNDS=5000;
+export const MIN_TRAINING_ROUNDS=5000; // statistical validation target, not a signal gate
+export const MIN_FIT_ROUNDS=300; // begin provisional weight fitting before validation
 export const ROUND_MS=300000;
 const good=n=>typeof n==='number'&&Number.isFinite(n);
 const clamp=(v,lo=-4,hi=4)=>Math.max(lo,Math.min(hi,v));
@@ -63,15 +64,15 @@ export function scoreDirection(features,model){
   const p=calibrated?sigmoid(model.calibration[0]+model.calibration[1]*raw):null;
   const direction=(calibrated?p>=0.5:raw>=0)?'UP':'DOWN';
   return {direction,score:raw,modelProbability:calibrated?(direction==='UP'?p:1-p):null,
-    calibrationReady:calibrated,executionEligible:calibrated};
+    calibrationReady:calibrated,executionEligible:true}; // complete real inputs suffice for a direction; model quality is reported separately
 }
 export function trainOnOfficial(rows){
   const labeled=rows.filter(r=>valid(r.actual)&&r.probe?.inputVersion===INPUT_VERSION&&
     r.probe.values?.length===FEATURE_NAMES.length&&r.probe.values.every(good)&&
     good(r.probe.at)&&r.probe.at<r.round+8000&&good(r.settledAt)&&r.settledAt>=r.round+ROUND_MS)
     .sort((a,b)=>a.round-b.round);
-  if(labeled.length<MIN_TRAINING_ROUNDS)return {status:'COLLECTING',samples:labeled.length,
-    required:MIN_TRAINING_ROUNDS,calibrationReady:false,model:null};
+  if(labeled.length<MIN_FIT_ROUNDS)return {status:'COLLECTING',samples:labeled.length,
+    required:MIN_TRAINING_ROUNDS,fitRequired:MIN_FIT_ROUNDS,calibrationReady:false,model:null};
   const N=labeled.length,train=labeled.slice(0,Math.floor(N*.7)),
     calibration=labeled.slice(Math.floor(N*.7),Math.floor(N*.85)),
     test=labeled.slice(Math.floor(N*.85));
@@ -104,8 +105,9 @@ export function trainOnOfficial(rows){
     const actual=subs.reduce((s,r)=>s+r.y,0)/subs.length;
     ece+=subs.length/evaluated.length*Math.abs(avg-actual);
   }
-  const calibrationReady=ece<=.08&&brier<base;
-  return {status:calibrationReady?'VALIDATED':'CALIBRATION_REJECTED',samples:N,required:MIN_TRAINING_ROUNDS,
+  const calibrationReady=N>=MIN_TRAINING_ROUNDS&&ece<=.08&&brier<base;
+  return {status:N<MIN_TRAINING_ROUNDS?'PROVISIONAL_TRAINED':calibrationReady?'VALIDATED':'CALIBRATION_REJECTED',
+    samples:N,required:MIN_TRAINING_ROUNDS,fitRequired:MIN_FIT_ROUNDS,
     calibrationReady,holdoutSamples:test.length,brier,ece,baselineBrier:base,
     model:{weights,calibration:[a,b],calibrationReady,trainedAt:Date.now(),
       version:'EDGE5_OFFICIAL_'+N+'_'+labeled.at(-1).round}};

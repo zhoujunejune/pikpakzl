@@ -31,3 +31,14 @@ Workspace: `tea-db8509mq1p3s739jsnr0` / My Workspace. Region: `singapore`. All c
 
 ## Git details
 Migration branch: `migration/render-blueprint-20261018` (PR #167). The original Railway services are not edited/deleted. The earlier Render Blueprint is preserved only in `render-migration/render-blueprint-reference.yaml` (root `render.yaml` was removed to prevent duplicate resource creation). This reference must not be applied because the actual preview resources were created explicitly, under new names. Render service settings currently managed through the Render API calls.
+
+
+## Binance HTTP 418 mitigation — 2026-10-18 03:15 UTC
+
+- Binance Spot REST and data REST returned HTTP 418 / error `-1003` from the Singapore Render outbound IP `74.220.52.132`. Binance documentation describes 418 as an IP rate-limit ban; its original source is unconfirmed (potentially shared egress). This is **not** an HTTP 451 region restriction.
+- Render V3 startup now **skips** Spot REST historical 1s K-line / aggregate-trade warmup in `RENDER_MIGRATION_PREVIEW=true` mode. It waits for authentic BTCUSDT spot WebSocket ticks instead; no manufactured data and a warm-up gap is expected.
+- Render V3's read-only network preflight now skips all 4 Binance REST probe calls by default (`BINANCE_REST_PREFLIGHT=false`), retaining only Cloudflare status checks. Panel's startup Spot REST ping is also opt-in only.
+- Signed read-only Binance Prediction `GET` requests in V3 now record cooldown and honor the `Retry-After` header or the message's IP ban-until timestamp upon HTTP 429/418. During cooldown they return a blocked result rather than retrying.
+- Deployed V3 and panel, both reports **live**. V3 confirmed log events `render_binance_rest_probes_config enabled:false skipped:4`, `spot_rest_history_bootstrap_paused`, and `binance_ws_connected`. Panel model/direction/EDGE/status read-only routes remain HTTP 200 and model config ready.
+- **This does not lift an already-active Binance IP ban**; the actual Retry-After was not captured by earlier probes. Do not assume Spot REST, Binance Prediction signed authorization or real-money orders are restored. No live trading credentials were entered and no real orders were placed. A single read-only probe can be considered **only after the ban interval**; ongoing probing is disabled.
+- These fixes are limited to the separate Render migration branch, and don't modify Railway deployment, Cloudflare models, official settlement ledger or Binance order execution logic.

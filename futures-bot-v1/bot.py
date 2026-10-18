@@ -17,6 +17,7 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from urllib.parse import urlencode
 
 import requests
+from controls import read_control
 
 def env_float(k, d):
     return float(os.getenv(k, d))
@@ -171,11 +172,11 @@ def signal(c5, c1):
     return {"symbol":None,"side":side,"price":price,"distance":distance,
             "candle_close":int(now[6]),"strength":strength}
 
-def quantity_for(balance, price, distance, sym_info):
+def quantity_for(balance, price, distance, sym_info, risk_fraction=None, margin_fraction=None, leverage=None):
     if balance<=0 or price<=0 or distance<=0:
         return 0.
-    risk_notional=balance*RISK_FRACTION*price/distance
-    max_margin_notional=balance*MARGIN_FRACTION*LEVERAGE
+    risk_notional=balance*(RISK_FRACTION if risk_fraction is None else risk_fraction)*price/distance
+    max_margin_notional=balance*(MARGIN_FRACTION if margin_fraction is None else margin_fraction)*(LEVERAGE if leverage is None else leverage)
     desired=min(risk_notional,max_margin_notional)
     filters={x["filterType"]:x for x in sym_info["filters"]}
     lot=filters.get("MARKET_LOT_SIZE") or filters["LOT_SIZE"]
@@ -352,6 +353,11 @@ def tick(api,state):
     reconcile(api,state)
     if state["halt"] or KILL_FILE.exists():
         return
+    # Controls are effective on the very next cycle; paper only.
+    # Existing simulated positions continue to be monitored even when new entries are paused.
+    control=read_control() if MODE=="paper" else None
+    if control is not None and (not control["entry_enabled"] or control["emergency_stop"]):
+        return
     if state.get("trade"):
         return
     if time.time()-state.get("last_exit",0)<1800:
@@ -383,7 +389,10 @@ def tick(api,state):
         if abs(current-s["price"])/s["price"]>.002:
             log("stale_signal_price_drift",symbol=s["symbol"])
             continue
-        q=quantity_for(balance,current,s["distance"],markets[s["symbol"]])
+        q=quantity_for(balance,current,s["distance"],markets[s["symbol"]],
+                       risk_fraction=control["risk_fraction"] if control else None,
+                       margin_fraction=control["max_margin_fraction"] if control else None,
+                       leverage=control["leverage"] if control else None)
         if q<=0:
             log("skip_below_minimum_order",symbol=s["symbol"])
             continue

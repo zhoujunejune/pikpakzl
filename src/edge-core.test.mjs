@@ -1,5 +1,6 @@
 import {verifiedDirectOfficialResolution} from './edge-official-backfill.mjs';
 import test from 'node:test';
+import {DISPLAY_START_ROUND,v1DisplaySummary,v2DisplaySummary} from './edge-display-stats.mjs';
 import assert from 'node:assert/strict';
 import {bybitMarket} from './provider-market.mjs';
 import {predictionSnapshot,v2Features,v2Summary,V2_INPUT_VERSION,V2_FEATURE_NAMES} from './edge-v2-shadow.mjs';
@@ -175,4 +176,28 @@ test('V2 uses nonredundant Binance spot and PM price/depth, not Binance Futures'
  assert.equal(stats.pmOnly.hits,2);
  assert.equal(stats.blend.hits,1);
  assert.equal(stats.pending,1);
+});
+
+test('UI-only restart excludes pre-upgrade results but never resets model-training samples',()=>{
+ assert.equal(DISPLAY_START_ROUND,1792320900000);
+ const oldRecords=[{round:DISPLAY_START_ROUND-300000,direction:'UP',actual:'DOWN'}];
+ assert.ok(oldRecords[0].round<DISPLAY_START_ROUND);
+ const v1=v1DisplaySummary([
+  {direction:'UP',total:5,settled:3,hits:2},
+  {direction:'DOWN',total:4,settled:2,hits:1}
+ ]);
+ assert.deepEqual(v1,{observedRounds:9,locked:9,pending:4,
+  overall:{samples:5,hits:3,misses:2,accuracy:0.6},
+  up:{samples:3,hits:2,misses:1,accuracy:2/3},
+  down:{samples:2,hits:1,misses:1,accuracy:0.5}});
+ const fresh=v1DisplaySummary([]);
+ assert.equal(fresh.overall.samples,0);
+ assert.equal(fresh.overall.accuracy,null);
+ assert.equal(fresh.pending,0);
+ const v2=v2DisplaySummary({total:4,settled:3,pmHits:1,blendHits:2});
+ assert.equal(v2.observedRounds,4);
+ assert.equal(v2.pending,1);
+ assert.equal(v2.pmOnly.accuracy,1/3);
+ assert.equal(v2.blend.accuracy,2/3);
+ assert.equal(v2DisplaySummary({}).pmOnly.accuracy,null);
 });

@@ -45,4 +45,30 @@ void (async () => {
 // Migration-branch-only diagnostics; results are read-only and independent of signal decisions.
 void import('./render-migration-readonly-preflight.mjs').catch(e=>
   console.warn(JSON.stringify({event:'render_migration_preflight_load_failed',error:String(e?.message||e).slice(0,120)})));
+// One-shot signed GET verification after startup; never invokes order-writing APIs.
+// Only status codes/counts returned by the existing redacted diagnostic endpoint are logged.
+if (process.env.RENDER_MIGRATION_PREVIEW === 'true' &&
+    process.env.RENDER_AUTH_READONLY_CHECK !== 'false') {
+  setTimeout(async () => {
+    try {
+      const r=await fetch('http://127.0.0.1:' + (process.env.PORT || '10000') +
+        '/api/official-settlement-source-diagnostic', {
+        cache:'no-store',signal:AbortSignal.timeout(18000)
+      });
+      const data=await r.json();
+      const short=x=>({
+        ok:x?.ok===true,httpStatus:Number(x?.httpStatus)||0,
+        binanceCode:x?.binanceCode??null,itemCount:Number(x?.itemCount)||0,
+        btcusdt5mItems:Number(x?.btcusdt5mItems)||0,
+        shape:x?.shape??null,errorType:x?.errorType??null
+      });
+      console.log(JSON.stringify({event:'render_authenticated_prediction_readonly_check',
+        httpStatus:r.status,credentialsConfigured:data?.credentialsConfigured===true,
+        list:short(data?.list),search:short(data?.search)}));
+    } catch (e) {
+      console.log(JSON.stringify({event:'render_authenticated_prediction_readonly_check',
+        error:String(e?.message||e).slice(0,160)}));
+    }
+  }, 12000).unref();
+}
 await import('./index.mjs');

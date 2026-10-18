@@ -2,6 +2,7 @@
 // No Binance order API, no Railway mutation, no effect on existing Workers.
 import {DurableObject} from 'cloudflare:workers';
 import {bestMarket} from './provider-market.mjs';
+import {verifiedDirectOfficialResolution} from './edge-official-backfill.mjs';
 import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection,
   trainOnOfficial,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS} from './edge-core.mjs';
 
@@ -160,6 +161,31 @@ export class Edge5 extends DurableObject{
    // Query only unsettled records visible to the official tracker.
    const pending=this.ctx.storage.sql.exec(
     'SELECT round,direction,features FROM edge_rounds WHERE actual IS NULL ORDER BY round DESC LIMIT 120').toArray();
+   // V2 migration started with an empty archive. Recheck absent older rounds
+   // against V3's authenticated Binance Prediction market-detail resolver.
+   // Four bounded read-only requests per 5m; no invented labels or reset.
+   const now=Date.now();
+   const missing=pending.filter(r=>r.round+ROUND_MS<=now&&!valid(map.get(r.round)));
+   const start=missing.length?Number(m.backfillIndex||0)%missing.length:0;
+   const targets=Array.from({length:Math.min(4,missing.length)},(_,i)=>
+     missing[(start+i)%missing.length]);
+   if(missing.length)m.backfillIndex=(start+targets.length)%missing.length;
+   const attempts=await Promise.all(targets.map(async r=>{
+    try{
+     const u='https://zl-signal-v3-migration.onrender.com/api/prediction-resolution?round='+r.round;
+     const direct=await readJson(u,10000);
+     return {round:r.round,direction:verifiedDirectOfficialResolution(direct,r.round),
+       error:direct?.error||(!direct?.resolved?'UNRESOLVED_OR_UNVERIFIED':null)};
+    }catch(e){return {round:r.round,direction:null,error:msg(e)};}
+   }));
+   m.backfillLookups=Number(m.backfillLookups||0)+attempts.length;
+   m.backfillLastAt=now;
+   for(const r of attempts){
+    if(valid(r.direction)){map.set(r.round,r.direction);m.backfillRecovered=Number(m.backfillRecovered||0)+1;}
+    else if(r.error)this.ctx.storage.sql.exec(
+      'UPDATE edge_rounds SET pendingReason=? WHERE round=? AND actual IS NULL',
+      String(r.error).slice(0,150),r.round);
+   }
    let additions=0;
    for(const row of pending){
     const actual=map.get(row.round);
@@ -222,7 +248,9 @@ export class Edge5 extends DurableObject{
     deadlineMs:8000,nextAlarm:await this.ctx.storage.getAlarm()},
    health:{marketError:m.marketError,officialError:m.officialError,
     lastOfficialAt:m.lastOfficialAt,venue:m.activeVenue,storage:m.storage,persisted:true,
-    officialOrigin:OFFICIAL_URL,marketOrigin:RAILWAY_MARKET_URL}};
+    officialOrigin:OFFICIAL_URL,marketOrigin:RAILWAY_MARKET_URL,
+     backfillLookups:Number(m.backfillLookups||0),
+     backfillRecovered:Number(m.backfillRecovered||0),backfillLastAt:m.backfillLastAt||null}};
   if(pathname==='/health')return json({ok:true,model:EDGE_MODEL,orders:false,readOnly:true,
    lastTickAt:m.lastTickAt,lastGoodDataAt:m.lastGoodDataAt,
    marketError:m.marketError,officialError:m.officialError,

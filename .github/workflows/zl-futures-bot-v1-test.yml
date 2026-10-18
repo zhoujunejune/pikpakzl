@@ -20,6 +20,8 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r futures-bot-v1/requirements.txt
+      - name: Compile all dashboard and trading modules
+        run: python -m compileall -q futures-bot-v1
       - name: Run unit tests without network or trading keys
         working-directory: futures-bot-v1
         run: python -m unittest discover -v -p 'test_*.py'

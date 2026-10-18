@@ -40,9 +40,10 @@ export function probability(weights, x) {
   return finite(score) ? sigmoid(score) : null;
 }
 
-function fit(samples) {
+function fit(samples, lambda = 0.1) {
   const weights = new Array(samples[0].x.length + 1).fill(0);
-  for (let epoch = 0; epoch < 160; epoch++) {
+  // Deterministic optimizer; lambda is selected on an inner chronological slice.
+  for (let epoch = 0; epoch < 200; epoch++) {
     const gradient = new Array(weights.length).fill(0);
     for (const { x, y } of samples) {
       const error = probability(weights, x) - y;
@@ -50,36 +51,54 @@ function fit(samples) {
       for (let j = 0; j < x.length; j++) gradient[j + 1] += error * x[j];
     }
     for (let j = 0; j < weights.length; j++) {
-      weights[j] -= 0.06 * (gradient[j] / samples.length + (j ? 0.02 * weights[j] : 0));
+      weights[j] -= 0.04 * (gradient[j] / samples.length + (j ? lambda * weights[j] : 0));
     }
   }
   return weights;
 }
 
+function score(weights, samples) {
+  let hits = 0, brier = 0;
+  for (const s of samples) {
+    const p = probability(weights, s.x);
+    hits += Number(Number(p >= 0.5) === s.y);
+    brier += (p - s.y) ** 2;
+  }
+  return { samples: samples.length, hits, accuracy: samples.length ? hits / samples.length : null,
+    brier: samples.length ? brier / samples.length : null };
+}
 export function trainFast8(samples) {
   if (samples.length < MIN_TRAINING || samples.some(s => !Array.isArray(s.x) ||
-      s.x.length !== FEATURES.length * 2 + 2 || !s.x.every(finite) || ![0, 1].includes(s.y))) {
+      s.x.length !== FEATURES.length * 2 + 2 || !s.x.every(finite) || ![0, 1].includes(s.y) ||
+      !finite(s.roundStartMs) || !finite(s.decisionAt) || !finite(s.labelReceivedAt))) {
     throw new Error('INVALID_TRAINING_ROWS');
   }
   const ordered = [...samples].sort((a, b) => a.roundStartMs - b.roundStartMs);
   const split = Math.floor(ordered.length * 0.8);
   const validation = ordered.slice(split);
-  // Labels for a training row must have existed before the first holdout decision.
   const train = ordered.slice(0, split).filter(s => s.labelReceivedAt < validation[0].decisionAt);
-  if (train.length < 100) throw new Error('INSUFFICIENT_TEMPORAL_TRAINING');
-  const candidate = fit(train);
-  let hits = 0, baselineHits = 0, brier = 0;
-  for (const s of validation) {
-    const p = probability(candidate, s.x);
-    hits += Number(Number(p >= 0.5) === s.y);
-    baselineHits += Number(s.baseline === (s.y ? 'UP' : 'DOWN'));
-    brier += (p - s.y) ** 2;
-  }
-  const holdout = { samples: validation.length, hits, accuracy: hits / validation.length,
-    baselineHits, baselineAccuracy: baselineHits / validation.length,
-    brier: brier / validation.length, coverage: 1, evidence: 'TEMPORAL_HOLDOUT_NOT_FORWARD' };
-  return { accepted: hits >= baselineHits && holdout.brier < 0.26,
-    weights: fit(ordered), trainingSamples: ordered.length, holdout,
+  if (train.length < 100 || validation.length < 20) throw new Error('INSUFFICIENT_TEMPORAL_TRAINING');
+
+  // Tune only inside the training period; never select hyperparameters on the outer holdout.
+  const innerSplit = Math.floor(train.length * 0.8);
+  const innerValidation = train.slice(innerSplit);
+  const innerTrain = train.slice(0, innerSplit).filter(s =>
+    s.labelReceivedAt < innerValidation[0]?.decisionAt);
+  if (innerTrain.length < 60 || innerValidation.length < 20) throw new Error('INSUFFICIENT_INNER_VALIDATION');
+  const regularizationGrid = [0.02, 0.1, 0.3, 1];
+  const tuning = regularizationGrid.map(lambda => ({
+    lambda, ...score(fit(innerTrain, lambda), innerValidation)
+  })).sort((a, b) => a.brier - b.brier || b.accuracy - a.accuracy);
+  const selectedLambda = tuning[0].lambda;
+  const candidate = fit(train, selectedLambda);
+  const holdoutScore = score(candidate, validation);
+  let baselineHits = 0;
+  for (const s of validation) baselineHits += Number(s.baseline === (s.y ? 'UP' : 'DOWN'));
+  const holdout = { ...holdoutScore, baselineHits, baselineAccuracy: baselineHits / validation.length,
+    coverage: 1, evidence: 'TEMPORAL_HOLDOUT_NOT_FORWARD', selectedLambda,
+    innerValidation: tuning, trainSamples: train.length };
+  return { accepted: holdout.hits >= baselineHits && holdout.brier < 0.26,
+    weights: fit(ordered, selectedLambda), trainingSamples: ordered.length, holdout, selectedLambda,
     trainingThroughRound: ordered.at(-1).roundStartMs,
     trainingLabelsReceivedThrough: Math.max(...ordered.map(s => s.labelReceivedAt)) };
 }

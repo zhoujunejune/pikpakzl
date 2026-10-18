@@ -1349,19 +1349,55 @@ function startInner() {
 }
 
 function proxyInner(req, res, transformHtml = false) {
-  const headers = { ...req.headers, host: `127.0.0.1:${INNER_PANEL_PORT}` };
-  const p = http.request({ hostname: '127.0.0.1', port: INNER_PANEL_PORT, path: req.url, method: req.method, headers }, innerRes => {
-    if (!transformHtml) { res.writeHead(innerRes.statusCode || 502, innerRes.headers); innerRes.pipe(res); return; }
-    const chunks = [];
-    innerRes.on('data', c => chunks.push(c));
-    innerRes.on('end', () => {
-      const body = injectStats(Buffer.concat(chunks).toString('utf8'));
-      const outHeaders = { ...innerRes.headers }; delete outHeaders['content-length']; outHeaders['content-type'] = 'text/html; charset=utf-8'; outHeaders['cache-control'] = 'no-store';
-      res.writeHead(innerRes.statusCode || 200, outHeaders); res.end(body);
+  // Port 3002 is a second independently started child process. On a Render
+  // cold start, never return an immediate 502 for idempotent page/status GETs.
+  const safeRead = req.method === 'GET' || req.method === 'HEAD';
+  const maxRetries = safeRead ? 30 : 0;
+  const attempt = (n = 0) => {
+    if (res.destroyed || res.writableEnded) return;
+    const headers = { ...req.headers, host: `127.0.0.1:${INNER_PANEL_PORT}` };
+    const p = http.request({ hostname:'127.0.0.1', port:INNER_PANEL_PORT, path:req.url, method:req.method, headers }, innerRes => {
+      if (n) log('inner_panel_proxy_recovered', { attempts:n, port:INNER_PANEL_PORT });
+      if (!transformHtml) {
+        res.writeHead(innerRes.statusCode || 502, innerRes.headers);
+        innerRes.pipe(res);
+        return;
+      }
+      const chunks = [];
+      innerRes.on('data', c => chunks.push(c));
+      innerRes.on('end', () => {
+        if (res.destroyed || res.writableEnded) return;
+        const body = injectStats(Buffer.concat(chunks).toString('utf8'));
+        const outHeaders = { ...innerRes.headers };
+        delete outHeaders['content-length'];
+        outHeaders['content-type'] = 'text/html; charset=utf-8';
+        outHeaders['cache-control'] = 'no-store';
+        res.writeHead(innerRes.statusCode || 200, outHeaders);
+        res.end(body);
+      });
     });
-  });
-  p.on('error', err => { res.writeHead(502, { 'content-type':'application/json; charset=utf-8' }); res.end(JSON.stringify({ ok:false, error:`内部控制台未就绪：${err.message}` })); });
-  req.pipe(p);
+    p.on('error', err => {
+      if (safeRead && err?.code === 'ECONNREFUSED' && n < maxRetries &&
+          !res.headersSent && !res.destroyed) {
+        if (n === 0) log('inner_panel_startup_wait', { port:INNER_PANEL_PORT });
+        setTimeout(() => attempt(n + 1), 400).unref();
+        return;
+      }
+      if (!res.headersSent && !res.destroyed) {
+        res.writeHead(503, {
+          'content-type':'application/json; charset=utf-8',
+          'cache-control':'no-store',
+          'retry-after':'2',
+        });
+        res.end(JSON.stringify({ok:false,
+          error:'内部控制台暂未就绪，请稍后重试',
+          reason:err?.code||'INNER_PANEL_UNAVAILABLE'}));
+      }
+    });
+    if (safeRead) p.end();
+    else req.pipe(p);
+  };
+  attempt();
 }
 
 async function fetchStatsOrigin(origin, timeoutMs, label) {

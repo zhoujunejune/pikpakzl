@@ -74,3 +74,13 @@ Migration branch: `migration/render-blueprint-20261018` (PR #167). The original 
 - **Real orders remain OFF**, all 6 direction switches OFF, `autoOrder:false`, panel gateway blocks mutations in preview mode; neither PIN login nor the Cloudflare Worker API token changes trading permissions. No actual orders placed.
 - Current known limitations: Render Free sleep/ephemeral Redis order ledger, missing settlement history, EDGE `executionEligible:false`, breakout20 `DATA_GAP` due stale Railway V3 and Render V3 503. Not safe to unlock automatic orders yet.
 - The temporary Cloudflare API token remains protected in Render encrypted env; it has broad permission per owner's configuration and should be revoked when no further Worker deployment is needed.
+
+## 2026-10-18 06:26 UTC: owner-controlled EDGE auto-follow deployment
+
+- Owner explicitly authorized a manual Start/Stop switch that permits live auto-confirm only after they press Start. Render panel env flags RENDER_TRADING_USER_ARMED=true, AUTO_CONFIRM_ENABLED=true. Deploy dep-dba6d0mq1p3s73agetqg is live. Login smoke passed and inner control process reports mode AUTO_CONFIRM_LIVE.
+- EDGE 8-second locked UP/DOWN may now prepare an order without the 5000-round calibration gate. Its frozen, fresh, correctly attributed data and signal validation are still required. The model remains uncalibrated, read-only itself, and no accuracy promise is implied.
+- Session/PIN-protected gateway allows only owner-requested control/confirm/model-selection/direction-mode POST routes. Other mutating requests are blocked. Model-selection and all direction settings are not changed by deployment. Process enabled is false on boot and remains OFF until owner starts.
+- After a user-started follow, backend may automatically submit using fresh Binance Quote. The STOP path checks before and after atomic round claim, and no submission is made after the STOP check. MAX_ORDER_SUBMIT_ATTEMPTS=1 with Redis atomic round claim; ambiguous Binance outcomes are closed as UNKNOWN and do not retry.
+- Insufficient balance returns INSUFFICIENT_BALANCE during preparation instead of gating the manual switch. The front end distinguishes rejected, unknown, pending confirmation, and exchange-confirmed fill.
+- This is an enabled CONTROL PATH, not a verified successful real trade. Zero actual live POSTs executed or verified. Binance market discovery, wallet authorization, quote and fill may fail in actual conditions.
+- Render FREE Redis persistenceMode=off means atomic same-round prevention applies only while its Redis data survives; this is not a durable lifetime guarantee through Redis loss. Restart resets follow enabled=false. Free plan can sleep. No cost upgrade was made.

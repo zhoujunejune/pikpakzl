@@ -727,6 +727,23 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       marketTopicId: pendingAction.marketTopicId,
       quoteMode: pendingAction.quoteMode,
     }));
+    // Only a PIN-authenticated user can enable following. Run exactly one
+    // backend confirmation attempt when a fresh signed intent becomes READY.
+    // No browser needs to remain open; no signal if controls are OFF.
+    if(enabled && process.env.RENDER_TRADING_USER_ARMED==='true' &&
+       process.env.AUTO_CONFIRM_ENABLED==='true'){
+      const ready=pendingAction;
+      setImmediate(()=>{
+        if(enabled && pendingAction===ready && ready.state==='READY')
+          void processOrderConfirmation(makeInternalOrderResult(),
+            {confirmationToken:ready.confirmationToken},{automatic:true})
+            .catch(e=>{
+              enabled=false;
+              console.error(JSON.stringify({event:'auto_order_unhandled_halted',
+                error:String(e?.message||e).slice(0,150)}));
+            });
+      });
+    }
   } finally {
     prepareInFlight = false;
   }
@@ -880,6 +897,193 @@ async function readBody(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
   try { return JSON.parse(raw || '{}'); } catch { return {}; }
+}
+
+
+async function processOrderConfirmation(res,body,{automatic=false}={}){
+  if(automatic && (!enabled || process.env.RENDER_TRADING_USER_ARMED!=='true' ||
+     process.env.AUTO_CONFIRM_ENABLED!=='true')){
+    return send(res,409,{ok:false,error:'自动跟随已经关闭'});
+  }
+
+    if (!automatic && !pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
+
+    const p = pendingAction;
+    if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
+    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置暂不可用'})}
+    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已切换，旧订单不可提交'});
+    if (body.confirmationToken !== p.confirmationToken) return send(res, 409, { ok: false, error: '订单确认令牌已失效，请刷新页面' });
+    if (submittedRounds.has(String(p.round))) return send(res, 409, { ok: false, error: '本轮已经提交过订单' });
+
+    p.state = 'QUOTING';
+    const quoteRequestStartedAt = Date.now();
+    const [current, freshQuote] = await Promise.all([
+      getSignal(),
+      getFreshQuote(p._internal),
+    ]);
+
+    if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current)) {
+      pendingAction = null;
+      return send(res, 409, { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' });
+    }
+
+    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置不可用'})}
+    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已变化，停止旧报价提交'});
+    if (!freshQuote.ok) {
+      p.state = 'READY';
+      p.error = freshQuote.error;
+      p.code = freshQuote.code ?? null;
+      console.log(JSON.stringify({
+        event: 'fresh_quote_failed',
+        round: p.round,
+        action: p.action,
+        error: freshQuote.error,
+        code: freshQuote.code ?? null,
+        httpStatus: freshQuote.httpStatus ?? null,
+      }));
+      return send(res, 502, freshQuote);
+    }
+
+    const quote = freshQuote.quote;
+    const expireAt = Number(quote.expireAt || 0);
+    const remainingMs = expireAt > 0 ? expireAt - Date.now() : null;
+    console.log(JSON.stringify({
+      event: 'fresh_quote_ready',
+      round: p.round,
+      action: p.action,
+      quoteId: quote.quoteId,
+      chance: quote.chance ?? null,
+      expireAt: quote.expireAt ?? null,
+      remainingMs,
+      quoteLatencyMs: freshQuote.receivedAt - freshQuote.startedAt,
+      confirmToQuoteMs: Date.now() - quoteRequestStartedAt,
+    }));
+
+    if (remainingMs !== null && remainingMs < 1200) {
+      p.state = 'READY';
+      p.error = '最新 Quote 剩余有效期不足，未提交。请在下一次按钮出现后更快确认。';
+      console.log(JSON.stringify({ event: 'fresh_quote_too_close_to_expiry', round: p.round, remainingMs, expireAt }));
+      return send(res, 409, { ok: false, error: p.error, expireAt, remainingMs });
+    }
+
+    p.state = 'SUBMITTING';
+    const intent = p._internal;
+    const placeBody = {
+      walletAddress: intent.wallet.walletAddress,
+      walletId: intent.wallet.walletId,
+      quoteId: quote.quoteId,
+      timeInForce: 'FOK',
+      accountType: intent.payment.accountType,
+      orderType: 'MARKET',
+      slippageBps: intent.slippageBps,
+      fundingSource: intent.payment.fundingSource,
+    };
+    if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
+
+    const startedAt = new Date().toISOString();
+    const placeStartedAtMs = Date.now();
+    // Single successful claim before the only external money-moving POST.
+    // Redis CAS is fail-closed. Never retry an ambiguous Binance response.
+    try{
+      await claimOrderSubmitAttempt(p.round);
+    }catch(err){
+      p.state='PREPARE_ERROR';p.error='本轮已提交或订单状态未知，禁止重复提交';
+      return send(res,409,{ok:false,error:p.error,
+        reason:String(err?.message||err).slice(0,100)});
+    }
+    const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
+    const placeFinishedAtMs = Date.now();
+    try{
+      await closeOrderSubmitRound(p.round,call.ok&&call.data?.orderId?'SUBMITTED':'UNKNOWN');
+    }catch(err){
+      enabled=false;p.state='SUBMISSION_UNKNOWN';
+      console.error(JSON.stringify({event:'order_submit_ledger_close_failed',
+        round:p.round,reason:String(err?.message||err).slice(0,130)}));
+      return send(res,503,{ok:false,error:'订单状态未能记录，跟随已关闭，请核对币安原始订单'});
+    }
+
+    if (!call.ok) {
+      const err = asError(call, 'PREDICTION_PLACE_ORDER_FAILED');
+      const unknown = call.network || Number(call.status) >= 500;
+      p.state = unknown ? 'SUBMISSION_UNKNOWN' : 'PLACE_ERROR';
+      p.error = err.error;
+      p.code = err.code;
+      p.httpStatus = err.httpStatus;
+      lastOrder = {
+        state: p.state,
+        status: p.state,
+        orderId: null,
+        action: p.action,
+        amount: p.amount,
+        round: p.round,
+        error: err.error,
+        code: err.code,
+        startedAt,
+      };
+      console.log(JSON.stringify({
+        event: 'api_order_failed',
+        round: p.round,
+        action: p.action,
+        amount: p.amount,
+        quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
+        submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
+        ...err,
+      }));
+      return send(res, unknown ? 502 : 400, err);
+    }
+
+    const orderId = call.data?.orderId;
+    if (!orderId) {
+      p.state = 'SUBMISSION_UNKNOWN';
+      return send(res, 502, { ok: false, error: 'Binance 返回成功但缺少 orderId，状态未知，请勿重复提交' });
+    }
+
+    submittedRounds.add(String(p.round));
+    p.state = 'SUBMITTED_PENDING_CONFIRMATION';
+    p.quoteExpireAt = quote.expireAt ?? null;
+    p.quoteChance = quote.chance ?? null;
+    lastOrder = {
+      state: 'SUBMITTED_PENDING_CONFIRMATION',
+      status: 'PLACED_UNVERIFIED',
+      orderId: String(orderId),
+      action: p.action,
+      amount: p.amount,
+      round: p.round,
+      walletAddress: intent.wallet.walletAddress,
+      submittedAt: new Date().toISOString(),
+      fillPercentage: null,
+      filledUsdtAmount: null,
+      quoteExpireAt: quote.expireAt ?? null,
+      quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
+      submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
+    };
+
+    console.log(JSON.stringify({
+      event: 'api_order_submitted_pending_confirmation',
+      orderId: String(orderId),
+      round: p.round,
+      action: p.action,
+      amount: p.amount,
+      quoteRemainingAtSubmitMs: lastOrder.quoteRemainingAtSubmitMs,
+      submitLatencyMs: lastOrder.submitLatencyMs,
+    }));
+
+    setTimeout(() => refreshLastOrderStatus(true), 700);
+    setTimeout(() => refreshLastOrderStatus(true), 1800);
+    setTimeout(() => refreshLastOrderStatus(true), 3500);
+    return send(res, 202, { ok: true, orderId: String(orderId), state: 'SUBMITTED_PENDING_CONFIRMATION' });
+
+}
+
+function makeInternalOrderResult(){
+ let status=null;
+ return {writeHead(code){status=code;},end(raw){
+   let body={};try{body=JSON.parse(String(raw||'{}'))}catch{}
+   console.log(JSON.stringify({event:'auto_order_attempt_result',
+     httpStatus:status,ok:body.ok===true,state:body.state||null,
+     code:body.code??null,error:body.error??null,
+     orderId:body.orderId??null,at:new Date().toISOString()}));
+ }};
 }
 
 http.createServer(async (req, res) => {
@@ -1047,172 +1251,7 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/confirm') {
     const body = await readBody(req);
-    if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
-
-    const p = pendingAction;
-    if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
-    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置暂不可用'})}
-    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已切换，旧订单不可提交'});
-    if (body.confirmationToken !== p.confirmationToken) return send(res, 409, { ok: false, error: '订单确认令牌已失效，请刷新页面' });
-    if (submittedRounds.has(String(p.round))) return send(res, 409, { ok: false, error: '本轮已经提交过订单' });
-
-    p.state = 'QUOTING';
-    const quoteRequestStartedAt = Date.now();
-    const [current, freshQuote] = await Promise.all([
-      getSignal(),
-      getFreshQuote(p._internal),
-    ]);
-
-    if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current)) {
-      pendingAction = null;
-      return send(res, 409, { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' });
-    }
-
-    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置不可用'})}
-    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已变化，停止旧报价提交'});
-    if (!freshQuote.ok) {
-      p.state = 'READY';
-      p.error = freshQuote.error;
-      p.code = freshQuote.code ?? null;
-      console.log(JSON.stringify({
-        event: 'fresh_quote_failed',
-        round: p.round,
-        action: p.action,
-        error: freshQuote.error,
-        code: freshQuote.code ?? null,
-        httpStatus: freshQuote.httpStatus ?? null,
-      }));
-      return send(res, 502, freshQuote);
-    }
-
-    const quote = freshQuote.quote;
-    const expireAt = Number(quote.expireAt || 0);
-    const remainingMs = expireAt > 0 ? expireAt - Date.now() : null;
-    console.log(JSON.stringify({
-      event: 'fresh_quote_ready',
-      round: p.round,
-      action: p.action,
-      quoteId: quote.quoteId,
-      chance: quote.chance ?? null,
-      expireAt: quote.expireAt ?? null,
-      remainingMs,
-      quoteLatencyMs: freshQuote.receivedAt - freshQuote.startedAt,
-      confirmToQuoteMs: Date.now() - quoteRequestStartedAt,
-    }));
-
-    if (remainingMs !== null && remainingMs < 1200) {
-      p.state = 'READY';
-      p.error = '最新 Quote 剩余有效期不足，未提交。请在下一次按钮出现后更快确认。';
-      console.log(JSON.stringify({ event: 'fresh_quote_too_close_to_expiry', round: p.round, remainingMs, expireAt }));
-      return send(res, 409, { ok: false, error: p.error, expireAt, remainingMs });
-    }
-
-    p.state = 'SUBMITTING';
-    const intent = p._internal;
-    const placeBody = {
-      walletAddress: intent.wallet.walletAddress,
-      walletId: intent.wallet.walletId,
-      quoteId: quote.quoteId,
-      timeInForce: 'FOK',
-      accountType: intent.payment.accountType,
-      orderType: 'MARKET',
-      slippageBps: intent.slippageBps,
-      fundingSource: intent.payment.fundingSource,
-    };
-    if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
-
-    const startedAt = new Date().toISOString();
-    const placeStartedAtMs = Date.now();
-    // Single successful claim before the only external money-moving POST.
-    // Redis CAS is fail-closed. Never retry an ambiguous Binance response.
-    try{
-      await claimOrderSubmitAttempt(p.round);
-    }catch(err){
-      p.state='PREPARE_ERROR';p.error='本轮已提交或订单状态未知，禁止重复提交';
-      return send(res,409,{ok:false,error:p.error,
-        reason:String(err?.message||err).slice(0,100)});
-    }
-    const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
-    const placeFinishedAtMs = Date.now();
-    try{
-      await closeOrderSubmitRound(p.round,call.ok&&call.data?.orderId?'SUBMITTED':'UNKNOWN');
-    }catch(err){
-      enabled=false;p.state='SUBMISSION_UNKNOWN';
-      console.error(JSON.stringify({event:'order_submit_ledger_close_failed',
-        round:p.round,reason:String(err?.message||err).slice(0,130)}));
-      return send(res,503,{ok:false,error:'订单状态未能记录，跟随已关闭，请核对币安原始订单'});
-    }
-
-    if (!call.ok) {
-      const err = asError(call, 'PREDICTION_PLACE_ORDER_FAILED');
-      const unknown = call.network || Number(call.status) >= 500;
-      p.state = unknown ? 'SUBMISSION_UNKNOWN' : 'PLACE_ERROR';
-      p.error = err.error;
-      p.code = err.code;
-      p.httpStatus = err.httpStatus;
-      lastOrder = {
-        state: p.state,
-        status: p.state,
-        orderId: null,
-        action: p.action,
-        amount: p.amount,
-        round: p.round,
-        error: err.error,
-        code: err.code,
-        startedAt,
-      };
-      console.log(JSON.stringify({
-        event: 'api_order_failed',
-        round: p.round,
-        action: p.action,
-        amount: p.amount,
-        quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
-        submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
-        ...err,
-      }));
-      return send(res, unknown ? 502 : 400, err);
-    }
-
-    const orderId = call.data?.orderId;
-    if (!orderId) {
-      p.state = 'SUBMISSION_UNKNOWN';
-      return send(res, 502, { ok: false, error: 'Binance 返回成功但缺少 orderId，状态未知，请勿重复提交' });
-    }
-
-    submittedRounds.add(String(p.round));
-    p.state = 'SUBMITTED_PENDING_CONFIRMATION';
-    p.quoteExpireAt = quote.expireAt ?? null;
-    p.quoteChance = quote.chance ?? null;
-    lastOrder = {
-      state: 'SUBMITTED_PENDING_CONFIRMATION',
-      status: 'PLACED_UNVERIFIED',
-      orderId: String(orderId),
-      action: p.action,
-      amount: p.amount,
-      round: p.round,
-      walletAddress: intent.wallet.walletAddress,
-      submittedAt: new Date().toISOString(),
-      fillPercentage: null,
-      filledUsdtAmount: null,
-      quoteExpireAt: quote.expireAt ?? null,
-      quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
-      submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
-    };
-
-    console.log(JSON.stringify({
-      event: 'api_order_submitted_pending_confirmation',
-      orderId: String(orderId),
-      round: p.round,
-      action: p.action,
-      amount: p.amount,
-      quoteRemainingAtSubmitMs: lastOrder.quoteRemainingAtSubmitMs,
-      submitLatencyMs: lastOrder.submitLatencyMs,
-    }));
-
-    setTimeout(() => refreshLastOrderStatus(true), 700);
-    setTimeout(() => refreshLastOrderStatus(true), 1800);
-    setTimeout(() => refreshLastOrderStatus(true), 3500);
-    return send(res, 202, { ok: true, orderId: String(orderId), state: 'SUBMITTED_PENDING_CONFIRMATION' });
+    return processOrderConfirmation(res,body);
   }
 
   return send(res, 404, { ok: false, error: 'Not found' });

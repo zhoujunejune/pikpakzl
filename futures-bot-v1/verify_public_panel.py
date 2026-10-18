@@ -47,6 +47,13 @@ def main():
         payload=json.loads(raw)
         print("HTTPS_AUTH_MODE:",payload.get("mode"))
         if payload.get("mode")!="paper":return 5
+        # Verify the *actual phone landing page*, not just health endpoints.
+        root_code,root_body=probe("/",pw)
+        print("HTTPS_HOME_STATUS:",root_code)
+        print("HTTPS_HOME_CONTENT:",root_body[:90].decode("utf-8","replace").replace("\\n"," "))
+        if root_code!=200 or b"ZL" not in root_body:
+            print("PANEL_VERIFY_FAILED: main page not actually served")
+            return 12
         status,raw=probe("/status",pw)
         print("HTTPS_STATUS_ENDPOINT:",status)
         if status!=200:return 6

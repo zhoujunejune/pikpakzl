@@ -143,7 +143,7 @@ def main():
     t.start()
     port=int(os.environ.get("PORT","10000"))
     bot.log("render_paper_http_ready",port=port)
-    ThreadingHTTPServer(("0.0.0.0",port),Handler).serve_forever()
+    ThreadingHTTPServer((os.environ.get("BIND_HOST", "127.0.0.1"),port),Handler).serve_forever()
 
 if __name__=="__main__":
     main()

@@ -40,3 +40,7 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
           ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
         run: python futures-bot-v1/aliyun_panel_deploy.py
+      - name: Confirm HTTPS certificate, anonymous 401 and authenticated paper dashboard
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python futures-bot-v1/smoke_panel.py

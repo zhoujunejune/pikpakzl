@@ -1,0 +1,38 @@
+name: EDGE5 live read-only smoke
+on:
+  pull_request:
+    branches: [cloudflare-edge5m-20261017]
+    paths: ['.github/workflows/edge5-live-readonly-smoke.yml']
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Verify deployed Cloudflare Worker and record visible status
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://edge-5m-v1.zl528094-3ba.workers.dev';
+          let checked=null;
+          for(let i=0;i<8;i++){
+            try{
+              const r=await fetch(base+'/status',{signal:AbortSignal.timeout(10000),cache:'no-store'});
+              const d=await r.json();
+              checked={status:r.status,model:d.model,training:d.training,
+                health:d.health,timed:d.timed,results:d.results,
+                latest:d.latest?{round:d.latest.round,direction:d.latest.direction,
+                  executionEligible:d.latest.executionEligible}:null};
+              console.log('EDGE5 status probe:',JSON.stringify(checked).slice(0,4200));
+              if(r.status===200&&d.training?.signalIndependentOfCalibration===true&&
+                d.health?.officialOrigin==='https://zl-signal-v2-migration.onrender.com/api/round-stats'&&
+                d.health?.marketOrigin==='https://zl-signal-v3-migration.onrender.com/api/shadow-market-data'){
+                const m=await fetch(base+'/market-check',{signal:AbortSignal.timeout(13000)});
+                console.log('EDGE5 market-check:',m.status,(await m.text()).slice(0,1200));
+                process.exit(0);
+              }
+            }catch(e){console.log('EDGE5 error:',String(e).slice(0,200))}
+            await new Promise(r=>setTimeout(r,8000));
+          }
+          throw Error('DEPLOYED_EDGE5_NEW_VERSION_NOT_VERIFIED');
+          NODE

@@ -884,10 +884,10 @@ setInterval(() => refreshLastOrderStatus(false), 2500);
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>5分钟 API 实盘确认控制台</title><style>
 body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;padding:18px}.w{max-width:580px;margin:auto}.c{background:#191d27;border-radius:18px;padding:18px;margin:14px 0}.big{font-size:25px;font-weight:800}.on{color:#3ddc84}.off,.bad{color:#ff6868}.ok{color:#3ddc84}.warn{color:#f0b90b}.muted{color:#a8b0bd;font-size:14px;line-height:1.55}input,button{width:100%;box-sizing:border-box;padding:15px;border-radius:12px;margin-top:10px;font-size:17px}input{background:#0d1016;color:#fff;border:1px solid #3b4352}button{border:0;font-weight:800}.start{background:#28c76f;color:#06150b}.stop{background:#ff5c62;color:#fff}.confirm{background:#f0b90b;color:#161616;font-size:19px}.confirm:disabled{opacity:.45}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.kv{background:#10141c;padding:12px;border-radius:12px}.k{font-size:12px;color:#8f98a8}.v{font-size:17px;font-weight:700;margin-top:4px}.wallet{font-size:30px;font-weight:900;margin-top:6px}.pending{border:1px solid #454d5f}.hidden{display:none}</style></head><body><div class="w">
 <h2>5分钟 API 实盘确认控制台</h2>
-<div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：新一轮 LOCKED → 后端先准备市场/方向（不提前拿 Quote）→ 你点一次“确认下单” → 后端即时获取最新 Quote → 立刻调用 Binance Prediction 下单 API → 再核验真实订单状态。</div></div>
+<div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：你使用控制 PIN 开始跟随（默认关闭）→ 下一轮有效 LOCKED → 后端核对行情/方向和支付路径 → 自动获取最新 Quote → 每轮最多尝试提交一次 Binance Prediction 订单 → 再核验交易所成交状态。未完成概率校准的 EDGE 方向没有已验证的胜率优势。</div></div>
 <div class="c"><div class="k">Prediction 可用余额</div><div class="wallet" id="walletBalance">读取中...</div><div class="muted" id="walletMeta">正在连接 Binance Prediction...</div></div>
 <div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随（自动提交，下一轮生效）</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
-<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
+<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">PIN控制 · 自动跟随 / 每轮一次</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>
 <div id="riskControlsAnchor"></div>
@@ -1109,7 +1109,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/healthz') {
     return send(res, 200, {
       ok: true,
-      mode: 'API_CONFIRM_LIVE',
+      mode: process.env.AUTO_CONFIRM_ENABLED==='true'?'AUTO_CONFIRM_LIVE':'MANUAL_CONFIRM_LIVE',
       quoteMode: 'FRESH_ON_CONFIRM',
       hasSiteOrigin: Boolean(SITE_ORIGIN),
       hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),
@@ -1269,7 +1269,7 @@ http.createServer(async (req, res) => {
   console.log(JSON.stringify({
     event: 'control_panel_started',
     port: PORT,
-    mode: 'API_CONFIRM_LIVE',
+    mode: process.env.AUTO_CONFIRM_ENABLED==='true'?'AUTO_CONFIRM_LIVE':'MANUAL_CONFIRM_LIVE',
     quoteMode: 'FRESH_ON_CONFIRM',
     hasSiteOrigin: Boolean(SITE_ORIGIN),
     hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),

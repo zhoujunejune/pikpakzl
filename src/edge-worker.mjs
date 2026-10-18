@@ -9,7 +9,7 @@ import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection
 
 const OFFICIAL_URL='https://zl-signal-v2-migration.onrender.com/api/round-stats';
 const RAILWAY_MARKET_URL='https://zl-signal-v3-migration.onrender.com/api/shadow-market-data';
-const V2_PM_URL='https://zl-signal-v3-migration.onrender.com/api/signal';
+const V2_MARKET_URL='https://zl-signal-v3-migration.onrender.com/api/edge-v2-market-data';
 const OFFICIAL_SOURCE='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
 const PHASES=[-15000,-12000,-9000,-6000,-3000,1900,4500,6050,6800,7450,25000];
 const TTL=ROUND_MS*25;
@@ -68,30 +68,26 @@ const observation=(venue=null)=>bestMarket(venue,binanceObservation);
 // The V2 research candidate avoids Binance Futures HTTP 451 entirely.
 // It requires independent real Binance spot price, L5 book and signed trades.
 async function binanceV2SpotObservation(){
- const [spot,depth,trade]=await Promise.all([
-  firstGood([RAILWAY_MARKET_URL,
-    'https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT'],
-    p=>(p?.ok===true&&p?.readOnly===true&&
-      Number(p?.latest?.lastPrice)>0&&Number(p?.latest?.eventMs)>0)||
-      (p?.symbol==='BTCUSDT'&&Number(p?.price)>0)),
-  firstGood(['https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=10'],
-    p=>Array.isArray(p?.bids)&&p.bids.length>=5&&
-      Array.isArray(p?.asks)&&p.asks.length>=5),
-  firstGood(['https://data-api.binance.vision/api/v3/aggTrades?symbol=BTCUSDT&limit=200'],
-    p=>Array.isArray(p)&&p.length>=3)
- ]);
- const at=Date.now(),fromV3=spot.payload?.ok===true;
- const spotPrice=fromV3?Number(spot.payload.latest.lastPrice):Number(spot.payload.price);
- const spotAt=fromV3?Number(spot.payload.latest.eventMs):spot.receivedAt;
- if(!(spotPrice>0&&spotAt<=at+300&&at-spotAt<=2500))
-  throw Error('V2_BINANCE_SPOT_STALE');
- const rows=trade.payload.map(t=>({T:Number(t.T),q:t.q,m:t.m}));
- if(rows.filter(t=>Number(t.q)>0&&at-t.T>=-300&&at-t.T<=4000).length<3)
-  throw Error('V2_BINANCE_TRADES_STALE');
- return {venue:'BINANCE',spotPrice,spotAt,
-  bids:depth.payload.bids,asks:depth.payload.asks,trades:rows,
-  at,source:fromV3?'BINANCE_WS_EVENT':'BINANCE_SPOT_REST_RECEIPT'};
+ // The Cloudflare egress receives Binance REST HTTP 403. Reuse the real
+ // Binance SPOT WebSocket maintained by Render V3, never Bybit or synthetic data.
+ const d=await readJson(V2_MARKET_URL,2200),at=Date.now();
+ if(d?.ok!==true||d?.readOnly!==true||d.venue!=='BINANCE'||
+   d.source!=='BINANCE_SPOT_WSS_DEPTH20_AGGTRADES_REAL')
+   throw Error('V2_RENDER_BINANCE_SOURCE_NOT_VERIFIED');
+ const price=Number(d.spotPrice),spotAt=Number(d.spotAt);
+ if(!(price>0&&spotAt<=at+300&&at-spotAt<=2500&&
+   Array.isArray(d.bids)&&d.bids.length>=5&&
+   Array.isArray(d.asks)&&d.asks.length>=5))
+  throw Error('V2_RENDER_SPOT_BOOK_STALE');
+ const trades=d.trades;
+ if(!Array.isArray(trades)||
+   trades.filter(t=>Number(t.q)>0&&at-Number(t.T)>=-300&&at-Number(t.T)<=4000).length<3)
+  throw Error('V2_RENDER_BINANCE_TRADES_STALE');
+ return {venue:'BINANCE',spotPrice:price,spotAt,
+   bids:d.bids,asks:d.asks,trades,at,pmSource:d,
+   source:d.source};
 }
+
 function officialRounds(payload){
  if(payload?.ok!==true||payload?.settlementSource!==OFFICIAL_SOURCE||
    !Array.isArray(payload?.records))throw Error('OFFICIAL_LEDGER_PROVENANCE_INVALID');
@@ -161,11 +157,11 @@ export class Edge5 extends DurableObject{
      t=>at-t.at<=25000&&t.venue==='BINANCE'):[];
    if(roundAt(at)!==roundAt(startedAt))return;
    const elapsed=at-roundAt(at);
-   if(elapsed>=5600&&elapsed<8000){
+   if(elapsed>=6400&&elapsed<8000){
     const old=this.ctx.storage.sql.exec(
      'SELECT round FROM edge_v2_shadow WHERE round=?',roundAt(at)).toArray()[0];
     if(!old){
-     const source=await readJson(V2_PM_URL,1900),freezeAt=Date.now(),
+     const source=obs.pmSource,freezeAt=Date.now(),
        round=roundAt(freezeAt),pm=predictionSnapshot(source,round,freezeAt);
      if(round===roundAt(startedAt)&&freezeAt-round<8000&&pm){
       const f=v2Features(obs,trail,pm,freezeAt);

@@ -8,8 +8,12 @@ if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
   if (process.env.AUTO_CONFIRM_ENABLED !== 'false') {
     throw Error('RENDER_PREVIEW_REQUIRES_AUTO_CONFIRM_DISABLED');
   }
-  if (process.env.BINANCE_PREDICTION_API_KEY || process.env.BINANCE_PREDICTION_API_SECRET) {
-    throw Error('RENDER_PREVIEW_DISALLOWS_TRADING_CREDENTIALS');
+  // Read-only authenticated queries can be checked in preview.
+  // The public panel gateway blocks every mutation and masks balances.
+  // Never turn on live execution in this free-tier preview.
+  if (Boolean(process.env.BINANCE_PREDICTION_API_KEY) !==
+      Boolean(process.env.BINANCE_PREDICTION_API_SECRET)) {
+    throw Error('RENDER_PREVIEW_INCOMPLETE_BINANCE_API_PAIR');
   }
   const url = String(process.env.SIGNAL_REDIS_URL || '').trim();
   if (!url) throw Error('RENDER_PREVIEW_REDIS_MISSING');

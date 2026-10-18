@@ -3,7 +3,7 @@
 // A selection in the panel is handled by existing Redis selector and order engine.
 import {createClient} from 'redis';
 import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection,
-  trainOnOfficial,summarize,MIN_TRAINING_ROUNDS} from './edge-5m-core.mjs';
+  trainOnOfficial,summarize,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS} from './edge-5m-core.mjs';
 import {verifiedOfficialRoundDirections} from './novice-mix-shadow.mjs';
 const MARKET_ORIGIN=String(process.env.NOVICE_MARKET_ORIGIN||
   'https://signal-diagnostic-v3-production.up.railway.app').replace(/\/+$/,'');
@@ -122,12 +122,13 @@ export function createEdge5mService({fetcher=globalThis.fetch,clock=Date.now,
      }
      state.lastOfficialAt=now;state.officialError=null;
      const n=state.rows.filter(r=>r.probe&&valid(r.actual)).length;
-     if(n>=MIN_TRAINING_ROUNDS&&n-lastModelTrainCount>=5){
+     if(n>=MIN_FIT_ROUNDS&&n-lastModelTrainCount>=5){
        const result=trainOnOfficial(state.rows);state.training={...result};
        if(result.model){state.model=result.model;}
        lastModelTrainCount=n;changed=true;
-     }else if(n<MIN_TRAINING_ROUNDS){
-       state.training={status:'COLLECTING',samples:n,required:MIN_TRAINING_ROUNDS,calibrationReady:false};
+     }else if(n<MIN_FIT_ROUNDS){
+       state.training={status:'COLLECTING',samples:n,required:MIN_TRAINING_ROUNDS,
+         fitRequired:MIN_FIT_ROUNDS,calibrationReady:false};
      }
      if(changed)await save();
    }catch(error){state.officialError=String(error?.message||error).slice(0,140);}
@@ -135,11 +136,12 @@ export function createEdge5mService({fetcher=globalThis.fetch,clock=Date.now,
  }
  function snapshot(){
    const now=clock(),round=roundAt(now),row=state.rows.find(r=>r.round===round)||null;
+   // Valid locked direction is independent of the sample/calibration threshold;
+   // require durable records, genuine market evidence, and the matching model version.
    const trusted=state.persisted&&state.storage==='REDIS_PERSISTENT'&&
-     state.training?.calibrationReady===true&&state.model?.calibrationReady===true&&
-     state.model?.version===row?.modelVersion;
+     (state.model?.version||'EDGE5_UNCALIBRATED_PROBE')===row?.modelVersion;
    const latest=row?.probe?{...row,status:'LOCKED',inputVersion:INPUT_VERSION,
-     marketAt:row.probe.marketAt,executionEligible:trusted&&row.calibrationReady===true}:null;
+     marketAt:row.probe.marketAt,executionEligible:trusted&&Number.isFinite(row.score)}:null;
    const results=summarize(state.rows);
    return {ok:true,model:EDGE_MODEL,inputVersion:INPUT_VERSION,name:'EDGE 5分钟概率优势',
      readOnly:true,orders:false,productionIntegration:false,
@@ -149,7 +151,9 @@ export function createEdge5mService({fetcher=globalThis.fetch,clock=Date.now,
        lockedAt:r.lockedAt,actual:r.actual,pendingReason:r.pendingReason,
        modelProbability:r.modelProbability,calibrationReady:r.calibrationReady})),
      results,training:{...state.training,version:state.model?.version||null,
-       ready:trusted,remaining:Math.max(0,MIN_TRAINING_ROUNDS-Number(state.training.samples||0))},
+       ready:state.training?.calibrationReady===true,
+       signalIndependentOfCalibration:true,
+       remaining:Math.max(0,MIN_TRAINING_ROUNDS-Number(state.training.samples||0))},
      timed:{lastTickAt:state.lastTickAt,lastGoodDataAt:state.lastMarketAt,deadlineMs:8000},
      health:{marketError:state.marketError,officialError:state.officialError,
        lastOfficialAt:state.lastOfficialAt,storage:state.storage,persisted:state.persisted}};

@@ -387,7 +387,14 @@ export default{
     'executionEligible:l?.executionEligible===true,trainingSamples:t.samples,'+
     'required:5000,calibrationReady:t.ready,accuracy:r.overall,'+
     'UP:r.up,DOWN:r.down,marketError:h.marketError,'+
-    'officialError:h.officialError,latest:l},null,2)}catch(e){'+
+    'officialError:h.officialError,latest:l,'+
+    'V2_shadow_no_orders:{source:"BINANCE_SPOT_AND_PREDICTION",'+
+    'locked:d.shadowV2?.results?.locked||0,'+
+    'pending:d.shadowV2?.results?.pending||0,'+
+    'PM_only:d.shadowV2?.results?.pmOnly,'+
+    'binance_PM_blend:d.shadowV2?.results?.blend,'+
+    'latest:d.shadowV2?.latest,'+
+    'dataError:d.shadowV2?.error}},null,2)}catch(e){'+
     'document.querySelector("#state").textContent=String(e)}}go();setInterval(go,5000)</script>'+
     '</body></html>',{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
   }

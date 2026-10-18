@@ -24,6 +24,24 @@ class RiskTests(unittest.TestCase):
     def test_pnl_includes_fees(self):
         t={"side":"BUY","entry":100,"qty":1}
         self.assertAlmostEqual(pnl(t,101),1-(100+101)*.0005)
+    def test_ban_response_is_not_retried(self):
+        from bot import API
+        class FakeResp:
+            status_code=418
+            headers={"Retry-After":"3600"}
+            text="IP temporarily banned"
+            ok=False
+        class FakeSession:
+            def __init__(self): self.count=0
+            def request(self,*a,**kw):
+                self.count+=1
+                return FakeResp()
+        client=API()
+        client.session=FakeSession()
+        with self.assertRaisesRegex(RuntimeError, "HTTP 418; Retry-After=3600"):
+            client.call("GET","/fapi/v1/time")
+        self.assertEqual(client.session.count,1)
+
     def test_no_signal_flat_market(self):
         c=[]
         for i in range(160):

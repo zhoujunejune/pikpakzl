@@ -15,7 +15,10 @@ if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
 void (async () => {
   for (const [target, url] of [
     ['public_egress_ip', 'https://checkip.amazonaws.com/'],
-    ['binance_public_ping', 'https://api.binance.com/api/v3/ping'],
+    // Explicit opt-in only: Binance Spot REST currently returns 418 for Render egress.
+    ...(process.env.BINANCE_REST_PREFLIGHT === 'true'
+      ? [['binance_public_ping', 'https://api.binance.com/api/v3/ping']]
+      : []),
   ]) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(6500), cache: 'no-store' });

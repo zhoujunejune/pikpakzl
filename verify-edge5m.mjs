@@ -5,7 +5,15 @@ if(!url)throw Error('Missing EDGE Worker URL from Wrangler output');
 const get=async(path)=>{const r=await fetch(url+path);const raw=await r.text();
  let body;try{body=JSON.parse(raw)}catch{throw Error(path+' HTTP '+r.status+' received non-JSON: '+raw.slice(0,1200))}
  return {httpStatus:r.status,body};};
-const health=await get('/health'),status=await get('/status');
+const DISPLAY_START_ROUND=1792320900000;
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+let health,status;
+for(let attempt=0;attempt<9;attempt++){
+ [health,status]=await Promise.all([get('/health'),get('/status')]);
+ if(status.body.statisticsWindow?.startRound===DISPLAY_START_ROUND)break;
+ if(attempt<8)await sleep(2500); // Cloudflare edge propagation after deploy
+}
+
 if(health.httpStatus!==200||status.httpStatus!==200||
  health.body.ok!==true||health.body.orders!==false||
  status.body.model!=='EDGE_5M_V1'||status.body.readOnly!==true||
@@ -16,6 +24,22 @@ if(health.httpStatus!==200||status.httpStatus!==200||
  status.body.health?.officialOrigin!=='https://zl-signal-v2-migration.onrender.com/api/round-stats'||
  status.body.health?.marketOrigin!=='https://zl-signal-v3-migration.onrender.com/api/shadow-market-data')
  throw Error('ISOLATED_READ_ONLY_CONTRACT_FAILED');
+// Every public front end must see the post-V2 window, while the model
+// still learns from all verified outcomes. Never pass a cached lifetime score.
+const stats=status.body.results||{},recent=status.body.recent||[];
+const maxRounds=Math.max(0,Math.ceil((Number(status.body.generatedAt||Date.now())-DISPLAY_START_ROUND)/300000)+1);
+if(status.body.statisticsWindow?.startRound!==DISPLAY_START_ROUND||
+ status.body.statisticsWindow?.historicalRowsPreserved!==true||
+ status.body.statisticsWindow?.trainingHistoryPreserved!==true||
+ !Array.isArray(recent)||recent.some(r=>Number(r.round)<DISPLAY_START_ROUND)||
+ Number(stats.observedRounds)>maxRounds||
+ Number(stats.overall?.samples||0)>Number(stats.observedRounds||0)||
+ status.body.training?.historyScope!=='ALL_VERIFIED_OFFICIAL_LABELS_UNCHANGED')
+ throw Error('POST_V2_DISPLAY_WINDOW_NOT_ACTIVE_OR_LEGACY_HISTORY_LEAKED');
+console.log('EDGE display restart:',JSON.stringify({
+ since:status.body.statisticsWindow.startAt,visibleResults:stats,
+ cumulativeTrainingSamples:status.body.training.samples,
+ recentVisible:recent.length}));
 if(!Number.isFinite(Number(status.body.timed?.nextAlarm)))
  throw Error('DURABLE_OBJECT_ALARM_NOT_SCHEDULED');
 console.log('EDGE Worker deployed:',url);

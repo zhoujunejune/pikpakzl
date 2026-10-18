@@ -1,0 +1,115 @@
+# STAGING PREVIEW ONLY. NOT a durable/always-on production trading deployment.
+# All plans set explicitly to Free. Do not copy Binance write credentials yet.
+services:
+  - type: web
+    name: zl-trade-control
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: railway-diagnostic
+    buildCommand: npm install --omit=dev
+    startCommand: node risk-runner.mjs & node panel-stats-shell.mjs
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: INNER_PANEL_PORT
+        value: '3002'
+      - key: PANEL_PUBLIC_PORT
+        value: '10000'
+      - key: AUTO_CONFIRM_ENABLED
+        value: 'false'
+      - key: SIGNAL_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: zl-transient-kv
+          property: connectionString
+      - key: ROUND_STATS_ORIGIN
+        sync: false
+      - key: ROUND_STATS_PUBLIC_ORIGIN
+        sync: false
+      - key: SIGNAL_WS_URL
+        sync: false
+      - key: SITE_ORIGIN
+        sync: false
+      - key: CONTROL_PIN_SHA256
+        sync: false
+      - key: BINANCE_PREDICTION_API_KEY
+        sync: false
+      - key: BINANCE_PREDICTION_API_SECRET
+        sync: false
+      - key: BINANCE_PREDICTION_WALLET_ADDRESS
+        sync: false
+      - key: BINANCE_PREDICTION_WALLET_ID
+        sync: false
+
+  - type: web
+    name: zl-signal-v2
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./round-tracker/Dockerfile
+    dockerContext: ./round-tracker
+    dockerCommand: node index-rest.mjs
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: SIGNAL_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: zl-transient-kv
+          property: connectionString
+      - key: SIGNAL_ORIGIN
+        sync: false
+      - key: SITE_ORIGIN
+        sync: false
+      - key: ROUND_HISTORY_FILE
+        value: /tmp/round-history.json
+      # WARNING: /tmp is ephemeral; old Railway /data history is not migrated.
+
+  - type: web
+    name: zl-signal-v3
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: fast-signal-engine
+    buildCommand: npm install --omit=dev
+    startCommand: node freeze-wrapper.mjs
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SITE_ORIGIN
+        sync: false
+
+  - type: web
+    name: zl-z3-collector
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: render-migration/collector
+    buildCommand: node --version
+    startCommand: node index.mjs
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: SITE_ORIGIN
+        sync: false
+      - key: Z3_COLLECTOR_CODE_BASE64
+        sync: false
+      - key: Z3_COLLECTOR_CODE_SHA256
+        sync: false
+      - key: EVENT10_RELAY_CODE_BASE64
+        sync: false
+      - key: EVENT10_RELAY_CODE_SHA256
+        sync: false
+
+  - type: keyvalue
+    name: zl-transient-kv
+    plan: free
+    region: singapore
+    maxmemoryPolicy: noeviction
+    persistenceMode: off
+    ipAllowList: []

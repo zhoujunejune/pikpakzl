@@ -42,3 +42,14 @@ Migration branch: `migration/render-blueprint-20261018` (PR #167). The original 
 - Deployed V3 and panel, both reports **live**. V3 confirmed log events `render_binance_rest_probes_config enabled:false skipped:4`, `spot_rest_history_bootstrap_paused`, and `binance_ws_connected`. Panel model/direction/EDGE/status read-only routes remain HTTP 200 and model config ready.
 - **This does not lift an already-active Binance IP ban**; the actual Retry-After was not captured by earlier probes. Do not assume Spot REST, Binance Prediction signed authorization or real-money orders are restored. No live trading credentials were entered and no real orders were placed. A single read-only probe can be considered **only after the ban interval**; ongoing probing is disabled.
 - These fixes are limited to the separate Render migration branch, and don't modify Railway deployment, Cloudflare models, official settlement ledger or Binance order execution logic.
+
+
+## PIN-protected access — 2026-10-18 04:01 UTC
+
+- Connected Render owner configured a Binance Prediction API pair on the existing panel, without sharing it in GitHub or this document. The first redeploy failed because `render-preview-seed.mjs` disallowed any keys. Fixed the guard to permit a complete pair while preserving preview-only execution shutdown.
+- PIN access has been implemented **server-side** in `render-preview-auth.mjs` behind the Render public HTTPS URL. Only a SHA-256 hash is stored in Render `RENDER_PANEL_LOGIN_PIN_SHA256`, plus a separate high-entropy HMAC session secret in `RENDER_PANEL_SESSION_SECRET`. **Do not store plaintext PIN in source or logs.**
+- Secure `HttpOnly` `SameSite=Strict` cookie, 8-hour session, login throttling; logout action. Unauthorized frontend requests redirect to `/auth/login`; unauthenticated data/API requests return HTTP 401. Only minimal `/healthz` is public.
+- PIN-authenticated `/api/status` now shows real read-only Prediction balance; anonymous response never includes account data. The public gateway still rejects every state-mutating route with HTTP 403 in preview mode, irrespective of PIN, so logging in does **not** enable order submission.
+- Deploy `dep-dba48l7btjjs73dns7ng` is **live** with smoke log `render_pin_gateway_smoke ok:true,anonymousFront:303,anonymousStatus:401,login:200,health:200`.
+- Binance balance query succeeded with **3 account options**, but values are deliberately omitted from logs.
+- No live trading action was made. Remaining blockers: real settlement history and Z3 source migration, official settlement `PREDICTION_TOPIC_NOT_FOUND`, Render Free reliability and durable funds/order state.

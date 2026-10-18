@@ -9,11 +9,24 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 4
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - name: Verify deployed Cloudflare Worker and record visible status
         run: |
           node --input-type=module <<'NODE'
           const base='https://edge-5m-v1.zl528094-3ba.workers.dev';
+          const workerCode=await fetch('https://api.cloudflare.com/client/v4/accounts/3ba148af3f98117d6b299158e20bf687/workers/scripts/edge-5m-v1',{
+            headers:{Authorization:'Bearer '+process.env.CF_TOKEN},
+            signal:AbortSignal.timeout(12000)});
+          const current=await workerCode.text();
+          const bybitFresh=current.includes('BYBIT_FRESH_TRADES_UNAVAILABLE_');
+          const hasRender2=current.includes('zl-signal-v2-migration.onrender.com/api/round-stats');
+          const hasRender3=current.includes('zl-signal-v3-migration.onrender.com/api/shadow-market-data');
+          console.log('CLOUDFLARE_DIRECT_API_AUDIT',JSON.stringify({status:workerCode.status,
+            bybitFresh,hasRender2,hasRender3,codeLength:current.length}));
+          if(workerCode.status!==200||!bybitFresh||!hasRender2||!hasRender3)
+            throw Error('CLOUDFLARE_DEPLOYED_WORKER_SOURCE_NOT_UPDATED');
           let checked=null;
           for(let i=0;i<8;i++){
             try{

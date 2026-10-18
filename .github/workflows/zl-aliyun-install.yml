@@ -1,5 +1,5 @@
 name: Alibaba SWAS futures paper-only install
-# Reinstall paper-only release after correcting storage and exchange status labels.
+# Install the tested phone control UI locally; external HTTPS disabled until password is configured.
 on:
   push:
     branches: [feature/zl-futures-bot-v1]

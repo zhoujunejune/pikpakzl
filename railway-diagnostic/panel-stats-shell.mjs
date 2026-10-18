@@ -46,7 +46,8 @@ function log(event, extra = {}) {
   console.log(JSON.stringify({ event, shell: 'panel-stats', at: new Date().toISOString(), ...extra }));
 }
 
-const statsCard = `<div class="c" id="roundStatsCard">
+const statsCard = (process.env.RENDER_MIGRATION_PREVIEW === 'true' ?
+  '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费测试环境｜实盘下单关闭</strong><div style="color:#ccd4e0;margin-top:6px">Redis 仅用于临时测试；原订单账本、交易凭据与 Z3 采集器未迁移。Cloudflare EDGE 为只读信号，突破20%模型有数据缺口。方向不代表币安成交。</div></div>' : '') + `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
 <div class="muted" id="rsMeta">仅统计新版RSI(14)直接输出方向与币安预测市场官方结算的准确率；实际订单盈亏另行统计。</div>
@@ -1460,6 +1461,31 @@ http.createServer((req, res) => {
           responseDataType:result.responseDataType ?? null});
       } catch (err) { log('binance_official_singapore_probe', {ok:false,error:err?.name || 'REQUEST_FAILED'}); }
     }, 3000).unref();
+  }
+
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    setTimeout(async () => {
+      for (const route of ['/api/order-signal-model','/api/direction-mode',
+        '/api/shadow-breakout20/edge-5m','/api/status']) {
+        try {
+          const response = await fetch('http://127.0.0.1:' + PORT + route, {
+            cache:'no-store',signal:AbortSignal.timeout(7000)
+          });
+          const data = await response.json();
+          log('render_preview_readonly_check', {
+            route,httpStatus:response.status,apiOk:data?.ok===true,
+            modelChoiceReady:data?.ready??data?.orderSignalModelReady??null,
+            directionModeReady:data?.directionModeReady??null,
+            model:data?.model??data?.orderSignalModel??null,
+            signalStatus:data?.signal?.status??null,
+            edgeReadOnly:data?.model==='EDGE_5M_V1'?data?.readOnly===true:null,
+            error:data?.error??null
+          });
+        } catch (error) {
+          log('render_preview_readonly_check',{route,error:String(error?.message||error).slice(0,160)});
+        }
+      }
+    }, 14000).unref();
   }
   setTimeout(refreshStatsCache, 300).unref();
   setInterval(refreshStatsCache, 1000).unref();

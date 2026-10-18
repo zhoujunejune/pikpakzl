@@ -150,6 +150,8 @@ let prevDepthBidQty = null;
 let prevDepthAskQty = null;
 let lastDepthUpdateId = null;
 let lastDepthAt = 0;
+let edgeSpotDepthBids = [];
+let edgeSpotDepthAsks = [];
 
 const trades = [];
 const prices = [];
@@ -1502,6 +1504,10 @@ function handleMessage(raw) {
       lastMarketTs = Math.max(lastMarketTs, lastDepthMarketTs);
       pushOfiEvent(lastDepthMarketTs, bid, bidQty, ask, askQty);
       lastDepthAt = now;
+      // Retain the real WS top five levels for an isolated read-only model.
+      // No effect on the existing V3 scoring or exchange order state.
+      edgeSpotDepthBids = d.bids.slice(0,5).map(x=>[Number(x[0]),Number(x[1])]);
+      edgeSpotDepthAsks = d.asks.slice(0,5).map(x=>[Number(x[0]),Number(x[1])]);
       if (Number.isFinite(Number(d.lastUpdateId))) lastDepthUpdateId = Number(d.lastUpdateId);
     }
     return;
@@ -1805,6 +1811,55 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('cache-control', 'no-store');
   res.setHeader('access-control-allow-origin', '*');
+
+  // Strictly read-only Binance SPOT WS snapshot for EDGE5 V2 independent
+  // shadow. Never exposes API secrets, orders, synthetic book or stale trades.
+  if (req.method === 'GET' && url.pathname === '/api/edge-v2-market-data') {
+    const at=Date.now();
+    const liveTrades=trades.filter(t=>Number(t.marketTs)>0 &&
+       at-Number(t.marketTs)>=-300&&at-Number(t.marketTs)<=4000&&
+       Number(t.qty)>0).slice(-200).map(t=>({
+         T:Number(t.marketTs),q:String(t.qty),m:t.isAggressiveBuy===false
+       }));
+    const bookFresh=lastDepthAt>0&&at-lastDepthAt<=1500;
+    const priceFresh=lastTradeReceivedAt>0&&at-lastTradeReceivedAt<=1500;
+    const depthReal=edgeSpotDepthBids.length>=5&&edgeSpotDepthAsks.length>=5&&
+      edgeSpotDepthBids.concat(edgeSpotDepthAsks).every(x=>
+        Number.isFinite(x[0])&&x[0]>0&&Number.isFinite(x[1])&&x[1]>0);
+    const ok=Boolean(ws?.readyState===WebSocket.OPEN&&bookFresh&&priceFresh&&
+      depthReal&&Number(lastPrice)>0&&liveTrades.length>=3);
+    const p=payload();
+    const data={ok,readOnly:true,venue:'BINANCE',
+      source:'BINANCE_SPOT_WSS_DEPTH20_AGGTRADES_REAL',
+      at,spotPrice:ok?lastPrice:null,
+      spotAt:ok?lastTradeMarketTs:null,
+      bids:ok?edgeSpotDepthBids:null,
+      asks:ok?edgeSpotDepthAsks:null,
+      trades:ok?liveTrades:[],
+      reason:ok?null:'BINANCE_WS_SPOT_BOOK_OR_FLOW_NOT_FRESH',
+      dataIntegrity:{wsConnected:p.dataIntegrity.wsConnected,
+        lastMessageAgeMs:p.dataIntegrity.lastMessageAgeMs,
+        predictionOrderbookConnected:p.dataIntegrity.predictionOrderbookConnected,
+        predictionOrderbookFresh:p.dataIntegrity.predictionOrderbookFresh},
+      signal:{roundStartMs:p.signal.roundStartMs,
+        factsCalculatedAt:p.signal.factsCalculatedAt,
+        facts:p.signal.facts ? {
+          predictionMarketRound:p.signal.facts.predictionMarketRound,
+          predictionMarketRoundAligned:p.signal.facts.predictionMarketRoundAligned,
+          predictionMarketMappingReliable:p.signal.facts.predictionMarketMappingReliable,
+          predictionMarketYesDirection:p.signal.facts.predictionMarketYesDirection,
+          predictionMarketId:p.signal.facts.predictionMarketId,
+          predictionMarketBookAgeMs:p.signal.facts.predictionMarketBookAgeMs,
+          predictionMarketUpBid:p.signal.facts.predictionMarketUpBid,
+          predictionMarketUpAsk:p.signal.facts.predictionMarketUpAsk,
+          predictionMarketUpMid:p.signal.facts.predictionMarketUpMid,
+          predictionMarketDepthImbalance5:p.signal.facts.predictionMarketDepthImbalance5
+        }:null}};
+    res.writeHead(ok?200:503, {
+      'content-type':'application/json; charset=utf-8',
+      'cache-control':'no-store','x-content-type-options':'nosniff'});
+    return res.end(JSON.stringify(data));
+  }
 
   // Shadow-only public OHLCV read endpoint. This path cannot control prediction or trading.
   if (req.method === 'GET' && url.pathname === '/api/shadow-market-data') {

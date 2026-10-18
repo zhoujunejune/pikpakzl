@@ -67,6 +67,87 @@ const statsCard = (process.env.RENDER_MIGRATION_PREVIEW === 'true' ?
 <div class="muted" style="margin-top:10px">有置信度时显示接口原值；置信度缺失但有 score 时，显示原始评分绝对值（未校准，非概率、非预测胜率，不同模型之间不可直接比较）；两者均缺失则标记“未提供”或“兜底无评分”。真实结果仅按 Binance Prediction 官方结算。</div>
 </div>`;
 
+// Independent EDGE read-only statistics. Always visible, regardless of the
+// active order-signal selection or the disabled trading preview controls.
+const edgeIndependentCard = `<div class="c" id="edgeIndependentCard" style="border:1px solid #34445a">
+<div class="k">EDGE_5M_V1 · 固定模型独立统计</div>
+<div class="big" id="edgeAlwaysHeadline" style="font-size:21px">正在读取 EDGE 官方结算...</div>
+<div class="muted" id="edgeAlwaysNote">训练已停止 · 保留历史记录 · 继续预测及按 Binance Prediction 官方结算统计 · 非实盘成交结果</div>
+<div class="grid" style="margin-top:12px">
+<div class="kv"><div class="k">官方已结算 / 总胜率</div><div class="v" id="edgeAlwaysOverall">-</div></div>
+<div class="kv"><div class="k">命中 / 未命中</div><div class="v" id="edgeAlwaysHitMiss">-</div></div>
+<div class="kv"><div class="k">UP 胜率</div><div class="v" id="edgeAlwaysUp">-</div></div>
+<div class="kv"><div class="k">DOWN 胜率</div><div class="v" id="edgeAlwaysDown">-</div></div>
+<div class="kv"><div class="k">待官方结算</div><div class="v" id="edgeAlwaysPending">-</div></div>
+<div class="kv"><div class="k">已锁定 / 观察轮次</div><div class="v" id="edgeAlwaysCoverage">-</div></div>
+</div>
+<div class="muted" style="margin-top:12px">EDGE 最近 30 轮（包括待结算），独立于下单模型选择</div>
+<div style="overflow-x:auto;max-height:340px;margin-top:7px;border:1px solid #2b313d;border-radius:9px">
+<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:365px">
+<thead><tr style="text-align:left;color:#a8b0bd"><th>轮次</th><th>预测</th><th>官方</th><th>结果</th></tr></thead>
+<tbody id="edgeAlwaysRows"><tr><td colspan="4">正在加载历史记录...</td></tr></tbody></table>
+</div>
+<div class="muted" style="margin-top:9px">官方未结算轮次不纳入胜率；仅按此前锁定方向计算预测命中率，不等于真实订单盈利概率。</div>
+</div>`;
+
+const edgeIndependentScript = `<script>(function(){
+'use strict';
+function node(id){return document.getElementById(id);}
+function update(id,value){var el=node(id);if(el)el.textContent=String(value);}
+function rate(group){var n=Number(group?.samples||0),hits=Number(group?.hits||0);
+ return n?(100*hits/n).toFixed(2)+'%（'+hits+'/'+n+'）':'暂无已结算';}
+function clock(ms){var t=Number(ms);if(!Number.isFinite(t)||t<=0)return '-';
+ return new Date(t).toLocaleString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});}
+var busy=false;
+async function reload(){
+ if(busy)return;busy=true;
+ try{
+  var response=await fetch('/api/shadow-breakout20/edge-5m?ts='+Date.now(),{cache:'no-store'});
+  if(response.status===401){update('edgeAlwaysHeadline','请重新登录查看 EDGE 统计');return;}
+  if(!response.ok)throw Error('EDGE 状态 HTTP '+response.status);
+  var d=await response.json();
+  if(d?.ok!==true||d?.model!=='EDGE_5M_V1'||
+     d?.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')
+   throw Error('EDGE 官方统计来源未就绪');
+  var r=d.results||{},overall=r.overall||{},up=r.up||{},down=r.down||{};
+  var n=Number(overall.samples||0),hits=Number(overall.hits||0);
+  update('edgeAlwaysHeadline','EDGE 固定模型 · 训练停止 · 持续记录');
+  update('edgeAlwaysOverall',rate(overall));
+  update('edgeAlwaysHitMiss',hits+' / '+Math.max(0,n-hits)+'（'+n+'轮）');
+  update('edgeAlwaysUp',rate(up));update('edgeAlwaysDown',rate(down));
+  update('edgeAlwaysPending',Number(r.pending||0)+' 轮');
+  update('edgeAlwaysCoverage',Number(r.locked||0)+' / '+Number(r.observedRounds||0));
+  var note='真实官方结算 · 仅统计已冻结预测 · 自动实盘交易未启用';
+  if(d.health?.officialError)note+=' · 结算异常：'+String(d.health.officialError).slice(0,80);
+  if(d.health?.marketError)note+=' · 行情提示：'+String(d.health.marketError).slice(0,80);
+  update('edgeAlwaysNote',note);
+  var body=node('edgeAlwaysRows');if(!body)return;
+  body.replaceChildren();
+  var records=Array.isArray(d.recent)?d.recent.slice(0,30):[];
+  if(!records.length){var tr=document.createElement('tr'),td=document.createElement('td');
+   td.colSpan=4;td.textContent='暂无 EDGE 历史预测';tr.append(td);body.append(tr);return;}
+  for(var item of records){
+   var pred=['UP','DOWN'].includes(item.direction)?item.direction:null;
+   var actual=['UP','DOWN'].includes(item.actual)?item.actual:null;
+   var vals=[clock(item.round),pred||'未锁定',actual||'待结算',
+     !pred?'无效预测':!actual?'待结算':pred===actual?'命中':'未命中'];
+   var row=document.createElement('tr');
+   for(var i=0;i<vals.length;i++){var cell=document.createElement('td');
+    cell.textContent=vals[i];cell.style.padding='8px 4px';
+    cell.style.borderTop='1px solid #303846';
+    if(i===3&&actual&&pred)cell.style.color=pred===actual?'#3ddc84':'#ff6868';
+    row.append(cell);}
+   body.append(row);
+  }
+ }catch(err){update('edgeAlwaysHeadline','EDGE 统计读取异常');
+   update('edgeAlwaysNote',String(err?.message||err).slice(0,140));
+ }finally{busy=false;}
+}
+function boot(){reload();setInterval(reload,8000);}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);
+else boot();
+})();</script>`;
+
 const previewCard = `<div class="c" id="waitVisibilityCard">
 <div class="k">实时方向观察 · 生产交易严格分离</div>
 <div class="big" id="wvTradeStatus">正在核对生产方向...</div>
@@ -430,6 +511,17 @@ async function renderNoviceRoundStats(){
  }).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">新手混合模型尚无独立轮次记录</td></tr>';
 }
 async function load(){
+ // EDGE official ledger is independent of the V2/Breakout mode and must never
+ // be overwritten by the generic or legacy stats updater.
+ if(globalThis.__orderModelStatsSelection==='EDGE_5M_V1'){
+  try{await renderEdgeRoundStats();}
+  catch(err){
+   e('rsAccuracy').textContent='EDGE 官方结算统计暂不可用';
+   e('rsMeta').textContent=String(err?.message||err);
+   e('rsRows').innerHTML='<tr><td colspan="8">无法读取 EDGE 独立历史记录</td></tr>';
+  }
+  return;
+ }
  // Only the two currently selectable 8-second models use the reset ledger.
  // Keep the historical legacy diagnostics runnable when testing other production modes.
  if(globalThis.__orderModelStatsSelection==='DYNAMIC_ENTRY_5M_SHADOW_V1'){
@@ -1210,6 +1302,13 @@ function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${shadowCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}${shadowCard}</body>`);
+  const inputsMarker='<div class="c" id="tradeInputsCard">';
+  if(out.includes(inputsMarker)){
+    out=out.replace(inputsMarker,edgeIndependentCard+inputsMarker);
+  }else{
+    out=out.replace('<div id="riskControlsAnchor"></div>',
+      edgeIndependentCard+'<div id="riskControlsAnchor"></div>');
+  }
   if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
     const notice = '<h2>5分钟 · Render 信号测试台</h2>' +
       '<form method="POST" action="/auth/logout"><button type="submit" style="padding:8px;max-width:150px;background:#344155;color:#fff;font-size:13px">退出登录</button></form>' +
@@ -1225,7 +1324,7 @@ function injectStats(html) {
     out = out.replace('检测 Railway 出口 IP（只读）', '检测 Render 出口 IP（只读）');
   }
   out = out.replace('</head>', layoutStabilityStyle+'</head>');
-  return out.replace('</body>', `${primaryScript}${statsScript}${shadowScript}</body>`);
+  return out.replace('</body>', `${edgeIndependentScript}${primaryScript}${statsScript}${shadowScript}</body>`);
 }
 
 let child = null;

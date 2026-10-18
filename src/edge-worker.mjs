@@ -3,7 +3,8 @@
 import {DurableObject} from 'cloudflare:workers';
 import {bestMarket} from './provider-market.mjs';
 import {verifiedDirectOfficialResolution} from './edge-official-backfill.mjs';
-import {predictionSnapshot,v2Features,v2Summary} from './edge-v2-shadow.mjs';
+import {predictionSnapshot,v2Features} from './edge-v2-shadow.mjs';
+import {DISPLAY_START_ROUND,v1DisplaySummary,v2DisplaySummary} from './edge-display-stats.mjs';
 import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection,
   trainOnOfficial,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS} from './edge-core.mjs';
 
@@ -141,10 +142,10 @@ export class Edge5 extends DurableObject{
  }
  async schedule(){if(await this.ctx.storage.getAlarm()===null)
    await this.ctx.storage.setAlarm(nextTick(Date.now()));}
- latestRows(n=40){
+ latestRows(n=40,minRound=0){
   return this.ctx.storage.sql.exec(
    'SELECT round,direction,lockedAt,marketAt,score,modelVersion,modelProbability,calibrationReady,actual,settledAt,pendingReason '+
-   'FROM edge_rounds ORDER BY round DESC LIMIT ?',n).toArray().map(r=>({
+   'FROM edge_rounds WHERE round>=? ORDER BY round DESC LIMIT ?',minRound,n).toArray().map(r=>({
     round:r.round,direction:r.direction,lockedAt:r.lockedAt,marketAt:r.marketAt,
     score:r.score,modelVersion:r.modelVersion,modelProbability:r.modelProbability,
     calibrationReady:!!r.calibrationReady,actual:r.actual,settledAt:r.settledAt,
@@ -307,13 +308,27 @@ export class Edge5 extends DurableObject{
    return new Response('Not Found',{status:404});
   await this.schedule();
   const m=await this.meta(),now=Date.now(),round=roundAt(now);
-  const recent=this.latestRows(pathname==='/status'?40:1);
-  const v2Rows=this.ctx.storage.sql.exec(
+  // Only the post-upgrade window is exposed to UI/panel consumers.
+  // Underlying rows and m.results are retained for official backfill/training.
+  const recent=this.latestRows(pathname==='/status'?40:1,DISPLAY_START_ROUND);
+  const v1Groups=this.ctx.storage.sql.exec(
+   "SELECT direction,COUNT(*) AS total,"+
+   "SUM(CASE WHEN actual IN ('UP','DOWN') THEN 1 ELSE 0 END) AS settled,"+
+   "SUM(CASE WHEN actual=direction THEN 1 ELSE 0 END) AS hits "+
+   "FROM edge_rounds WHERE round>=? AND direction IN ('UP','DOWN') GROUP BY direction",
+   DISPLAY_START_ROUND).toArray();
+  const visibleResults=v1DisplaySummary(v1Groups);
+  const v2Counters=this.ctx.storage.sql.exec(
+   "SELECT COUNT(*) AS total,"+
+   "SUM(CASE WHEN actual IN ('UP','DOWN') THEN 1 ELSE 0 END) AS settled,"+
+   "SUM(CASE WHEN actual IN ('UP','DOWN') AND pmDirection=actual THEN 1 ELSE 0 END) AS pmHits,"+
+   "SUM(CASE WHEN actual IN ('UP','DOWN') AND blendDirection=actual THEN 1 ELSE 0 END) AS blendHits "+
+   "FROM edge_v2_shadow WHERE round>=?",DISPLAY_START_ROUND).toArray()[0]||{};
+  const v2Results=v2DisplaySummary(v2Counters);
+  const v2Latest=this.ctx.storage.sql.exec(
    'SELECT round,pmDirection,blendDirection,lockedAt,marketAt,pmMarketId,'+
-   'pmUpMid,features,actual,settledAt FROM edge_v2_shadow '+
-   'ORDER BY round DESC LIMIT 500').toArray();
-  const v2Results=v2Summary(v2Rows);
-  const v2Latest=v2Rows[0]||null;
+   'pmUpMid,actual FROM edge_v2_shadow WHERE round>=? ORDER BY round DESC LIMIT 1',
+   DISPLAY_START_ROUND).toArray()[0]||null;
   const row=recent.find(r=>r.round===round);
   const execOk=Boolean(row&&valid(row.direction)&&
     Number.isFinite(row.lockedAt)&&row.lockedAt>=round&&row.lockedAt<round+8000&&
@@ -325,7 +340,11 @@ export class Edge5 extends DurableObject{
    readOnly:true,orders:false,productionIntegration:false,
    statsScope:'EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY',
    generatedAt:now,latest,
-   recent,results:m.results,
+   statisticsWindow:{startRound:DISPLAY_START_ROUND,
+     startAt:'2026-10-18T10:55:00.000Z',
+     label:'EDGE V2上线后重新统计',historicalRowsPreserved:true,
+     trainingHistoryPreserved:true},
+   recent,results:visibleResults,
    shadowV2:{name:'EDGE5_BINANCE_PM_V2_SHADOW',productionEffect:'NONE',
      lockTargetMs:6800,featureNames:[
       'binance_spot_momentum','binance_spot_book_imbalance',
@@ -337,7 +356,7 @@ export class Edge5 extends DurableObject{
        pmUpMid:v2Latest.pmUpMid,actual:v2Latest.actual,
        pmMarketId:v2Latest.pmMarketId}:null,
      error:m.v2Error||null,lastGoodAt:m.v2LastGoodAt||null},
-   training:{...m.training,
+   training:{...m.training,historyScope:'ALL_VERIFIED_OFFICIAL_LABELS_UNCHANGED',
     remaining:Math.max(0,MIN_TRAINING_ROUNDS-(m.training?.samples||0)),
     ready:m.training?.ready===true,
     fitRequired:MIN_FIT_ROUNDS,signalIndependentOfCalibration:true,
@@ -374,16 +393,18 @@ export default{
     '<title>EDGE_5M_V1 实时观察</title><body style="font-family:system-ui;'+
     'background:#111827;color:#f9fafb;padding:24px;line-height:1.8">'+
     '<h2>EDGE_5M_V1 · Cloudflare 独立观察</h2>'+
-    '<p>实时行情 / 独立官方结算 / 概率训练。方向≠成交；训练与方向预测分离，真实订单由交易系统控制。</p>'+
+    '<p>新版统计从2026-10-18 18:55（北京时间）重新开始；此前预测仅从前台隐藏，数据库历史和训练样本保留。方向≠成交。</p>'+
     '<pre id="state" style="white-space:pre-wrap;word-break:break-word">读取中...</pre>'+
     '<script>async function go(){try{let d=await (await fetch("/status")).json();'+
     'let r=d.results||{},t=d.training||{},h=d.health||{},l=d.latest;'+
     'document.querySelector("#state").textContent='+
-    'JSON.stringify({model:d.model,currentDirection:l?.direction||"尚未冻结",'+
-    'executionEligible:l?.executionEligible===true,trainingSamples:t.samples,'+
+    'JSON.stringify({model:d.model,statsStartBeijing:"2026-10-18 18:55",'+
+    'newVersionOnly:true,currentDirection:l?.direction||"尚未冻结",'+
+    'executionEligible:l?.executionEligible===true,trainingHistoricalSamples:t.samples,'+
     'required:5000,calibrationReady:t.ready,accuracy:r.overall,'+
     'UP:r.up,DOWN:r.down,marketError:h.marketError,'+
     'officialError:h.officialError,latest:l,'+
+    'recentNewPredictions:d.recent?.slice(0,20)||[],'+
     'V2_shadow_no_orders:{source:"BINANCE_SPOT_AND_PREDICTION",'+
     'locked:d.shadowV2?.results?.locked||0,'+
     'pending:d.shadowV2?.results?.pending||0,'+

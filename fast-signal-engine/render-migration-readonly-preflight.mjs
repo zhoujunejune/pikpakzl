@@ -49,6 +49,30 @@ await Promise.all(tests.map(async ([target,url]) => {
         Object.keys(body.latest).slice(0,24):[];
       result.latestLocked=body?.latest?.status==='LOCKED' &&
         ['UP','DOWN'].includes(body?.latest?.direction);
+      result.health=body?.health ? {
+        storage:typeof body.health.storage==='string'?body.health.storage:null,
+        persisted:body.health.persisted===true,
+        marketError:typeof body.health.marketError==='string'?body.health.marketError:null,
+        officialError:typeof body.health.officialError==='string'?body.health.officialError:null,
+        lastOfficialAt:Number(body.health.lastOfficialAt)||null
+      }:null;
+      result.timings=body?.timed ? {
+        lastGoodDataAt:Number(body.timed.lastGoodDataAt)||null,
+        lastTickAt:Number(body.timed.lastTickAt)||null,
+        deadlineMs:Number(body.timed.deadlineMs)||null
+      }:null;
+      result.recentAudit=Array.isArray(body?.recent)?
+        body.recent.slice(0,12).map(r=>({
+          status:r?.status??null,round:r?.round??null,
+          official:r?.actual??null,pendingReason:r?.pendingReason??null
+        })):null;
+      result.results=body?.results ? {
+        observedRounds:Number(body.results.observedRounds)||0,
+        locked:Number(body.results.locked)||0,
+        pending:Number(body.results.pending)||0,
+        officialSamples:Number(body.results.overall?.samples)||0
+      }:null;
+
       result.calibrationReady=body?.training?.calibrationReady===true;
       result.trainingReady=body?.training?.ready===true;
       result.trainingRequired=Number.isFinite(Number(body?.training?.required))?

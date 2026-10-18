@@ -1,5 +1,5 @@
 // Render migration preflight, READ-ONLY. No keys, signatures or order submissions.
-const tests = [
+const probes = [
   ['binance_spot','https://api.binance.com/api/v3/time'],
   ['binance_prediction','https://api.binance.com/sapi/v1/w3w/wallet/prediction/market/list?limit=1'],
   ['binance_data','https://data-api.binance.vision/api/v3/time'],
@@ -7,6 +7,11 @@ const tests = [
   ['cloudflare_edge','https://edge-5m-v1.zl528094-3ba.workers.dev/status'],
   ['cloudflare_breakout20','https://breakout20-shadow.zl528094-3ba.workers.dev/status']
 ];
+// Never repeatedly probe Spot REST from a banned/shared Render egress.
+const tests = probes.filter(([target]) =>
+  process.env.BINANCE_REST_PREFLIGHT === 'true' || target.startsWith('cloudflare_'));
+console.log(JSON.stringify({event:'render_binance_rest_probes_config',
+  enabled:process.env.BINANCE_REST_PREFLIGHT === 'true',skipped:probes.length-tests.length}));
 await Promise.all(tests.map(async ([target,url]) => {
   const result={event:'render_migration_readonly_preflight',target,at:new Date().toISOString()};
   try {

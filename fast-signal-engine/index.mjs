@@ -46,6 +46,29 @@ const STRATEGY_VERSION = 'REGIME_LAYER_V6_QUALITY_GATED_5M';
 const PREDICTION_API = 'https://api.binance.com';
 const PREDICTION_API_KEY = String(process.env.BINANCE_PREDICTION_API_KEY || '');
 const PREDICTION_API_SECRET = String(process.env.BINANCE_PREDICTION_API_SECRET || '');
+
+let predictionRestBlockedUntil = 0;
+function predictionBackoff(status, headers, data) {
+  if (status !== 429 && status !== 418) return;
+  const now = Date.now();
+  const retryHeader = String(headers.get('retry-after') || '').trim();
+  let until = 0;
+  if (/^\d+$/.test(retryHeader)) {
+    until = now + Math.min(Number(retryHeader) * 1000, 259200000);
+  } else if (retryHeader) {
+    const date = Date.parse(retryHeader);
+    if (Number.isFinite(date)) until = date;
+  }
+  const msg = String(data?.msg || '');
+  const banUntil = msg.match(/banned until\s+(\d{13})/i);
+  if (banUntil) until = Math.max(until, Number(banUntil[1]));
+  const fallback = now + (status === 418 ? 10 * 60000 : 2 * 60000);
+  predictionRestBlockedUntil = Math.max(predictionRestBlockedUntil, until > now ? until : fallback);
+  console.warn(JSON.stringify({event:'binance_rest_backoff',status,
+    until:new Date(predictionRestBlockedUntil).toISOString(),
+    source:until > now?'RETRY_AFTER_OR_BAN_UNTIL':'CONSERVATIVE_FALLBACK'}));
+}
+
 const PREDICTION_REFRESH_MS = Math.max(1000, Number(process.env.PREDICTION_MARKET_REFRESH_MS || 3000));
 const PREDICTION_BOOK_STALE_MS = Math.max(1000, Number(process.env.PREDICTION_BOOK_STALE_MS || 5000));
 const LATE_CONSENSUS_START_MS = Math.max(16000, Number(process.env.V6_LATE_CONSENSUS_START_MS || 18000));
@@ -297,6 +320,9 @@ function predictionSign(query) {
 }
 
 async function signedPredictionGet(path, params = {}) {
+  if (Date.now() < predictionRestBlockedUntil) {
+    return {ok:false,status:418,data:{msg:'BINANCE_REST_COOLDOWN'},error:'BINANCE_REST_COOLDOWN'};
+  }
   if (!PREDICTION_API_KEY || !PREDICTION_API_SECRET) {
     return { ok: false, status: 500, data: { msg: 'PREDICTION_API_CREDENTIALS_MISSING' } };
   }
@@ -316,6 +342,7 @@ async function signedPredictionGet(path, params = {}) {
     const text = await r.text();
     let data;
     try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 500) }; }
+    predictionBackoff(r.status, r.headers, data);
     return { ok: r.ok, status: r.status, data };
   } catch (e) {
     return { ok: false, status: 0, data: null, error: e?.message || String(e) };
@@ -1496,6 +1523,15 @@ function resetTransportState() {
 
 async function bootstrapMarketHistory() {
   const now = Date.now();
+  // This Render FREE preview is on a Spot REST-banned shared IP.
+  // Fill the rolling window from the live authenticated-free exchange WS rather than hammer REST.
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    bootstrapCompletedAt = now;
+    console.log(JSON.stringify({event:'spot_rest_history_bootstrap_paused',
+      reason:'BINANCE_SPOT_HTTP_418',recovery:'REALTIME_WEBSOCKET_HISTORY_ONLY',
+      at:new Date(now).toISOString()}));
+    return;
+  }
   try {
     const startTime = now - Math.min(STORAGE_MS, 999000);
     const u = new URL('https://api.binance.com/api/v3/klines');

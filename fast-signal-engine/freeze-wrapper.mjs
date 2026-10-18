@@ -45,6 +45,13 @@ void (async () => {
 // Migration-branch-only diagnostics; results are read-only and independent of signal decisions.
 void import('./render-migration-readonly-preflight.mjs').catch(e=>
   console.warn(JSON.stringify({event:'render_migration_preflight_load_failed',error:String(e?.message||e).slice(0,120)})));
+// Cloudflare Worker inspection runs only if the user provides the two values
+// in Render's encrypted environment. It makes GET requests only: no deployment.
+if (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) {
+  void import('./cloudflare-worker-audit.mjs').catch(e=>
+    console.warn(JSON.stringify({event:'cloudflare_worker_audit_import_failed',
+      errorType:String(e?.name||'UNKNOWN').slice(0,50)})));
+}
 // One-shot signed GET verification after startup; never invokes order-writing APIs.
 // Only status codes/counts returned by the existing redacted diagnostic endpoint are logged.
 if (process.env.RENDER_MIGRATION_PREVIEW === 'true' &&

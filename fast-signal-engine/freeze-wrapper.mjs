@@ -52,6 +52,13 @@ if (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) {
     console.warn(JSON.stringify({event:'cloudflare_worker_audit_import_failed',
       errorType:String(e?.name||'UNKNOWN').slice(0,50)})));
 }
+// Explicit, single-purpose Cloudflare API repair, only enabled by
+// an owner-supplied temporary Render environment flag. Never submits orders.
+if(process.env.CF_REPAIR_STAGE==='edge-official'){
+  void import('./cloudflare-edge-official-repair.mjs').catch(e=>
+    console.warn(JSON.stringify({event:'cloudflare_edge_repair_import_failed',
+      reason:String(e?.message||e).slice(0,100)})));
+}
 // One-shot signed GET verification after startup; never invokes order-writing APIs.
 // Only status codes/counts returned by the existing redacted diagnostic endpoint are logged.
 if (process.env.RENDER_MIGRATION_PREVIEW === 'true' &&

@@ -720,8 +720,12 @@ const clientJs = String.raw`(function(){
         html('walletBalance','<span class="ok">'+first.availableBalanceDisplay+' USDT</span>');
         text('walletMeta','账户：'+first.accountType+' · Binance Prediction 实时可用余额');
       }else{
-        html('walletBalance','<span class="bad">读取失败</span>');
-        text('walletMeta',(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':''));
+        html('walletBalance',b.error==='BINANCE_API_CREDENTIALS_MISSING'
+          ?'<span class="warn">交易账户未接入</span>'
+          :'<span class="bad">读取失败</span>');
+        text('walletMeta',b.error==='BINANCE_API_CREDENTIALS_MISSING'
+          ?'V3只读行情API已配置；本前台没有交易账户密钥，余额暂不可读取。'
+          :(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':''));
       }
 
       currentPending=j.pendingAction||null;
@@ -794,9 +798,9 @@ const clientJs = String.raw`(function(){
     var pinEl=el('pin'),button=el('egressProbeBtn');
     if(!pinEl||!pinEl.value){text('egressProbeResult','请先填写上方控制 PIN');return;}
     if(button){button.disabled=true;button.textContent='检测中...';}
-    text('egressProbeResult','正在查询 Railway 服务器公网出口...');
+    text('egressProbeResult','正在检查 Render 服务器公网出口...');
     request('POST','/api/egress-ip',{pin:pinEl.value},function(code,j){
-      if(button){button.disabled=false;button.textContent='检测 Railway 出口 IP（只读）';}
+      if(button){button.disabled=false;button.textContent='检测 Render 出口 IP（只读）';}
       if(code!==200||!j.ok){text('egressProbeResult',(j&&j.error)||'检测失败');return;}
       var consistency=j.consistency==='MATCH'?'两个来源一致':
         j.consistency==='DIFFERENT_EGRESS_IPS'?'注意：两个来源的IP不同':'仅一个来源成功';

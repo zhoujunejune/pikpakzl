@@ -9,11 +9,34 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 4
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - name: Verify V1 untouched and V2 shadow fields online
         run: |
           node --input-type=module <<'NODE'
           const base='https://edge-5m-v1.zl528094-3ba.workers.dev';
+          const worker=await fetch('https://api.cloudflare.com/client/v4/accounts/3ba148af3f98117d6b299158e20bf687/workers/scripts/edge-5m-v1',{
+            headers:{Authorization:'Bearer '+process.env.CLOUDFLARE_API_TOKEN},
+            signal:AbortSignal.timeout(12000)});
+          const code=await worker.text();
+          console.log('EDGE_V2_DEPLOYED_CODE_MARKERS',JSON.stringify({status:worker.status,
+            hasRenderSnapshot:code.includes('/api/edge-v2-market-data'),
+            hasOldRestV2:code.includes('V2_BINANCE_TRADES_STALE'),
+            hasShadow:code.includes('edge_v2_shadow'),
+            codeLength:code.length}));
+          try{
+            const mr=await fetch('https://zl-signal-v3-migration.onrender.com/api/edge-v2-market-data',{
+              signal:AbortSignal.timeout(12000)});
+            const m=await mr.json();
+            console.log('EDGE_V2_RENDER_SNAPSHOT',JSON.stringify({
+              status:mr.status,ok:m.ok,reason:m.reason,venue:m.venue,at:m.at,
+              spotAt:m.spotAt,depth:m.bids?.length,trades:m.trades?.length,
+              predictionRound:m.signal?.facts?.predictionMarketRound,
+              predictionAge:m.signal?.facts?.predictionMarketBookAgeMs,
+              predictionReliable:m.signal?.facts?.predictionMarketMappingReliable,
+              predictionConnected:m.dataIntegrity?.predictionOrderbookConnected}));
+          }catch(e){console.log('EDGE_V2_RENDER_SNAPSHOT_ERROR',String(e.message));}
           let out;
           for(let attempt=0;attempt<9;attempt++){
             const r=await fetch(base+'/status',{cache:'no-store',signal:AbortSignal.timeout(15000)});

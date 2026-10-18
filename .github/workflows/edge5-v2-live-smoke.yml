@@ -1,0 +1,44 @@
+name: EDGE V2 live status read-only verification
+on:
+  pull_request:
+    branches: [cloudflare-edge5m-20261017]
+    paths: ['.github/workflows/edge5-v2-live-smoke.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Verify V1 untouched and V2 shadow fields online
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://edge-5m-v1.zl528094-3ba.workers.dev';
+          let out;
+          for(let attempt=0;attempt<9;attempt++){
+            const r=await fetch(base+'/status',{cache:'no-store',signal:AbortSignal.timeout(15000)});
+            const d=await r.json();
+            const c=d.shadowV2;
+            out={status:r.status,at:new Date().toISOString(),
+              v1:{model:d.model,deadline:d.timed?.deadlineMs,
+                observed:d.results?.observedRounds,locked:d.results?.locked,
+                official:d.results?.overall,pending:d.results?.pending,
+                latest:d.latest,venue:d.health?.venue,
+                source:d.health?.marketOrigin},
+              v2:c?{name:c.name,productionEffect:c.productionEffect,
+                features:c.featureNames,lockTargetMs:c.lockTargetMs,
+                results:c.results,latest:c.latest,error:c.error,
+                lastGoodAt:c.lastGoodAt}:null};
+            if(r.status===200&&d.model==='EDGE_5M_V1'&&d.timed?.deadlineMs===8000&&
+               c?.productionEffect==='NONE'&&
+               Array.isArray(c.featureNames)&&c.featureNames.length===6){
+              const market=await fetch(base+'/market-check',{cache:'no-store',signal:AbortSignal.timeout(13000)});
+              out.marketCheck={status:market.status,ok:market.ok};
+              console.log('EDGE_V2_LIVE_VERIFIED',JSON.stringify(out));
+              process.exit(0);
+            }
+            await new Promise(resolve=>setTimeout(resolve,5000));
+          }
+          console.log('EDGE_V2_LIVE_NOT_YET_READY',JSON.stringify(out));
+          process.exitCode=1;
+          NODE

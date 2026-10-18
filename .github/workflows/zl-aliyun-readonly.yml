@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/zl-aliyun-readonly.yml'
       - 'futures-bot-v1/aliyun_readonly.py'
+      - 'futures-bot-v1/aliyun_ram_audit.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,7 +19,12 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install Alibaba Cloud SWAS API SDK
-        run: python -m pip install --disable-pip-version-check alibabacloud_swas_open20200601==4.0.0
+        run: python -m pip install --disable-pip-version-check alibabacloud_swas_open20200601==4.0.0 alibabacloud_ram20150501
+      - name: Audit existing RAM grants read-only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python futures-bot-v1/aliyun_ram_audit.py
       - name: Read-only server lookup (no commands)
         env:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}

@@ -345,7 +345,7 @@ async function getSignal({ forceHttp = false } = {}) {
         source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:verified.lockedAt,
         lockedAt:verified.lockedAt,marketAt:verified.marketAt,
         frozen:true,executionEligible:verified.executionEligible,
-        qualityGate:verified.executionEligible?'EDGE5_OFFICIAL_CALIBRATED':'EDGE5_COLLECTING_UNCALIBRATED',
+        qualityGate:verified.calibrationReady?'EDGE5_OFFICIAL_CALIBRATED':'EDGE5_FROZEN_DIRECTION_UNCALIBRATED',
         signalId:SIGNAL_MODEL_NAME+':'+verified.round+':'+EDGE_MODEL+':'+verified.modelVersion+':'+verified.direction,
         transport:'railway_edge5m_readonly'};
     }catch{return null;}
@@ -859,7 +859,7 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
 <h2>5分钟 API 实盘确认控制台</h2>
 <div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：新一轮 LOCKED → 后端先准备市场/方向（不提前拿 Quote）→ 你点一次“确认下单” → 后端即时获取最新 Quote → 立刻调用 Binance Prediction 下单 API → 再核验真实订单状态。</div></div>
 <div class="c"><div class="k">Prediction 可用余额</div><div class="wallet" id="walletBalance">读取中...</div><div class="muted" id="walletMeta">正在连接 Binance Prediction...</div></div>
-<div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随新信号</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
+<div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随（自动提交，下一轮生效）</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
 <div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>
@@ -1014,8 +1014,8 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/control') {
     const body = await readBody(req);
-    if (process.env.RENDER_MIGRATION_PREVIEW === 'true' && body.enabled === true) {
-      return send(res, 403, {ok:false,error:'Render 免费测试环境：实盘跟随未启用。请先完成持久化和交易链路验证。'});
+    if (body.enabled === true && process.env.RENDER_TRADING_USER_ARMED !== 'true') {
+      return send(res, 403, {ok:false,error:'实盘开关尚未获得部署授权'});
     }
     if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
     const nextEnabled = Boolean(body.enabled);
@@ -1123,8 +1123,25 @@ http.createServer(async (req, res) => {
 
     const startedAt = new Date().toISOString();
     const placeStartedAtMs = Date.now();
+    // Single successful claim before the only external money-moving POST.
+    // Redis CAS is fail-closed. Never retry an ambiguous Binance response.
+    try{
+      await claimOrderSubmitAttempt(p.round);
+    }catch(err){
+      p.state='PREPARE_ERROR';p.error='本轮已提交或订单状态未知，禁止重复提交';
+      return send(res,409,{ok:false,error:p.error,
+        reason:String(err?.message||err).slice(0,100)});
+    }
     const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
     const placeFinishedAtMs = Date.now();
+    try{
+      await closeOrderSubmitRound(p.round,call.ok&&call.data?.orderId?'SUBMITTED':'UNKNOWN');
+    }catch(err){
+      enabled=false;p.state='SUBMISSION_UNKNOWN';
+      console.error(JSON.stringify({event:'order_submit_ledger_close_failed',
+        round:p.round,reason:String(err?.message||err).slice(0,130)}));
+      return send(res,503,{ok:false,error:'订单状态未能记录，跟随已关闭，请核对币安原始订单'});
+    }
 
     if (!call.ok) {
       const err = asError(call, 'PREDICTION_PLACE_ORDER_FAILED');

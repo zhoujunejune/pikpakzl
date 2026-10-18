@@ -113,7 +113,7 @@ async function reload(){
    throw Error('EDGE 官方统计来源未就绪');
   var r=d.results||{},overall=r.overall||{},up=r.up||{},down=r.down||{};
   var n=Number(overall.samples||0),hits=Number(overall.hits||0);
-  update('edgeAlwaysHeadline','EDGE 固定模型 · 训练停止 · 持续记录');
+  update('edgeAlwaysHeadline','EDGE 模型 · 自动试训练 · 官方结算记录');
   update('edgeAlwaysOverall',rate(overall));
   update('edgeAlwaysHitMiss',hits+' / '+Math.max(0,n-hits)+'（'+n+'轮）');
   update('edgeAlwaysUp',rate(up));update('edgeAlwaysDown',rate(down));
@@ -390,7 +390,7 @@ async function renderEdgeRoundStats(){
  var up=r.up||{},down=r.down||{};
  var percentOf=function(group){var count=Number(group.samples||0),hit=Number(group.hits||0);
    return count?(100*hit/count).toFixed(2)+'%（'+hit+'/'+count+'）':'暂无结算';};
- e('rsMeta').textContent='EDGE_5M_V1 · 已停止训练，固定模型参数 · 继续逐轮预测、记录和官方结算 · '+
+ e('rsMeta').textContent='EDGE_5M_V1 · 真实样本持续训练 · 仍须前瞻验证 · '+
    '总胜率 '+percentOf(v)+' · UP '+percentOf(up)+' · DOWN '+percentOf(down)+
    ' · 待结算 '+Number(r.pending||0)+' 轮 · 实盘未启用';
  var rows=Array.isArray(d.recent)?d.recent.slice(0,30):[];
@@ -627,13 +627,13 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
   <select id="orderSignalModelSelect" aria-label="选择真实下单信号模型"
     style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
     <option value="BREAKOUT20_RSI_MACD_RANGE_V1">BASELINE · RSI(14)单指标</option>
-    <option value="EDGE_5M_V1">EDGE_5M_V1 · 8秒内概率优势</option>
+    <option value="EDGE_5M_V1">EDGE_5M_V1 · 真实行情8秒锁定</option>
   </select>
   <button id="orderSignalModelSave" type="button"
     style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
-  <div class="muted" style="margin-top:7px">生产下拉框仅保留 BASELINE 与 EDGE_5M_V1。基线复用原 RSI 行情输入，不再展示退役 NOVICE/DYNAMIC 策略。EDGE 目前前8秒观察方向，只有独立官方样本达到5000轮且概率校准通过、买入价和Edge均达标才允许提交订单；数据不足或行情异常只显示观察、不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
+  <div class="muted" style="margin-top:7px">生产下拉框仅保留 BASELINE 与 EDGE_5M_V1。基线复用原 RSI 行情输入，不再展示退役 NOVICE/DYNAMIC 策略。EDGE 必须按真实行情前8秒锁定；训练样本和概率校准只供统计，不阻止你手动授权的跟随。报价无效、无有效锁定或开关关闭时仍不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
 </div>
 <div id="liveOrderFlowCard" role="region" aria-label="本轮交易进度" style="border:1px solid #4e6079;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
  <div style="font-size:16px;font-weight:800">本轮交易进度 · 不等于模型胜率</div>
@@ -722,7 +722,7 @@ async function loadOrderModelStats(){
    (v.samples?(Number(v.accuracy)*100).toFixed(2)+'% ('+v.hits+'/'+v.samples+')':'暂无已结算')+
    ' · UP '+(r.up&&r.up.samples?(Number(r.up.accuracy)*100).toFixed(2)+'%':'暂无')+
    ' · DOWN '+(r.down&&r.down.samples?(Number(r.down.accuracy)*100).toFixed(2)+'%':'暂无')+
-   ' · '+(chosenOrderModel==='EDGE_5M_V1'?'训练已停止 · 固定模型 · 已结算 '+Number(v.samples||0)+' 轮 · 实盘未启用':
+   ' · '+(chosenOrderModel==='EDGE_5M_V1'?'训练中 · 已结算 '+Number(v.samples||0)+' 轮 · 实盘未启用':
  chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'模拟入场 '+Number(r.entryRounds||0):
  '锁定 '+Number(r.locked||0))+' 轮';
  }catch(err){e('orderSignalModelStats').textContent='所选模型胜率读取失败（不改变下单选择）';}
@@ -1202,14 +1202,14 @@ async function updateOrderSignal(){
      '动态入场有冻结候选，但未通过实盘有效性校验'):
    dynamicMode&&dynamic?.health?.marketError?'动态行情异常：'+String(dynamic.health.marketError):
    dynamicMode?'等待动态入场触发（方向不是锁定信号）':
-   edgeMode?(edge?.latest?.round===round?'EDGE已有方向，但未完成校准或风控，不下单':
+   edgeMode?(edge?.latest?.round===round?'EDGE已有方向，但实时锁定或执行证据未通过':
      'EDGE数据不足或未锁定，不下单'):
    '等待本轮8秒有效锁定';
   put('flowLocked',lockMessage);
   put('activeFast8EmittedDirection',locked?
-   signal.direction+'（'+(dynamicMode?'5分钟动态冻结':edgeMode?'EDGE已校准8秒锁定':'RSI 8秒锁定')+'）':lockMessage);
+   signal.direction+'（'+(dynamicMode?'5分钟动态冻结':edgeMode?'EDGE真实行情8秒锁定':'RSI 8秒锁定')+'）':lockMessage);
   if(edgeMode)put('activeFast8Direction',
-    ['UP','DOWN'].includes(preview)?preview+' · '+(edge?.latest?.executionEligible?'已校准':'未校准，仅参考'):'没有有效EDGE方向');
+    ['UP','DOWN'].includes(preview)?preview+' · '+(edge?.latest?.executionEligible?'有效锁定':'未满足有效锁定条件'):'没有有效EDGE方向');
   if(dynamicMode&&dynamic)put('activeFast8Direction',
     ['UP','DOWN'].includes(preview)?preview+' · 动态模型方向参考':'尚无当前轮次方向');
   var side=e('activeFast8OrderDirection'),mode=j.orderMappingMode;
@@ -1325,7 +1325,7 @@ function injectStats(html) {
       out=out.replace('Render 免费预览 · 实盘未启用',
         '用户授权交易控制 · 跟随默认关闭');
       out=out.replace('已启用 PIN 登录，可查看实际币安只读余额。实盘交易仍保持关闭。原 Railway 订单历史尚未迁移。预测信号和模型数据不代表交易已成交。免费实例会休眠，免费 Redis 不持久化，暂不能承担实盘。',
-        '已保留 PIN 登录。仅当你手动开启跟随且选择的方向开关允许时，后台才会尝试真实下单。固定 EDGE 未完成概率校准，不能据此判断胜率；Render 免费实例可能休眠，订单去重 Redis 不持久化。');
+        '已保留 PIN 登录。仅当你手动开启跟随且选择的方向开关允许时，后台才会尝试真实下单。EDGE 未完成概率校准，不能据此判断真实胜率；Render 免费实例可能休眠，订单去重 Redis 不持久化。');
     }else{
       out = out.replace('<button class="start" onclick="setV(true)">开始跟随（自动提交，下一轮生效）</button>',
         '<button class="start" disabled title="Render 预览期禁止实盘" style="opacity:.5;cursor:not-allowed">开始跟随（测试期禁用）</button>');

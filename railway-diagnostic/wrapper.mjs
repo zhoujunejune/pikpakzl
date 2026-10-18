@@ -181,38 +181,28 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     source,
   }));
 
-  // Independent execution criteria for EDGE_5M_V1 only.
-  // The other three model execution paths and global EV_FILTER_ENABLED stay untouched.
+  // EDGE model selection, immutable 8s evidence, explicit user toggle and
+  // genuine Binance quote remain mandatory. Training progress is informational.
+  // Never substitute an uncalibrated score for a market win probability.
   if (p.signalModelChoice===EDGE_MODEL) {
-    const prob=Number(current.modelProbability);
+    const quotePrice=Number(quote.chance);
+    if (current.executionEligible!==true||
+        !Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1) {
+      p.state=isAuto?'AUTO_FAILED':'READY';
+      p.blockReason=current.executionEligible!==true?'EDGE5_SIGNAL_INVALID':'EDGE5_QUOTE_INVALID';
+      p.error='EDGE方向证据或币安订单报价无效，本轮未下单';
+      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
+    }
+    const prob=typeof current.modelProbability==='number'&&
+      Number.isFinite(current.modelProbability)&&current.calibrationReady===true
+      ?current.modelProbability:null;
     const cost=Math.max(0,Number(process.env.EDGE5_FEE_BUFFER||0.01))+
       Math.max(0,Number(process.env.EDGE5_SLIPPAGE_BUFFER||0.005));
-    const minEdge=Math.max(0.03,Number(process.env.EDGE5_MIN_EDGE||0.04));
-    const maxPrice=Math.min(0.99,Number(process.env.EDGE5_MAX_ENTRY_PRICE||0.55));
-    const quotePrice=Number(quote.chance);
-    const trusted=current.calibrationReady===true&&current.executionEligible===true&&
-      Number(current.calibrationSamples)>=5000&&
-      Number.isFinite(prob)&&prob>=0.5&&prob<=1;
-    const buyProbability=(current.rawDirection===p.signal)?prob:1-prob;
-    const edge=buyProbability-quotePrice-cost;
-    if(!trusted||!Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1||
-       !Number.isFinite(edge)||quotePrice>maxPrice||edge<minEdge){
-      p.state=isAuto?'EV_FILTERED':'READY';
-      p.blockReason=!trusted?'EDGE5_NOT_CALIBRATED':
-        !Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1?'EDGE5_QUOTE_INVALID':
-        quotePrice>maxPrice?'EDGE5_PRICE_ABOVE_CAP':'EDGE5_INSUFFICIENT_EDGE';
-      p.error='EDGE模型未通过实时概率、买入价和成本校验，本轮不下单';
-      p.modelProbability=trusted?buyProbability:null;
-      p.quoteChance=Number.isFinite(quotePrice)?quotePrice:null;
-      p.edge=Number.isFinite(edge)?Number(edge.toFixed(6)):null;
-      p.minEdge=minEdge;
-      p.calibrationSamples=current.calibrationSamples||0;
-      console.log(JSON.stringify({event:'edge5_execution_filtered',round:p.round,
-        reason:p.blockReason,modelProbability:p.modelProbability,
-        quotePrice:p.quoteChance,edge:p.edge,minEdge,cost}));
-      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason,
-        modelProbability:p.modelProbability,quotePrice:p.quoteChance,edge:p.edge,minEdge}};
-    }
+    const buyProbability=prob===null?null:(current.rawDirection===p.signal?prob:1-prob);
+    p.modelProbability=buyProbability;
+    p.quoteChance=quotePrice;
+    p.edge=buyProbability===null?null:Number((buyProbability-quotePrice-cost).toFixed(6));
+    // Non-calibrated models remain explicitly uncalibrated; do not imply 75% accuracy.
   }
 
   if (EV_FILTER_ENABLED) {
@@ -414,11 +404,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
           (currentRetry.upstreamModel!==EDGE_MODEL||currentRetry.signalId!==p.signalId||
            currentRetry.executionEligible!==true||
            !Number.isFinite(Number(nextQuote.quote?.chance))||
-           Number(nextQuote.quote.chance)>Number(process.env.EDGE5_MAX_ENTRY_PRICE||0.55)||
-           (Number(currentRetry.rawDirection===p.signal?currentRetry.modelProbability:1-currentRetry.modelProbability)-
-             Number(nextQuote.quote.chance)-Number(process.env.EDGE5_FEE_BUFFER||0.01)-
-             Number(process.env.EDGE5_SLIPPAGE_BUFFER||0.005))<
-             Number(process.env.EDGE5_MIN_EDGE||0.04)))||
+           Number(nextQuote.quote.chance)<=0||
+           Number(nextQuote.quote.chance)>=1))||
        rejectExpiredOrderWindow(p,'before_retry_place_order')){
       p.state='RETRY_ABORTED';
       p.error='重试时信号、轮次或下单设置不再有效';

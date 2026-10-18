@@ -402,8 +402,43 @@ def main():
         raise RuntimeError(f"Exchange ban/cooldown until {BINANCE_RETRY_NOT_BEFORE_UTC}")
     api.server_time()
     log("started",mode=MODE,symbols=SYMBOLS,leverage=LEVERAGE,real_trading=MODE=="live")
-    if MODE=="live" and state.get("pending"):
-        raise RuntimeError("Unresolved prior entry; investigate manually before starting")
+    if MODE=="live":
+        from recovery import reconstruct_owned_position, ManualReviewRequired
+        # Exchange-side read-only reconciliation; no automatic trading resumed
+        # if the local ledger is missing, ambiguous or a position was recovered.
+        positions=api.positions()
+        algos=[]
+        for symbol in SYMBOLS:
+            algos.extend(api.algo_open(symbol))
+        try:
+            snapshot=reconstruct_owned_position(positions,algos,SYMBOLS)
+            if snapshot:
+                state["trade"]=snapshot
+                state["halt"]=True
+                save(state)
+                log("live_position_recovered_halted",symbol=snapshot["symbol"],
+                    protectionCount=len(snapshot["algo_ids"]))
+                raise RuntimeError("Open position recovered from exchange; entries halted until manual inspection")
+            if state.get("pending"):
+                state["halt"]=True
+                save(state)
+                raise RuntimeError("Unresolved entry intent despite no visible position; manual reconciliation")
+            if state.get("trade"):
+                state["trade"]=None
+                state["halt"]=True
+                save(state)
+                raise RuntimeError("Local position missing on exchange; halt and reconcile fills before proceeding")
+            if not STATE_FILE.exists():
+                state["halt"]=True
+                save(state)
+                raise RuntimeError("No durable position journal; halt and review before any live trading")
+            if state.get("halt"):
+                raise RuntimeError("Persistent trading halt is enabled")
+        except ManualReviewRequired as e:
+            state["halt"]=True
+            save(state)
+            log("live_position_snapshot_unsafe_halt",reason=str(e))
+            raise RuntimeError("Exchange-side position reconciliation failed; no entries permitted")
     while True:
         try:
             tick(api,state)

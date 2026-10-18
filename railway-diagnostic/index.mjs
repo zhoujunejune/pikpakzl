@@ -557,6 +557,16 @@ async function prepareIntent(signal) {
     resolveWallet(), discoverTopic(signal.round),
     lastBalance?.ok ? Promise.resolve(lastBalance) : getPaymentBalances(),
   ]);
+  // Do not reject enabling the user's toggle because of insufficient funds.
+  // For each actual round, report the balance error as PREPARE_ERROR instead
+  // of silently changing the payment source or claiming a successful order.
+  if (balance?.ok!==true) return {ok:false,error:balance?.error||'PAYMENT_BALANCE_UNAVAILABLE'};
+  const accounts=Array.isArray(balance.items)?balance.items.filter(x=>x.enabled===true):[];
+  const amount=Number(tradeAmountText);
+  const sufficient=accounts.filter(x=>Number(x.availableBalanceDisplay)>=amount);
+  if(accounts.length&&sufficient.length===0)return {
+    ok:false,error:'INSUFFICIENT_BALANCE',code:'PREDICTION_AVAILABLE_BALANCE_TOO_LOW'
+  };
   if (!wallet.ok) return wallet;
   if (!marketResult.ok) return marketResult;
 
@@ -565,7 +575,7 @@ async function prepareIntent(signal) {
 
   const amountIn = amountToWei(tradeAmountText);
   lastBalance = balance;
-  const payment = paymentRoute(balance);
+  const payment = paymentRoute({...balance,items:sufficient.length?sufficient:accounts});
   const slippageBps = Number(marketResult.topic?.slippageBps || 1200);
   const feeRateBps = Number(marketResult.topic?.feeRateBps || 200);
 

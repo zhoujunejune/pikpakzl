@@ -39,6 +39,8 @@ Environment=MAX_MARGIN_FRACTION=0.15
 Environment=MAX_DAILY_LOSS_FRACTION=0.08
 Environment=PAPER_TAKER_FEE=0.0005
 Environment=STATE_FILE=/var/lib/zl-futures-bot/state.json
+Environment=CONTROL_FILE=/var/lib/zl-futures-bot/control.json
+EnvironmentFile=-/etc/zl-futures-bot-panel.env
 Environment=PORT=10000
 Environment=BIND_HOST=127.0.0.1
 ExecStart=/opt/zl-futures-bot/venv/bin/python -u futures-bot-v1/serve.py

@@ -19,14 +19,35 @@ function fresh(observedAt,sourceAt){
 }
 export async function bybitMarket(){
  const hosts=['https://api.bybit.com','https://api.bytick.com'];
- const url=['/v5/market/tickers?category=spot&symbol=BTCUSDT',
-  '/v5/market/tickers?category=linear&symbol=BTCUSDT',
-  '/v5/market/orderbook?category=spot&symbol=BTCUSDT&limit=25',
-  '/v5/market/recent-trade?category=linear&symbol=BTCUSDT&limit=200'];
- const [spot,perp,book,trades]=await Promise.all(url.map((path,i)=>first(hosts,path,d=>
-  d?.retCode===0&&(i===2?Array.isArray(d.result?.b)&&d.result.b.length>=5&&
-    Array.isArray(d.result?.a)&&d.result.a.length>=5:
-    Array.isArray(d.result?.list)&&d.result.list.length>=3-(i===3?0:2)))));
+ // Take the five-level book and the active trades from the same exchange.
+ // Prefer recent BYBIT spot trades to match the spot book; BYBIT linear trades
+ // are a same-venue fallback. Never substitute fabricated stale trade events.
+ const freshTrades=d=>d?.retCode===0&&Array.isArray(d.result?.list)&&
+   d.result.list.filter(x=>fresh(Date.now(),Number(x.time))&&Number(x.size)>0).length>=3;
+ async function recentTrades(){
+   const errors=[];
+   for(const category of ['spot','linear']){
+     try{
+       return await first(hosts,
+         '/v5/market/recent-trade?category='+category+'&symbol=BTCUSDT&limit=200',
+         freshTrades);
+     }catch(e){errors.push(err(e));}
+   }
+   throw Error('BYBIT_FRESH_TRADES_UNAVAILABLE_'+errors.join(';').slice(0,110));
+ }
+ const [spot,perp,book,trades]=await Promise.all([
+   first(hosts,'/v5/market/tickers?category=spot&symbol=BTCUSDT',
+     d=>d?.retCode===0&&Array.isArray(d.result?.list)&&d.result.list.length>=1&&
+       fresh(Date.now(),Number(d.time))),
+   first(hosts,'/v5/market/tickers?category=linear&symbol=BTCUSDT',
+     d=>d?.retCode===0&&Array.isArray(d.result?.list)&&d.result.list.length>=1&&
+       fresh(Date.now(),Number(d.time))),
+   first(hosts,'/v5/market/orderbook?category=spot&symbol=BTCUSDT&limit=25',
+     d=>d?.retCode===0&&Array.isArray(d.result?.b)&&d.result.b.length>=5&&
+       Array.isArray(d.result?.a)&&d.result.a.length>=5&&
+       fresh(Date.now(),Number(d.result.ts))),
+   recentTrades()
+ ]);
  const now=Date.now(),s=spot.data.result.list[0],p=perp.data.result.list[0];
  const spotPrice=Number(s.lastPrice),perpPrice=Number(p.lastPrice);
  const spotAt=Number(spot.data.time),perpAt=Number(perp.data.time);

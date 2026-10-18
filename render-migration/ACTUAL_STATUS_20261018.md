@@ -64,3 +64,13 @@ Migration branch: `migration/render-blueprint-20261018` (PR #167). The original 
 - Do **not** switch `breakout20-shadow` market origin yet. Render V3 `/api/shadow-market-data` responds HTTP **503** with `WS_WARMING_UP_0_OF_35` for both 1m and 5m after restart. Replacing its dead Railway URL with an unready Render source would not fix predictions and violates the requirement to ensure fresh, complete history first.
 - An additional public Binance Spot WebSocket API `klines` historical query through `wss://ws-api.binance.com:443/ws-api/v3` was independently tested from Render V3 and returned **HTTP 418** on upgrade; do not retry on the banned shared egress. The already-connected Spot market WebSocket remains the only verified real-time spot Kline stream.
 - **Real trading remains OFF**. Render Free startup/idle/ephemeral state limitations persist. Cloudflare API Token should be revoked in Cloudflare after both Worker changes are complete.
+
+
+## 2026-10-18 05:45 UTC: User-requested EDGE fixed model / win-rate only
+
+- Applied one minimal owner-authorized production Worker edit **only to `edge-5m-v1`**: early-return from `trainOnOfficial(rows)` with `PAUSED_RECORD_ONLY` and `model:null`. This prevents any future weight fitting and calibration without deleting or modifying existing parameters. It does **not** touch `scan`, `resolveOfficial`, SQL history, 8-second lock timing or official UP/DOWN statistics.
+- API deployment HTTP 200; post-deploy Cloudflare GET confirmed Worker source hash prefix `b6efceaac1306394`, original `EDGE5` Durable Object binding, compatibility date, and statistics logic preserved. At 31 official samples (far below previous 5000 minimum), no model training had actually commenced prior to this request; the new no-op enforces it permanently at the training function.
+- Render panel deployed live `dep-dba5qr2jnfac73efpgo0`: EDGE statistics page now explicitly says fixed model, training stopped, and shows official total, UP, DOWN accuracy and pending count. PIN auth smoke `ok:true`.
+- **Real orders remain OFF**, all 6 direction switches OFF, `autoOrder:false`, panel gateway blocks mutations in preview mode; neither PIN login nor the Cloudflare Worker API token changes trading permissions. No actual orders placed.
+- Current known limitations: Render Free sleep/ephemeral Redis order ledger, missing settlement history, EDGE `executionEligible:false`, breakout20 `DATA_GAP` due stale Railway V3 and Render V3 503. Not safe to unlock automatic orders yet.
+- The temporary Cloudflare API token remains protected in Render encrypted env; it has broad permission per owner's configuration and should be revoked when no further Worker deployment is needed.

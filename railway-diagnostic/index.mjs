@@ -416,7 +416,8 @@ async function refreshUiBalance() {
   if (balanceRefreshPromise) return balanceRefreshPromise;
   balanceRefreshPromise = (async () => {
     const next = await getPaymentBalances();
-    if (next?.ok) {
+    if (next?.ok || process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+      // Preview negative-cache prevents public page polling from hammering Binance.
       lastBalance = next;
       lastBalanceAt = Date.now();
     }
@@ -430,8 +431,10 @@ async function refreshUiBalance() {
 }
 
 async function getUiBalance() {
-  if (lastBalance?.ok) {
-    if (Date.now() - lastBalanceAt >= UI_BALANCE_CACHE_MS) refreshUiBalance();
+  if (lastBalance?.ok || (process.env.RENDER_MIGRATION_PREVIEW === 'true' && lastBalance)) {
+    if (Date.now() - lastBalanceAt >=
+      (process.env.RENDER_MIGRATION_PREVIEW === 'true' ? 120000 : UI_BALANCE_CACHE_MS))
+      refreshUiBalance();
     return { ...lastBalance, cached: Date.now() - lastBalanceAt > 1000, cacheAgeMs: Math.max(0, Date.now() - lastBalanceAt) };
   }
   const fresh = await refreshUiBalance();
@@ -1212,7 +1215,8 @@ http.createServer(async (req, res) => {
   console.log(JSON.stringify({
     event: 'prediction_balance_check',
     ok: lastBalance.ok,
-    items: lastBalance.items || [],
+    items: process.env.RENDER_MIGRATION_PREVIEW === 'true' ? [] : (lastBalance.items || []),
+    itemCount: Array.isArray(lastBalance.items) ? lastBalance.items.length : 0,
     error: lastBalance.error || null,
   }));
   await auditSettledHistoryTopics(['6374907','6374910']);

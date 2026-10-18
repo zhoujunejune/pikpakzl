@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {bybitMarket} from './provider-market.mjs';
 import {EDGE_MODEL,INPUT_VERSION,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS,roundAt,extractFeatures,
   scoreDirection,trainOnOfficial,summarize} from './edge-core.mjs';
 const ROUND=1792166400000;
@@ -76,4 +77,29 @@ test('300 verified rounds allow provisional training without fake probability',(
  assert.ok(['UP','DOWN'].includes(p.direction));
  assert.equal(p.modelProbability,null);
  assert.equal(p.executionEligible,true);
+});
+
+test('BYBIT trade adapter retries second host when first returns stale spot trades',async()=>{
+ const prior=globalThis.fetch,now=Date.now();
+ const ticks={time:now-90,retCode:0,result:{list:[{lastPrice:'72000'}]}};
+ const book={retCode:0,result:{ts:now-90,b:Array.from({length:5},(_,i)=>[String(72000-i),'1']),a:Array.from({length:5},(_,i)=>[String(72001+i),'1'])}};
+ globalThis.fetch=async input=>{
+  const url=String(input);
+  if(url.includes('/market/orderbook?'))return new Response(JSON.stringify(book));
+  if(url.includes('/market/tickers?'))return new Response(JSON.stringify(url.includes('category=linear')?
+    {time:now-90,retCode:0,result:{list:[{lastPrice:'72010'}]}}:ticks));
+  if(url.includes('/market/recent-trade?')){
+   const stale=url.startsWith('https://api.bybit.com');
+   return new Response(JSON.stringify({retCode:0,result:{list:Array.from({length:4},(_,i)=>({
+      time:stale?now-12000:now-150,q:'1',size:'0.02',side:i%2?'Sell':'Buy'}))}}));
+  }
+  throw Error('unexpected request '+url);
+ };
+ try{
+  const m=await bybitMarket();
+  assert.equal(m.venue,'BYBIT');
+  assert.equal(m.trades.length,4);
+  assert.match(m.providers.trades,/api.bytick.com.*category=spot/);
+  assert.ok(m.trades.every(t=>t.T>=now-3500));
+ }finally{globalThis.fetch=prior}
 });

@@ -65,7 +65,10 @@ WantedBy=multi-user.target
 EOF
 chmod 0644 /etc/systemd/system/zl-futures-bot-paper.service
 systemctl daemon-reload
-systemctl enable --now zl-futures-bot-paper.service
+systemctl enable zl-futures-bot-paper.service
+# enable --now does not restart an already running process after a code update.
+# Reload the active Python service to apply new browser routing without touching state.
+systemctl restart zl-futures-bot-paper.service
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
   if curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:10000/healthz >/dev/null; then
     echo "INSTALL_OK: service responds locally"

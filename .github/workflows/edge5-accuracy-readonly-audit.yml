@@ -1,0 +1,56 @@
+name: EDGE5 read-only accuracy decomposition
+on:
+  pull_request:
+    branches: [cloudflare-edge5m-20261017]
+    paths: ['.github/workflows/edge5-accuracy-readonly-audit.yml']
+permissions:
+  contents: read
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Analyze live 40-record rolling sample without changing Worker or orders
+        run: |
+          node --input-type=module <<'NODE'
+          const base='https://edge-5m-v1.zl528094-3ba.workers.dev';
+          const res=await fetch(base+'/status',{cache:'no-store',signal:AbortSignal.timeout(12000)});
+          if(!res.ok)throw Error('EDGE_STATUS_HTTP_'+res.status);
+          const d=await res.json();
+          if(d.model!=='EDGE_5M_V1')throw Error('BAD_EDGE_MODEL');
+          const rows=(d.recent||[]).map(r=>({
+            round:r.round,
+            lockDelay:r.lockedAt-r.round,
+            dir:r.direction,
+            actual:r.actual,
+            match:r.actual==='UP'||r.actual==='DOWN'?r.actual===r.direction:null,
+            version:r.modelVersion,calibrated:r.calibrationReady,
+            pending:r.pendingReason
+          }));
+          const rate=xs=>({n:xs.length,hit:xs.filter(x=>x.match===true).length,
+            win:xs.length?xs.filter(x=>x.match===true).length/xs.length:null});
+          const settled=rows.filter(x=>x.match!==null).sort((a,b)=>a.round-b.round);
+          const versions={};
+          for(const x of settled){(versions[x.version]??=[]).push(x)}
+          const delays=settled.map(x=>x.lockDelay).filter(Number.isFinite).sort((a,b)=>a-b);
+          const pending=rows.filter(x=>x.match===null);
+          const result={liveAt:new Date().toISOString(),marketError:d.health?.marketError,
+            venue:d.health?.venue,overall:d.results?.overall,
+            up:d.results?.up,down:d.results?.down,
+            observed:d.results?.observedRounds,locked:d.results?.locked,
+            pendingCount:d.results?.pending,
+            training:{status:d.training?.status,samples:d.training?.samples,
+              version:d.training?.version,fitRequired:d.training?.fitRequired,
+              calibrationReady:d.training?.calibrationReady,holdoutSamples:d.training?.holdoutSamples,
+              brier:d.training?.brier,baselineBrier:d.training?.baselineBrier,ece:d.training?.ece},
+            backfill:{lookups:d.health?.backfillLookups,recovered:d.health?.backfillRecovered},
+            latest40Count:rows.length,recentSettled:rate(settled),
+            earliest20:rate(settled.slice(0,20)),latest20:rate(settled.slice(-20)),
+            recentUp:rate(settled.filter(x=>x.dir==='UP')),
+            recentDown:rate(settled.filter(x=>x.dir==='DOWN')),
+            versions:Object.fromEntries(Object.entries(versions).map(([k,v])=>[k,rate(v)])),
+            lockDelay:{min:delays[0],median:delays[Math.floor(delays.length/2)],max:delays.at(-1)},
+            pendingOldest:pending.length?Math.min(...pending.map(x=>x.round)):null,
+            records:rows};
+          console.log('EDGE5_READONLY_ACCURACY_AUDIT',JSON.stringify(result));
+          NODE

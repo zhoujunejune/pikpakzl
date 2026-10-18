@@ -14,7 +14,7 @@ export const EDGE_INPUT_VERSION='EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1';
 export const RSI_INPUT_VERSION='RSI_ONLY_14_V1';
 export const ORDER_SIGNAL_MODELS=Object.freeze([
  {id:BASE_MODEL,name:'BASELINE（RSI14单指标 · Railway 信号）'},
- {id:EDGE_MODEL,name:'EDGE_5M_V1（前8秒 · 概率校准与Edge过滤）'}
+ {id:EDGE_MODEL,name:'EDGE_5M_V1（前8秒 · 训练与方向分离）'}
 ]);
 const isChoice=m=>ORDER_SIGNAL_MODELS.some(x=>x.id===m);
 const roundOf=t=>Math.floor(t/300000)*300000;
@@ -173,7 +173,7 @@ export function validateEdgeSignal(body,now=Date.now()){
     body.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')
    return {ok:false,reason:'UNTRUSTED_EDGE_SOURCE'};
  if(!Number.isSafeInteger(body.generatedAt)||body.generatedAt>now+300||
-   now-body.generatedAt>3500||body.health?.marketError!=null)
+   now-body.generatedAt>3500)
    return {ok:false,reason:'EDGE_MARKET_OR_STATUS_STALE'};
  if(!lock||lock.round!==round||lock.status!=='LOCKED'||
    !['UP','DOWN'].includes(lock.direction)||!Number.isSafeInteger(lock.lockedAt)||
@@ -184,7 +184,7 @@ export function validateEdgeSignal(body,now=Date.now()){
    typeof lock.score!=='number'||!Number.isFinite(lock.score)||
    !/^EDGE5_(?:OFFICIAL_[0-9]+_[0-9]+|UNCALIBRATED_PROBE)$/.test(String(lock.modelVersion||'')))
    return {ok:false,reason:'EDGE_LOCK_EVIDENCE_MISSING'};
- const ready=lock.executionEligible===true&&lock.calibrationReady===true&&
+ const ready=lock.calibrationReady===true&&
    body.training?.ready===true&&body.training?.calibrationReady===true&&
    body.training?.version===lock.modelVersion&&
    Number(body.training.samples)>=5000;
@@ -192,18 +192,20 @@ export function validateEdgeSignal(body,now=Date.now()){
  if(ready&&(!(typeof probability==='number'&&Number.isFinite(probability))||
    probability<0.5||probability>1))
    return {ok:false,reason:'EDGE_CALIBRATION_INVALID'};
- // Uncalibrated directional probes are visible but explicitly barred from execution.
+ // Execution eligibility depends on a genuine, timely, immutable locked
+ // direction, NOT on statistical calibration. Uncalibrated score is not a
+ // probability or evidence of predictive advantage.
  return {ok:true,round,direction:lock.direction,model:EDGE_MODEL,
    lockedAt:lock.lockedAt,marketAt:lock.marketAt,score:lock.score,
    modelVersion:lock.modelVersion,modelProbability:ready?probability:null,
    calibrationReady:ready,calibrationSamples:Number(body.training?.samples||0),
-   executionEligible:ready};
+   executionEligible:lock.executionEligible===true};
 }
 
 
 // Per-round, cross-restart limit for real Binance POSTs. Redis is the same
 // authority already required for real-order model switching.
-export const MAX_ORDER_SUBMIT_ATTEMPTS=3;
+export const MAX_ORDER_SUBMIT_ATTEMPTS=1;
 const ORDER_SUBMIT_PREFIX='trade-control:order-submit:v1:';
 const CLAIM_POST_SCRIPT="local marker=redis.call('GET',KEYS[2]); if marker and marker~='REJECTED' then return -2 end; local n=tonumber(redis.call('GET',KEYS[1]) or '0'); if n>=tonumber(ARGV[1]) then return -1 end; n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],7200) end; redis.call('SET',KEYS[2],'IN_FLIGHT:'..n,'EX',7200); return n";
 function checkedSubmitRound(round){

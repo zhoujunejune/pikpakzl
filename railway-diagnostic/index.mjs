@@ -345,7 +345,7 @@ async function getSignal({ forceHttp = false } = {}) {
         source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:verified.lockedAt,
         lockedAt:verified.lockedAt,marketAt:verified.marketAt,
         frozen:true,executionEligible:verified.executionEligible,
-        qualityGate:verified.executionEligible?'EDGE5_OFFICIAL_CALIBRATED':'EDGE5_COLLECTING_UNCALIBRATED',
+        qualityGate:verified.calibrationReady?'EDGE5_OFFICIAL_CALIBRATED':'EDGE5_FROZEN_DIRECTION_UNCALIBRATED',
         signalId:SIGNAL_MODEL_NAME+':'+verified.round+':'+EDGE_MODEL+':'+verified.modelVersion+':'+verified.direction,
         transport:'railway_edge5m_readonly'};
     }catch{return null;}
@@ -416,7 +416,8 @@ async function refreshUiBalance() {
   if (balanceRefreshPromise) return balanceRefreshPromise;
   balanceRefreshPromise = (async () => {
     const next = await getPaymentBalances();
-    if (next?.ok) {
+    if (next?.ok || process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+      // Preview negative-cache prevents public page polling from hammering Binance.
       lastBalance = next;
       lastBalanceAt = Date.now();
     }
@@ -430,8 +431,10 @@ async function refreshUiBalance() {
 }
 
 async function getUiBalance() {
-  if (lastBalance?.ok) {
-    if (Date.now() - lastBalanceAt >= UI_BALANCE_CACHE_MS) refreshUiBalance();
+  if (lastBalance?.ok || (process.env.RENDER_MIGRATION_PREVIEW === 'true' && lastBalance)) {
+    if (Date.now() - lastBalanceAt >=
+      (process.env.RENDER_MIGRATION_PREVIEW === 'true' ? 120000 : UI_BALANCE_CACHE_MS))
+      refreshUiBalance();
     return { ...lastBalance, cached: Date.now() - lastBalanceAt > 1000, cacheAgeMs: Math.max(0, Date.now() - lastBalanceAt) };
   }
   const fresh = await refreshUiBalance();
@@ -554,6 +557,16 @@ async function prepareIntent(signal) {
     resolveWallet(), discoverTopic(signal.round),
     lastBalance?.ok ? Promise.resolve(lastBalance) : getPaymentBalances(),
   ]);
+  // Do not reject enabling the user's toggle because of insufficient funds.
+  // For each actual round, report the balance error as PREPARE_ERROR instead
+  // of silently changing the payment source or claiming a successful order.
+  if (balance?.ok!==true) return {ok:false,error:balance?.error||'PAYMENT_BALANCE_UNAVAILABLE'};
+  const accounts=Array.isArray(balance.items)?balance.items.filter(x=>x.enabled===true):[];
+  const amount=Number(tradeAmountText);
+  const sufficient=accounts.filter(x=>Number(x.availableBalanceDisplay)>=amount);
+  if(accounts.length&&sufficient.length===0)return {
+    ok:false,error:'INSUFFICIENT_BALANCE',code:'PREDICTION_AVAILABLE_BALANCE_TOO_LOW'
+  };
   if (!wallet.ok) return wallet;
   if (!marketResult.ok) return marketResult;
 
@@ -562,7 +575,7 @@ async function prepareIntent(signal) {
 
   const amountIn = amountToWei(tradeAmountText);
   lastBalance = balance;
-  const payment = paymentRoute(balance);
+  const payment = paymentRoute({...balance,items:sufficient.length?sufficient:accounts});
   const slippageBps = Number(marketResult.topic?.slippageBps || 1200);
   const feeRateBps = Number(marketResult.topic?.feeRateBps || 200);
 
@@ -724,6 +737,23 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       marketTopicId: pendingAction.marketTopicId,
       quoteMode: pendingAction.quoteMode,
     }));
+    // Only a PIN-authenticated user can enable following. Run exactly one
+    // backend confirmation attempt when a fresh signed intent becomes READY.
+    // No browser needs to remain open; no signal if controls are OFF.
+    if(enabled && process.env.RENDER_TRADING_USER_ARMED==='true' &&
+       process.env.AUTO_CONFIRM_ENABLED==='true'){
+      const ready=pendingAction;
+      setImmediate(()=>{
+        if(enabled && pendingAction===ready && ready.state==='READY')
+          void processOrderConfirmation(makeInternalOrderResult(),
+            {confirmationToken:ready.confirmationToken},{automatic:true})
+            .catch(e=>{
+              enabled=false;
+              console.error(JSON.stringify({event:'auto_order_unhandled_halted',
+                error:String(e?.message||e).slice(0,150)}));
+            });
+      });
+    }
   } finally {
     prepareInFlight = false;
   }
@@ -854,10 +884,10 @@ setInterval(() => refreshLastOrderStatus(false), 2500);
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>5分钟 API 实盘确认控制台</title><style>
 body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;padding:18px}.w{max-width:580px;margin:auto}.c{background:#191d27;border-radius:18px;padding:18px;margin:14px 0}.big{font-size:25px;font-weight:800}.on{color:#3ddc84}.off,.bad{color:#ff6868}.ok{color:#3ddc84}.warn{color:#f0b90b}.muted{color:#a8b0bd;font-size:14px;line-height:1.55}input,button{width:100%;box-sizing:border-box;padding:15px;border-radius:12px;margin-top:10px;font-size:17px}input{background:#0d1016;color:#fff;border:1px solid #3b4352}button{border:0;font-weight:800}.start{background:#28c76f;color:#06150b}.stop{background:#ff5c62;color:#fff}.confirm{background:#f0b90b;color:#161616;font-size:19px}.confirm:disabled{opacity:.45}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.kv{background:#10141c;padding:12px;border-radius:12px}.k{font-size:12px;color:#8f98a8}.v{font-size:17px;font-weight:700;margin-top:4px}.wallet{font-size:30px;font-weight:900;margin-top:6px}.pending{border:1px solid #454d5f}.hidden{display:none}</style></head><body><div class="w">
 <h2>5分钟 API 实盘确认控制台</h2>
-<div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：新一轮 LOCKED → 后端先准备市场/方向（不提前拿 Quote）→ 你点一次“确认下单” → 后端即时获取最新 Quote → 立刻调用 Binance Prediction 下单 API → 再核验真实订单状态。</div></div>
+<div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：你使用控制 PIN 开始跟随（默认关闭）→ 下一轮有效 LOCKED → 后端核对行情/方向和支付路径 → 自动获取最新 Quote → 每轮最多尝试提交一次 Binance Prediction 订单 → 再核验交易所成交状态。未完成概率校准的 EDGE 方向没有已验证的胜率优势。</div></div>
 <div class="c"><div class="k">Prediction 可用余额</div><div class="wallet" id="walletBalance">读取中...</div><div class="muted" id="walletMeta">正在连接 Binance Prediction...</div></div>
-<div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随新信号</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
-<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
+<div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随（自动提交，下一轮生效）</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
+<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">PIN控制 · 自动跟随 / 每轮一次</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>
 <div id="riskControlsAnchor"></div>
@@ -866,8 +896,8 @@ let currentPending=null;
 let refreshBusy=false;
 function el(id){return document.getElementById(id)}
 async function refresh(){if(refreshBusy)return;refreshBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();el('switch').innerHTML=j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>';const s=j.signal||{};el('round').textContent=s.round??'-';el('status').textContent=s.status??'-';el('direction').textContent=s.direction??'-';el('score').textContent=s.score==null?'-':Number(s.score).toFixed(2);el('amountView').textContent=j.amount??'-';if(document.activeElement!==el('amount')&&j.amount!=null)el('amount').value=j.amount;const b=j.balance||{};const first=(b.items||[]).find(x=>x.enabled&&Number(x.availableBalanceDisplay)>0)||(b.items||[]).find(x=>x.enabled)||(b.items||[])[0];if(b.ok&&first){el('walletBalance').innerHTML='<span class="ok">'+first.availableBalanceDisplay+' USDT</span>';el('walletMeta').textContent='账户：'+first.accountType+' · Binance Prediction 实时可用余额'}else{el('walletBalance').innerHTML='<span class="bad">读取失败</span>';el('walletMeta').textContent=(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':'')}
-currentPending=j.pendingAction||null;const btn=el('confirmBtn');if(!currentPending){el('pendingTitle').textContent='暂无';el('pendingMeta').textContent=j.enabled?'正在等待下一轮 LOCKED，并准备市场/方向...':'开启后等待下一轮 LOCKED 信号。';btn.classList.add('hidden')}else if(currentPending.state==='READY'){el('pendingTitle').textContent=(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT';el('pendingMeta').textContent='市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · Quote：点击确认后即时获取';btn.textContent='确认 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';btn.disabled=false;btn.classList.remove('hidden')}else if(currentPending.state==='PREPARE_ERROR'){el('pendingTitle').textContent='准备失败';el('pendingMeta').textContent=(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':'');btn.classList.add('hidden')}else{el('pendingTitle').textContent=currentPending.state==='QUOTING'?'正在获取最新 Quote...':'正在提交...';el('pendingMeta').textContent='请稍候，不要重复点击。';btn.classList.add('hidden')}
-const o=j.lastOrder;if(o){const filled=o.state==='CONFIRMED_FILLED'||Number(o.fillPercentage||0)>=1||Number(o.filledUsdtAmount||0)>0;const failed=o.state==='CONFIRMED_FAILED';if(filled){el('orderTitle').innerHTML='<span class="ok">已成交</span>'}else if(failed){el('orderTitle').innerHTML='<span class="bad">下单失败</span>'}else{el('orderTitle').innerHTML='<span class="warn">已提交，核验中</span>'}el('orderMeta').textContent='orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:'')}else{el('orderTitle').textContent='暂无';el('orderMeta').textContent='-' }}catch(e){el('switch').textContent='状态读取失败'}finally{refreshBusy=false}}
+currentPending=j.pendingAction||null;const btn=el('confirmBtn');if(!currentPending){el('pendingTitle').textContent='暂无';el('pendingMeta').textContent=j.enabled?'正在等待下一轮 LOCKED，并准备市场/方向...':'开启后等待下一轮 LOCKED 信号。';btn.classList.add('hidden')}else if(currentPending.state==='READY'){el('pendingTitle').textContent=(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT';el('pendingMeta').textContent='市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · Quote：点击确认后即时获取';btn.textContent='确认 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';btn.disabled=false;btn.classList.remove('hidden')}else if(currentPending.state==='PREPARE_ERROR'){el('pendingTitle').textContent=currentPending.error==='INSUFFICIENT_BALANCE'?'余额不足 · 本轮下单失败':'订单准备失败';el('pendingMeta').textContent=(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':'');btn.classList.add('hidden')}else{el('pendingTitle').textContent=currentPending.state==='QUOTING'?'正在获取最新 Quote...':'正在提交...';el('pendingMeta').textContent='请稍候，不要重复点击。';btn.classList.add('hidden')}
+const o=j.lastOrder;if(o){const filled=o.state==='CONFIRMED_FILLED'||Number(o.fillPercentage||0)>=1||Number(o.filledUsdtAmount||0)>0;const failed=o.state==='CONFIRMED_FAILED'||o.state==='PLACE_ERROR';const unknown=o.state==='SUBMISSION_UNKNOWN'||o.state==='RECONCILIATION_REQUIRED';if(filled){el('orderTitle').innerHTML='<span class="ok">币安已确认成交</span>'}else if(failed){el('orderTitle').innerHTML='<span class="bad">下单失败</span>'}else if(unknown){el('orderTitle').innerHTML='<span class="warn">提交结果未知 · 禁止重复下单</span>'}else{el('orderTitle').innerHTML='<span class="warn">已提交，等待币安确认</span>'}el('orderMeta').textContent='orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:'')}else{el('orderTitle').textContent='暂无';el('orderMeta').textContent='-' }}catch(e){el('switch').textContent='状态读取失败'}finally{refreshBusy=false}}
 async function setV(v){const a=Number(el('amount').value);if(v&&(!Number.isFinite(a)||a<1)){alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准');return}const r=await fetch('/api/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:v,amount:v?el('amount').value:undefined,pin:el('pin').value})});const j=await r.json();if(!r.ok){alert(j.error||'操作失败');return}refresh()}
 async function confirmOrder(){if(!currentPending||currentPending.state!=='READY')return;if(!confirm('确认提交真实订单：'+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT？\n确认后后台会即时获取最新 Quote 并立即提交。'))return;const btn=el('confirmBtn');btn.disabled=true;btn.textContent='正在获取最新 Quote 并提交...';const r=await fetch('/api/confirm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pin:el('pin').value,confirmationToken:currentPending.confirmationToken})});const j=await r.json();if(r.ok){alert('订单已提交，正在核验 Binance 成交状态。orderId：'+j.orderId)}else{alert((j.error||'下单失败')+(j.code!=null?' ('+j.code+')':''))}refresh()}
 refresh();setInterval(refresh,1000);
@@ -877,6 +907,203 @@ async function readBody(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
   try { return JSON.parse(raw || '{}'); } catch { return {}; }
+}
+
+
+async function processOrderConfirmation(res,body,{automatic=false}={}){
+  if(automatic && (!enabled || process.env.RENDER_TRADING_USER_ARMED!=='true' ||
+     process.env.AUTO_CONFIRM_ENABLED!=='true')){
+    return send(res,409,{ok:false,error:'自动跟随已经关闭'});
+  }
+
+    if (!automatic && !pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
+
+    const p = pendingAction;
+    if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
+    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置暂不可用'})}
+    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已切换，旧订单不可提交'});
+    if (body.confirmationToken !== p.confirmationToken) return send(res, 409, { ok: false, error: '订单确认令牌已失效，请刷新页面' });
+    if (submittedRounds.has(String(p.round))) return send(res, 409, { ok: false, error: '本轮已经提交过订单' });
+
+    p.state = 'QUOTING';
+    const quoteRequestStartedAt = Date.now();
+    const [current, freshQuote] = await Promise.all([
+      getSignal(),
+      getFreshQuote(p._internal),
+    ]);
+
+    if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current)) {
+      pendingAction = null;
+      return send(res, 409, { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' });
+    }
+
+    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置不可用'})}
+    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已变化，停止旧报价提交'});
+    if (!freshQuote.ok) {
+      p.state = 'READY';
+      p.error = freshQuote.error;
+      p.code = freshQuote.code ?? null;
+      console.log(JSON.stringify({
+        event: 'fresh_quote_failed',
+        round: p.round,
+        action: p.action,
+        error: freshQuote.error,
+        code: freshQuote.code ?? null,
+        httpStatus: freshQuote.httpStatus ?? null,
+      }));
+      return send(res, 502, freshQuote);
+    }
+
+    const quote = freshQuote.quote;
+    const expireAt = Number(quote.expireAt || 0);
+    const remainingMs = expireAt > 0 ? expireAt - Date.now() : null;
+    console.log(JSON.stringify({
+      event: 'fresh_quote_ready',
+      round: p.round,
+      action: p.action,
+      quoteId: quote.quoteId,
+      chance: quote.chance ?? null,
+      expireAt: quote.expireAt ?? null,
+      remainingMs,
+      quoteLatencyMs: freshQuote.receivedAt - freshQuote.startedAt,
+      confirmToQuoteMs: Date.now() - quoteRequestStartedAt,
+    }));
+
+    if (remainingMs !== null && remainingMs < 1200) {
+      p.state = 'READY';
+      p.error = '最新 Quote 剩余有效期不足，未提交。请在下一次按钮出现后更快确认。';
+      console.log(JSON.stringify({ event: 'fresh_quote_too_close_to_expiry', round: p.round, remainingMs, expireAt }));
+      return send(res, 409, { ok: false, error: p.error, expireAt, remainingMs });
+    }
+
+    p.state = 'SUBMITTING';
+    const intent = p._internal;
+    const placeBody = {
+      walletAddress: intent.wallet.walletAddress,
+      walletId: intent.wallet.walletId,
+      quoteId: quote.quoteId,
+      timeInForce: 'FOK',
+      accountType: intent.payment.accountType,
+      orderType: 'MARKET',
+      slippageBps: intent.slippageBps,
+      fundingSource: intent.payment.fundingSource,
+    };
+    if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
+
+    // STOP always takes effect before any actual external money-moving POST,
+    // including when the user presses it during fresh-quote acquisition.
+    if(!enabled||pendingAction!==p){
+      return send(res,409,{ok:false,error:'跟随已关闭，本次不会提交真实订单'});
+    }
+    const startedAt = new Date().toISOString();
+    const placeStartedAtMs = Date.now();
+    // Single successful claim before the only external money-moving POST.
+    // Redis CAS is fail-closed. Never retry an ambiguous Binance response.
+    try{
+      await claimOrderSubmitAttempt(p.round);
+    }catch(err){
+      p.state='PREPARE_ERROR';p.error='本轮已提交或订单状态未知，禁止重复提交';
+      return send(res,409,{ok:false,error:p.error,
+        reason:String(err?.message||err).slice(0,100)});
+    }
+    if(!enabled||pendingAction!==p){
+      // The unique round claim has been consumed. Never reuse it after STOP.
+      try{await closeOrderSubmitRound(p.round,'UNKNOWN')}catch{}
+      return send(res,409,{ok:false,error:'跟随已关闭，已取消提交，本轮不会重试'});
+    }
+    const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
+    const placeFinishedAtMs = Date.now();
+    try{
+      await closeOrderSubmitRound(p.round,call.ok&&call.data?.orderId?'SUBMITTED':'UNKNOWN');
+    }catch(err){
+      enabled=false;p.state='SUBMISSION_UNKNOWN';
+      console.error(JSON.stringify({event:'order_submit_ledger_close_failed',
+        round:p.round,reason:String(err?.message||err).slice(0,130)}));
+      return send(res,503,{ok:false,error:'订单状态未能记录，跟随已关闭，请核对币安原始订单'});
+    }
+
+    if (!call.ok) {
+      const err = asError(call, 'PREDICTION_PLACE_ORDER_FAILED');
+      const unknown = call.network || Number(call.status) >= 500;
+      p.state = unknown ? 'SUBMISSION_UNKNOWN' : 'PLACE_ERROR';
+      p.error = err.error;
+      p.code = err.code;
+      p.httpStatus = err.httpStatus;
+      lastOrder = {
+        state: p.state,
+        status: p.state,
+        orderId: null,
+        action: p.action,
+        amount: p.amount,
+        round: p.round,
+        error: err.error,
+        code: err.code,
+        startedAt,
+      };
+      console.log(JSON.stringify({
+        event: 'api_order_failed',
+        round: p.round,
+        action: p.action,
+        amount: p.amount,
+        quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
+        submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
+        ...err,
+      }));
+      return send(res, unknown ? 502 : 400, err);
+    }
+
+    const orderId = call.data?.orderId;
+    if (!orderId) {
+      p.state = 'SUBMISSION_UNKNOWN';
+      return send(res, 502, { ok: false, error: 'Binance 返回成功但缺少 orderId，状态未知，请勿重复提交' });
+    }
+
+    submittedRounds.add(String(p.round));
+    p.state = 'SUBMITTED_PENDING_CONFIRMATION';
+    p.quoteExpireAt = quote.expireAt ?? null;
+    p.quoteChance = quote.chance ?? null;
+    lastOrder = {
+      state: 'SUBMITTED_PENDING_CONFIRMATION',
+      status: 'PLACED_UNVERIFIED',
+      orderId: String(orderId),
+      action: p.action,
+      amount: p.amount,
+      round: p.round,
+      walletAddress: intent.wallet.walletAddress,
+      submittedAt: new Date().toISOString(),
+      fillPercentage: null,
+      filledUsdtAmount: null,
+      quoteExpireAt: quote.expireAt ?? null,
+      quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
+      submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
+    };
+
+    console.log(JSON.stringify({
+      event: 'api_order_submitted_pending_confirmation',
+      orderId: String(orderId),
+      round: p.round,
+      action: p.action,
+      amount: p.amount,
+      quoteRemainingAtSubmitMs: lastOrder.quoteRemainingAtSubmitMs,
+      submitLatencyMs: lastOrder.submitLatencyMs,
+    }));
+
+    setTimeout(() => refreshLastOrderStatus(true), 700);
+    setTimeout(() => refreshLastOrderStatus(true), 1800);
+    setTimeout(() => refreshLastOrderStatus(true), 3500);
+    return send(res, 202, { ok: true, orderId: String(orderId), state: 'SUBMITTED_PENDING_CONFIRMATION' });
+
+}
+
+function makeInternalOrderResult(){
+ let status=null;
+ return {writeHead(code){status=code;},end(raw){
+   let body={};try{body=JSON.parse(String(raw||'{}'))}catch{}
+   console.log(JSON.stringify({event:'auto_order_attempt_result',
+     httpStatus:status,ok:body.ok===true,state:body.state||null,
+     code:body.code??null,error:body.error??null,
+     orderId:body.orderId??null,at:new Date().toISOString()}));
+ }};
 }
 
 http.createServer(async (req, res) => {
@@ -892,7 +1119,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/healthz') {
     return send(res, 200, {
       ok: true,
-      mode: 'API_CONFIRM_LIVE',
+      mode: process.env.AUTO_CONFIRM_ENABLED==='true'?'AUTO_CONFIRM_LIVE':'MANUAL_CONFIRM_LIVE',
       quoteMode: 'FRESH_ON_CONFIRM',
       hasSiteOrigin: Boolean(SITE_ORIGIN),
       hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),
@@ -1011,6 +1238,9 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/control') {
     const body = await readBody(req);
+    if (body.enabled === true && process.env.RENDER_TRADING_USER_ARMED !== 'true') {
+      return send(res, 403, {ok:false,error:'实盘开关尚未获得部署授权'});
+    }
     if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
     const nextEnabled = Boolean(body.enabled);
     if (nextEnabled) {
@@ -1041,155 +1271,7 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/confirm') {
     const body = await readBody(req);
-    if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
-
-    const p = pendingAction;
-    if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
-    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置暂不可用'})}
-    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已切换，旧订单不可提交'});
-    if (body.confirmationToken !== p.confirmationToken) return send(res, 409, { ok: false, error: '订单确认令牌已失效，请刷新页面' });
-    if (submittedRounds.has(String(p.round))) return send(res, 409, { ok: false, error: '本轮已经提交过订单' });
-
-    p.state = 'QUOTING';
-    const quoteRequestStartedAt = Date.now();
-    const [current, freshQuote] = await Promise.all([
-      getSignal(),
-      getFreshQuote(p._internal),
-    ]);
-
-    if (!current || current.status !== 'LOCKED' || String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current)) {
-      pendingAction = null;
-      return send(res, 409, { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' });
-    }
-
-    try{await refreshModelSelection()}catch{return send(res,503,{ok:false,error:'下单模型选择配置不可用'})}
-    if(!selectedSignalMatches(p))return send(res,409,{ok:false,error:'下单信号源已变化，停止旧报价提交'});
-    if (!freshQuote.ok) {
-      p.state = 'READY';
-      p.error = freshQuote.error;
-      p.code = freshQuote.code ?? null;
-      console.log(JSON.stringify({
-        event: 'fresh_quote_failed',
-        round: p.round,
-        action: p.action,
-        error: freshQuote.error,
-        code: freshQuote.code ?? null,
-        httpStatus: freshQuote.httpStatus ?? null,
-      }));
-      return send(res, 502, freshQuote);
-    }
-
-    const quote = freshQuote.quote;
-    const expireAt = Number(quote.expireAt || 0);
-    const remainingMs = expireAt > 0 ? expireAt - Date.now() : null;
-    console.log(JSON.stringify({
-      event: 'fresh_quote_ready',
-      round: p.round,
-      action: p.action,
-      quoteId: quote.quoteId,
-      chance: quote.chance ?? null,
-      expireAt: quote.expireAt ?? null,
-      remainingMs,
-      quoteLatencyMs: freshQuote.receivedAt - freshQuote.startedAt,
-      confirmToQuoteMs: Date.now() - quoteRequestStartedAt,
-    }));
-
-    if (remainingMs !== null && remainingMs < 1200) {
-      p.state = 'READY';
-      p.error = '最新 Quote 剩余有效期不足，未提交。请在下一次按钮出现后更快确认。';
-      console.log(JSON.stringify({ event: 'fresh_quote_too_close_to_expiry', round: p.round, remainingMs, expireAt }));
-      return send(res, 409, { ok: false, error: p.error, expireAt, remainingMs });
-    }
-
-    p.state = 'SUBMITTING';
-    const intent = p._internal;
-    const placeBody = {
-      walletAddress: intent.wallet.walletAddress,
-      walletId: intent.wallet.walletId,
-      quoteId: quote.quoteId,
-      timeInForce: 'FOK',
-      accountType: intent.payment.accountType,
-      orderType: 'MARKET',
-      slippageBps: intent.slippageBps,
-      fundingSource: intent.payment.fundingSource,
-    };
-    if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
-
-    const startedAt = new Date().toISOString();
-    const placeStartedAtMs = Date.now();
-    const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
-    const placeFinishedAtMs = Date.now();
-
-    if (!call.ok) {
-      const err = asError(call, 'PREDICTION_PLACE_ORDER_FAILED');
-      const unknown = call.network || Number(call.status) >= 500;
-      p.state = unknown ? 'SUBMISSION_UNKNOWN' : 'PLACE_ERROR';
-      p.error = err.error;
-      p.code = err.code;
-      p.httpStatus = err.httpStatus;
-      lastOrder = {
-        state: p.state,
-        status: p.state,
-        orderId: null,
-        action: p.action,
-        amount: p.amount,
-        round: p.round,
-        error: err.error,
-        code: err.code,
-        startedAt,
-      };
-      console.log(JSON.stringify({
-        event: 'api_order_failed',
-        round: p.round,
-        action: p.action,
-        amount: p.amount,
-        quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
-        submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
-        ...err,
-      }));
-      return send(res, unknown ? 502 : 400, err);
-    }
-
-    const orderId = call.data?.orderId;
-    if (!orderId) {
-      p.state = 'SUBMISSION_UNKNOWN';
-      return send(res, 502, { ok: false, error: 'Binance 返回成功但缺少 orderId，状态未知，请勿重复提交' });
-    }
-
-    submittedRounds.add(String(p.round));
-    p.state = 'SUBMITTED_PENDING_CONFIRMATION';
-    p.quoteExpireAt = quote.expireAt ?? null;
-    p.quoteChance = quote.chance ?? null;
-    lastOrder = {
-      state: 'SUBMITTED_PENDING_CONFIRMATION',
-      status: 'PLACED_UNVERIFIED',
-      orderId: String(orderId),
-      action: p.action,
-      amount: p.amount,
-      round: p.round,
-      walletAddress: intent.wallet.walletAddress,
-      submittedAt: new Date().toISOString(),
-      fillPercentage: null,
-      filledUsdtAmount: null,
-      quoteExpireAt: quote.expireAt ?? null,
-      quoteRemainingAtSubmitMs: expireAt > 0 ? expireAt - placeStartedAtMs : null,
-      submitLatencyMs: placeFinishedAtMs - placeStartedAtMs,
-    };
-
-    console.log(JSON.stringify({
-      event: 'api_order_submitted_pending_confirmation',
-      orderId: String(orderId),
-      round: p.round,
-      action: p.action,
-      amount: p.amount,
-      quoteRemainingAtSubmitMs: lastOrder.quoteRemainingAtSubmitMs,
-      submitLatencyMs: lastOrder.submitLatencyMs,
-    }));
-
-    setTimeout(() => refreshLastOrderStatus(true), 700);
-    setTimeout(() => refreshLastOrderStatus(true), 1800);
-    setTimeout(() => refreshLastOrderStatus(true), 3500);
-    return send(res, 202, { ok: true, orderId: String(orderId), state: 'SUBMITTED_PENDING_CONFIRMATION' });
+    return processOrderConfirmation(res,body);
   }
 
   return send(res, 404, { ok: false, error: 'Not found' });
@@ -1197,7 +1279,7 @@ http.createServer(async (req, res) => {
   console.log(JSON.stringify({
     event: 'control_panel_started',
     port: PORT,
-    mode: 'API_CONFIRM_LIVE',
+    mode: process.env.AUTO_CONFIRM_ENABLED==='true'?'AUTO_CONFIRM_LIVE':'MANUAL_CONFIRM_LIVE',
     quoteMode: 'FRESH_ON_CONFIRM',
     hasSiteOrigin: Boolean(SITE_ORIGIN),
     hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),
@@ -1209,7 +1291,8 @@ http.createServer(async (req, res) => {
   console.log(JSON.stringify({
     event: 'prediction_balance_check',
     ok: lastBalance.ok,
-    items: lastBalance.items || [],
+    items: process.env.RENDER_MIGRATION_PREVIEW === 'true' ? [] : (lastBalance.items || []),
+    itemCount: Array.isArray(lastBalance.items) ? lastBalance.items.length : 0,
     error: lastBalance.error || null,
   }));
   await auditSettledHistoryTopics(['6374907','6374910']);

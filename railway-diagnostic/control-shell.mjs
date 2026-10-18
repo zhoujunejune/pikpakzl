@@ -148,27 +148,52 @@ function startInner() {
 }
 
 function proxy(req, res, { transformHtml = false } = {}) {
-  const headers = { ...req.headers, host: `127.0.0.1:${INNER_PORT}` };
-  const p = http.request({ hostname: '127.0.0.1', port: INNER_PORT, path: req.url, method: req.method, headers }, innerRes => {
-    if (!transformHtml) {
-      res.writeHead(innerRes.statusCode || 502, innerRes.headers);
-      innerRes.pipe(res);
-      return;
-    }
-    const chunks = [];
-    innerRes.on('data', c => chunks.push(c));
-    innerRes.on('end', () => {
-      const body = injectRiskControls(Buffer.concat(chunks).toString('utf8'));
-      const outHeaders = { ...innerRes.headers };
-      delete outHeaders['content-length'];
-      outHeaders['content-type'] = 'text/html; charset=utf-8';
-      outHeaders['cache-control'] = 'no-store';
-      res.writeHead(innerRes.statusCode || 200, outHeaders);
-      res.end(body);
+  // Render Free cold starts can expose the outer proxy before port 3001 listens.
+  // Retry only idempotent reads; NEVER replay a money-moving POST.
+  const safeRead = req.method === 'GET' || req.method === 'HEAD';
+  const maxRetries = safeRead ? 30 : 0;
+  const attempt = (n = 0) => {
+    if (res.destroyed || res.writableEnded) return;
+    const headers = { ...req.headers, host: `127.0.0.1:${INNER_PORT}` };
+    const p = http.request({ hostname: '127.0.0.1', port: INNER_PORT, path: req.url, method: req.method, headers }, innerRes => {
+      if (n) log('inner_control_proxy_recovered', { attempts:n, port:INNER_PORT });
+      if (!transformHtml) {
+        res.writeHead(innerRes.statusCode || 502, innerRes.headers);
+        innerRes.pipe(res);
+        return;
+      }
+      const chunks = [];
+      innerRes.on('data', c => chunks.push(c));
+      innerRes.on('end', () => {
+        if (res.destroyed || res.writableEnded) return;
+        const body = injectRiskControls(Buffer.concat(chunks).toString('utf8'));
+        const outHeaders = { ...innerRes.headers };
+        delete outHeaders['content-length'];
+        outHeaders['content-type'] = 'text/html; charset=utf-8';
+        outHeaders['cache-control'] = 'no-store';
+        res.writeHead(innerRes.statusCode || 200, outHeaders);
+        res.end(body);
+      });
     });
-  });
-  p.on('error', e => sendJson(res, 502, { ok: false, error: `内部控制台未就绪：${e.message}` }));
-  req.pipe(p);
+    p.on('error', e => {
+      if (safeRead && e?.code === 'ECONNREFUSED' && n < maxRetries &&
+          !res.headersSent && !res.destroyed) {
+        if (n === 0) log('inner_control_startup_wait', { port:INNER_PORT });
+        setTimeout(() => attempt(n + 1), 400).unref();
+        return;
+      }
+      if (!res.headersSent && !res.destroyed) {
+        res.setHeader('cache-control', 'no-store');
+        res.setHeader('retry-after', '2');
+        sendJson(res, 503, { ok:false,
+          error:'内部控制台暂未就绪，请稍后重试',
+          reason:e?.code || 'INNER_CONTROL_UNAVAILABLE' });
+      }
+    });
+    if (safeRead) p.end();
+    else req.pipe(p);
+  };
+  attempt();
 }
 
 startInner();

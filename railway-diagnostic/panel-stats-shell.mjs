@@ -4,13 +4,22 @@ import { noviceMixShadow } from './novice-mix-shadow.mjs';
 // EDGE_5M_V1 runs in an isolated Cloudflare Free Worker; this panel only reads its status.
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
+import { handleRenderPreviewAuth } from './render-preview-auth.mjs';
+
+// Explicitly tagged Render free preview only: seed missing OFF settings, never overwrite.
+if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+  await import('./render-preview-seed.mjs');
+}
 
 // RAILWAY_EGRESS_IP_READONLY_DIAG_20261014
 // One-shot startup diagnostic: no credentials, no trading API writes, no order changes.
 void (async () => {
   for (const [target, url] of [
     ['public_egress_ip', 'https://checkip.amazonaws.com/'],
-    ['binance_public_ping', 'https://api.binance.com/api/v3/ping'],
+    // Explicit opt-in only: Binance Spot REST currently returns 418 for Render egress.
+    ...(process.env.BINANCE_REST_PREFLIGHT === 'true'
+      ? [['binance_public_ping', 'https://api.binance.com/api/v3/ping']]
+      : []),
   ]) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(6500), cache: 'no-store' });
@@ -41,7 +50,10 @@ function log(event, extra = {}) {
   console.log(JSON.stringify({ event, shell: 'panel-stats', at: new Date().toISOString(), ...extra }));
 }
 
-const statsCard = `<div class="c" id="roundStatsCard">
+const statsCard = (process.env.RENDER_MIGRATION_PREVIEW === 'true' ?
+  (process.env.RENDER_TRADING_USER_ARMED === 'true' ?
+    '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费实例 · 交易控制已授权，默认关闭</strong><div style="color:#ccd4e0;margin-top:6px">需要你输入控制 PIN 手动启动。未校准信号无已证明的胜率优势；本服务可能休眠，Redis 不持久化，每轮提交限制无法跨数据丢失永久保证。真实成功仅按币安成交状态核验。</div></div>' :
+    '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费测试环境｜实盘下单关闭</strong><div style="color:#ccd4e0;margin-top:6px">PIN 登录后可查看只读余额与信号；原订单账本和 Z3 采集器尚未迁移。免费 Redis 不持久化，禁止实盘下单。</div></div>') : '') + `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
 <div class="muted" id="rsMeta">仅统计新版RSI(14)直接输出方向与币安预测市场官方结算的准确率；实际订单盈亏另行统计。</div>
@@ -56,6 +68,87 @@ const statsCard = `<div class="c" id="roundStatsCard">
 <div style="overflow:auto;max-height:460px;margin-top:12px;border:1px solid #2b313d;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px"><thead style="position:sticky;top:0;background:#151922;z-index:2"><tr style="text-align:left;color:#8f98a8"><th style="padding:8px 6px">轮次</th><th style="padding:8px 6px">生产判断</th><th style="padding:8px 6px">来源</th><th style="padding:8px 6px">强度 / 原始评分</th><th style="padding:8px 6px">耗时</th><th style="padding:8px 6px">官方结果</th><th style="padding:8px 6px">命中结果</th><th style="padding:8px 6px">官方结算证据</th></tr></thead><tbody id="rsRows"><tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">读取中...</td></tr></tbody></table></div>
 <div class="muted" style="margin-top:10px">有置信度时显示接口原值；置信度缺失但有 score 时，显示原始评分绝对值（未校准，非概率、非预测胜率，不同模型之间不可直接比较）；两者均缺失则标记“未提供”或“兜底无评分”。真实结果仅按 Binance Prediction 官方结算。</div>
 </div>`;
+
+// Independent EDGE read-only statistics. Always visible, regardless of the
+// active order-signal selection or the disabled trading preview controls.
+const edgeIndependentCard = `<div class="c" id="edgeIndependentCard" style="border:1px solid #34445a">
+<div class="k">EDGE_5M_V1 · 固定模型独立统计</div>
+<div class="big" id="edgeAlwaysHeadline" style="font-size:21px">正在读取 EDGE 官方结算...</div>
+<div class="muted" id="edgeAlwaysNote">训练已停止 · 保留历史记录 · 继续预测及按 Binance Prediction 官方结算统计 · 非实盘成交结果</div>
+<div class="grid" style="margin-top:12px">
+<div class="kv"><div class="k">官方已结算 / 总胜率</div><div class="v" id="edgeAlwaysOverall">-</div></div>
+<div class="kv"><div class="k">命中 / 未命中</div><div class="v" id="edgeAlwaysHitMiss">-</div></div>
+<div class="kv"><div class="k">UP 胜率</div><div class="v" id="edgeAlwaysUp">-</div></div>
+<div class="kv"><div class="k">DOWN 胜率</div><div class="v" id="edgeAlwaysDown">-</div></div>
+<div class="kv"><div class="k">待官方结算</div><div class="v" id="edgeAlwaysPending">-</div></div>
+<div class="kv"><div class="k">已锁定 / 观察轮次</div><div class="v" id="edgeAlwaysCoverage">-</div></div>
+</div>
+<div class="muted" style="margin-top:12px">EDGE 最近 30 轮（包括待结算），独立于下单模型选择</div>
+<div style="overflow-x:auto;max-height:340px;margin-top:7px;border:1px solid #2b313d;border-radius:9px">
+<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:365px">
+<thead><tr style="text-align:left;color:#a8b0bd"><th>轮次</th><th>预测</th><th>官方</th><th>结果</th></tr></thead>
+<tbody id="edgeAlwaysRows"><tr><td colspan="4">正在加载历史记录...</td></tr></tbody></table>
+</div>
+<div class="muted" style="margin-top:9px">官方未结算轮次不纳入胜率；仅按此前锁定方向计算预测命中率，不等于真实订单盈利概率。</div>
+</div>`;
+
+const edgeIndependentScript = `<script>(function(){
+'use strict';
+function node(id){return document.getElementById(id);}
+function update(id,value){var el=node(id);if(el)el.textContent=String(value);}
+function rate(group){var n=Number(group?.samples||0),hits=Number(group?.hits||0);
+ return n?(100*hits/n).toFixed(2)+'%（'+hits+'/'+n+'）':'暂无已结算';}
+function clock(ms){var t=Number(ms);if(!Number.isFinite(t)||t<=0)return '-';
+ return new Date(t).toLocaleString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});}
+var busy=false;
+async function reload(){
+ if(busy)return;busy=true;
+ try{
+  var response=await fetch('/api/shadow-breakout20/edge-5m?ts='+Date.now(),{cache:'no-store'});
+  if(response.status===401){update('edgeAlwaysHeadline','请重新登录查看 EDGE 统计');return;}
+  if(!response.ok)throw Error('EDGE 状态 HTTP '+response.status);
+  var d=await response.json();
+  if(d?.ok!==true||d?.model!=='EDGE_5M_V1'||
+     d?.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')
+   throw Error('EDGE 官方统计来源未就绪');
+  var r=d.results||{},overall=r.overall||{},up=r.up||{},down=r.down||{};
+  var n=Number(overall.samples||0),hits=Number(overall.hits||0);
+  update('edgeAlwaysHeadline','EDGE 模型 · 自动试训练 · 官方结算记录');
+  update('edgeAlwaysOverall',rate(overall));
+  update('edgeAlwaysHitMiss',hits+' / '+Math.max(0,n-hits)+'（'+n+'轮）');
+  update('edgeAlwaysUp',rate(up));update('edgeAlwaysDown',rate(down));
+  update('edgeAlwaysPending',Number(r.pending||0)+' 轮');
+  update('edgeAlwaysCoverage',Number(r.locked||0)+' / '+Number(r.observedRounds||0));
+  var note='真实官方结算 · 仅统计已冻结预测 · 自动实盘交易未启用';
+  if(d.health?.officialError)note+=' · 结算异常：'+String(d.health.officialError).slice(0,80);
+  if(d.health?.marketError)note+=' · 行情提示：'+String(d.health.marketError).slice(0,80);
+  update('edgeAlwaysNote',note);
+  var body=node('edgeAlwaysRows');if(!body)return;
+  body.replaceChildren();
+  var records=Array.isArray(d.recent)?d.recent.slice(0,30):[];
+  if(!records.length){var tr=document.createElement('tr'),td=document.createElement('td');
+   td.colSpan=4;td.textContent='暂无 EDGE 历史预测';tr.append(td);body.append(tr);return;}
+  for(var item of records){
+   var pred=['UP','DOWN'].includes(item.direction)?item.direction:null;
+   var actual=['UP','DOWN'].includes(item.actual)?item.actual:null;
+   var vals=[clock(item.round),pred||'未锁定',actual||'待结算',
+     !pred?'无效预测':!actual?'待结算':pred===actual?'命中':'未命中'];
+   var row=document.createElement('tr');
+   for(var i=0;i<vals.length;i++){var cell=document.createElement('td');
+    cell.textContent=vals[i];cell.style.padding='8px 4px';
+    cell.style.borderTop='1px solid #303846';
+    if(i===3&&actual&&pred)cell.style.color=pred===actual?'#3ddc84':'#ff6868';
+    row.append(cell);}
+   body.append(row);
+  }
+ }catch(err){update('edgeAlwaysHeadline','EDGE 统计读取异常');
+   update('edgeAlwaysNote',String(err?.message||err).slice(0,140));
+ }finally{busy=false;}
+}
+function boot(){reload();setInterval(reload,8000);}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);
+else boot();
+})();</script>`;
 
 const previewCard = `<div class="c" id="waitVisibilityCard">
 <div class="k">实时方向观察 · 生产交易严格分离</div>
@@ -294,8 +387,12 @@ async function renderEdgeRoundStats(){
  e('rsCorrect').textContent=hits;e('rsWrong').textContent=n-hits;
  e('rsWait').textContent=Number(r.observedRounds||0)-Number(r.locked||0);
  e('rsCoverage').textContent=r.observedRounds?(100*Number(r.locked||0)/r.observedRounds).toFixed(2)+'%':'-';
- e('rsMeta').textContent='EDGE_5M_V1 · 官方结算独立统计 · '+Number(d.training?.samples||0)+'/5000轮训练 · '+
-   (d.training?.ready?'概率已校准，实际下单仍须核对价格与Edge':'概率未校准，方向仅研究观察，不执行实盘');
+ var up=r.up||{},down=r.down||{};
+ var percentOf=function(group){var count=Number(group.samples||0),hit=Number(group.hits||0);
+   return count?(100*hit/count).toFixed(2)+'%（'+hit+'/'+count+'）':'暂无结算';};
+ e('rsMeta').textContent='EDGE_5M_V1 · 真实样本持续训练 · 仍须前瞻验证 · '+
+   '总胜率 '+percentOf(v)+' · UP '+percentOf(up)+' · DOWN '+percentOf(down)+
+   ' · 待结算 '+Number(r.pending||0)+' 轮 · 实盘未启用';
  var rows=Array.isArray(d.recent)?d.recent.slice(0,30):[];
  e('rsRows').innerHTML=rows.length?rows.map(function(x){
   var actual=x.actual==='UP'||x.actual==='DOWN'?x.actual:null,dir=x.direction;
@@ -416,6 +513,17 @@ async function renderNoviceRoundStats(){
  }).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">新手混合模型尚无独立轮次记录</td></tr>';
 }
 async function load(){
+ // EDGE official ledger is independent of the V2/Breakout mode and must never
+ // be overwritten by the generic or legacy stats updater.
+ if(globalThis.__orderModelStatsSelection==='EDGE_5M_V1'){
+  try{await renderEdgeRoundStats();}
+  catch(err){
+   e('rsAccuracy').textContent='EDGE 官方结算统计暂不可用';
+   e('rsMeta').textContent=String(err?.message||err);
+   e('rsRows').innerHTML='<tr><td colspan="8">无法读取 EDGE 独立历史记录</td></tr>';
+  }
+  return;
+ }
  // Only the two currently selectable 8-second models use the reset ledger.
  // Keep the historical legacy diagnostics runnable when testing other production modes.
  if(globalThis.__orderModelStatsSelection==='DYNAMIC_ENTRY_5M_SHADOW_V1'){
@@ -519,13 +627,13 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
   <select id="orderSignalModelSelect" aria-label="选择真实下单信号模型"
     style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
     <option value="BREAKOUT20_RSI_MACD_RANGE_V1">BASELINE · RSI(14)单指标</option>
-    <option value="EDGE_5M_V1">EDGE_5M_V1 · 8秒内概率优势</option>
+    <option value="EDGE_5M_V1">EDGE_5M_V1 · 真实行情8秒锁定</option>
   </select>
   <button id="orderSignalModelSave" type="button"
     style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
-  <div class="muted" style="margin-top:7px">生产下拉框仅保留 BASELINE 与 EDGE_5M_V1。基线复用原 RSI 行情输入，不再展示退役 NOVICE/DYNAMIC 策略。EDGE 目前前8秒观察方向，只有独立官方样本达到5000轮且概率校准通过、买入价和Edge均达标才允许提交订单；数据不足或行情异常只显示观察、不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
+  <div class="muted" style="margin-top:7px">生产下拉框仅保留 BASELINE 与 EDGE_5M_V1。基线复用原 RSI 行情输入，不再展示退役 NOVICE/DYNAMIC 策略。EDGE 必须按真实行情前8秒锁定；训练样本和概率校准只供统计，不阻止你手动授权的跟随。报价无效、无有效锁定或开关关闭时仍不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
 </div>
 <div id="liveOrderFlowCard" role="region" aria-label="本轮交易进度" style="border:1px solid #4e6079;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
  <div style="font-size:16px;font-weight:800">本轮交易进度 · 不等于模型胜率</div>
@@ -614,7 +722,7 @@ async function loadOrderModelStats(){
    (v.samples?(Number(v.accuracy)*100).toFixed(2)+'% ('+v.hits+'/'+v.samples+')':'暂无已结算')+
    ' · UP '+(r.up&&r.up.samples?(Number(r.up.accuracy)*100).toFixed(2)+'%':'暂无')+
    ' · DOWN '+(r.down&&r.down.samples?(Number(r.down.accuracy)*100).toFixed(2)+'%':'暂无')+
-   ' · '+(chosenOrderModel==='EDGE_5M_V1'?'训练 '+Number(data.training?.samples||0)+'/5000 · '+(data.training?.ready?'已校准':'尚未校准 · 不发实盘订单'):
+   ' · '+(chosenOrderModel==='EDGE_5M_V1'?'训练中 · 已结算 '+Number(v.samples||0)+' 轮 · 实盘未启用':
  chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'模拟入场 '+Number(r.entryRounds||0):
  '锁定 '+Number(r.locked||0))+' 轮';
  }catch(err){e('orderSignalModelStats').textContent='所选模型胜率读取失败（不改变下单选择）';}
@@ -776,9 +884,8 @@ async function renderEdgePrimary(){
  var now=Math.floor(Date.now()/300000)*300000,latest=d.latest?.round===now?d.latest:null;
  activeCatalog=[{id:'EDGE_5M_V1',name:'EDGE 5分钟概率优势',source:'SELECTIVE_V2_FAST8_PRIMARY',version:'EDGE5_CAUSAL_V1',active:true}];
  e('activeFast8Name').textContent='EDGE_5M_V1 · 第四套独立策略';
- e('activeFast8Desc').textContent='前8秒真实现货/合约订单簿和主动成交特征 · 官方结果训练 '+
-   Number(d.training?.samples||0)+'/5000 · '+
-   (d.training?.ready?'已校准，实盘须再通过实时价格和Edge':'未通过校准：只显示方向，不提交实盘订单');
+ e('activeFast8Desc').textContent='前8秒真实行情预测 · 训练已停止，模型参数固定 · 已结算 '+
+   n+' 轮 · 继续记录总胜率、UP和DOWN胜率 · 实盘未启用';
  e('activeFast8Direction').textContent=latest?latest.direction+'（'+(latest.executionEligible?'已校准':'仅观察')+'）':
    '本轮行情不足或未锁定';
  e('activeFast8Accuracy').textContent=n?pct(100*hits/n):'暂无官方结算';
@@ -1095,14 +1202,14 @@ async function updateOrderSignal(){
      '动态入场有冻结候选，但未通过实盘有效性校验'):
    dynamicMode&&dynamic?.health?.marketError?'动态行情异常：'+String(dynamic.health.marketError):
    dynamicMode?'等待动态入场触发（方向不是锁定信号）':
-   edgeMode?(edge?.latest?.round===round?'EDGE已有方向，但未完成校准或风控，不下单':
+   edgeMode?(edge?.latest?.round===round?'EDGE已有方向，但实时锁定或执行证据未通过':
      'EDGE数据不足或未锁定，不下单'):
    '等待本轮8秒有效锁定';
   put('flowLocked',lockMessage);
   put('activeFast8EmittedDirection',locked?
-   signal.direction+'（'+(dynamicMode?'5分钟动态冻结':edgeMode?'EDGE已校准8秒锁定':'RSI 8秒锁定')+'）':lockMessage);
+   signal.direction+'（'+(dynamicMode?'5分钟动态冻结':edgeMode?'EDGE真实行情8秒锁定':'RSI 8秒锁定')+'）':lockMessage);
   if(edgeMode)put('activeFast8Direction',
-    ['UP','DOWN'].includes(preview)?preview+' · '+(edge?.latest?.executionEligible?'已校准':'未校准，仅参考'):'没有有效EDGE方向');
+    ['UP','DOWN'].includes(preview)?preview+' · '+(edge?.latest?.executionEligible?'有效锁定':'未满足有效锁定条件'):'没有有效EDGE方向');
   if(dynamicMode&&dynamic)put('activeFast8Direction',
     ['UP','DOWN'].includes(preview)?preview+' · 动态模型方向参考':'尚无当前轮次方向');
   var side=e('activeFast8OrderDirection'),mode=j.orderMappingMode;
@@ -1197,8 +1304,36 @@ function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
   let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${shadowCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}${shadowCard}</body>`);
+  const inputsMarker='<div class="c" id="tradeInputsCard">';
+  if(out.includes(inputsMarker)){
+    out=out.replace(inputsMarker,edgeIndependentCard+inputsMarker);
+  }else{
+    out=out.replace('<div id="riskControlsAnchor"></div>',
+      edgeIndependentCard+'<div id="riskControlsAnchor"></div>');
+  }
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    const notice = '<h2>5分钟 · Render 信号测试台</h2>' +
+      '<form method="POST" action="/auth/logout"><button type="submit" style="padding:8px;max-width:150px;background:#344155;color:#fff;font-size:13px">退出登录</button></form>' +
+      '<div class="c" role="status" style="border:1px solid #eab308">' +
+      '<div class="big" style="color:#eab308;font-size:19px">Render 免费预览 · 实盘未启用</div>' +
+      '<div class="muted" style="margin-top:8px">已启用 PIN 登录，可查看实际币安只读余额。实盘交易仍保持关闭。' +
+      '原 Railway 订单历史尚未迁移。预测信号和模型数据不代表交易已成交。' +
+      '免费实例会休眠，免费 Redis 不持久化，暂不能承担实盘。</div></div>';
+    out = out.replace('<h2>5分钟 API 实盘确认控制台</h2>', notice);
+    out = out.replace('<span class="bad">读取失败</span>', '<span class="warn">交易账户未接入</span>');
+    if(process.env.RENDER_TRADING_USER_ARMED==='true'){
+      out=out.replace('Render 免费预览 · 实盘未启用',
+        '用户授权交易控制 · 跟随默认关闭');
+      out=out.replace('已启用 PIN 登录，可查看实际币安只读余额。实盘交易仍保持关闭。原 Railway 订单历史尚未迁移。预测信号和模型数据不代表交易已成交。免费实例会休眠，免费 Redis 不持久化，暂不能承担实盘。',
+        '已保留 PIN 登录。仅当你手动开启跟随且选择的方向开关允许时，后台才会尝试真实下单。EDGE 未完成概率校准，不能据此判断真实胜率；Render 免费实例可能休眠，订单去重 Redis 不持久化。');
+    }else{
+      out = out.replace('<button class="start" onclick="setV(true)">开始跟随（自动提交，下一轮生效）</button>',
+        '<button class="start" disabled title="Render 预览期禁止实盘" style="opacity:.5;cursor:not-allowed">开始跟随（测试期禁用）</button>');
+    }
+    out = out.replace('检测 Railway 出口 IP（只读）', '检测 Render 出口 IP（只读）');
+  }
   out = out.replace('</head>', layoutStabilityStyle+'</head>');
-  return out.replace('</body>', `${primaryScript}${statsScript}${shadowScript}</body>`);
+  return out.replace('</body>', `${edgeIndependentScript}${primaryScript}${statsScript}${shadowScript}</body>`);
 }
 
 let child = null;
@@ -1214,19 +1349,55 @@ function startInner() {
 }
 
 function proxyInner(req, res, transformHtml = false) {
-  const headers = { ...req.headers, host: `127.0.0.1:${INNER_PANEL_PORT}` };
-  const p = http.request({ hostname: '127.0.0.1', port: INNER_PANEL_PORT, path: req.url, method: req.method, headers }, innerRes => {
-    if (!transformHtml) { res.writeHead(innerRes.statusCode || 502, innerRes.headers); innerRes.pipe(res); return; }
-    const chunks = [];
-    innerRes.on('data', c => chunks.push(c));
-    innerRes.on('end', () => {
-      const body = injectStats(Buffer.concat(chunks).toString('utf8'));
-      const outHeaders = { ...innerRes.headers }; delete outHeaders['content-length']; outHeaders['content-type'] = 'text/html; charset=utf-8'; outHeaders['cache-control'] = 'no-store';
-      res.writeHead(innerRes.statusCode || 200, outHeaders); res.end(body);
+  // Port 3002 is a second independently started child process. On a Render
+  // cold start, never return an immediate 502 for idempotent page/status GETs.
+  const safeRead = req.method === 'GET' || req.method === 'HEAD';
+  const maxRetries = safeRead ? 30 : 0;
+  const attempt = (n = 0) => {
+    if (res.destroyed || res.writableEnded) return;
+    const headers = { ...req.headers, host: `127.0.0.1:${INNER_PANEL_PORT}` };
+    const p = http.request({ hostname:'127.0.0.1', port:INNER_PANEL_PORT, path:req.url, method:req.method, headers }, innerRes => {
+      if (n) log('inner_panel_proxy_recovered', { attempts:n, port:INNER_PANEL_PORT });
+      if (!transformHtml) {
+        res.writeHead(innerRes.statusCode || 502, innerRes.headers);
+        innerRes.pipe(res);
+        return;
+      }
+      const chunks = [];
+      innerRes.on('data', c => chunks.push(c));
+      innerRes.on('end', () => {
+        if (res.destroyed || res.writableEnded) return;
+        const body = injectStats(Buffer.concat(chunks).toString('utf8'));
+        const outHeaders = { ...innerRes.headers };
+        delete outHeaders['content-length'];
+        outHeaders['content-type'] = 'text/html; charset=utf-8';
+        outHeaders['cache-control'] = 'no-store';
+        res.writeHead(innerRes.statusCode || 200, outHeaders);
+        res.end(body);
+      });
     });
-  });
-  p.on('error', err => { res.writeHead(502, { 'content-type':'application/json; charset=utf-8' }); res.end(JSON.stringify({ ok:false, error:`内部控制台未就绪：${err.message}` })); });
-  req.pipe(p);
+    p.on('error', err => {
+      if (safeRead && err?.code === 'ECONNREFUSED' && n < maxRetries &&
+          !res.headersSent && !res.destroyed) {
+        if (n === 0) log('inner_panel_startup_wait', { port:INNER_PANEL_PORT });
+        setTimeout(() => attempt(n + 1), 400).unref();
+        return;
+      }
+      if (!res.headersSent && !res.destroyed) {
+        res.writeHead(503, {
+          'content-type':'application/json; charset=utf-8',
+          'cache-control':'no-store',
+          'retry-after':'2',
+        });
+        res.end(JSON.stringify({ok:false,
+          error:'内部控制台暂未就绪，请稍后重试',
+          reason:err?.code||'INNER_PANEL_UNAVAILABLE'}));
+      }
+    });
+    if (safeRead) p.end();
+    else req.pipe(p);
+  };
+  attempt();
 }
 
 async function fetchStatsOrigin(origin, timeoutMs, label) {
@@ -1387,6 +1558,21 @@ async function binanceOfficialReadOnlyProbe(req, res) {
 startInner();
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (handleRenderPreviewAuth(req,res,url)) return;
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    const mutating=req.method!=='GET'&&req.method!=='HEAD';
+    // Keep the PIN session gateway even when owner explicitly arms trading.
+    // Only four PIN-validated order-control routes are accepted; all other
+    // requests continue to fail closed on free Render.
+    const permitted = process.env.RENDER_TRADING_USER_ARMED==='true' &&
+      req.method==='POST' &&
+      ['/api/control','/api/confirm','/api/order-signal-model',
+       '/api/direction-mode'].includes(url.pathname);
+    if(mutating&&!permitted){
+      res.writeHead(403,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      return res.end(JSON.stringify({ok:false,error:'RENDER_TRADING_NOT_ARMED_OR_ROUTE_NOT_ALLOWED'}));
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
@@ -1455,6 +1641,48 @@ http.createServer((req, res) => {
           responseDataType:result.responseDataType ?? null});
       } catch (err) { log('binance_official_singapore_probe', {ok:false,error:err?.name || 'REQUEST_FAILED'}); }
     }, 3000).unref();
+  }
+
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    // Server-side smoke check: anonymous visitors must never reach funds or data.
+    setTimeout(async () => {
+      const base='http://127.0.0.1:'+PORT;
+      try {
+        const [front,status,login,health]=await Promise.all([
+          fetch(base+'/',{redirect:'manual',signal:AbortSignal.timeout(3000)}),
+          fetch(base+'/api/status',{redirect:'manual',signal:AbortSignal.timeout(3000)}),
+          fetch(base+'/auth/login',{redirect:'manual',signal:AbortSignal.timeout(3000)}),
+          fetch(base+'/healthz',{redirect:'manual',signal:AbortSignal.timeout(3000)})
+        ]);
+        const ok=front.status===303 && front.headers.get('location')==='/auth/login' &&
+          status.status===401 && login.status===200 && health.status===200;
+        log('render_pin_gateway_smoke',{ok,anonymousFront:front.status,
+          anonymousStatus:status.status,login:login.status,health:health.status});
+        if(!ok)log('render_pin_gateway_smoke_failed',{reason:'UNEXPECTED_ANONYMOUS_HTTP_STATUS'});
+      } catch(e){log('render_pin_gateway_smoke_failed',{reason:String(e?.message||e).slice(0,120)});}
+    },2200).unref();
+    setTimeout(async () => {
+      for (const route of ['/api/order-signal-model','/api/direction-mode',
+        '/api/shadow-breakout20/edge-5m','/api/status']) {
+        try {
+          const response = await fetch('http://127.0.0.1:' + PORT + route, {
+            cache:'no-store',signal:AbortSignal.timeout(7000)
+          });
+          const data = await response.json();
+          log('render_preview_readonly_check', {
+            route,httpStatus:response.status,apiOk:data?.ok===true,
+            modelChoiceReady:data?.ready??data?.orderSignalModelReady??null,
+            directionModeReady:data?.directionModeReady??null,
+            model:data?.model??data?.orderSignalModel??null,
+            signalStatus:data?.signal?.status??null,
+            edgeReadOnly:data?.model==='EDGE_5M_V1'?data?.readOnly===true:null,
+            error:data?.error??null
+          });
+        } catch (error) {
+          log('render_preview_readonly_check',{route,error:String(error?.message||error).slice(0,160)});
+        }
+      }
+    }, 14000).unref();
   }
   setTimeout(refreshStatsCache, 300).unref();
   setInterval(refreshStatsCache, 1000).unref();

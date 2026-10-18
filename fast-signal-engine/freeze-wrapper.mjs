@@ -42,4 +42,60 @@ void (async () => {
   }
 })();
 
+// Migration-branch-only diagnostics; results are read-only and independent of signal decisions.
+void import('./render-migration-readonly-preflight.mjs').catch(e=>
+  console.warn(JSON.stringify({event:'render_migration_preflight_load_failed',error:String(e?.message||e).slice(0,120)})));
+// Cloudflare Worker inspection runs only if the user provides the two values
+// in Render's encrypted environment. It makes GET requests only: no deployment.
+if (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) {
+  void import('./cloudflare-worker-audit.mjs').catch(e=>
+    console.warn(JSON.stringify({event:'cloudflare_worker_audit_import_failed',
+      errorType:String(e?.name||'UNKNOWN').slice(0,50)})));
+}
+// Explicit, single-purpose Cloudflare API repair, only enabled by
+// an owner-supplied temporary Render environment flag. Never submits orders.
+if(process.env.CF_REPAIR_STAGE==='edge-official'){
+  void import('./cloudflare-edge-official-repair.mjs').catch(e=>
+    console.warn(JSON.stringify({event:'cloudflare_edge_repair_import_failed',
+      reason:String(e?.message||e).slice(0,100)})));
+}
+// One-shot, public-only WebSocket klines experiment to recover spot history
+// without using REST on the banned Render shared egress.
+if(process.env.RENDER_WS_KLINE_HISTORY_PROBE==='true'){
+  void import('./binance-ws-history-probe.mjs').catch(e=>
+    console.log(JSON.stringify({event:'binance_ws_history_probe_module_error',
+      errorType:String(e?.name||'UNKNOWN').slice(0,70)})));
+}
+// One-time, owner-requested training freeze. This changes no order behavior.
+if(process.env.CF_REPAIR_STAGE==='edge-training-freeze'){
+  void import('./cloudflare-edge-training-freeze.mjs').catch(e=>
+    console.warn(JSON.stringify({event:'edge_training_freeze_import_failed',
+      reason:String(e?.message||e).slice(0,120)})));
+}
+// One-shot signed GET verification after startup; never invokes order-writing APIs.
+// Only status codes/counts returned by the existing redacted diagnostic endpoint are logged.
+if (process.env.RENDER_MIGRATION_PREVIEW === 'true' &&
+    process.env.RENDER_AUTH_READONLY_CHECK !== 'false') {
+  setTimeout(async () => {
+    try {
+      const r=await fetch('http://127.0.0.1:' + (process.env.PORT || '10000') +
+        '/api/official-settlement-source-diagnostic', {
+        cache:'no-store',signal:AbortSignal.timeout(18000)
+      });
+      const data=await r.json();
+      const short=x=>({
+        ok:x?.ok===true,httpStatus:Number(x?.httpStatus)||0,
+        binanceCode:x?.binanceCode??null,itemCount:Number(x?.itemCount)||0,
+        btcusdt5mItems:Number(x?.btcusdt5mItems)||0,
+        shape:x?.shape??null,errorType:x?.errorType??null
+      });
+      console.log(JSON.stringify({event:'render_authenticated_prediction_readonly_check',
+        httpStatus:r.status,credentialsConfigured:data?.credentialsConfigured===true,
+        list:short(data?.list),search:short(data?.search)}));
+    } catch (e) {
+      console.log(JSON.stringify({event:'render_authenticated_prediction_readonly_check',
+        error:String(e?.message||e).slice(0,160)}));
+    }
+  }, 12000).unref();
+}
 await import('./index.mjs');

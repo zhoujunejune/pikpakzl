@@ -46,6 +46,29 @@ const STRATEGY_VERSION = 'REGIME_LAYER_V6_QUALITY_GATED_5M';
 const PREDICTION_API = 'https://api.binance.com';
 const PREDICTION_API_KEY = String(process.env.BINANCE_PREDICTION_API_KEY || '');
 const PREDICTION_API_SECRET = String(process.env.BINANCE_PREDICTION_API_SECRET || '');
+
+let predictionRestBlockedUntil = 0;
+function predictionBackoff(status, headers, data) {
+  if (status !== 429 && status !== 418) return;
+  const now = Date.now();
+  const retryHeader = String(headers.get('retry-after') || '').trim();
+  let until = 0;
+  if (/^\d+$/.test(retryHeader)) {
+    until = now + Math.min(Number(retryHeader) * 1000, 259200000);
+  } else if (retryHeader) {
+    const date = Date.parse(retryHeader);
+    if (Number.isFinite(date)) until = date;
+  }
+  const msg = String(data?.msg || '');
+  const banUntil = msg.match(/banned until\s+(\d{13})/i);
+  if (banUntil) until = Math.max(until, Number(banUntil[1]));
+  const fallback = now + (status === 418 ? 10 * 60000 : 2 * 60000);
+  predictionRestBlockedUntil = Math.max(predictionRestBlockedUntil, until > now ? until : fallback);
+  console.warn(JSON.stringify({event:'binance_rest_backoff',status,
+    until:new Date(predictionRestBlockedUntil).toISOString(),
+    source:until > now?'RETRY_AFTER_OR_BAN_UNTIL':'CONSERVATIVE_FALLBACK'}));
+}
+
 const PREDICTION_REFRESH_MS = Math.max(1000, Number(process.env.PREDICTION_MARKET_REFRESH_MS || 3000));
 const PREDICTION_BOOK_STALE_MS = Math.max(1000, Number(process.env.PREDICTION_BOOK_STALE_MS || 5000));
 const LATE_CONSENSUS_START_MS = Math.max(16000, Number(process.env.V6_LATE_CONSENSUS_START_MS || 18000));
@@ -127,6 +150,8 @@ let prevDepthBidQty = null;
 let prevDepthAskQty = null;
 let lastDepthUpdateId = null;
 let lastDepthAt = 0;
+let edgeSpotDepthBids = [];
+let edgeSpotDepthAsks = [];
 
 const trades = [];
 const prices = [];
@@ -297,6 +322,9 @@ function predictionSign(query) {
 }
 
 async function signedPredictionGet(path, params = {}) {
+  if (Date.now() < predictionRestBlockedUntil) {
+    return {ok:false,status:418,data:{msg:'BINANCE_REST_COOLDOWN'},error:'BINANCE_REST_COOLDOWN'};
+  }
   if (!PREDICTION_API_KEY || !PREDICTION_API_SECRET) {
     return { ok: false, status: 500, data: { msg: 'PREDICTION_API_CREDENTIALS_MISSING' } };
   }
@@ -307,8 +335,15 @@ async function signedPredictionGet(path, params = {}) {
     }
     q.append('timestamp', String(Date.now()));
     q.append('recvWindow', '5000');
-    q.append('signature', predictionSign(q.toString()));
-    const r = await fetch(PREDICTION_API + path + '?' + q.toString(), {
+    // Binance's 2026 signed endpoints expect percent-encoded signed payloads.
+    // URLSearchParams encodes a space as '+', but Prediction market/search
+    // verifies the percent-encoded representation. Sign and transmit identical bytes.
+    const rawQuery = q.toString();
+    const unsignedQuery = path.endsWith('/market/search')
+      ? rawQuery.split('+').join('%20')
+      : rawQuery;
+    const signedQuery = unsignedQuery + '&signature=' + predictionSign(unsignedQuery);
+    const r = await fetch(PREDICTION_API + path + '?' + signedQuery, {
       headers: { 'X-MBX-APIKEY': PREDICTION_API_KEY },
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
@@ -316,6 +351,7 @@ async function signedPredictionGet(path, params = {}) {
     const text = await r.text();
     let data;
     try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 500) }; }
+    predictionBackoff(r.status, r.headers, data);
     return { ok: r.ok, status: r.status, data };
   } catch (e) {
     return { ok: false, status: 0, data: null, error: e?.message || String(e) };
@@ -1378,6 +1414,36 @@ function calculate(now = Date.now()) {
   };
 }
 
+// Retain only authentically CLOSED BTCUSDT spot klines delivered by Binance WS.
+// A restarted/free instance must rebuild warmup; missing history is never fabricated.
+const shadowClosedKlines = {'1m':new Map(),'5m':new Map()};
+function recordShadowClosedKline(interval,k) {
+  if(k?.x!==true)return;
+  const step=interval==='1m'?60000:300000;
+  const startMs=Number(k.t);
+  const endMs=Number(k.T);
+  const open=Number(k.o),high=Number(k.h),low=Number(k.l),
+    close=Number(k.c),volume=Number(k.v);
+  if(!Number.isSafeInteger(startMs)||startMs%step!==0||
+     !Number.isSafeInteger(endMs)||Math.abs(endMs-(startMs+step-1))>2||
+     ![open,high,low,close,volume].every(Number.isFinite)||
+     Math.min(open,high,low,close)<=0||volume<0||
+     high<Math.max(open,close)||low>Math.min(open,close))return;
+  const map=shadowClosedKlines[interval];
+  map.set(startMs,{startMs,open,high,low,close,volume,endMs,closed:true});
+  while(map.size>(interval==='1m'?1000:240))map.delete(map.keys().next().value);
+}
+function shadowCandleRows(interval) {
+  const map=shadowClosedKlines[interval];
+  if(!map)return [];
+  const rows=[...map.values()].sort((a,b)=>a.startMs-b.startMs);
+  if(!rows.length)return [];
+  const step=interval==='1m'?60000:300000;
+  let i=rows.length-1;
+  while(i>0&&rows[i].startMs-rows[i-1].startMs===step)i--;
+  return rows.slice(i);
+}
+
 function handleMessage(raw) {
   const now = Date.now();
   lastWsMessageAt = now;
@@ -1438,6 +1504,10 @@ function handleMessage(raw) {
       lastMarketTs = Math.max(lastMarketTs, lastDepthMarketTs);
       pushOfiEvent(lastDepthMarketTs, bid, bidQty, ask, askQty);
       lastDepthAt = now;
+      // Retain the real WS top five levels for an isolated read-only model.
+      // No effect on the existing V3 scoring or exchange order state.
+      edgeSpotDepthBids = d.bids.slice(0,5).map(x=>[Number(x[0]),Number(x[1])]);
+      edgeSpotDepthAsks = d.asks.slice(0,5).map(x=>[Number(x[0]),Number(x[1])]);
       if (Number.isFinite(Number(d.lastUpdateId))) lastDepthUpdateId = Number(d.lastUpdateId);
     }
     return;
@@ -1445,6 +1515,7 @@ function handleMessage(raw) {
 
   if (stream.includes('@kline_1m')) {
     const k = d.k || {};
+    recordShadowClosedKline('1m',k);
     const eventTs = Number(d.E || now);
     if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
@@ -1460,6 +1531,7 @@ function handleMessage(raw) {
 
   if (stream.includes('@kline_5m')) {
     const k = d.k || {};
+    recordShadowClosedKline('5m',k);
     const eventTs = Number(d.E || now);
     if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
@@ -1496,6 +1568,15 @@ function resetTransportState() {
 
 async function bootstrapMarketHistory() {
   const now = Date.now();
+  // This Render FREE preview is on a Spot REST-banned shared IP.
+  // Fill the rolling window from the live authenticated-free exchange WS rather than hammer REST.
+  if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    bootstrapCompletedAt = now;
+    console.log(JSON.stringify({event:'spot_rest_history_bootstrap_paused',
+      reason:'BINANCE_SPOT_HTTP_418',recovery:'REALTIME_WEBSOCKET_HISTORY_ONLY',
+      at:new Date(now).toISOString()}));
+    return;
+  }
   try {
     const startTime = now - Math.min(STORAGE_MS, 999000);
     const u = new URL('https://api.binance.com/api/v3/klines');
@@ -1720,12 +1801,65 @@ function payload() {
   };
 }
 
-const breakout20ReadonlyFeed = createReadOnlyMarketFeed({ live: payload });
+const breakout20ReadonlyFeed = createReadOnlyMarketFeed({
+  live: payload,
+  wsCandles: shadowCandleRows,
+  allowRest: () => process.env.RENDER_MIGRATION_PREVIEW !== 'true',
+});
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('cache-control', 'no-store');
   res.setHeader('access-control-allow-origin', '*');
+
+  // Strictly read-only Binance SPOT WS snapshot for EDGE5 V2 independent
+  // shadow. Never exposes API secrets, orders, synthetic book or stale trades.
+  if (req.method === 'GET' && url.pathname === '/api/edge-v2-market-data') {
+    const at=Date.now();
+    const liveTrades=trades.filter(t=>Number(t.marketTs)>0 &&
+       at-Number(t.marketTs)>=-300&&at-Number(t.marketTs)<=4000&&
+       Number(t.qty)>0).slice(-200).map(t=>({
+         T:Number(t.marketTs),q:String(t.qty),m:t.isAggressiveBuy===false
+       }));
+    const bookFresh=lastDepthAt>0&&at-lastDepthAt<=1500;
+    const priceFresh=lastTradeReceivedAt>0&&at-lastTradeReceivedAt<=1500;
+    const depthReal=edgeSpotDepthBids.length>=5&&edgeSpotDepthAsks.length>=5&&
+      edgeSpotDepthBids.concat(edgeSpotDepthAsks).every(x=>
+        Number.isFinite(x[0])&&x[0]>0&&Number.isFinite(x[1])&&x[1]>0);
+    const ok=Boolean(ws?.readyState===WebSocket.OPEN&&bookFresh&&priceFresh&&
+      depthReal&&Number(lastPrice)>0&&liveTrades.length>=3);
+    const p=payload();
+    const data={ok,readOnly:true,venue:'BINANCE',
+      source:'BINANCE_SPOT_WSS_DEPTH20_AGGTRADES_REAL',
+      at,spotPrice:ok?lastPrice:null,
+      spotAt:ok?lastTradeMarketTs:null,
+      bids:ok?edgeSpotDepthBids:null,
+      asks:ok?edgeSpotDepthAsks:null,
+      trades:ok?liveTrades:[],
+      reason:ok?null:'BINANCE_WS_SPOT_BOOK_OR_FLOW_NOT_FRESH',
+      dataIntegrity:{wsConnected:p.dataIntegrity.wsConnected,
+        lastMessageAgeMs:p.dataIntegrity.lastMessageAgeMs,
+        predictionOrderbookConnected:p.dataIntegrity.predictionOrderbookConnected,
+        predictionOrderbookFresh:p.dataIntegrity.predictionOrderbookFresh},
+      signal:{roundStartMs:p.signal.roundStartMs,
+        factsCalculatedAt:p.signal.factsCalculatedAt,
+        facts:p.signal.facts ? {
+          predictionMarketRound:p.signal.facts.predictionMarketRound,
+          predictionMarketRoundAligned:p.signal.facts.predictionMarketRoundAligned,
+          predictionMarketMappingReliable:p.signal.facts.predictionMarketMappingReliable,
+          predictionMarketYesDirection:p.signal.facts.predictionMarketYesDirection,
+          predictionMarketId:p.signal.facts.predictionMarketId,
+          predictionMarketBookAgeMs:p.signal.facts.predictionMarketBookAgeMs,
+          predictionMarketUpBid:p.signal.facts.predictionMarketUpBid,
+          predictionMarketUpAsk:p.signal.facts.predictionMarketUpAsk,
+          predictionMarketUpMid:p.signal.facts.predictionMarketUpMid,
+          predictionMarketDepthImbalance5:p.signal.facts.predictionMarketDepthImbalance5
+        }:null}};
+    res.writeHead(ok?200:503, {
+      'content-type':'application/json; charset=utf-8',
+      'cache-control':'no-store','x-content-type-options':'nosniff'});
+    return res.end(JSON.stringify(data));
+  }
 
   // Shadow-only public OHLCV read endpoint. This path cannot control prediction or trading.
   if (req.method === 'GET' && url.pathname === '/api/shadow-market-data') {

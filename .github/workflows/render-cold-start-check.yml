@@ -1,0 +1,26 @@
+name: Render internal proxy cold-start regression
+on:
+  pull_request:
+    branches: [migration/render-blueprint-20261018]
+    paths:
+      - 'railway-diagnostic/control-shell.mjs'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'railway-diagnostic/render-cold-start-proxy.test.mjs'
+      - '.github/workflows/render-cold-start-check.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check proxy and regression test
+        run: |
+          node --check railway-diagnostic/control-shell.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check railway-diagnostic/render-cold-start-proxy.test.mjs
+          node --test railway-diagnostic/render-cold-start-proxy.test.mjs

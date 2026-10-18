@@ -66,3 +66,39 @@ test('fails closed on stale upstream price instead of inventing data', async () 
   });
   assert.equal((await model.read()).ok, false);
 });
+
+
+test('Render preview uses authentic contiguous CLOSED WebSocket candles and never calls banned REST', async () => {
+  let calls=0;
+  const rowsFor=(interval)=>{
+    const step=interval==='1m'?60000:300000;
+    const end=Math.floor(at/step)*step-step;
+    return Array.from({length:35},(_,i)=>{
+      const startMs=end-(34-i)*step;
+      return {startMs,endMs:startMs+step-1,open:61000,high:61100,
+        low:60900,close:61020,volume:2,closed:true};
+    });
+  };
+  const feed=createReadOnlyMarketFeed({
+    now:()=>at,live,wsCandles:rowsFor,allowRest:()=>false,
+    fetchImpl:async()=>{calls++;throw Error('REST_MUST_NOT_BE_CALLED');}
+  });
+  const data=await feed.read();
+  assert.equal(data.ok,true);
+  assert.equal(data.candles['1m'].provider,'BINANCE_SPOT_WEBSOCKET_CLOSED_KLINES');
+  assert.equal(data.candles['5m'].provider,'BINANCE_SPOT_WEBSOCKET_CLOSED_KLINES');
+  assert.equal(calls,0);
+  assert.equal(data.source,'BINANCE_OFFICIAL_SPOT_WEBSOCKET_KLINES');
+});
+
+test('Render preview fails closed on too few WebSocket samples, without REST fallback',async()=>{
+  let calls=0;
+  const feed=createReadOnlyMarketFeed({
+    now:()=>at,live,wsCandles:()=>[],allowRest:()=>false,
+    fetchImpl:async()=>{calls++;throw Error('NEVER');}
+  });
+  const result=await feed.read();
+  assert.equal(result.ok,false);
+  assert.equal(calls,0);
+  assert.match(result.integrity.errors.join(' '),/WS_WARMING_UP_0_OF_35/);
+});

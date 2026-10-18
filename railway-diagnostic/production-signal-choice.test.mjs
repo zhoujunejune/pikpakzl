@@ -138,8 +138,8 @@ test('dynamic selector honors PIN, next round and unchanged direction mapping',(
  assert.match(panel,/saveOrderModelChoice/);
 });
 
-test('order attempts are capped at three real POSTs, never extra blind retries',()=>{
- assert.equal(MAX_ORDER_SUBMIT_ATTEMPTS,3);
+test('order attempts enforce one real POST per round and no blind retries',()=>{
+ assert.equal(MAX_ORDER_SUBMIT_ATTEMPTS,1);
  const accepted=(reason,status=400)=>({ok:false,status,data:{msg:reason}});
  for(const reason of ['QUOTE_EXPIRED','INVALID_QUOTE','PRICE_CHANGED','REQUOTE_REQUIRED','SLIPPAGE_EXCEEDED'])
    assert.equal(retryableRejectedOrderPost(accepted(reason)),true,reason);
@@ -193,7 +193,7 @@ test('EDGE fourth model never reuses old predictions and rejects uncalibrated ex
  for(const patch of [{orders:true},{readOnly:false},{latest:{...baseline.latest,round:ROUND-300000}},
    {latest:{...baseline.latest,lockedAt:ROUND+8000}},
    {latest:{...baseline.latest,marketAt:ROUND+10000}},
-   {health:{marketError:'HTTP_451'}}]){
+   {generatedAt:now-5000}]){
    assert.equal(validateEdgeSignal({...baseline,...patch},now).ok,false,JSON.stringify(patch));
  }
  const modelVersion='EDGE5_OFFICIAL_5000_'+(ROUND-300000);
@@ -201,6 +201,7 @@ test('EDGE fourth model never reuses old predictions and rejects uncalibrated ex
   latest:{...baseline.latest,modelVersion,modelProbability:.68,
    calibrationReady:true,executionEligible:true}};
  assert.equal(validateEdgeSignal(ready,now).executionEligible,true);
+ assert.equal(validateEdgeSignal({...ready,health:{marketError:'BYBIT_FRESH_TRADES_UNAVAILABLE'}},now).executionEligible,true);
  assert.equal(validateEdgeSignal({...ready,latest:{...ready.latest,modelProbability:.45}},now).ok,false);
 });
 test('EDGE quote gating is independent of previous three model paths',()=>{
@@ -208,7 +209,8 @@ test('EDGE quote gating is independent of previous three model paths',()=>{
  const wrapper=read('./wrapper.mjs'),panel=read('./panel-stats-shell.mjs'),service=read('./edge-5m-service.mjs');
  assert.match(wrapper,/if \(p\.signalModelChoice===EDGE_MODEL\)/);
  assert.match(wrapper,/EDGE_ORDER_DEADLINE_MS = 8000/);
- assert.match(wrapper,/EDGE5_NOT_CALIBRATED/);
+ assert.doesNotMatch(wrapper,/EDGE5_NOT_CALIBRATED/);
+ assert.match(wrapper,/EDGE5_QUOTE_INVALID/);
  assert.match(panel,/<option value="EDGE_5M_V1">/);
  assert.match(panel,/renderEdgePrimary/);
  assert.match(panel,/renderEdgeRoundStats/);

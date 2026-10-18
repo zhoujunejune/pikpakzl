@@ -1,4 +1,5 @@
 name: Alibaba SWAS HTTPS Phone Panel
+# Re-run after user configured ZL_PANEL_PASSWORD in GitHub encrypted Secrets.
 on:
   push:
     branches: [feature/zl-futures-bot-v1]

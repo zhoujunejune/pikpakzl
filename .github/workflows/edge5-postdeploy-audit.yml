@@ -1,0 +1,78 @@
+name: Verify deployed EDGE5 against authorized Cloudflare API
+on:
+  push:
+    branches: [cloudflare-edge5m-20261017]
+    paths: ['.github/workflows/edge5-postdeploy-audit.yml']
+permissions:
+  contents: read
+  issues: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check deployed Worker without changing any resources
+        run: |
+          node --input-type=module <<'NODE'
+          const name='edge-5m-v1';
+          const base='https://edge-5m-v1.zl528094-3ba.workers.dev';
+          const account='3ba148af3f98117d6b299158e20bf687';
+          const workerUrl='https://api.cloudflare.com/client/v4/accounts/'+account+'/workers/scripts/'+name;
+          const answer={worker:name,apiStatus:null,workerSourceUpdated:false,health:null,marketCheck:null,
+            liveUpdated:false,training:null,settledSamples:null,errors:[]};
+          try{
+            const response=await fetch(workerUrl,{headers:{Authorization:'Bearer '+process.env.CF_TOKEN},signal:AbortSignal.timeout(12000)});
+            answer.apiStatus=response.status;
+            if(response.ok){
+              const code=await response.text();
+              answer.workerSourceUpdated=code.includes('zl-signal-v2-migration.onrender.com/api/round-stats')&&
+                code.includes('zl-signal-v3-migration.onrender.com/api/shadow-market-data');
+            }
+          }catch(e){answer.errors.push('API:'+String(e.message).slice(0,110))}
+          async function read(path,timeout=13000){
+            const resp=await fetch(base+path,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
+            const body=await resp.json();
+            return {status:resp.status,body};
+          }
+          for(let i=0;i<20;i++){
+            try{
+              const status=await read('/status');
+              const s=status.body;
+              answer.liveUpdated=status.status===200&&s?.training?.signalIndependentOfCalibration===true&&
+                s?.health?.officialOrigin==='https://zl-signal-v2-migration.onrender.com/api/round-stats'&&
+                s?.health?.marketOrigin==='https://zl-signal-v3-migration.onrender.com/api/shadow-market-data';
+              if(answer.liveUpdated){
+                answer.training={status:s.training.status,samples:s.training.samples,
+                  ready:s.training.ready,fitRequired:s.training.fitRequired};
+                answer.settledSamples=s.results?.overall?.samples??null;
+                answer.health={lastGoodDataAt:s.timed?.lastGoodDataAt,
+                  officialError:s.health?.officialError,marketError:s.health?.marketError,
+                  nextAlarm:s.timed?.nextAlarm,storage:s.health?.storage};
+                break;
+              }
+            }catch(e){answer.errors.push('status attempt '+(i+1)+':'+String(e.message).slice(0,90))}
+            await new Promise(r=>setTimeout(r,10000));
+          }
+          if(answer.liveUpdated){
+            try{
+              const market=await read('/market-check');
+              answer.marketCheck={status:market.status,ok:market.body.ok===true,
+                error:market.body.error||null,venue:market.body.venue||null};
+            }catch(e){answer.marketCheck={error:String(e.message).slice(0,100)}}
+          }
+          const body='### EDGE5 Cloudflare post-deployment audit\n\n'+
+            'Status: **'+(answer.apiStatus===200&&answer.liveUpdated?'DEPLOYED':'NOT FULLY VERIFIED')+'**\n\n'+
+            '```json\n'+JSON.stringify(answer,null,2).slice(0,3500)+'\n```\n\n'+
+            'Read-only checks. No other Workers or trade orders touched.';
+          const comment=await fetch('https://api.github.com/repos/zhoujunejune/pikpakzl/issues/169/comments',{
+            method:'POST',headers:{authorization:'Bearer '+process.env.GH_TOKEN,
+              accept:'application/vnd.github+json','content-type':'application/json'},
+            body:JSON.stringify({body}),signal:AbortSignal.timeout(15000)});
+          console.log('Audit result:',JSON.stringify(answer));
+          console.log('PR comment status:',comment.status);
+          if(!comment.ok)throw Error('Cannot save audit result');
+          if(!answer.liveUpdated||answer.apiStatus!==200||!answer.workerSourceUpdated)process.exitCode=1;
+          NODE

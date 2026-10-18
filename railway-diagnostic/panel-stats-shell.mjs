@@ -51,7 +51,9 @@ function log(event, extra = {}) {
 }
 
 const statsCard = (process.env.RENDER_MIGRATION_PREVIEW === 'true' ?
-  '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费测试环境｜实盘下单关闭</strong><div style="color:#ccd4e0;margin-top:6px">PIN 登录后可查看只读余额与信号；原订单账本和 Z3 采集器尚未迁移。免费 Redis 不持久化，禁止实盘下单。</div></div>' : '') + `<div class="c" id="roundStatsCard">
+  (process.env.RENDER_TRADING_USER_ARMED === 'true' ?
+    '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费实例 · 交易控制已授权，默认关闭</strong><div style="color:#ccd4e0;margin-top:6px">需要你输入控制 PIN 手动启动。未校准信号无已证明的胜率优势；本服务可能休眠，Redis 不持久化，每轮提交限制无法跨数据丢失永久保证。真实成功仅按币安成交状态核验。</div></div>' :
+    '<div class="c" style="border:1px solid #eab308;color:#eab308"><strong>Render 免费测试环境｜实盘下单关闭</strong><div style="color:#ccd4e0;margin-top:6px">PIN 登录后可查看只读余额与信号；原订单账本和 Z3 采集器尚未迁移。免费 Redis 不持久化，禁止实盘下单。</div></div>') : '') + `<div class="c" id="roundStatsCard">
 <div class="k">每轮判断与真实结果</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
 <div class="muted" id="rsMeta">仅统计新版RSI(14)直接输出方向与币安预测市场官方结算的准确率；实际订单盈亏另行统计。</div>
@@ -1319,8 +1321,15 @@ function injectStats(html) {
       '免费实例会休眠，免费 Redis 不持久化，暂不能承担实盘。</div></div>';
     out = out.replace('<h2>5分钟 API 实盘确认控制台</h2>', notice);
     out = out.replace('<span class="bad">读取失败</span>', '<span class="warn">交易账户未接入</span>');
-    out = out.replace('<button class="start" onclick="setV(true)">开始跟随新信号</button>',
-      '<button class="start" disabled title="Render 预览期禁止实盘" style="opacity:.5;cursor:not-allowed">开始跟随（测试期禁用）</button>');
+    if(process.env.RENDER_TRADING_USER_ARMED==='true'){
+      out=out.replace('Render 免费预览 · 实盘未启用',
+        '用户授权交易控制 · 跟随默认关闭');
+      out=out.replace('已启用 PIN 登录，可查看实际币安只读余额。实盘交易仍保持关闭。原 Railway 订单历史尚未迁移。预测信号和模型数据不代表交易已成交。免费实例会休眠，免费 Redis 不持久化，暂不能承担实盘。',
+        '已保留 PIN 登录。仅当你手动开启跟随且选择的方向开关允许时，后台才会尝试真实下单。固定 EDGE 未完成概率校准，不能据此判断胜率；Render 免费实例可能休眠，订单去重 Redis 不持久化。');
+    }else{
+      out = out.replace('<button class="start" onclick="setV(true)">开始跟随（自动提交，下一轮生效）</button>',
+        '<button class="start" disabled title="Render 预览期禁止实盘" style="opacity:.5;cursor:not-allowed">开始跟随（测试期禁用）</button>');
+    }
     out = out.replace('检测 Railway 出口 IP（只读）', '检测 Render 出口 IP（只读）');
   }
   out = out.replace('</head>', layoutStabilityStyle+'</head>');
@@ -1515,14 +1524,18 @@ http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (handleRenderPreviewAuth(req,res,url)) return;
   if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
-    // No externally accessible mutating route in the Render free-tier preview.
-    // The trading keys are used exclusively for backend read-only GET checks.
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const mutating=req.method!=='GET'&&req.method!=='HEAD';
+    // Keep the PIN session gateway even when owner explicitly arms trading.
+    // Only four PIN-validated order-control routes are accepted; all other
+    // requests continue to fail closed on free Render.
+    const permitted = process.env.RENDER_TRADING_USER_ARMED==='true' &&
+      req.method==='POST' &&
+      ['/api/control','/api/confirm','/api/order-signal-model',
+       '/api/direction-mode'].includes(url.pathname);
+    if(mutating&&!permitted){
       res.writeHead(403,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
-      return res.end(JSON.stringify({ok:false,error:'RENDER_PREVIEW_READONLY_NO_ORDER_ACTIONS'}));
+      return res.end(JSON.stringify({ok:false,error:'RENDER_TRADING_NOT_ARMED_OR_ROUTE_NOT_ALLOWED'}));
     }
-    // PIN-authenticated read-only requests return actual account data.
-    // All state-changing methods remain blocked above.
   }
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);

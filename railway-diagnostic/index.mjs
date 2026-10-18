@@ -990,6 +990,11 @@ async function processOrderConfirmation(res,body,{automatic=false}={}){
     };
     if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
 
+    // STOP always takes effect before any actual external money-moving POST,
+    // including when the user presses it during fresh-quote acquisition.
+    if(!enabled||pendingAction!==p){
+      return send(res,409,{ok:false,error:'跟随已关闭，本次不会提交真实订单'});
+    }
     const startedAt = new Date().toISOString();
     const placeStartedAtMs = Date.now();
     // Single successful claim before the only external money-moving POST.
@@ -1000,6 +1005,11 @@ async function processOrderConfirmation(res,body,{automatic=false}={}){
       p.state='PREPARE_ERROR';p.error='本轮已提交或订单状态未知，禁止重复提交';
       return send(res,409,{ok:false,error:p.error,
         reason:String(err?.message||err).slice(0,100)});
+    }
+    if(!enabled||pendingAction!==p){
+      // The unique round claim has been consumed. Never reuse it after STOP.
+      try{await closeOrderSubmitRound(p.round,'UNKNOWN')}catch{}
+      return send(res,409,{ok:false,error:'跟随已关闭，已取消提交，本轮不会重试'});
     }
     const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
     const placeFinishedAtMs = Date.now();

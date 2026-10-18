@@ -11,7 +11,10 @@ if(health.httpStatus!==200||status.httpStatus!==200||
  status.body.model!=='EDGE_5M_V1'||status.body.readOnly!==true||
  status.body.orders!==false||status.body.productionIntegration!==false||
  status.body.inputVersion!=='EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1'||
- status.body.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')
+ status.body.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY'||
+ status.body.training?.signalIndependentOfCalibration!==true||
+ status.body.health?.officialOrigin!=='https://zl-signal-v2-migration.onrender.com/api/round-stats'||
+ status.body.health?.marketOrigin!=='https://zl-signal-v3-migration.onrender.com/api/shadow-market-data')
  throw Error('ISOLATED_READ_ONLY_CONTRACT_FAILED');
 if(!Number.isFinite(Number(status.body.timed?.nextAlarm)))
  throw Error('DURABLE_OBJECT_ALARM_NOT_SCHEDULED');

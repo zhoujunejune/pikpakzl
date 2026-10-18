@@ -1,0 +1,30 @@
+name: EDGE5 Cloudflare pre-release tests
+on:
+  pull_request:
+    branches: [cloudflare-edge5m-20261017]
+    paths:
+      - 'src/edge-core.mjs'
+      - 'src/edge-core.test.mjs'
+      - 'src/edge-worker.mjs'
+      - 'src/provider-market.mjs'
+      - 'verify-edge5m.mjs'
+      - '.github/workflows/edge5-pre-release-tests.yml'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          node --check src/edge-worker.mjs
+          node --check src/edge-core.mjs
+          node --check src/provider-market.mjs
+          node --check verify-edge5m.mjs
+          node --test src/edge-core.test.mjs
+          grep -q 'new_sqlite_classes = \["Edge5"\]' wrangler.toml
+          grep -q '^name = "edge-5m-v1"$' wrangler.toml

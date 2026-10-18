@@ -3,10 +3,10 @@
 import {DurableObject} from 'cloudflare:workers';
 import {bestMarket} from './provider-market.mjs';
 import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection,
-  trainOnOfficial,MIN_TRAINING_ROUNDS} from './edge-core.mjs';
+  trainOnOfficial,MIN_TRAINING_ROUNDS,MIN_FIT_ROUNDS} from './edge-core.mjs';
 
-const OFFICIAL_URL='https://signal-diagnostic-v2-production.up.railway.app/api/round-stats';
-const RAILWAY_MARKET_URL='https://signal-diagnostic-v3-production.up.railway.app/api/shadow-market-data';
+const OFFICIAL_URL='https://zl-signal-v2-migration.onrender.com/api/round-stats';
+const RAILWAY_MARKET_URL='https://zl-signal-v3-migration.onrender.com/api/shadow-market-data';
 const OFFICIAL_SOURCE='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
 const PHASES=[-15000,-12000,-9000,-6000,-3000,1900,4500,6600,25000];
 const TTL=ROUND_MS*25;
@@ -174,7 +174,7 @@ export class Edge5 extends DurableObject{
    m.lastOfficialAt=Date.now();m.officialError=null;
    const settled=m.results.overall.samples;
    m.training.samples=settled;
-   if(settled>=MIN_TRAINING_ROUNDS&&(settled-(m.lastTrainedCount||0)>=5)){
+   if(settled>=MIN_FIT_ROUNDS&&(settled-(m.lastTrainedCount||0)>=5)){
     const rows=this.ctx.storage.sql.exec(
      'SELECT round,direction,features,actual,settledAt FROM edge_rounds WHERE actual IS NOT NULL ORDER BY round ASC LIMIT 7500').toArray()
       .map(r=>({round:r.round,direction:r.direction,
@@ -203,9 +203,10 @@ export class Edge5 extends DurableObject{
   const m=await this.meta(),now=Date.now(),round=roundAt(now);
   const recent=this.latestRows(pathname==='/status'?40:1);
   const row=recent.find(r=>r.round===round);
-  const execOk=Boolean(m.training?.ready===true&&m.training?.calibrationReady===true&&
-    m.model?.calibrationReady===true&&row?.calibrationReady&&
-    m.model.version===row?.modelVersion);
+  const execOk=Boolean(row&&valid(row.direction)&&
+    Number.isFinite(row.lockedAt)&&row.lockedAt>=round&&row.lockedAt<round+8000&&
+    Number.isFinite(row.marketAt)&&row.marketAt<=row.lockedAt&&
+    row.lockedAt-row.marketAt<=4000&&Number.isFinite(row.score));
   const latest=row?{...row,status:'LOCKED',inputVersion:INPUT_VERSION,
     executionEligible:execOk}:null;
   const payload={ok:true,model:EDGE_MODEL,inputVersion:INPUT_VERSION,name:'EDGE 5分钟概率优势',
@@ -214,12 +215,14 @@ export class Edge5 extends DurableObject{
    generatedAt:now,latest,
    recent,results:m.results,training:{...m.training,
     remaining:Math.max(0,MIN_TRAINING_ROUNDS-(m.training?.samples||0)),
-    ready:execOk||m.training?.ready===true,
+    ready:m.training?.ready===true,
+    fitRequired:MIN_FIT_ROUNDS,signalIndependentOfCalibration:true,
     version:m.model?.version||null},
    timed:{lastTickAt:m.lastTickAt,lastGoodDataAt:m.lastGoodDataAt,
     deadlineMs:8000,nextAlarm:await this.ctx.storage.getAlarm()},
    health:{marketError:m.marketError,officialError:m.officialError,
-    lastOfficialAt:m.lastOfficialAt,venue:m.activeVenue,storage:m.storage,persisted:true}};
+    lastOfficialAt:m.lastOfficialAt,venue:m.activeVenue,storage:m.storage,persisted:true,
+    officialOrigin:OFFICIAL_URL,marketOrigin:RAILWAY_MARKET_URL}};
   if(pathname==='/health')return json({ok:true,model:EDGE_MODEL,orders:false,readOnly:true,
    lastTickAt:m.lastTickAt,lastGoodDataAt:m.lastGoodDataAt,
    marketError:m.marketError,officialError:m.officialError,
@@ -245,7 +248,7 @@ export default{
     '<title>EDGE_5M_V1 实时观察</title><body style="font-family:system-ui;'+
     'background:#111827;color:#f9fafb;padding:24px;line-height:1.8">'+
     '<h2>EDGE_5M_V1 · Cloudflare 独立观察</h2>'+
-    '<p>实时行情 / 独立官方结算 / 概率训练。方向≠成交，未校准不自动下单。</p>'+
+    '<p>实时行情 / 独立官方结算 / 概率训练。方向≠成交；训练与方向预测分离，真实订单由交易系统控制。</p>'+
     '<pre id="state" style="white-space:pre-wrap;word-break:break-word">读取中...</pre>'+
     '<script>async function go(){try{let d=await (await fetch("/status")).json();'+
     'let r=d.results||{},t=d.training||{},h=d.health||{},l=d.latest;'+

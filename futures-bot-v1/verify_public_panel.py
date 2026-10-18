@@ -54,6 +54,11 @@ def main():
         if root_code!=200 or b"ZL" not in root_body:
             print("PANEL_VERIFY_FAILED: main page not actually served")
             return 12
+        for p in ("/index.html", "/dashboard/", "/?v=1"):
+            nav_status,nav_body=probe(p,pw)
+            print("HTTPS_PAGE_VARIANT:",p,nav_status)
+            if nav_status != 200 or b"ZL" not in nav_body:
+                return 13
         status,raw=probe("/status",pw)
         print("HTTPS_STATUS_ENDPOINT:",status)
         if status!=200:return 6

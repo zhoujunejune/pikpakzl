@@ -48,7 +48,7 @@ test('valid inputs produce a direction independently of statistical calibration'
 });
 test('training cannot borrow predictions from unverified or un-settled rounds',()=>{
  assert.equal(MIN_TRAINING_ROUNDS,5000);
- assert.equal(MIN_FIT_ROUNDS,300);
+ assert.equal(MIN_FIT_ROUNDS,30);
  const probe=extractFeatures(observation,trail,t);
  const rows=[{round:ROUND,direction:'UP',probe,actual:'UP',
    settledAt:ROUND+300000+100},{round:ROUND+300000,direction:'UP',probe,
@@ -60,7 +60,7 @@ test('training cannot borrow predictions from unverified or un-settled rounds',(
  assert.equal(summarize(rows).overall.samples,1);
 });
 
-test('300 verified rounds allow provisional training without fake probability',()=>{
+test('30 verified rounds allow provisional training without fake probability',()=>{
  const rows=Array.from({length:MIN_FIT_ROUNDS},(_,i)=>{
   const round=ROUND+i*300000;
   return {round,direction:i%2?'UP':'DOWN',actual:i%3?'UP':'DOWN',

@@ -1493,6 +1493,23 @@ http.createServer((req, res) => {
   }
 
   if (process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+    // Server-side smoke check: anonymous visitors must never reach funds or data.
+    setTimeout(async () => {
+      const base='http://127.0.0.1:'+PORT;
+      try {
+        const [front,status,login,health]=await Promise.all([
+          fetch(base+'/',{redirect:'manual',signal:AbortSignal.timeout(3000)}),
+          fetch(base+'/api/status',{redirect:'manual',signal:AbortSignal.timeout(3000)}),
+          fetch(base+'/auth/login',{redirect:'manual',signal:AbortSignal.timeout(3000)}),
+          fetch(base+'/healthz',{redirect:'manual',signal:AbortSignal.timeout(3000)})
+        ]);
+        const ok=front.status===303 && front.headers.get('location')==='/auth/login' &&
+          status.status===401 && login.status===200 && health.status===200;
+        log('render_pin_gateway_smoke',{ok,anonymousFront:front.status,
+          anonymousStatus:status.status,login:login.status,health:health.status});
+        if(!ok)log('render_pin_gateway_smoke_failed',{reason:'UNEXPECTED_ANONYMOUS_HTTP_STATUS'});
+      } catch(e){log('render_pin_gateway_smoke_failed',{reason:String(e?.message||e).slice(0,120)});}
+    },2200).unref();
     setTimeout(async () => {
       for (const route of ['/api/order-signal-model','/api/direction-mode',
         '/api/shadow-breakout20/edge-5m','/api/status']) {

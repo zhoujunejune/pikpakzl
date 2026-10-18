@@ -1412,6 +1412,36 @@ function calculate(now = Date.now()) {
   };
 }
 
+// Retain only authentically CLOSED BTCUSDT spot klines delivered by Binance WS.
+// A restarted/free instance must rebuild warmup; missing history is never fabricated.
+const shadowClosedKlines = {'1m':new Map(),'5m':new Map()};
+function recordShadowClosedKline(interval,k) {
+  if(k?.x!==true)return;
+  const step=interval==='1m'?60000:300000;
+  const startMs=Number(k.t);
+  const endMs=Number(k.T);
+  const open=Number(k.o),high=Number(k.h),low=Number(k.l),
+    close=Number(k.c),volume=Number(k.v);
+  if(!Number.isSafeInteger(startMs)||startMs%step!==0||
+     !Number.isSafeInteger(endMs)||Math.abs(endMs-(startMs+step-1))>2||
+     ![open,high,low,close,volume].every(Number.isFinite)||
+     Math.min(open,high,low,close)<=0||volume<0||
+     high<Math.max(open,close)||low>Math.min(open,close))return;
+  const map=shadowClosedKlines[interval];
+  map.set(startMs,{startMs,open,high,low,close,volume,endMs,closed:true});
+  while(map.size>(interval==='1m'?1000:240))map.delete(map.keys().next().value);
+}
+function shadowCandleRows(interval) {
+  const map=shadowClosedKlines[interval];
+  if(!map)return [];
+  const rows=[...map.values()].sort((a,b)=>a.startMs-b.startMs);
+  if(!rows.length)return [];
+  const step=interval==='1m'?60000:300000;
+  let i=rows.length-1;
+  while(i>0&&rows[i].startMs-rows[i-1].startMs===step)i--;
+  return rows.slice(i);
+}
+
 function handleMessage(raw) {
   const now = Date.now();
   lastWsMessageAt = now;
@@ -1479,6 +1509,7 @@ function handleMessage(raw) {
 
   if (stream.includes('@kline_1m')) {
     const k = d.k || {};
+    recordShadowClosedKline('1m',k);
     const eventTs = Number(d.E || now);
     if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
@@ -1494,6 +1525,7 @@ function handleMessage(raw) {
 
   if (stream.includes('@kline_5m')) {
     const k = d.k || {};
+    recordShadowClosedKline('5m',k);
     const eventTs = Number(d.E || now);
     if (Number.isFinite(eventTs)) lastMarketTs = Math.max(lastMarketTs, eventTs);
     const open = Number(k.o);
@@ -1763,7 +1795,11 @@ function payload() {
   };
 }
 
-const breakout20ReadonlyFeed = createReadOnlyMarketFeed({ live: payload });
+const breakout20ReadonlyFeed = createReadOnlyMarketFeed({
+  live: payload,
+  wsCandles: shadowCandleRows,
+  allowRest: () => process.env.RENDER_MIGRATION_PREVIEW !== 'true',
+});
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');

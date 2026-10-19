@@ -27,7 +27,7 @@ jobs:
       - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
       - name: Deploy TP SL Redis restoration and isolated idle monitor
         env:
-          ALIBABA_CLOUD_ACCESS${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}ID: _KEY_
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_fix_risk_controls.py
       - name: Verify authenticated HTTPS save and open/close API with safe no-op settings

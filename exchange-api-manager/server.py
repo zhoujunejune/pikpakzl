@@ -156,6 +156,31 @@ def persist(record):
             json.dump(record,fp,ensure_ascii=False,separators=(",",":"))
             fp.flush();os.fsync(fp.fileno())
         os.replace(temp,path_for(bot,exchange))
+        if exchange=="binance":
+            # Each bot receives only its own variables through a systemd
+            # EnvironmentFile. An atomic replace avoids half-written credentials.
+            if not re.fullmatch(r"[A-Za-z0-9_-]{8,256}",record["apiKey"]):
+                raise ValueError("BINANCE_KEY_FORMAT")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{8,256}",record["apiSecret"]):
+                raise ValueError("BINANCE_SECRET_FORMAT")
+            names = {"futures":("BINANCE_API_KEY","BINANCE_API_SECRET"),
+                     "prediction":("BINANCE_PREDICTION_API_KEY","BINANCE_PREDICTION_API_SECRET")}
+            a,b=names[bot]
+            rows=[a+"="+record["apiKey"],b+"="+record["apiSecret"]]
+            if bot=="prediction":
+                if record.get("walletAddress"):
+                    rows.append("BINANCE_PREDICTION_WALLET_ADDRESS="+record["walletAddress"])
+                if record.get("walletId"):
+                    rows.append("BINANCE_PREDICTION_WALLET_ID="+record["walletId"])
+            ef,envtmp=tempfile.mkstemp(prefix=".env-",dir=str(parent))
+            try:
+                os.fchmod(ef,0o600)
+                with os.fdopen(ef,"w",encoding="utf8") as env_file:
+                    env_file.write("\n".join(rows)+"\n")
+                    env_file.flush();os.fsync(env_file.fileno())
+                os.replace(envtmp,parent/"binance.env")
+            finally:
+                if os.path.exists(envtmp):os.unlink(envtmp)
         try:
             d=os.open(str(parent),os.O_RDONLY|os.O_DIRECTORY)
             try:os.fsync(d)
@@ -174,6 +199,10 @@ def validate(body):
             raise ValueError("INVALID_CREDENTIAL_FORMAT")
     if len(body["apiKey"])<8 or len(body["apiSecret"])<8:
         raise ValueError("API_KEY_AND_SECRET_REQUIRED")
+    if exchange=="binance" and not (
+        re.fullmatch(r"[A-Za-z0-9_-]{8,256}",body["apiKey"]) and
+        re.fullmatch(r"[A-Za-z0-9_-]{8,256}",body["apiSecret"])):
+        raise ValueError("BINANCE_HMAC_KEY_FORMAT_REQUIRED")
     if bot=="prediction" and exchange=="binance":
         for k in ("walletAddress","walletId"):
             if len(body[k])>160 or (body[k] and not re.fullmatch("[A-Za-z0-9x_-]+",body[k])):

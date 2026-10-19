@@ -12,7 +12,7 @@ CONF=/etc/zl-prediction/panel.env
 for svc in zl-prediction-trade zl-prediction-v2 zl-prediction-v3 zl-prediction-redis zl-futures-bot-paper zl-prediction-risk-exits;do
  test "$(systemctl is-active "$svc")" = active
 done
-grep -Fxq 'AUTO_CONFIRM_ENABLED=false' "$CONF"
+grep -Fxq 'AUTO_CONFIRM_ENABLED=true' "$CONF"
 grep -Fxq 'ZL_OUTER_AUTH_ONLY=true' "$CONF"
 grep -Fxq 'RENDER_MIGRATION_PREVIEW=false' "$CONF"
 grep -Fxq 'ZL_PUBLIC_ORIGIN=https://prediction.47-237-188-69.sslip.io' "$CONF"
@@ -64,13 +64,10 @@ for file in index.mjs wrapper.mjs;do
 done
 python3 - <<'PY'
 from pathlib import Path
-p=Path('/etc/zl-prediction/panel.env')
-s=p.read_text()
-assert s.count('AUTO_CONFIRM_ENABLED=false\n')==1
+s=Path('/etc/zl-prediction/panel.env').read_text()
+assert s.count('AUTO_CONFIRM_ENABLED=true\n')==1
 assert s.count('RENDER_MIGRATION_PREVIEW=false\n')==1
-s=s.replace('AUTO_CONFIRM_ENABLED=false\n','AUTO_CONFIRM_ENABLED=true\n')
-p.write_text(s)
-p.chmod(0o640)
+print('FOLLOW_DEPLOY_EXISTING_AUTO_CAPABILITY_PRESERVED=true')
 PY
 systemctl start zl-prediction-trade.service
 HEALTHY=no

@@ -1,0 +1,43 @@
+name: Validate sole Selective8 frontend and retired research API cleanup
+on:
+  push:
+    branches: [feature/zl-prediction-aliyun]
+    paths:
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'round-tracker/index-rest.mjs'
+      - '.github/workflows/zl-verify-active-only-cleanup.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate production JS syntax without touching Alibaba or orders
+        run: |
+          node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check round-tracker/index-rest.mjs
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/production-signal-choice.mjs
+          node --check round-tracker/selective-v2-fast8-router.mjs
+      - name: Assert retired UI background loops and independent APIs disabled
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          panel=Path('railway-diagnostic/panel-stats-shell.mjs').read_text()
+          v2=Path('round-tracker/index-rest.mjs').read_text()
+          assert "void noviceMixShadow.start()" not in panel
+          assert "id=\\"edgeIndependentCard\\"" not in panel
+          assert "url.pathname.startsWith('/api/shadow-breakout20/')" in panel
+          assert "retiredModelPaths" in v2
+          assert "map(onlyActiveModelRow)" in v2
+          assert "onlyActiveModelRow(row)" in v2
+          assert 'id="orderSignalModelSelect"' in panel
+          assert "select.replaceChildren();" in panel
+          assert "SELECTIVE_V2_FAST8_PREWARM_V1" in panel
+          print("CLEANUP_STATIC_GUARDS_OK")
+          PY

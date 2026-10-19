@@ -3,6 +3,7 @@
 // localhost V3 market feed + localhost V2 *official* settlement. No Railway,
 // Render, Cloudflare, Polymarket or exchange order-submission clients.
 import http from 'node:http';
+import {readFileSync} from 'node:fs';
 import {edge5mService} from './edge-5m-service.mjs';
 import {dynamicEntryShadow} from './dynamic-entry-shadow.mjs';
 
@@ -37,11 +38,29 @@ const server=http.createServer((req,res)=>{
       startupErrors:metrics.errors});
   }
   if(url.pathname==='/edge-5m'){
-    // Same model identifier, but this is a NEW local model epoch; CF Durable
-    // Object weight/history must not be silently attributed to this engine.
-    return edge5mService.handler(res);
+    // Completely independent local epoch; show old aggregates as an explicitly
+    // archived snapshot only. Never mix or recompute old Cloudflare win rates.
+    const data=edge5mService.snapshot();
+    let archived=null;
+    try{
+      const raw=JSON.parse(readFileSync('/var/lib/zl-prediction/archive/edge-cloudflare-last-public-snapshot.json','utf8'));
+      if(raw.scope==='ARCHIVED_PUBLIC_SNAPSHOT_NOT_COMPLETE_DO_HISTORY'){
+        archived={scope:raw.scope,capturedAt:raw.generatedAt,
+          overall:raw.results?.overall||null,locked:raw.results?.locked??null,
+          observedRounds:raw.results?.observedRounds??null,pending:raw.results?.pending??null,
+          recentOnly:raw.recent?.length||0,completeHistoricRows:false,
+          weightsImported:false};
+      }
+    }catch{}
+    return reply(res,200,{...data,source:'ALIYUN_NATIVE_MODEL_NEW_EPOCH',
+      upstreams:{market:'ALIYUN_V3_LOCAL',official:'ALIYUN_V2_BINANCE_PREDICTION'},
+      legacyArchive:archived});
   }
-  if(url.pathname==='/dynamic-entry')return dynamicEntryShadow.handler(res);
+  if(url.pathname==='/dynamic-entry'){
+    return reply(res,200,{...dynamicEntryShadow.snapshot(),
+      source:'ALIYUN_NATIVE_MODEL',upstreams:{market:'ALIYUN_V3_LOCAL',
+         official:'ALIYUN_V2_BINANCE_PREDICTION'}});
+  }
   return reply(res,404,{ok:false,error:'NOT_FOUND'});
 });
 server.requestTimeout=10000;

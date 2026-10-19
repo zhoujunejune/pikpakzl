@@ -19,7 +19,7 @@ test "$(systemctl is-active zl-prediction-v3)" = active
 test "$(systemctl is-active zl-futures-bot-paper)" = active
 NODE=/opt/zl-prediction-node/bin/node
 test -x "$NODE"
-TMP=$(mktemp)
+TMP=$(mktemp --suffix=.mjs)
 trap 'rm -f "$TMP"' EXIT
 curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/zhoujunejune/pikpakzl/REV/prediction-bot-v1/llm-5m-engine.mjs -o "$TMP"
 "$NODE" --check "$TMP"

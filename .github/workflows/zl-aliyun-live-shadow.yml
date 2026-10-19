@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/zl-aliyun-live-shadow.yml"
       - "futures-research-panel/live_shadow.py"
+      - "futures-research-panel/auto_train.py"
+      - "futures-research-panel/test_auto_train.py"
       - "futures-research-panel/install_live_shadow.sh"
       - "futures-research-panel/test_live_shadow.py"
       - "futures-research-panel/index.html"
@@ -24,7 +26,7 @@ jobs:
       - name: 'Offline tests - read-only API and virtual trade ledger'
         run: |
           bash -n futures-research-panel/install_live_shadow.sh
-          python -m py_compile futures-research-panel/live_shadow.py futures-research-panel/aliyun_live_deploy.py
+          python -m py_compile futures-research-panel/auto_train.py futures-research-panel/live_shadow.py futures-research-panel/aliyun_live_deploy.py
           python -m unittest discover -v -s futures-research-panel -p 'test_live_shadow.py'
           python - <<'PY'
           from pathlib import Path
@@ -40,6 +42,8 @@ jobs:
           source=Path('futures-research-panel/live_shadow.py').read_text()
           assert 'BINANCE_API_SECRET' not in source
           assert '/fapi/v1/order' not in source
+          assert 'import auto_train' in source and 'train_loop()' in source
+          assert 'autoParameterTraining' in source
           PY
           node --check /tmp/forward-shadow-page.js
       - name: Install Alibaba SWAS client
@@ -73,11 +77,29 @@ jobs:
           # This previously returned 404 because Handler compared raw self.path.
           status=json.loads(req('/futures-lab/live.json?t='+str(int(time.time()*1000))))
           assert status.get('realOrders') is False
-          assert status.get('autoParameterTraining') is False
+          assert status.get('autoParameterTraining') is True
+          assert status.get('learning',{}).get('mode')=='walk_forward_parameter_search'
+          assert len(status.get('streams',[]))==9
           assert status.get('kind')=='live_paper_forward_test'
           print('SHADOW_FRONTEND_TIMESTAMPED_URL_HTTP_200=true')
           print('SHADOW_RUNTIME_AVAILABLE=true')
           print('SHADOW_STATUS_STREAMS',len(status.get('streams',[])))
+          # Training starts in its own daemon after the safe shadow restart.
+          # Never conflate enabled training with an actually finished run.
+          for attempt in range(20):
+           training=status.get('learning') or {}
+           if training.get('completedRuns',0)>=1:break
+           time.sleep(10)
+           status=json.loads(req('/futures-lab/live.json?t='+str(int(time.time()*1000))))
+          training=status.get('learning') or {}
+          print('SHADOW_TRAIN_RUNS',training.get('completedRuns'))
+          print('SHADOW_TRAIN_ERROR',str(training.get('error') or 'none')[:95])
+          learned=[r.get('learning') or {} for r in status.get('streams',[])]
+          print('SHADOW_TRAIN_STREAMS_WITH_STATUS',sum(bool(z.get('status')) for z in learned))
+          assert training.get('completedRuns',0)>=1,'AUTO_TRAIN_NOT_COMPLETED_YET'
+          assert sum(bool(z.get('status')) for z in learned)==9,'NOT_ALL_NINE_TRAINED'
+          assert all(not str(z.get('status')).startswith('TRAIN_FAILED') for z in learned),'TRAINING_FAILED'
+
           print('SHADOW_FEED_FRESH',status.get('fresh'))
           print('SHADOW_FEED_ERROR_CLASS',(status.get('error') or '').split(':')[0][:50])
           futures=json.loads(req('/status'))

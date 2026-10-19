@@ -16,6 +16,25 @@ done
 for port in 13001 13002 13003 13004 13005;do
  echo "HEALTH_HTTP_$port=$(curl -s --max-time 4 -o /dev/null -w '%{http_code}' http://127.0.0.1:$port/healthz || true)"
 done
+echo "AUDIT_TIME_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+echo "AUDIT_UPTIME=$(uptime -p)"
+echo "AUDIT_SWAP_MB=$(free -m | awk '/Swap:/{print $2}')"
+echo "AUDIT_DISK_USED=$(df -h / | awk 'NR==2{print $5}')"
+for name in zl-prediction-trade zl-prediction-v2 zl-prediction-v3 zl-exchange-api-manager zl-futures-bot-paper;do
+  echo "AUDIT_RESTARTS_$name=$(systemctl show "$name" --property=NRestarts --value)"
+  echo "AUDIT_MEMORY_CURRENT_$name=$(systemctl show "$name" --property=MemoryCurrent --value)"
+  echo "AUDIT_MEMORY_MAX_$name=$(systemctl show "$name" --property=MemoryMax --value)"
+  echo "AUDIT_MAINPID_$name=$(systemctl show "$name" --property=MainPID --value)"
+done
+for port in 10000 13001 13002 13003 13004 13005 13016;do
+  echo "AUDIT_PORT_$port=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "http://127.0.0.1:$port/healthz" || true)"
+done
+journalctl --no-pager -k --since '3 hours ago' -o cat 2>/dev/null |
+  python3 -c 'import sys,re; s=[x for x in sys.stdin if re.search(r"Out of memory|Killed process|oom-kill|memory cgroup",x,re.I)];print("AUDIT_KERNEL_OOM_EVENTS",len(s))' || true
+for service in zl-prediction-trade zl-prediction-v2 zl-prediction-v3;do
+  journalctl --no-pager -u "$service" --since '3 hours ago' -o cat 2>/dev/null |
+    python3 -c 'import sys,re,collections;lines=sys.stdin.read().splitlines();rules={"heap_failure":r"heap out of memory|Allocation failed|ENOMEM|Mark-Compact|FATAL ERROR","runtime_exception":r"uncaughtException|uncaught exception|TypeError:|ReferenceError:|SyntaxError:","network_failure":r"ECONNREFUSED|ETIMEDOUT|EADDRINUSE|ERR_CONNECTION","process_exit":r"exited|SIGKILL|SIGTERM","redis_error":r"WRONGPASS|NOAUTH|Redis.*Error"};print("AUDIT_JOURNAL_TYPES",len(lines),{k:sum(bool(re.search(p,x,re.I)) for x in lines) for k,p in rules.items()})' || true
+done
 echo "HEALTH_LOG_TRADE_ERROR_TYPES_BEGIN"
 journalctl -u zl-prediction-trade.service --no-pager --since '30 minutes ago' -o cat 2>/dev/null | python3 -c 'import re,sys;lines=[x.strip() for x in sys.stdin if re.search(r"Error:|ERR_|EACCES|ENOENT|Failed|denied|status=|signal=",x,re.I)];print("\n".join(re.sub(r"(?i)(token|secret|password|key)\s*[:=]\s*\S+",r"\1=[REDACTED]",x[:180]) for x in lines[-20:]))' || true
 echo "HEALTH_LOG_TRADE_ERROR_TYPES_END"

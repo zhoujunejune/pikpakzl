@@ -91,7 +91,7 @@ PY
   systemctl restart zl-prediction-trade.service || true
   exit 42
 fi
-node --version
+/opt/zl-prediction-node/bin/node --version
 echo "HOTFIX_LOCAL_HEALTH=200"
 echo "HOTFIX_SERVICE_RESTARTS=$(systemctl show zl-prediction-trade.service -p NRestarts --value)"
 echo "HOTFIX_CADDY_ACTIVE=$(systemctl is-active caddy.service)"

@@ -277,9 +277,12 @@ def public_view():
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path not in ("/futures-lab/live.json","/healthz"):
+        # Browsers attach cache-busting query parameters. Route by parsed path
+        # so ?t=<epoch> never turns a legitimate readonly feed into HTTP 404.
+        route=urllib.parse.urlsplit(self.path).path
+        if route not in ("/futures-lab/live.json","/healthz"):
             self.send_error(404);return
-        data=public_view() if self.path.endswith("live.json") else {"ok":True}
+        data=public_view() if route=="/futures-lab/live.json" else {"ok":True}
         b=json.dumps(data,ensure_ascii=False,separators=(",",":")).encode()
         self.send_response(200)
         self.send_header("Content-Type","application/json; charset=utf-8")

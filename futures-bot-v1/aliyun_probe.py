@@ -29,7 +29,8 @@ curl -fsS --max-time 5 http://127.0.0.1:10000/status | python3 -c '
 import json,sys
 s=json.load(sys.stdin)
 wallet=s.get("futuresWallet") or {}
-print("SERVICE_MODE:",s.get("mode"))\nprint("REAL_TRADE_SWITCH_ENABLED:",s.get("liveTradingEnabled"))
+print("SERVICE_MODE:",s.get("mode"))
+print("REAL_TRADE_SWITCH_ENABLED:",s.get("liveTradingEnabled"))
 print("SERVICE_WORKER_RUNNING:",s.get("workerRunning"))
 print("SERVICE_MARKET_STATUS:",(s.get("marketHealth") or {}).get("status"))
 print("SERVICE_WALLET_READER_STATUS:",wallet.get("status"))
@@ -63,7 +64,10 @@ else:print("STATE_FILE_ABSENT")
 try:
     with urllib.request.urlopen("http://127.0.0.1:10000/status",timeout=4) as resp:
         s=json.load(resp)
-    print("ENGINE_RUNNING:",s.get("workerRunning"))\n    print("LIVE_SWITCH_ENABLED:",s.get("liveTradingEnabled"))\n    print("LIVE_ENGINE_HALTED:",s.get("halted"))\n    print("LIVE_CONFIRMED_POSITION_COUNT:",len(s.get("positions") or []))
+    print("ENGINE_RUNNING:",s.get("workerRunning"))
+    print("LIVE_SWITCH_ENABLED:",s.get("liveTradingEnabled"))
+    print("LIVE_ENGINE_HALTED:",s.get("halted"))
+    print("LIVE_CONFIRMED_POSITION_COUNT:",len(s.get("positions") or []))
     print("ENGINE_ERROR:",str(s.get("workerError") or "")[:170])
     print("MARKET_HEALTH:",(s.get("marketHealth") or {}).get("status"))
     print("CONFIGURED_SYMBOLS:",s.get("configuredSymbols"))

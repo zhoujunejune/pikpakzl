@@ -1,5 +1,4 @@
 import http from 'node:http';
-import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { noviceMixShadow } from './novice-mix-shadow.mjs';
 // EDGE_5M_V1 and DYNAMIC_ENTRY are hosted locally on Alibaba; no external worker in the runtime path.
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
@@ -594,9 +593,9 @@ if(j.productionSignalSourceMode==='BREAKOUT20_FAST8'){
   // If that ledger is unavailable, do not silently fall back to a partial figure.
   s={settledRounds:0,decidedRounds:0,correct:0,wrong:0,noDecision:0,accuracyPct:null,coveragePct:null};
   try{
-    var verifiedResponse=await fetch('/api/shadow-breakout20/status?ts='+Date.now(),{cache:'no-store'});
+    var verifiedResponse=await fetch('/api/postflip-official-stats?model=BREAKOUT20_RSI_MACD_RANGE_V1&ts='+Date.now(),{cache:'no-store'});
     var verified=await verifiedResponse.json();
-    var officialRate=verifiedResponse.ok&&verified.official?.available?verified.official.results:null;
+    var officialRate=verifiedResponse.ok&&verified.ok===true?verified.results:null;
     if(officialRate&&officialRate.overall){
       var v=officialRate.overall;
       s={settledRounds:v.samples,decidedRounds:v.samples,correct:v.hits,
@@ -720,7 +719,8 @@ async function loadOrderModelStats(){
  try{
   var endpoint=chosenOrderModel==='EDGE_5M_V1'?'/api/shadow-breakout20/edge-5m':
  chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'/api/shadow-breakout20/dynamic-entry':
- chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':'/api/shadow-breakout20/status';
+ chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':
+ '/api/postflip-official-stats?model=BREAKOUT20_RSI_MACD_RANGE_V1';
   var response=await fetch(endpoint+'?ts='+Date.now(),{cache:'no-store'});
   var data=await response.json();
   if(!response.ok||data.ok!==true)throw Error('读取失败');
@@ -1072,10 +1072,10 @@ if(chosenOrderModel==='NOVICE_MIX_LOW_V1'){
   var breakout20Official=null;
   if(j.productionSignalSourceMode==='BREAKOUT20_FAST8'){
    try{
-    var officialResponse=await fetch('/api/shadow-breakout20/status?ts='+Date.now(),{cache:'no-store'});
+    var officialResponse=await fetch('/api/postflip-official-stats?model=BREAKOUT20_RSI_MACD_RANGE_V1&ts='+Date.now(),{cache:'no-store'});
     var officialBody=await officialResponse.json();
-    if(officialResponse.ok&&officialBody.official?.available)
-      breakout20Official=officialBody.official.results;
+    if(officialResponse.ok&&officialBody.ok===true)
+      breakout20Official=officialBody.results;
    }catch(_){}
   }
   if(chosenOrderModel==='NOVICE_MIX_LOW_V1')return;
@@ -1310,7 +1310,7 @@ const layoutStabilityStyle = `<style id="dashboard-layout-stability">
 function injectStats(html) {
   if (html.includes('id="roundStatsCard"')) return html;
   const marker = '<div id="riskControlsAnchor"></div>';
-  let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${shadowCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}${shadowCard}</body>`);
+  let out = html.includes(marker) ? html.replace(marker, `${primaryCard}${statsCard}${marker}`) : html.replace('</body>', `${primaryCard}${statsCard}</body>`);
   const inputsMarker='<div class="c" id="tradeInputsCard">';
   if(out.includes(inputsMarker)){
     out=out.replace(inputsMarker,edgeIndependentCard+inputsMarker);
@@ -1340,7 +1340,7 @@ function injectStats(html) {
     out = out.replace('检测 Railway 出口 IP（只读）', '检测 Render 出口 IP（只读）');
   }
   out = out.replace('</head>', layoutStabilityStyle+'</head>');
-  return out.replace('</body>', `${edgeIndependentScript}${primaryScript}${statsScript}${shadowScript}</body>`);
+  return out.replace('</body>', `${edgeIndependentScript}${primaryScript}${statsScript}</body>`);
 }
 
 let child = null;
@@ -1581,7 +1581,6 @@ http.createServer((req, res) => {
     }
   }
   if (req.method === 'GET' && url.pathname === '/api/internal/binance-official-probe') return binanceOfficialReadOnlyProbe(req,res);
-  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status') return proxyShadowStatus(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/novice-mix') return noviceMixShadow.handler(res);
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/edge-5m'){
     void (async()=>{

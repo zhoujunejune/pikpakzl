@@ -33,6 +33,24 @@ code{color:#9bc8f7;font-size:12px}
 <h1>合约策略模拟训练中心</h1>
 <div class="row"><div class="sub">Freqtrade 社区策略原始信号 · 历史合约数据 · 独立离线回放</div><span class="flag">仅模拟 · 不连接实盘下单</span></div>
 <div class="notice" style="margin-top:14px">这不是实盘收益，也不是模型自动学习中的收益。页面展示真实 Binance 历史 K 线上的<strong>历史策略模拟回放</strong>。成交使用独立模拟引擎，不是 Freqtrade 官方回测引擎，且不包含真实资金费、强平或订单簿滑点。</div>
+<section class="card" id="live-forward">
+ <div class="row"><h2>实时行情 · 独立模拟机器人</h2><span class="flag">纯模拟 · 订单数 0</span></div>
+ <div class="notice">使用阿里云独立进程读取 Binance 官方合约行情。**固定开源规则**实时出信号、记虚拟仓位及收益；这不是机器学习自动调参，也不会触发实盘订单。实时模拟从启动之后的新K线开始，历史回测数据不冒充实时胜率。</div>
+ <div class="row" style="margin-top:12px"><strong id="forwardStatus">正在连接实时模拟服务…</strong><small class="sub" id="forwardTime"></small><button onclick="loadForward()">刷新实时结果</button></div>
+ <div class="selects" style="margin-top:12px">
+  <div><label for="forwardPair">实时交易对</label><select id="forwardPair" onchange="showForward()"><option>BTCUSDT</option><option>ETHUSDT</option><option>BTCUSDC</option></select></div>
+  <div><label for="forwardModel">实时模拟策略</label><select id="forwardModel" onchange="showForward()"><option value="TrendFollowingStrategy">TrendFollowing · 5分钟</option><option value="FSampleStrategy">FSample · 1小时</option><option value="FAdxSmaStrategy">FAdxSma · 1小时</option></select></div>
+  <div class="stat"><small>实时标记价</small><strong id="forwardPrice">—</strong></div>
+ </div>
+ <div class="grid" style="margin-top:12px">
+  <div class="stat"><small>模拟净收益（含浮动）</small><strong id="forwardProfit">—</strong><small id="forwardAsset">USDT</small></div>
+  <div class="stat"><small>已平仓模拟胜率</small><strong id="forwardWinrate">—</strong><small id="forwardCount">0 笔</small></div>
+  <div class="stat"><small>当前虚拟仓位</small><strong id="forwardPosition">—</strong><small id="forwardEntry">等待实时信号</small></div>
+  <div class="stat"><small>已观察新K线数</small><strong id="forwardBars">—</strong><small id="forwardSignal">模型固定参数</small></div>
+ </div>
+ <div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>交易对</th><th>策略</th><th>模拟净收益</th><th>模拟已平仓胜率</th><th>交易笔数</th><th>虚拟仓位</th></tr></thead><tbody id="forwardCompare"><tr><td colspan="6">等待实时行情</td></tr></tbody></table></div>
+ <div class="sub" style="margin-top:8px">模拟约定：每组初始 1,000 USDT/USDC，1×、名义仓位约 100；单边手续费 0.05%，估计滑点 0.03%，模拟止损 2%、止盈 3%。每 30 秒采样标记价，可能遗漏采样间的触价。资金费率、强平和真实成交偏差尚未计入。市场数据过期时禁止生成新信号。</div>
+</section>
 <section class="card">
  <div class="row"><h2>模拟任务与数据状态</h2><button onclick="loadReport()">刷新报告</button></div>
  <div class="row"><div id="status" class="sub">读取中…</div><div id="stamp" class="sub"></div></div>
@@ -137,6 +155,46 @@ async function loadReport(){
   $('compare').innerHTML='<tr><td colspan="7">无已校验回测结果</td></tr>';
  }
 }
+let FORWARD=null;
+function showForward(){
+ const stream=FORWARD?.streams?.find(x=>x.symbol===$('forwardPair').value&&x.strategy===$('forwardModel').value);
+ const quote=FORWARD?.market?.[$('forwardPair').value];
+ txt('forwardPrice',quote&&Number.isFinite(quote.markPrice)?Number(quote.markPrice).toFixed(2):'—');
+ txt('forwardProfit',stream?fixed(stream.totalPnlEstimate,4):'—');
+ $('forwardProfit').className=stream&&stream.totalPnlEstimate>=0?'good':'bad';
+ txt('forwardAsset',stream?.currency||($('forwardPair').value==='BTCUSDC'?'USDC':'USDT'));
+ txt('forwardWinrate',stream&&stream.winratePct!==null?pct(stream.winratePct):'尚无交易');
+ txt('forwardCount',stream?stream.closedTrades+' 笔已平仓（'+stream.wins+' 胜）':'—');
+ txt('forwardPosition',stream?.position?.side||'空仓');
+ txt('forwardEntry',stream?.position?'入场 '+fixed(stream.position.entry,4)+' · 止损 '+fixed(stream.position.stop,4):'等待下一根已收盘K线信号');
+ txt('forwardBars',stream?String(stream.seenNewBars):'—');
+ txt('forwardSignal',stream?.lastSignal?'最近信号 '+stream.lastSignal.side+' '+stream.lastSignal.at:'策略固定参数 · 未自动调参');
+}
+function showForwardCompare(){
+ const list=FORWARD?.streams||[];
+ $('forwardCompare').innerHTML=list.length?list.map(x=>'<tr><td>'+esc(x.symbol)+'</td><td>'+esc(x.strategy.replace('Strategy',''))+'</td><td class="'+(x.totalPnlEstimate>=0?'good':'bad')+'">'+fixed(x.totalPnlEstimate,4)+' '+esc(x.currency)+'</td><td>'+(x.winratePct===null?'—':pct(x.winratePct))+'</td><td>'+esc(x.closedTrades)+'</td><td>'+esc(x.position?.side||'空仓')+'</td></tr>').join(''):'<tr><td colspan="6">尚未获取到实时模拟数据</td></tr>';
+}
+async function loadForward(){
+ try{
+  const r=await fetch('/futures-lab/live.json?t='+Date.now(),{cache:'no-store'});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  const j=await r.json();
+  if(j.kind!=='live_paper_forward_test'||j.realOrders!==false||!Array.isArray(j.streams))throw new Error('模拟数据校验失败');
+  FORWARD=j;
+  txt('forwardStatus',j.error?'行情异常 / 已暂停更新：'+j.error:(j.fresh?'真实行情连接正常 · 正在实时模拟':'行情未就绪或过期 · 等待恢复'));
+  $('forwardStatus').className=j.fresh&&!j.error?'good':'warn';
+  txt('forwardTime','行情更新时间 '+(j.updatedAt||'暂无'));
+  showForward();showForwardCompare();
+ }catch(e){
+  FORWARD=null;
+  txt('forwardStatus','实时模拟服务暂未就绪：'+e.message);
+  $('forwardStatus').className='warn';
+  txt('forwardTime','历史回测可继续查看');
+  showForward();showForwardCompare();
+ }
+}
+loadForward();
+setInterval(loadForward,30000);
 loadReport();
 setInterval(loadReport,120000);
 </script></body></html>

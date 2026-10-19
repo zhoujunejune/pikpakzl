@@ -683,11 +683,36 @@ const edgeRescueExpansion = createEdgeRescueExpansion({
   onPersist: saveHistory,
 });
 
+// Retain exactly the source data required by the active Selective V2 8s
+// router and official Binance Prediction settlement. Old shadow-model
+// score/history fields are not written back to active or archive storage.
+const RETIRED_MODEL_ROW_KEYS = new Set([
+  'lockQualityShadow','adaptiveGateShadow','preLockAdaptiveShadow',
+  'baseDirectionRescueV2','selectiveV2NoBaseShadow','selectiveV2NoBaseContest',
+  'selectiveV2HighPrecisionShadow','v3NoBase15sShadow',
+  'v3NoBase20sShadow','v3TrendBandForward',
+  'shadowCandidateProbability','shadowCandidateTrainedAt',
+  'shadowFacts','shadowModelTrainedAt','shadowObservedAt',
+  'shadowProbability','calibrationComponents','calibrationMethod',
+  'calibrationReady','calibrationSamples'
+]);
+function onlyActiveModelRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const cleaned={...row};
+  for (const k of RETIRED_MODEL_ROW_KEYS) delete cleaned[k];
+  for (const k of Object.keys(cleaned)) {
+    if (k.startsWith('shadow')||k.startsWith('lockQuality')||
+        k.startsWith('preLock')||k.startsWith('adaptiveGate'))
+      delete cleaned[k];
+  }
+  return cleaned;
+}
+
 function saveHistory() {
   try {
     const data = Array.from(rounds.values())
       .sort((a, b) => a.roundStartMs - b.roundStartMs)
-      .slice(-HISTORY_LIMIT);
+      .slice(-HISTORY_LIMIT).map(onlyActiveModelRow);
     const temp = `${HISTORY_FILE}.tmp-${process.pid}`;
     fs.writeFileSync(temp, JSON.stringify(data), 'utf8');
     fs.renameSync(temp, HISTORY_FILE);
@@ -894,7 +919,7 @@ function archiveSettledRow(row, reason = 'settlement') {
   try {
     fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
     const record = {
-      ...row,
+      ...onlyActiveModelRow(row),
       archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
       archivedAt: Date.now(),
     };
@@ -6460,6 +6485,37 @@ const signalHttpServer = http.createServer((req, res) => {
     const p = payload();
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ ok: true, health: p.health }));
+  }
+
+  // User retired all independent non-production research models. Keep only
+  // immutable Selective8 locks, official resolution, and current round stats.
+  const retiredModelPaths = new Set([
+    '/api/training-status','/api/calibration-backtest','/api/shadow-stats',
+    '/api/shadow-v2-stats','/api/shadow-v3-stats','/api/shadow35-stats',
+    '/api/fast8-stats','/api/fast8-latest','/api/no-base-specialist-stats',
+    '/api/15s-candidate-registry',
+    '/api/pm-current25-support08-15s-production-stats',
+    '/api/current03-pm-agree-15s-production-stats',
+    '/api/v3-no-base-15s-stats','/api/v3-trend-band-forward-stats',
+    '/api/vip75-input-version-stats','/api/independent-direction-stats',
+    '/api/base-direction-rescue-v2-stats','/api/shadow-v4-stats',
+    '/api/shadow-v5-stats','/api/shadow-v7-stats',
+    '/api/selective-v2-optimization-backtest',
+    '/api/selective-v2-filtered-wait-rescue-backtest',
+    '/api/selective-v2-edge-rescue-stats',
+    '/api/selective-v2-edge-expansion-stats',
+    '/api/selective-v2-no-base-shadow-stats',
+    '/api/wait-rescue-shadow-stats','/api/wait-rescue-backtest',
+    '/api/selective-v2-no-base-contest-stats',
+    '/api/shadow-quality-v2-stats','/api/selective-v2-hard-fuse',
+    '/api/selective-v2-high-precision-shadow-stats',
+    '/api/adaptive-gate-shadow-stats','/api/prelock-adaptive-shadow-stats',
+    '/api/breakout20-official-accuracy'
+  ]);
+  if (req.method === 'GET' && retiredModelPaths.has(url.pathname)) {
+    res.writeHead(410, { 'content-type':'application/json; charset=utf-8',
+      'cache-control':'no-store' });
+    return res.end(JSON.stringify({ok:false,error:'LEGACY_SIGNAL_MODEL_RETIRED'}));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/training-status') {

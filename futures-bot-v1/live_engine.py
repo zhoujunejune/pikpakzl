@@ -241,7 +241,7 @@ def snapshot(worker,quotes):
     positions=[position_view(t,quotes,bot.TAKER_FEE) for t in held]
     from wallet_view import public_wallet
     return {"app":"zl-futures-bot-v1","mode":"live","liveTradingEnabled":control["enabled"],
-      "liveControl":control,"workerRunning":worker["running"],"workerError":worker["error"],
+      "liveControl":control,"control":read_control(),"workerRunning":worker["running"],"workerError":worker["error"],
       "configuredSymbols":list(SYMBOLS),"positions":held,
       "positionDetails":[x for x in positions if x is not None],
       "latestPrices":quotes,"futuresWallet":public_wallet(worker.get("wallet")),

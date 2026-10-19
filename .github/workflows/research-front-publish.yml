@@ -28,7 +28,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           s=Path("research/freqtrade-futures-20261019/index.html").read_text()
-          assert "真实收益" in s and "离线" in s
+          assert "真实获利" in s and "历史回放" in s
           print("RESEARCH_UI_DISCLAIMER_PRESENT=true")
           PY
       - name: Download pinned open source trading strategies

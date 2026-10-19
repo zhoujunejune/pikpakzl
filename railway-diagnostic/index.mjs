@@ -786,23 +786,11 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       marketTopicId: pendingAction.marketTopicId,
       quoteMode: pendingAction.quoteMode,
     }));
-    // Only a PIN-authenticated user can enable following. Run exactly one
-    // backend confirmation attempt when a fresh signed intent becomes READY.
-    // No browser needs to remain open; no signal if controls are OFF.
-    if(enabled && deploymentAllowsLiveFollowing() &&
-       process.env.AUTO_CONFIRM_ENABLED==='true'){
-      const ready=pendingAction;
-      setImmediate(()=>{
-        if(enabled && pendingAction===ready && ready.state==='READY')
-          void processOrderConfirmation(makeInternalOrderResult(),
-            {confirmationToken:ready.confirmationToken},{automatic:true})
-            .catch(e=>{
-              enabled=false;
-              console.error(JSON.stringify({event:'auto_order_unhandled_halted',
-                error:String(e?.message||e).slice(0,150)}));
-            });
-      });
-    }
+    // wrapper.mjs owns the sole automatic-confirm scheduler and shares
+    // submitPendingOrder with manual confirmation. A second scheduler here
+    // would race and could attempt duplicate quotes/submissions. Deliberately
+    // no auto-submit call in this base handler.
+
   } finally {
     prepareInFlight = false;
   }

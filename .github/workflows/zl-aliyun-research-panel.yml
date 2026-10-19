@@ -27,7 +27,7 @@ jobs:
           Path('/tmp/research-ui.js').write_text(js)
           installer=Path('futures-research-panel/install_aliyun.sh').read_text()
           assert 'systemctl restart' not in installer
-          assert 'systemctl reload' in installer
+          assert "['systemctl','reload','caddy']" in installer
           assert 'zl-futures-bot-paper' in installer
           assert 'basic_auth' in installer
           PY

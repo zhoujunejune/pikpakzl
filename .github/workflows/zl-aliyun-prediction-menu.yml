@@ -4,7 +4,8 @@ on:
     branches: [feature/zl-futures-bot-v1]
     paths:
       - '.github/workflows/zl-aliyun-prediction-menu.yml'
-      - 'prediction-bot-v1/**'
+      - 'prediction-bot-v1/serve.py'
+      - 'prediction-bot-v1/aliyun_deploy.py'
       - 'futures-bot-v1/dashboard.py'
   workflow_dispatch:
 permissions:

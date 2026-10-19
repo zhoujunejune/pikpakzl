@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { hydrateRiskConfig } from './risk-config-storage.mjs';
+import { RISK_CONFIG_FILE as CONTROL_FILE, hydrateRiskConfig } from './risk-config-storage.mjs';
 
-const CONTROL_FILE = '/tmp/risk-control.json';
-const STATUS_FILE = '/tmp/risk-runtime-status.json';
+
+const STATUS_FILE = process.env.RISK_STATUS_FILE || '/tmp/risk-runtime-status.json';
 const CHECK_MS = 300;
 const STATUS_MS = 2000;
 

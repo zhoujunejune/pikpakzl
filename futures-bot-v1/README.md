@@ -12,7 +12,7 @@ A standalone trend-breakout Binance **USD(S)-M futures** bot for a 200 U synthet
 
 ## Strategy
 
-5-minute **closed-candle** breakout above prior 12 bars or below prior 12 bars, aligned with closed 1-hour EMA20/EMA50 trend; requires volume >1.3x prior 20-bar average. Stop distance = max(1.5 ATR14, 0.4% price), take-profit target = 1.8R. One position across BTCUSDT, ETHUSDT and BTCUSDC. No compulsory trades and no trade in the same bar twice. 30-min cooldown.
+5-minute **closed-candle** breakout above prior 12 bars or below prior 12 bars, aligned with closed 1-hour EMA20/EMA50 trend; requires volume >1.3x prior 20-bar average. Stop distance = max(1.5 ATR14, 0.4% price), take-profit target = 1.8R. Paper mode: BTCUSDT, ETHUSDT and BTCUSDC scan independently and may each hold one simulated position concurrently (up to three total). No compulsory entries, no repeated signal in the same closed 5-minute bar, and **no post-close cooldown**. Existing paper trades migrate from the former single-trade field without resetting historical PnL or balances. Paper positions share one synthetic U wallet with reservation for other open margins. Live execution is deliberately unchanged, remains single-position, and is not certified.
 
 ## Reference configuration (not profit forecasts)
 

@@ -13,6 +13,7 @@ from controls import read_control, change
 from dashboard import PAGE
 from market_health import snapshot as market_snapshot
 from position_view import view as paper_position_view
+from paper_portfolio import positions_for_display, reserved_margin
 import quotes
 from preflight import assess
 
@@ -64,16 +65,17 @@ def public_snapshot():
                 st["closed"]+=1
                 st["wins"]+=int(net>0)
                 st["net"]+=net
-        position=current.get("trade") or {}
-        if position.get("symbol") in stats:
-            stats[position["symbol"]]["open"]=True
+        paper_positions=positions_for_display(current)
+        for symbol in paper_positions:
+            if symbol in stats:
+                stats[symbol]["open"]=True
         for st in stats.values():
             st["net"]=round(st["net"],4)
-        last_exit=float(current.get("last_exit") or 0)
-        cooldown_remaining=max(0,int(1800-max(0,time.time()-last_exit))) if last_exit else 0
         market=market_snapshot(WORKER["running"])
         latest_prices=quotes.current()
-        position_detail=paper_position_view(current.get("trade"),latest_prices,bot.TAKER_FEE)
+        positions=list(paper_positions.values())
+        position_details=[paper_position_view(trade,latest_prices,bot.TAKER_FEE) for trade in positions]
+        position_details=[p for p in position_details if p is not None]
         # A worker thread is not by itself evidence of fresh Binance prices.
         if WORKER["error"] and any(x in WORKER["error"] for x in ("418","429","451")):
             market["status"]="exchange_restricted"
@@ -93,16 +95,21 @@ def public_snapshot():
             "wins":sum(1 for x in days if x>0),
             "losses":sum(1 for x in days if x<=0),
             "symbolStats":stats,
-            "onePositionAcrossAllSymbols":True,
-            "cooldownRemainingSeconds":cooldown_remaining,
+            "onePositionAcrossAllSymbols":False,
+            "onePositionPerSymbol":True,
+            "cooldownRemainingSeconds":0,
+            "maxConcurrentPaperPositions":len(bot.SYMBOLS),
+            "paperReservedMargin":round(reserved_margin(paper_positions,read_control()["leverage"]),4),
             "lastTrades":[{"symbol":str((t.get("trade") or {}).get("symbol","UNKNOWN")),
                            "side":str((t.get("trade") or {}).get("side","")),
                            "net":round(float(t.get("net",0)),4),
                            "reason":str(t.get("reason",""))[:30],
                            "at":t.get("at"),
                            "marginAsset":"USDC" if (t.get("trade") or {}).get("symbol")=="BTCUSDC" else "USDT"} for t in trades[-12:]],
-            "position":current.get("trade"),
-            "positionDetail":position_detail,
+            "position":positions[0] if positions else None,  # old API consumer compatibility
+            "positionDetail":position_details[0] if position_details else None,
+            "positions":positions,
+            "positionDetails":position_details,
             "latestPrices":latest_prices,
             "halted":bool(current.get("halt",False)),
             "workerRunning":WORKER["running"],

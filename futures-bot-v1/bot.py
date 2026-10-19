@@ -20,6 +20,7 @@ import requests
 from controls import read_control
 from market_health import record as record_market_response, record_error as record_market_error
 from symbol_config import ALLOWED_SYMBOLS, DEFAULT_SYMBOLS, margin_asset
+from paper_portfolio import positions_for_display, migrate_paper_state, reserved_margin
 
 def env_float(k, d):
     return float(os.getenv(k, d))
@@ -236,24 +237,25 @@ def pnl(trade, exit_price):
             - (exit_price+trade["entry"])*trade["qty"]*TAKER_FEE)
 
 def reconcile(api,state):
-    trade=state.get("trade")
     if MODE=="paper":
-        if trade is None:
-            return
-        mark=paper_price(api,trade["symbol"])
-        hit_stop=mark<=trade["stop"] if trade["side"]=="BUY" else mark>=trade["stop"]
-        hit_tp=mark>=trade["tp"] if trade["side"]=="BUY" else mark<=trade["tp"]
-        if hit_stop or hit_tp:
-            result=pnl(trade,mark)
-            state["balance"]+=result
-            state["history"].append({"trade":trade,"exit":mark,"net":result,
-                "reason":"STOP" if hit_stop else "TAKE_PROFIT","at":int(time.time())})
-            state["history"]=state["history"][-500:]
-            state["trade"]=None
-            state["last_exit"]=time.time()
-            save(state)
-            log("paper_closed",net=round(result,4),balance=round(state["balance"],4))
+        # Every simulated symbol has its own stop/take-profit and settlement.
+        # A missing or restricted exchange quote never fabricates an exit.
+        for symbol,trade in list(positions_for_display(state).items()):
+            mark=paper_price(api,symbol)
+            hit_stop=mark<=trade["stop"] if trade["side"]=="BUY" else mark>=trade["stop"]
+            hit_tp=mark>=trade["tp"] if trade["side"]=="BUY" else mark<=trade["tp"]
+            if hit_stop or hit_tp:
+                result=pnl(trade,mark)
+                state["balance"]+=result
+                state["history"].append({"trade":trade,"exit":mark,"net":result,
+                    "reason":"STOP" if hit_stop else "TAKE_PROFIT","at":int(time.time())})
+                state["history"]=state["history"][-500:]
+                state["paper_positions"].pop(symbol)
+                state["last_exit"]=time.time()  # informational only; no paper cooldown
+                save(state)
+                log("paper_closed",symbol=symbol,net=round(result,4),balance=round(state["balance"],4))
         return
+    trade=state.get("trade")
     positions=api.positions()
     bot_positions=[p for p in positions if p["symbol"] in SYMBOLS]
     if trade:
@@ -296,10 +298,16 @@ def flatten(api,p):
         "newClientOrderId":"ZL_EM_"+uuid.uuid4().hex[:20]},signed=True)
     log("emergency_flatten_submitted",symbol=p["symbol"])
 
-def paper_enter(api,state,s,quantity):
-    sym=s["symbol"]; price=paper_price(api,sym); sl,tp=levels(s["side"],price,s["distance"])
-    state["trade"]={"symbol":sym,"side":s["side"],"qty":quantity,"entry":price,
-                    "stop":sl,"tp":tp,"at":int(time.time()),"paper":True}
+def paper_enter(api,state,s,quantity,leverage=None):
+    sym=s["symbol"]
+    if sym in positions_for_display(state):
+        raise RuntimeError("Paper position already open for "+sym)
+    price=paper_price(api,sym)
+    sl,tp=levels(s["side"],price,s["distance"])
+    lev=LEVERAGE if leverage is None else leverage
+    state["paper_positions"][sym]={"symbol":sym,"side":s["side"],"qty":quantity,"entry":price,
+                    "stop":sl,"tp":tp,"at":int(time.time()),"paper":True,
+                    "leverage":lev,"margin_reserved":round(quantity*price/lev,8)}
     save(state)
     log("paper_open",symbol=sym,side=s["side"],qty=quantity,entry=price,stop=sl,tp=tp)
 
@@ -365,6 +373,8 @@ def live_enter(api,state,s,quantity,info):
     log("live_open_with_stop",symbol=symbol,side=s["side"],qty=qty,entry=entry,stop=sl,tp=tp)
 
 def tick(api,state):
+    if MODE=="paper":
+        migrate_paper_state(state,save)
     if state.get("pending"):
         state["halt"]=True;save(state)
         log("pending_entry_manual_reconciliation_required",pending=state["pending"])
@@ -380,10 +390,12 @@ def tick(api,state):
     control=read_control() if MODE=="paper" else None
     if control is not None and (not control["entry_enabled"] or control["emergency_stop"]):
         return
-    if state.get("trade"):
-        return
-    if time.time()-state.get("last_exit",0)<1800:
-        return
+    if MODE=="live":
+        # This unverified real-order path remains single-position and unchanged.
+        if state.get("trade"):
+            return
+        if time.time()-state.get("last_exit",0)<1800:
+            return
     today=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     # Paper uses one synthetic U wallet, USDT and USDC accounted 1:1.
     # Live sizes using settlement-specific wallets; daily loss aggregates both,
@@ -408,6 +420,8 @@ def tick(api,state):
     markets=api.info()
     candidates=[]
     for sym in SYMBOLS:
+        if MODE=="paper" and sym in positions_for_display(state):
+            continue
         contract=markets.get(sym)
         if (not contract or contract.get("status")!="TRADING"
             or contract.get("contractType")!="PERPETUAL"
@@ -421,26 +435,43 @@ def tick(api,state):
     candidates.sort(key=lambda x:x["strength"],reverse=True)
     for s in candidates:
         signal_key=f'{s["symbol"]}-{s["candle_close"]}'
-        if state.get("last_signal")==signal_key:
-            continue
-        state["last_signal"]=signal_key;save(state)
+        if MODE=="paper":
+            if state["last_signals"].get(s["symbol"])==signal_key:
+                continue
+            state["last_signals"][s["symbol"]]=signal_key
+        else:
+            if state.get("last_signal")==signal_key:
+                continue
+            state["last_signal"]=signal_key
+        save(state)
         current=api.mark(s["symbol"])
         if abs(current-s["price"])/s["price"]>.002:
             log("stale_signal_price_drift",symbol=s["symbol"])
             continue
         wallet=state["balance"] if MODE=="paper" else live_balances[margin_asset(s["symbol"])]
+        # Share one synthetic wallet: reserve margin for existing paper positions,
+        # while each eligible symbol is permitted one concurrent simulated order.
+        paper_leverage=control["leverage"] if control else LEVERAGE
+        paper_margin_fraction=None
+        if MODE=="paper":
+            free_margin=max(0.0,wallet-reserved_margin(positions_for_display(state),paper_leverage))
+            paper_margin_fraction=min(control["max_margin_fraction"],free_margin/wallet) if wallet>0 else 0
+            if paper_margin_fraction<=0:
+                log("paper_no_free_margin",symbol=s["symbol"])
+                continue
         q=quantity_for(wallet,current,s["distance"],markets[s["symbol"]],
                        risk_fraction=control["risk_fraction"] if control else None,
-                       margin_fraction=control["max_margin_fraction"] if control else None,
-                       leverage=control["leverage"] if control else None)
+                       margin_fraction=paper_margin_fraction if MODE=="paper" else None,
+                       leverage=paper_leverage if MODE=="paper" else None)
         if q<=0:
             log("skip_below_minimum_order",symbol=s["symbol"])
             continue
         if MODE=="live":
             live_enter(api,state,s,q,markets[s["symbol"]])
-        else:
-            paper_enter(api,state,s,q)
-        break
+            break
+        paper_enter(api,state,s,q,leverage=paper_leverage)
+        # No break and no 30-minute cooldown: evaluate all remaining pairs.
+        # Same symbol stays limited to one open position and one signal per 5m bar.
 
 def main():
     api=API()

@@ -28,7 +28,10 @@ class DashboardSymbolStatsTests(unittest.TestCase):
         self.assertEqual(data["symbolStats"]["BTCUSDC"]["closed"],0)
         self.assertEqual(data["lastTrades"][0]["symbol"],"ETHUSDT")
         self.assertEqual(data["lastTrades"][0]["side"],"SELL")
-        self.assertTrue(data["onePositionAcrossAllSymbols"])
+        self.assertFalse(data["onePositionAcrossAllSymbols"])
+        self.assertTrue(data["onePositionPerSymbol"])
+        self.assertEqual(data["cooldownRemainingSeconds"],0)
+        self.assertEqual(len(data["positions"]),1)
 
 if __name__=="__main__":
     unittest.main()

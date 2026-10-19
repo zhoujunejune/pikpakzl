@@ -69,7 +69,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 <div><label for="margin">单笔保证金比例上限</label><select id="margin"><option value="0.05">5%</option><option value="0.1">10%</option><option value="0.15">15%</option><option value="0.2">20%</option></select></div>
 </div><button class="primary" style="width:100%;margin-top:15px" onclick="saveParams()">保存模拟参数</button>
 <small>模拟共用一个资金池，USDT和USDC按1:1记账，并非真实保证金余额。杠杆只改变仓位规模上限，并非收益倍增保证；止损可能因跳空、滑点产生额外亏损。</small></section>
-<section class="card"><h2>当前模拟持仓</h2>
+<section class="card"><h2>当前模拟持仓（可同时最多3个交易对）</h2>
 <div id="flat" class="sub">暂无持仓</div>
 <div id="position-fields" style="display:none">
  <div class="row"><b id="pos-symbol">—</b><b id="pos-side">—</b></div>
@@ -85,11 +85,12 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
  <div class="posfoot" id="pos-distance">—</div>
  <div class="posfoot">仅模拟：止盈止损由机器人按周期检查标记价格，可能出现滑点。浮动盈亏扣除估算双边手续费，不含资金费率及真实成交滑点。</div>
 </div>
+<div id="other-positions"></div>
 </section>
 <section class="card"><h2>各交易对模拟统计</h2>
 <div id="symbol-stats" class="sub">正在读取…</div>
 <div class="row" style="margin-top:12px;align-items:start"><small>为什么暂时没有其他开仓？</small><b id="entry-reason" style="text-align:right;max-width:69%;font-size:12px">正在读取…</b></div>
-<small>全机器人只允许一个持仓，已有持仓期间不再新开其他币对；平仓后冷却30分钟。即使空仓，也要符合突破、成交量和趋势条件。这里展示真实记录，不代表每个交易对都必须成交。</small>
+<small>三种合约独立扫描，符合策略条件就可分别开仓、同时持仓；各交易对同一时刻最多一单。已取消模拟平仓后30分钟冷却；仍须满足突破、成交量和趋势条件，同一根5分钟K线的信号只使用一次。模拟资金池共用，并非无限保证金。</small>
 </section>
 <section class="card"><h2>最近12笔模拟平仓（含交易对）</h2><div id="trades" class="sub">暂无记录</div></section>
 <section class="card"><h2>安全与数据</h2><small id="storage">状态读取中</small><p class="sub" style="font-size:12px">2026年实验版 · 模拟成交基于标记价格估算，并非交易所真实成交结果。页面需HTTPS身份验证；请勿公开密码。</p></section>
@@ -141,10 +142,11 @@ async function refresh(){
     el(prefix+"-meta").textContent=q.price===null||q.price===undefined?
       "暂无有效价格":(q.stale?"已过期 · ":"更新正常 · ")+elapsed(q.ageSeconds)+" · "+readableTime(q.updatedAt);
   }
-  const p=s.positionDetail;
+  const holdings=s.positionDetails||[];
+  const p=holdings[0]||s.positionDetail;
   el("position-fields").style.display=p?"block":"none";
   el("flat").style.display=p?"none":"block";
-  el("flat").textContent=s.position&&!p?"持仓数据不完整，请检查机器人状态":"当前空仓，未产生模拟开仓价和止盈止损价";
+  el("flat").textContent=(s.positions||[]).length&&!p?"持仓数据不完整，请检查机器人状态":"当前空仓，未产生模拟开仓价和止盈止损价";
   if(p){
     el("pos-symbol").textContent=p.symbol;
     el("pos-side").textContent=p.side==="BUY"?"做多 / BUY":"做空 / SELL";
@@ -162,6 +164,21 @@ async function refresh(){
       "最新价格尚未确认，不展示止盈止损的当前距离":
       "距止盈 "+fmt(p.distanceToTakeProfitPct)+"% · 距止损 "+fmt(p.distanceToStopPct)+"%";
   }
+  el("other-positions").innerHTML=holdings.slice(1).map(t=>{
+    const gain=t.estimatedNetPnl;
+    const profit=gain===null?"—（行情过期）":(gain>0?"+":"")+fmt(gain)+" "+safe(t.marginAsset||"USDT")+"（估算）";
+    return '<div class="level" style="margin-top:12px">'+
+      '<div class="row"><b>'+safe(t.symbol)+'</b><b class="'+(t.side==="BUY"?"good":"bad")+'">'+
+      (t.side==="BUY"?"做多 / BUY":"做空 / SELL")+'</b></div>'+
+      '<div class="levels">'+
+      '<div class="level"><small>模拟开仓价</small><strong>'+priceFmt(t.entryPrice)+'</strong></div>'+
+      '<div class="level"><small>当前标记价</small><strong>'+priceFmt(t.markPrice)+'</strong></div>'+
+      '<div class="level"><small>止盈目标</small><strong class="tpnum">'+priceFmt(t.takeProfitPrice)+'</strong></div>'+
+      '<div class="level"><small>止损目标</small><strong class="stopnum">'+priceFmt(t.stopPrice)+'</strong></div>'+
+      '<div class="level"><small>浮动净盈亏</small><strong>'+profit+'</strong></div>'+
+      '<div class="level"><small>持仓数量</small><strong>'+qtyFmt(t.quantity)+'</strong></div></div>'+
+      '<div class="posfoot">开仓时间：'+readableTime(t.openAt*1000)+' · '+(t.markPriceStale?"标记价格已过期":"标记价格更新正常")+'</div></div>';
+  }).join("");
   const stats=s.symbolStats||{};
   el("symbol-stats").innerHTML=(s.configuredSymbols||["BTCUSDT","ETHUSDT","BTCUSDC"]).map(sym=>{
     const item=stats[sym]||{},closed=item.closed||0,wins=item.wins||0;
@@ -170,10 +187,9 @@ async function refresh(){
     return '<div class="trade"><span><b>'+safe(sym)+'</b>'+(item.open?' · <b class="good">当前持仓</b>':' · 空仓')+
       '</span><span>平仓 '+closed+' · 胜 '+wins+' · '+wr+'</span><b>'+net+' U</b></div>';
   }).join("");
+  const active=(s.positions||[]).map(p=>p.symbol);
   const blocked=s.halted?"内部安全锁定":c.emergency_stop?"紧急锁定":!c.entry_enabled?"已暂停新开仓":
-    s.position?"当前 "+safe(s.position.symbol)+" 已持仓，其他币对等待":
-    s.cooldownRemainingSeconds>0?"平仓冷却中，剩余 "+Math.ceil(s.cooldownRemainingSeconds/60)+" 分钟":
-    "允许扫描，等待符合策略条件的信号";
+    "独立扫描中 · "+(active.length?"持仓："+active.join("、")+"；其他币对可独立开仓":"当前空仓，等待符合策略的信号")+" · 无平仓冷却";
   el("entry-reason").textContent=blocked;
   el("storage").textContent=s.storageNote||"模拟数据";
   el("trades").innerHTML=(s.lastTrades||[]).length?s.lastTrades.slice().reverse().map(x=>

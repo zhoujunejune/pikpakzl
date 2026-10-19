@@ -57,6 +57,8 @@ try:
     print("MARKET_HEALTH:",(s.get("marketHealth") or {}).get("status"))
     print("CONFIGURED_SYMBOLS:",s.get("configuredSymbols"))
     print("SUPPORTED_SYMBOLS:",s.get("supportedSymbols"))
+    print("SYMBOL_STATS:",s.get("symbolStats"))
+    print("LAST_TRADES_SYMBOLS:",[x.get("symbol") for x in (s.get("lastTrades") or [])])
     print("NEW_ENTRIES_ENABLED:",(s.get("control") or {}).get("entry_enabled"))
     print("EMERGENCY_STOP:",(s.get("control") or {}).get("emergency_stop"))
     for key in ("BTCUSDT","ETHUSDT","BTCUSDC"):

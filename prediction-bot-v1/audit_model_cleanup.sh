@@ -46,3 +46,41 @@ try:
  print('PRUNE_AUDIT_REDIS_PREFIXES',counts)
 except Exception as e:print('PRUNE_AUDIT_REDIS_ERROR',type(e).__name__)
 PY
+
+echo "PRUNE_FINAL_VERIFICATION_BEGIN"
+test ! -f /etc/systemd/system/zl-prediction-native-models.service
+for name in local-model-host.mjs edge-5m-service.mjs dynamic-entry-shadow.mjs dynamic-entry-shadow-core.mjs novice-mix-shadow.mjs postflip-official-stats.mjs shadow-breakout20-dashboard.mjs;do
+ test ! -f "/opt/zl-prediction-live/src/railway-diagnostic/$name" || exit 21
+done
+test ! -f /var/lib/zl-prediction/archive/edge-cloudflare-last-public-snapshot.json
+test ! -f /var/lib/zl-prediction/archive/breakout20-cloudflare-last-public-snapshot.json
+python3 - <<'PY'
+import os,json,pathlib,subprocess,urllib.request,urllib.error
+from collections import Counter
+root=pathlib.Path('/var/lib/zl-prediction/rounds')
+rows=json.loads((root/'round-history.json').read_text())
+MODEL='SELECTIVE_V2_FAST8_PREWARM_V1'
+assert len(rows)>0
+for row in rows:
+ assert row.get('productionModel') in (None,MODEL)
+ assert not any(k.startswith(('shadow','lockQuality','preLock','adaptiveGate')) for k in row)
+ assert not any(k in row for k in ('calibrationComponents','calibrationMethod','calibrationReady','calibrationSamples',
+ 'baseDirectionRescueV2','selectiveV2NoBaseShadow','selectiveV2HighPrecisionShadow'))
+print('PRUNE_FINAL_ACTIVE_LEDGER_ROWS',len(rows),'onlyModel',MODEL)
+for file in (root/'round-history.json.archive').glob('v6-rounds-*.jsonl'):
+ lines=[json.loads(line) for line in file.read_text().splitlines() if line.strip()]
+ assert all(x.get('productionModel') in (None,MODEL) and not any(k.startswith('shadow') for k in x) for x in lines)
+ print('PRUNE_FINAL_ARCHIVE',file.name,'rows',len(lines))
+with urllib.request.urlopen('http://127.0.0.1:13001/api/order-signal-model',timeout=12) as response:
+ model=json.load(response)
+assert model.get('model')==MODEL and len(model.get('models') or [])==1
+print('PRUNE_FINAL_ORDER_MODEL_FIXED',MODEL)
+pw=pathlib.Path('/etc/zl-prediction/redis-auth').read_text().strip()
+env=os.environ.copy();env['REDISCLI_AUTH']=pw
+for pattern in ('shadow:*','breakout20:*'):
+ result=subprocess.run(['redis-cli','-h','127.0.0.1','-p','6385','--scan','--pattern',pattern],
+   capture_output=True,text=True,env=env,timeout=15)
+ assert result.returncode==0 and not result.stdout.strip(),pattern
+ print('PRUNE_FINAL_REDIS_NAMESPACE_EMPTY',pattern)
+print('PRUNE_FINAL_NO_INDEPENDENT_MODELS=true')
+PY

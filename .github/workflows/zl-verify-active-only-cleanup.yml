@@ -31,7 +31,7 @@ jobs:
           panel=Path('railway-diagnostic/panel-stats-shell.mjs').read_text()
           v2=Path('round-tracker/index-rest.mjs').read_text()
           assert "void noviceMixShadow.start()" not in panel
-          assert "id=\\"edgeIndependentCard\\"" not in panel
+          assert 'id="edgeIndependentCard"' not in panel
           assert "url.pathname.startsWith('/api/shadow-breakout20/')" in panel
           assert "retiredModelPaths" in v2
           assert "map(onlyActiveModelRow)" in v2

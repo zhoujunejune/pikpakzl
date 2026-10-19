@@ -1,0 +1,25 @@
+name: Audit Alibaba-only model data and official settlement provenance
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_cutover_audit.py'
+      - '.github/workflows/zl-aliyun-cutover-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  readonly-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Verify active model source files and V2 official evidence locally on Alibaba
+        env:
+          ALIBABA_CLOUD_ACCESS${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}ID: _KEY_
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_cutover_audit.py

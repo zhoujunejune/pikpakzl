@@ -1,0 +1,74 @@
+name: RESEARCH - Publish verified simulation summary (no trading)
+on:
+  push:
+    branches: [research/freqtrade-futures-20261019]
+    paths: [".github/workflows/research-publish-report.yml"]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/freqtrade-futures-20261019
+          persist-credentials: true
+      - name: Download exact successful isolated public-data simulation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/futures-sim
+          gh run download 39275338944 --repo "${{ github.repository }}" --name zl-offline-futures-strategies-public-archive --dir /tmp/futures-sim
+      - name: Verify, sanitize and publish only synthetic metrics and sparse equity curves
+        run: |
+          python3 - <<'PY'
+          import json,math,pathlib,datetime
+          src=pathlib.Path('/tmp/futures-sim/historical_simulation.json')
+          p=json.loads(src.read_text())
+          assert p['kind']=='historical_simulation' and p['never_live_orders'] is True
+          assert p['official_freqtrade_engine'] is False
+          allowpairs={'BTCUSDT','ETHUSDT','BTCUSDC'}
+          strategies={'TrendFollowingStrategy','FSampleStrategy','FAdxSmaStrategy'}
+          rows=p['rows']
+          assert len(rows)==18
+          assert all(x['symbol'] in allowpairs and x['strategy'] in strategies and x['stage'] in {'train','holdout'} for x in rows)
+          allowed=('symbol','strategy','stage','status','currency','trades','wins',
+            'winrate_pct','net_profit_abs','net_profit_pct','max_drawdown_pct',
+            'profit_factor','fee_bps_per_side','adverse_slippage_bps_per_side',
+            'funding_included','backtesting_engine','notes')
+          cleanrows=[{k:x[k] for k in allowed if k in x} for x in rows]
+          details={}
+          for name,val in p['details'].items():
+           assert len(name)<100
+           series=val.get('curve',[])
+           # Every historical time series is sampled from ACTUAL simulated points.
+           skip=max(1,len(series)//180)
+           trimmed=[{'t':str(k['t'])[:32],'equity':round(float(k['equity']),4)}
+             for k in series[::skip]]
+           if series and trimmed[-1]['t']!=str(series[-1]['t'])[:32]:
+            trimmed.append({'t':str(series[-1]['t'])[:32],
+              'equity':round(float(series[-1]['equity']),4)})
+           details[name]={'curve':trimmed,'trades':val.get('trades',[])[:150]}
+          report={'kind':'historical_simulation','source_run_id':39275338944,
+            'published_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'no_live_orders':True,'official_freqtrade_engine':False,
+            'period_train':'2026-08-15..2026-09-14 UTC',
+            'period_holdout':'2026-09-15..2026-10-15 UTC',
+            'starting_equity_each':1000,
+            'symbols':sorted(allowpairs),'strategies':sorted(strategies),
+            'data_coverage':p['data_coverage'],'rows':cleanrows,'details':details,
+            'disclaimer':'过去历史模拟，不是实盘收益；当前无自动机器学习训练。使用开源策略原始指标信号+独立离线成交回放；未计入真实资金费、强平及订单簿。'}
+          dest=pathlib.Path('published-results/futures-simulation.json')
+          dest.parent.mkdir(exist_ok=True)
+          dest.write_text(json.dumps(report,separators=(',',':'),ensure_ascii=False))
+          print('PUBLIC_REPORT_BYTES',dest.stat().st_size,'SIMULATIONS',len(rows))
+          PY
+      - name: Commit research report only to isolated research branch
+        run: |
+          git config user.name "zl-research-publisher"
+          git config user.email "zl-research-publisher@users.noreply.github.com"
+          git add published-results/futures-simulation.json
+          git commit -m "research: publish verified public historical futures simulations" || true
+          git push origin HEAD:research/freqtrade-futures-20261019

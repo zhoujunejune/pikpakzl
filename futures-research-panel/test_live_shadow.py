@@ -44,6 +44,24 @@ class ReadOnlyForwardTests(unittest.TestCase):
         self.assertTrue(0<=m.rsi(close)[-1]<=100)
         rows=[[i*300000,close[i],close[i]+1,close[i]-1,close[i],4] for i in range(200)]
         self.assertIsNotNone(m.adx(rows))
+    def test_frontend_timestamped_live_data_endpoint(self):
+        # The browser uses /futures-lab/live.json?t=<epoch> with no-store.
+        # HTTP GET must match the path without treating the query as a 404.
+        from io import BytesIO
+        class Fake:
+            path="/futures-lab/live.json?t=1792450000000"
+            wfile=BytesIO()
+            status=None
+            def send_response(self,code):self.status=code
+            def send_header(self,*args):pass
+            def end_headers(self):pass
+            def send_error(self,code):raise AssertionError("unexpected HTTP "+str(code))
+        obj=Fake()
+        m.Handler.do_GET(obj)
+        self.assertEqual(obj.status,200)
+        payload=__import__("json").loads(obj.wfile.getvalue())
+        self.assertEqual(payload.get("kind"),"live_paper_forward_test")
+        self.assertFalse(payload.get("realOrders"))
     def test_live_api_contract_is_read_only(self):
         self.assertEqual(m.Handler.do_POST.__name__,"do_POST")
         self.assertEqual(m.SYMBOLS,("BTCUSDT","ETHUSDT","BTCUSDC"))

@@ -60,7 +60,7 @@ def main():
             if nav_status != 200 or b"ZL" not in nav_body:
                 return 13
         # The phone homepage must visibly contain the new quotes and TP/SL cards.
-        for marker in (b'id="btc-price"',b'id="eth-price"',b'id="entry-price"',
+        for marker in (b'id="btc-price"',b'id="eth-price"',b'id="btcusdc-price"',b'id="entry-price"',
                        b'id="sl-price"',b'id="tp-price"',b'id="floating-pnl"'):
             if marker not in root_body:
                 print("PANEL_VERIFY_FAILED: missing mobile quote/position field")
@@ -76,7 +76,7 @@ def main():
         if not isinstance(quotes,dict) or not isinstance(quotes.get("symbols"),dict):
             print("PANEL_VERIFY_FAILED: quote payload missing")
             return 17
-        for symbol in ("BTCUSDT","ETHUSDT"):
+        for symbol in ("BTCUSDT","ETHUSDT","BTCUSDC"):
             quote=quotes["symbols"].get(symbol)
             if not isinstance(quote,dict) or "price" not in quote or "stale" not in quote or "ageSeconds" not in quote:
                 print("PANEL_VERIFY_FAILED: required symbol quote missing")

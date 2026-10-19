@@ -1,10 +1,10 @@
 # ZL Futures Bot V1 (experimental)
 
-A standalone trend-breakout Binance **USDT-M futures** bot for a 200 USDT experiment. This strategy has **not** demonstrated a positive expected return. It is not connected to the older EDGE/prediction-market system.
+A standalone trend-breakout Binance **USD(S)-M futures** bot for a 200 U synthetic paper experiment. This strategy has **not** demonstrated a positive expected return. It is not connected to the older EDGE/prediction-market system.
 
 ## Status
 
-- Source code on feature branch only; **not deployed and not live trading**.
+- Alibaba Cloud runs a **paper-only** instance. Live trading is disabled and not production-certified.
 - MODE=paper by default. Uses real Binance public market data for paper simulated entries/exits, including an estimated taker fee; does not simulate exchange order-book fills or slippage. Paper results may be optimistic.
 - MODE=live provides API integration, but should not be enabled without validating contract filters, account configuration, stop orders, recovery, journal, and Binance account/region permissions. It is **not yet production-certified**.
 - Never paste exchange API secrets into GitHub or chat. Put them in Railway encrypted variables. Enable futures only, disable withdrawals, restrict IP if possible.
@@ -12,15 +12,15 @@ A standalone trend-breakout Binance **USDT-M futures** bot for a 200 USDT experi
 
 ## Strategy
 
-5-minute **closed-candle** breakout above prior 12 bars or below prior 12 bars, aligned with closed 1-hour EMA20/EMA50 trend; requires volume >1.3x prior 20-bar average. Stop distance = max(1.5 ATR14, 0.4% price), take-profit target = 1.8R. One position across BTCUSDT and ETHUSDT. No compulsory trades and no trade in the same bar twice. 30-min cooldown.
+5-minute **closed-candle** breakout above prior 12 bars or below prior 12 bars, aligned with closed 1-hour EMA20/EMA50 trend; requires volume >1.3x prior 20-bar average. Stop distance = max(1.5 ATR14, 0.4% price), take-profit target = 1.8R. One position across BTCUSDT, ETHUSDT and BTCUSDC. No compulsory trades and no trade in the same bar twice. 30-min cooldown.
 
 ## Reference configuration (not profit forecasts)
 
 | Setting | Default | Purpose |
 |---|---|---|
-| PAPER_BALANCE | 200 | Paper wallet start |
+| PAPER_BALANCE | 200 | One synthetic U balance; USDT and USDC accounted at parity |
 | MODE | paper | Live trading is gated |
-| SYMBOLS | BTCUSDT,ETHUSDT | Allowed symbols |
+| SYMBOLS | BTCUSDT,ETHUSDT,BTCUSDC | USD(S)-M perpetual symbols |
 | LEVERAGE | 10 | 1-20 supported |
 | RISK_FRACTION | 0.015 | Target risk budget per position (excludes gap/slippage/fees) |
 | MAX_MARGIN_FRACTION | 0.15 | Margin cap per position |
@@ -36,6 +36,7 @@ Live-only safeguards:
 - BINANCE_API_KEY, BINANCE_API_SECRET
 - DURABLE_STORAGE_CONFIRMED=YES and absolute STATE_FILE on durable volume.
 - Assumes one-way (BOTH) Binance account mode and isolated margin.
+- BTCUSDC uses USDC collateral; USDT instruments use USDT. Live sizing reads the corresponding wallet. The combined loss counter models USDT/USDC near parity; do not assume a guaranteed peg. Real trading is still unverified.
 - Exchange-side stop placed **before** take profit through 2026 USDT-M algo orders endpoint.
 - If order state uncertain, **halts** instead of automatically repeating a live order.
 - A **dedicated futures account or subaccount** is strongly preferred: this bot does not adopt pre-existing positions.

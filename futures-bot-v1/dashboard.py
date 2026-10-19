@@ -28,7 +28,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 .bot-nav a{display:block;padding:12px 8px;text-align:center;text-decoration:none;color:var(--fg);border:1px solid #3c4d6e;background:#142239;border-radius:11px;font-weight:650}
 .bot-nav a.active{background:#196bb6;border-color:#2786df}
 </style></head><body><main>
-<div class="top"><div><h1>ZL 合约机器人</h1><div class="sub">阿里云 · BTC/ETH · USDT永续实验</div></div><span class="pill">仅模拟 · 实盘关闭</span></div>
+<div class="top"><div><h1>ZL 合约机器人</h1><div class="sub">阿里云 · BTC/ETH · USDT/USDC 永续实验</div></div><span class="pill">仅模拟 · 实盘关闭</span></div>
 
 <nav class="bot-nav" aria-label="选择机器人">
 <a href="/dashboard/" class="active" aria-current="page">合约机器人</a>
@@ -39,13 +39,14 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 <section class="card quotes">
 <div class="row"><h2>最新合约价格</h2><small>币安标记价格 · 约15秒更新</small></div>
 <div class="grid">
- <div class="metric"><small>BTCUSDT</small><strong class="quoteprice" id="btc-price">—</strong><div class="price-meta sub" id="btc-meta">等待行情…</div></div>
- <div class="metric"><small>ETHUSDT</small><strong class="quoteprice" id="eth-price">—</strong><div class="price-meta sub" id="eth-meta">等待行情…</div></div>
+ <div class="metric"><small id="btc-label">BTCUSDT</small><strong class="quoteprice" id="btc-price">—</strong><div class="price-meta sub" id="btc-meta">等待行情…</div></div>
+ <div class="metric"><small id="eth-label">ETHUSDT</small><strong class="quoteprice" id="eth-price">—</strong><div class="price-meta sub" id="eth-meta">等待行情…</div></div>
+ <div class="metric"><small id="btcusdc-label">BTCUSDC</small><strong class="quoteprice" id="btcusdc-price">—</strong><div class="price-meta sub" id="btcusdc-meta">等待行情…</div></div>
 </div>
-<small>页面每5秒刷新；行情时间以服务器实际收到数据为准。行情超时会显示“已过期”，不能视为实时成交价。</small>
+<small>页面每5秒刷新；“策略监控”代表交易对已加入扫描。行情时间以服务器实际收到数据为准。行情超时会显示“已过期”，不能视为实时成交价。</small>
 </section>
 <section class="card"><div class="row"><h2>运行概况</h2><span id="worker" class="pill">检查中</span></div>
-<div class="grid"><div class="metric"><small>模拟账户余额</small><strong id="balance">—</strong></div>
+<div class="grid"><div class="metric"><small>模拟统一资金池余额（U）</small><strong id="balance">—</strong></div>
 <div class="metric"><small>累计净盈亏</small><strong id="pnl">—</strong></div>
 <div class="metric"><small>已平仓 / 盈利笔数</small><strong id="wins">—</strong></div>
 <div class="metric"><small>模拟胜率</small><strong id="winrate">—</strong></div></div>
@@ -67,7 +68,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 <div><label for="risk">单笔计划价格风险</label><select id="risk"><option value="0.005">0.5%</option><option value="0.01">1%</option><option value="0.015">1.5%</option><option value="0.02">2%</option></select></div>
 <div><label for="margin">单笔保证金比例上限</label><select id="margin"><option value="0.05">5%</option><option value="0.1">10%</option><option value="0.15">15%</option><option value="0.2">20%</option></select></div>
 </div><button class="primary" style="width:100%;margin-top:15px" onclick="saveParams()">保存模拟参数</button>
-<small>杠杆只改变仓位规模上限，并非收益倍增保证；止损可能因跳空、滑点产生额外亏损。</small></section>
+<small>模拟共用一个资金池，USDT和USDC按1:1记账，并非真实保证金余额。杠杆只改变仓位规模上限，并非收益倍增保证；止损可能因跳空、滑点产生额外亏损。</small></section>
 <section class="card"><h2>当前模拟持仓</h2>
 <div id="flat" class="sub">暂无持仓</div>
 <div id="position-fields" style="display:none">
@@ -99,8 +100,8 @@ async function refresh(){
  try{
   const r=await fetch("/status",{cache:"no-store"});if(!r.ok)throw Error("HTTP "+r.status);
   const s=await r.json(),c=s.control||{};
-  el("balance").textContent=fmt(s.simulatedBalance)+" USDT";
-  let v=s.simulatedPnL;el("pnl").textContent=(v>0?"+":"")+fmt(v)+" USDT";el("pnl").className=v>0?"good":v<0?"bad":"";
+  el("balance").textContent=fmt(s.simulatedBalance)+" U（模拟）";
+  let v=s.simulatedPnL;el("pnl").textContent=(v>0?"+":"")+fmt(v)+" U（模拟）";el("pnl").className=v>0?"good":v<0?"bad":"";
   el("wins").textContent=(s.closedTrades||0)+" / "+(s.wins||0);
   el("winrate").textContent=s.closedTrades?((s.wins||0)*100/s.closedTrades).toFixed(1)+"%":"—";
   el("worker").textContent=s.workerRunning?"行情任务运行中":"行情任务未运行";
@@ -127,7 +128,8 @@ async function refresh(){
   el("resume").disabled=working||c.entry_enabled||c.emergency_stop;
   el("stop").disabled=working||c.emergency_stop;
   const prices=(s.latestPrices&&s.latestPrices.symbols)||{};
-  for(const [symbol,prefix] of [["BTCUSDT","btc"],["ETHUSDT","eth"]]){
+  for(const [symbol,prefix] of [["BTCUSDT","btc"],["ETHUSDT","eth"],["BTCUSDC","btcusdc"]]){
+    el(prefix+"-label").textContent=symbol+((s.configuredSymbols||[]).includes(symbol)?" · 策略监控":" · 仅行情");
     const q=prices[symbol]||{};
     el(prefix+"-price").textContent=priceFmt(q.price);
     el(prefix+"-price").className="quoteprice"+(q.stale?" bad":"");
@@ -148,7 +150,7 @@ async function refresh(){
     el("sl-price").textContent=priceFmt(p.stopPrice);
     el("pos-qty").textContent=qtyFmt(p.quantity);
     const profit=p.estimatedNetPnl;
-    el("floating-pnl").textContent=profit===null?"—（行情过期）":(profit>0?"+":"")+fmt(profit)+" USDT";
+    el("floating-pnl").textContent=profit===null?"—（行情过期）":(profit>0?"+":"")+fmt(profit)+" "+(p.marginAsset||"USDT")+"（估算）";
     el("floating-pnl").className=profit===null?"":profit>0?"good":profit<0?"bad":"";
     el("pos-time").textContent="开仓时间："+(p.openAt?readableTime(p.openAt*1000):"未知")+" · 标记价格："+elapsed(p.markAgeSeconds);
     el("pos-distance").textContent=p.markPriceStale?
@@ -156,7 +158,7 @@ async function refresh(){
       "距止盈 "+fmt(p.distanceToTakeProfitPct)+"% · 距止损 "+fmt(p.distanceToStopPct)+"%";
   }
   el("storage").textContent=s.storageNote||"模拟数据";
-  el("trades").innerHTML=(s.lastTrades||[]).length?s.lastTrades.slice().reverse().map(x=>'<div class="trade"><span>'+safe(new Date(x.at*1000).toLocaleString())+'</span><span>'+safe(x.reason)+'</span><b>'+fmt(x.net)+' U</b></div>').join(""):"暂无已平仓交易";
+  el("trades").innerHTML=(s.lastTrades||[]).length?s.lastTrades.slice().reverse().map(x=>'<div class="trade"><span>'+safe(new Date(x.at*1000).toLocaleString())+'</span><span>'+safe(x.reason)+'</span><b>'+fmt(x.net)+' '+safe(x.marginAsset||'USDT')+'（模拟）</b></div>').join(""):"暂无已平仓交易";
   if(!init && Object.keys(c).length){
    el("lev").value=String(c.leverage);el("risk").value=String(c.risk_fraction);el("margin").value=String(c.max_margin_fraction);init=true;
   }

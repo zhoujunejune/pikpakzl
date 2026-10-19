@@ -32,7 +32,7 @@ Group=zlbot
 WorkingDirectory=$SRC
 Environment=MODE=paper
 Environment=PAPER_BALANCE=200
-Environment=SYMBOLS=BTCUSDT,ETHUSDT
+Environment=SYMBOLS=BTCUSDT,ETHUSDT,BTCUSDC
 Environment=LEVERAGE=10
 Environment=RISK_FRACTION=0.015
 Environment=MAX_MARGIN_FRACTION=0.15

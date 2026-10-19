@@ -63,3 +63,32 @@ jobs:
             assert a==200
           print('API_MANAGER_SMOKE_BOTH_ROBOTS_OK')
           PY
+
+      - name: Probe prediction homepage repeatedly to catch intermittent HTTP 502
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,time,urllib.request,urllib.error
+          base='https://prediction.47-237-188-69.sslip.io/'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          failures=[]
+          for index in range(6):
+              req=urllib.request.Request(base,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+              try:
+                  with urllib.request.urlopen(req,timeout=20) as r:
+                      code=r.status
+                      data=r.read(300000)
+              except urllib.error.HTTPError as e:
+                  code=e.code
+                  data=b''
+              except Exception:
+                  code=0
+                  data=b''
+              valid=code==200 and b'<html' in data.lower()
+              print('PREDICTION_HOME_PROBE',index+1,'HTTP',code,'HTML',valid)
+              if not valid:failures.append((index+1,code))
+              if index<5:time.sleep(2)
+          assert not failures, 'PREDICTION_HOME_UNSTABLE '+str(failures)
+          print('PREDICTION_HOME_6_REQUESTS_OK')
+          PY

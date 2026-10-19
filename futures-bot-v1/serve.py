@@ -232,8 +232,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not bot.STATE_FILE.exists():
                         live_engine.persist(live_engine.blank())
                     result=live_control.save_enabled(True)
+                elif action=="set_params":
+                    # Adjust sizing of FUTURE positions only; do not change
+                    # existing exchange orders or enable the live switch.
+                    result=change("set_params",obj.get("payload"))
                 else:
-                    raise ValueError("实盘页面只支持开启或关闭实盘新开仓")
+                    raise ValueError("实盘页面只支持开关和调整未来新仓参数")
             else:
                 result=change(action,obj.get("payload"))
             self.send_json({"ok":True,"control":result})

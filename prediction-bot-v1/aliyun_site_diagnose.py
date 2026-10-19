@@ -247,6 +247,28 @@ try:
 except Exception as e:print('FOLLOW_CADDY_SCAN_ERROR',type(e).__name__)
 PY
 echo "FOLLOW_ROUTING_AUDIT_END"
+echo "FOLLOW_ALERT_SOURCE_CONTEXT_BEGIN"
+python3 - <<'PY'
+from pathlib import Path
+import re
+root=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for name in ('index.mjs','trade-control-fixed.mjs'):
+ p=root/name
+ if not p.exists():continue
+ lines=p.read_text(errors='replace').splitlines()
+ locations=[i for i,v in enumerate(lines) if ('实盘开关尚未获得部署授权' in v or 'RENDER_TRADING_USER_ARMED' in v or "url.pathname === '/api/control'" in v)]
+ print('FOLLOW_ALERT_FILE',name,'matching_line_numbers',[i+1 for i in locations[:20]])
+ taken=set()
+ for pos in locations[:12]:
+  for i in range(max(0,pos-4),min(len(lines),pos+5)):
+   if i in taken:continue
+   taken.add(i)
+   raw=lines[i].strip()
+   raw=re.sub(r'(?i)(secret|password|api_key|api-key|token)\s*[:=]\s*[^,;}\s]+',r'\1=[REDACTED]',raw)
+   if len(raw)>350:raw=raw[:350]+'...'
+   print('FOLLOW_ALERT_CODE',name,i+1,raw)
+PY
+echo "FOLLOW_ALERT_SOURCE_CONTEXT_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

@@ -27,7 +27,7 @@ jobs:
       - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
       - name: Deploy and repair persisted direction controls
         env:
-          ALIBABA_CLOUD_ACCESS${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}ID: _KEY_
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_direction_controls_deploy.py
       - name: Test authenticated HTTPS GET and benign OFF save without secondary PIN

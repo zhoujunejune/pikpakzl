@@ -92,10 +92,25 @@ export async function hydrateDirectionSettings(){
     let raw=await db.get(ORDER_MODE_REDIS_KEY);
     if(!raw){
       const legacyRaw=await db.get(LEGACY_ORDER_MODE_REDIS_KEY);
-      if(!legacyRaw)throw Error('DIRECTION_CONFIGURATION_MISSING');
-      const legacy=JSON.parse(legacyRaw);
-      const modes=migrateLegacyModes(legacy?.modes);
-      const migrated={modes,revision:crypto.randomUUID(),updatedAt:new Date().toISOString()};
+      // After explicit retirement of old model statistics, the v4 direction
+      // key may be absent. Initialize all 6 source/side switches OFF in Redis,
+      // never infer approval to trade from a missing key. Legacy v3 settings,
+      // when present, retain their exact FORWARD/INVERSE choices.
+      let modes;
+      let migration;
+      if(legacyRaw){
+        const legacy=JSON.parse(legacyRaw);
+        modes=migrateLegacyModes(legacy?.modes);
+        migration='RESTORED_LEGACY_V3';
+      }else{
+        modes=Object.fromEntries(ORDER_SOURCES.map(source=>[
+          source,{UP:'OFF',DOWN:'OFF'}
+        ]));
+        migration='INITIALIZED_ALL_OFF';
+      }
+      const migrated={modes,revision:crypto.randomUUID(),
+        updatedAt:new Date().toISOString(),effectiveAfterRound:null,
+        initialization:migration};
       const proposed=JSON.stringify(migrated);
       const created=await db.set(ORDER_MODE_REDIS_KEY,proposed,{NX:true});
       raw=created==='OK'?proposed:await db.get(ORDER_MODE_REDIS_KEY);

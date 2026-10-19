@@ -1,0 +1,51 @@
+name: Alibaba single-host prediction migration
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_singlehost_install.sh'
+      - 'prediction-bot-v1/aliyun_singlehost_deploy.py'
+      - '.github/workflows/zl-aliyun-singlehost.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax checks
+        run: |
+          bash -n prediction-bot-v1/aliyun_singlehost_install.sh
+          python -m py_compile prediction-bot-v1/aliyun_singlehost_deploy.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy independent models and local original official settlement
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_singlehost_deploy.py
+      - name: Smoke test model and resolution routes
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,urllib.request,base64
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          for name in ['edge-5m','dynamic-entry']:
+           req=urllib.request.Request(base+'/api/shadow-breakout20/'+name,headers={'Authorization':auth})
+           with urllib.request.urlopen(req,timeout=16) as r:body=json.load(r)
+           assert body.get('ok') is True and body.get('readOnly') is True and body.get('orders') is False
+           print('SINGLEHOST_MODEL_ROUTE',name,'records',len(body.get('recent',[])))
+          req=urllib.request.Request(base+'/api/round-stats',headers={'Authorization':auth})
+          with urllib.request.urlopen(req,timeout=16) as r:body=json.load(r)
+          assert body.get('settlementSource')=='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY'
+          print('SINGLEHOST_OFFICIAL_LOCAL',len(body.get('records',[])))
+          PY

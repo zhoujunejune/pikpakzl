@@ -1,6 +1,4 @@
-name: Alibaba SWAS futures paper-only install
-# Deploy the tested independently managed BTCUSDT/ETHUSDT/BTCUSDC paper positions with no post-close cooldown.
-# Deploy read-only Binance USDT/USDC wallet cards and paper margin breakdown; preserve ledger.
+name: Alibaba SWAS futures REAL engine deploy - owner switch OFF
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -15,16 +13,56 @@ concurrency:
 jobs:
   install:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 22
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install Alibaba Cloud SDK
+        with: {python-version: '3.11'}
+      - name: Offline checks for real-order protections and browser code
+        run: |
+          bash -n futures-bot-v1/install_aliyun.sh
+          python -m compileall -q futures-bot-v1
+          python -m pip install -q -r futures-bot-v1/requirements.txt
+          (cd futures-bot-v1 && python -m unittest discover -v -p 'test_*.py')
+          python -c "import sys;sys.path.insert(0,'futures-bot-v1');from live_dashboard import PAGE;open('/tmp/futures-live-page.js','w').write(PAGE.split('<script>',1)[1].split('</script>',1)[0])"
+          node --check /tmp/futures-live-page.js
+      - name: Install Alibaba Cloud API client
         run: python -m pip install --disable-pip-version-check alibabacloud_swas_open20200601==4.0.0
-      - name: Install paper-only bot on confirmed Alibaba SWAS instance
+      - name: Install real-capable futures engine with live switch OFF
         env:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python futures-bot-v1/aliyun_deploy.py
+      - name: Verify external authenticated REAL dashboard is disarmed
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import json,os,base64,urllib.request,time
+          host='https://47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(host+path,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+           with urllib.request.urlopen(req,timeout=20) as r:return r.status,r.read()
+          for _ in range(10):
+           try:
+            code,raw=get('/status')
+            s=json.loads(raw)
+            assert code==200 and s.get('mode')=='live'
+            assert s.get('liveTradingEnabled') is False
+            assert s.get('perSymbolPositionLimit')==1
+            assert s.get('postCloseCooldownSeconds')==0
+            assert s.get('configuredSymbols')==['BTCUSDT','ETHUSDT','BTCUSDC']
+            print('FUTURES_LIVE_MODE_INSTALLED=true')
+            print('FUTURES_SWITCH_STAYS_OFF=true')
+            print('FUTURES_THREE_SYMBOLS_NO_COOLDOWN=true')
+            code,page=get('/')
+            assert code==200
+            assert b'live_on' in page and b'live_off' in page
+            print('FUTURES_OWNER_LIVE_SWITCH_VISIBLE=true')
+            print('FUTURES_REAL_ORDERS_SUBMITTED_BY_DEPLOY=0')
+            break
+           except Exception:
+            time.sleep(2)
+          else:raise RuntimeError('REAL_DASHBOARD_PUBLIC_SMOKE_FAILED')
+          PY

@@ -26,7 +26,15 @@ $PANEL_DOMAIN {
   basic_auth {
     zl $PANEL_BCRYPT_HASH
   }
-  reverse_proxy 127.0.0.1:10000
+  handle_path /prediction/* {
+    reverse_proxy 127.0.0.1:11000
+  }
+  handle /prediction {
+    redir /prediction/ 308
+  }
+  handle {
+    reverse_proxy 127.0.0.1:10000
+  }
   header {
     Strict-Transport-Security "max-age=31536000"
     X-Content-Type-Options "nosniff"

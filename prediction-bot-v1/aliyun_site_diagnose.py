@@ -131,6 +131,26 @@ print("SITE_NODE_TYPEERROR_VARIANTS",errors.most_common(12))
 print("SITE_NODE_STACK_LOCATIONS",stacks.most_common(12))
 '
 echo "SITE_NODE_TYPEERROR_DETAILS_END"
+echo "SITE_RUNTIME_955_INSPECT_BEGIN"
+python3 - <<'PY'
+from pathlib import Path
+import re
+p=Path("/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs")
+if not p.exists():
+ print("SITE_RUNTIME_SOURCE_EXISTS=false")
+else:
+ lines=p.read_text(errors="replace").splitlines()
+ print("SITE_RUNTIME_SOURCE_EXISTS=true")
+ print("SITE_RUNTIME_SOURCE_LENGTH",len(lines))
+ for n in range(947,964):
+  if n>len(lines):continue
+  line=lines[n-1].strip()
+  line=re.sub(r"(?i)(password|token|secret|api[_-]?key)\s*[:=]\s*[^,;}]+",r"\1=[MASKED]",line)
+  line=re.sub(r"(?i)(https?://)[^\s'\"]+",r"\1[URL]",line)
+  line=re.sub(r"([\"'])([^\"']{36,})\1",r"\1[LONG_LITERAL_MASKED]\1",line)
+  print("SITE_RUNTIME_SOURCE_LINE",n,line[:220])
+PY
+echo "SITE_RUNTIME_955_INSPECT_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

@@ -69,10 +69,13 @@ jobs:
           assert b'forwardStatus' in page and b'futures-lab/live.json' in page
           report=json.loads(req('/futures-lab/report.json'))
           assert len(report.get('rows',[]))==18
-          status=json.loads(req('/futures-lab/live.json'))
+          # Verify the EXACT browser URL, including the cache-buster.
+          # This previously returned 404 because Handler compared raw self.path.
+          status=json.loads(req('/futures-lab/live.json?t='+str(int(time.time()*1000))))
           assert status.get('realOrders') is False
           assert status.get('autoParameterTraining') is False
           assert status.get('kind')=='live_paper_forward_test'
+          print('SHADOW_FRONTEND_TIMESTAMPED_URL_HTTP_200=true')
           print('SHADOW_RUNTIME_AVAILABLE=true')
           print('SHADOW_STATUS_STREAMS',len(status.get('streams',[])))
           print('SHADOW_FEED_FRESH',status.get('fresh'))

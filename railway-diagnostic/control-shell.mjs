@@ -2,12 +2,12 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { hydrateRiskConfig, persistRiskConfig } from './risk-config-storage.mjs';
+import { RISK_CONFIG_FILE as RISK_CONTROL_FILE, hydrateRiskConfig, persistRiskConfig } from './risk-config-storage.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PORT = Number(process.env.INNER_CONTROL_PORT || 3001);
 const CONTROL_PIN_SHA256 = process.env.CONTROL_PIN_SHA256 || '';
-const RISK_CONTROL_FILE = '/tmp/risk-control.json';
+
 let persistenceReady = false;
 let persistenceHealthy = false;
 let persistenceRestored = false;
@@ -217,7 +217,7 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/risk-control') {
     const body = await readJsonBody(req);
-    if (!pinOK(body.pin, req)) return sendJson(res, 401, { ok: false, error: 'PIN 错误' });
+    if (!pinOK(body.pin, req)) return sendJson(res, 401, { ok: false, error: '站点登录未通过或请求来源不符，请重新登录' });
     if (!persistenceReady || !persistenceHealthy) return sendJson(res, 503, { ok: false, error: '持久化存储不可用，已阻止可能丢失的配置修改；请检查 Redis 状态' });
     try {
       const updated = await serializedRiskWrite(async () => {
@@ -245,7 +245,7 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/take-profit-control') {
     const body = await readJsonBody(req);
-    if (!pinOK(body.pin, req)) return sendJson(res, 401, { ok: false, error: 'PIN 错误' });
+    if (!pinOK(body.pin, req)) return sendJson(res, 401, { ok: false, error: '站点登录未通过或请求来源不符，请重新登录' });
     const percent = Number(body.percent);
     if (!validPercent(percent)) return sendJson(res, 400, { ok: false, error: '止盈百分比必须在 1% - 100% 之间' });
     if (!persistenceReady || !persistenceHealthy) return sendJson(res, 503, { ok: false, error: '持久化存储不可用，暂不允许修改止盈配置' });

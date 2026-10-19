@@ -17,9 +17,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import auto_train
+
 SYMBOLS=("BTCUSDT","ETHUSDT","BTCUSDC")
 MODELS=("TrendFollowingStrategy","FSampleStrategy","FAdxSmaStrategy")
 STATE=pathlib.Path("/var/lib/zl-futures-shadow/state.json")
+TRAINING_STATE=STATE.with_name("training.json")
+TRAIN_INTERVAL=86400
+HISTORY_COUNT={"5m":4500,"1h":850}
+TRAINING={"schema":1,"lastRun":None,"nextRun":None,"running":False,"error":None,"streams":{},"runs":0}
 HTTP_HOST="127.0.0.1"
 HTTP_PORT=13017
 LOOP=30
@@ -106,13 +112,14 @@ def adx(rows,n=14):
         result=(result*(n-1)+d)/n
     return result
 
-def signals(rows,model):
+def signals(rows,model,params=None):
+    if params is None:params=auto_train.BASELINES[model]
     if len(rows)<180:
         return (None,None)
     close=[r[4] for r in rows]
     volume=[r[5] for r in rows]
     if model=="TrendFollowingStrategy":
-        ma=ema(close,20)
+        ma=ema(close,int(params["ema"]))
         obv_change=volume[-1] if close[-1]>close[-2] else (-volume[-1] if close[-1]<close[-2] else 0)
         enter="LONG" if close[-1]>ma[-1] and close[-2]<=ma[-2] and obv_change>0 else None
         # Original example has no can_short=True; preserve LONG-only behavior.
@@ -126,18 +133,18 @@ def signals(rows,model):
         tp=[(r[2]+r[3]+r[4])/3 for r in rows]
         mid=sma(tp,20)[-1]
         if mid is None:return (None,None)
-        lo=(rr[-2]<=30<rr[-1] and tema[-1]<=mid and tema[-1]>tema[-2] and volume[-1]>0)
-        hi=(rr[-2]<=70<rr[-1] and tema[-1]>mid and tema[-1]<tema[-2] and volume[-1]>0)
+        lo=(rr[-2]<=params["rsi_low"]<rr[-1] and tema[-1]<=mid and tema[-1]>tema[-2] and volume[-1]>0)
+        hi=(rr[-2]<=params["rsi_high"]<rr[-1] and tema[-1]>mid and tema[-1]<tema[-2] and volume[-1]>0)
         return ("LONG" if lo else "SHORT" if hi else None,"SHORT" if lo else "LONG" if hi else None)
     if model=="FAdxSmaStrategy":
         strength=adx(rows)
-        fast=sma(close,12);slow=sma(close,48)
+        fast=sma(close,int(params["short"]));slow=sma(close,int(params["long"]))
         if strength is None or any(v is None for v in (fast[-1],slow[-1],fast[-2],slow[-2])):
             return (None,None)
         higher=fast[-2]<=slow[-2] and fast[-1]>slow[-1]
         lower=fast[-2]>=slow[-2] and fast[-1]<slow[-1]
-        return ("LONG" if higher and strength>30 else "SHORT" if lower and strength>30 else None,
-                "BOTH" if strength<30 else None)
+        return ("LONG" if higher and strength>params["adx"] else "SHORT" if lower and strength>params["adx"] else None,
+                "BOTH" if strength<params["adx"] else None)
     return (None,None)
 
 def valid_candles(items,now):
@@ -161,7 +168,7 @@ def pair_state(sym,model):
           "equity":1000.0,"position":None,"history":[],"lastCandle":None,"lastSignal":None,"barsSeen":0}
     return MEM["streams"][key]
 
-def entry(p,side,mark,at):
+def entry(p,side,mark,at,params=None,version=0):
     if p["position"] or p["equity"]<105:return
     price=mark*(1+SLIP if side=="LONG" else 1-SLIP)
     stake=min(100,p["equity"]*.1)
@@ -170,7 +177,8 @@ def entry(p,side,mark,at):
     p["equity"]-=cost
     p["position"]={"side":side,"qty":qty,"entry":price,"at":at,
           "stop":price*(1-STOP if side=="LONG" else 1+STOP),
-          "take":price*(1+TAKE if side=="LONG" else 1-TAKE),"entryFee":cost}
+          "take":price*(1+TAKE if side=="LONG" else 1-TAKE),"entryFee":cost,
+          "trainingParams":dict(params or auto_train.BASELINES[p["strategy"]]),"trainingVersion":int(version)}
     p["lastSignal"]={"side":side,"at":at,"price":round(mark,6)}
     MEM["events"].append({"type":"PAPER_ENTRY","symbol":p["symbol"],"model":p["strategy"],"at":at})
 
@@ -209,11 +217,15 @@ def eval_one(p,rows,price,now):
     p["barsSeen"]+=1
     period=300000 if p["strategy"]=="TrendFollowingStrategy" else 3600000
     if current-previous>period or now*1000-current>period*2:return
-    entered,exit_for=signals(rows,p["strategy"])
+    learner=TRAINING.get("streams",{}).get(p["symbol"]+"_"+p["strategy"],{})
+    active=learner.get("activeParams") or auto_train.BASELINES[p["strategy"]]
+    # An already-open virtual trade always retains its entry strategy params.
+    exit_params=(p["position"] or {}).get("trainingParams") or active
+    entered,exit_for=signals(rows,p["strategy"],exit_params if p["position"] else active)
     if p["position"] and exit_for in (p["position"]["side"],"BOTH"):
         close(p,price,"EXIT_SIGNAL",utc(now))
     if not p["position"] and entered:
-        entry(p,entered,price,utc(now))
+        entry(p,entered,price,utc(now),active,learner.get("version",0))
 
 def run_cycle():
     now=time.time()
@@ -245,6 +257,131 @@ def run_cycle():
     CACHE["error"]=None
     save()
 
+
+def restore_training():
+    global TRAINING
+    if not TRAINING_STATE.exists():return
+    try:
+        obj=json.loads(TRAINING_STATE.read_text())
+        if obj.get("schema")!=1 or not isinstance(obj.get("streams"),dict):
+            raise ValueError("invalid trainer state schema")
+        TRAINING.update({k:v for k,v in obj.items() if k in
+                         ("lastRun","nextRun","error","streams","runs")})
+        TRAINING["running"]=False
+    except Exception as e:
+        TRAINING["error"]="Training state unreadable; preserved: "+type(e).__name__
+        TRAINING["disabled"]=True
+
+def save_training():
+    TRAINING_STATE.parent.mkdir(parents=True,exist_ok=True)
+    temp=TRAINING_STATE.with_suffix(".new")
+    with temp.open("w") as stream:
+        json.dump({k:v for k,v in TRAINING.items() if k!="running"},stream,
+                  ensure_ascii=False,separators=(",",":"))
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(temp,0o600)
+    os.replace(temp,TRAINING_STATE)
+
+def fetch_training_candles(symbol,interval,count):
+    """Page Binance PUBLIC GET candles backwards. Do not mix spot/mark data."""
+    if symbol not in SYMBOLS or interval not in HISTORY_COUNT:
+        raise ValueError("invalid training source")
+    now=time.time()
+    before=int(now*1000)
+    saved={}
+    for _ in range(7):
+        items=api("/fapi/v1/klines",{"symbol":symbol,"interval":interval,
+                "limit":1000,"endTime":before})
+        candles=valid_candles(items,now)
+        if not candles:break
+        for row in candles:saved[int(row[0])]=row
+        before=min(int(r[0]) for r in candles)-1
+        if len(saved)>=count:break
+        time.sleep(0.15)
+    rows=[saved[key] for key in sorted(saved)][-count:]
+    return rows
+
+def train_cycle():
+    """Independent pure parameter learning, no writes to orders or trade state.
+    Fetch and test nine markets separately and keep the old paper strategy
+    when holdout evidence is weak or unavailable."""
+    global TRAINING
+    with LOCK:
+        TRAINING["running"]=True
+        TRAINING["error"]=None
+    try:
+        # Pairs share one public history request per timeframe, not per model.
+        for sym in SYMBOLS:
+            history={}
+            for interval,count in HISTORY_COUNT.items():
+                history[interval]=fetch_training_candles(sym,interval,count)
+            for model in MODELS:
+                interval="5m" if model=="TrendFollowingStrategy" else "1h"
+                try:
+                    outcome=auto_train.study(history[interval],model)
+                    stamp=utc()
+                    key=sym+"_"+model
+                    with LOCK:
+                        old=TRAINING["streams"].get(key,{})
+                        baseline=auto_train.BASELINES[model]
+                        prior=old.get("activeParams") or baseline
+                        version=int(old.get("version") or 0)
+                        # Never claim a candidate is active until the held-out
+                        # test passes ALL thresholds. Preserve earlier versions
+                        # and any open virtual positions on model changes.
+                        promote=bool(outcome.get("eligible") and outcome.get("candidateParams")!=prior)
+                        params=outcome.get("candidateParams") if promote else prior
+                        if promote:version+=1
+                        holdout=outcome.get("holdout") or {}
+                        ref=outcome.get("baselineHoldout") or {}
+                        info={"status":("PROMOTED" if promote else outcome["status"]),
+                              "activeParams":dict(params),"version":version,
+                              "candidateParams":outcome.get("candidateParams"),
+                              "lastTrainedAt":stamp,"candleCount":outcome.get("candleCount",0),
+                              "trainTrades":(outcome.get("train") or {}).get("trades",0),
+                              "holdoutTrades":holdout.get("trades",0),
+                              "holdoutNetPct":holdout.get("netPct"),
+                              "holdoutDrawdownPct":holdout.get("maxDrawdownPct"),
+                              "baselineHoldoutNetPct":ref.get("netPct"),
+                              "method":outcome.get("method"),"candidateCount":outcome.get("candidateCount",0),
+                              "promotions":int(old.get("promotions") or 0)+int(promote)}
+                        TRAINING["streams"][key]=info
+                        save_training()
+                except Exception as e:
+                    with LOCK:
+                        key=sym+"_"+model
+                        old=dict(TRAINING["streams"].get(key,{}))
+                        old["status"]="TRAIN_FAILED_"+type(e).__name__
+                        old["lastTrainedAt"]=utc()
+                        TRAINING["streams"][key]=old
+                        save_training()
+        with LOCK:
+            TRAINING["runs"]=int(TRAINING.get("runs") or 0)+1
+            TRAINING["lastRun"]=utc()
+            TRAINING["nextRun"]=utc(time.time()+TRAIN_INTERVAL)
+            save_training()
+    except Exception as e:
+        with LOCK:
+            TRAINING["error"]="Research training incomplete: "+type(e).__name__
+            TRAINING["nextRun"]=utc(time.time()+3600)
+            save_training()
+    finally:
+        with LOCK:TRAINING["running"]=False
+
+def train_loop():
+    while True:
+        if TRAINING.get("disabled"):
+            time.sleep(3600)
+            continue
+        next_run=TRAINING.get("nextRun")
+        try:
+            when=datetime.datetime.fromisoformat(next_run).timestamp() if next_run else 0
+        except (ValueError,TypeError):when=0
+        if time.time()>=when:
+            train_cycle()
+        time.sleep(60)
+
 def public_view():
     with LOCK:
         streams=[]
@@ -264,16 +401,23 @@ def public_view():
               "totalPnlEstimate":round(net,5),"closedTrades":len(closed),"wins":wins,
               "winratePct":round(wins/len(closed)*100,2) if closed else None,
               "seenNewBars":p["barsSeen"],"lastSignal":p.get("lastSignal"),
-              "position":pos,"history":closed[-12:]})
+              "position":pos,"history":closed[-12:],
+              "learning":{k:TRAINING.get("streams",{}).get(p["symbol"]+"_"+p["strategy"],{}).get(k)
+                  for k in ("version","activeParams","status","lastTrainedAt","candleCount",
+                            "trainTrades","holdoutTrades","holdoutNetPct","baselineHoldoutNetPct","candidateParams")}})
         ts=CACHE["updatedAt"]
         fresh=bool(ts and time.time()-datetime.datetime.fromisoformat(ts).timestamp()<100)
-        return {"kind":"live_paper_forward_test","realOrders":False,"autoParameterTraining":False,
+        return {"kind":"live_paper_forward_test","realOrders":False,"autoParameterTraining":True,
+            "learning":{"mode":"walk_forward_parameter_search","running":TRAINING.get("running",False),
+              "lastRun":TRAINING.get("lastRun"),"nextRun":TRAINING.get("nextRun"),
+              "completedRuns":TRAINING.get("runs",0),"error":TRAINING.get("error"),
+              "scope":"9 independent shadow streams; paper-only; training every 24h"},
             "source":"Binance official public USD-M futures REST /fapi/v1/klines + /fapi/v1/premiumIndex",
             "updatedAt":ts,"fresh":fresh,"error":CACHE["error"],
             "market":CACHE["market"],"streams":streams,
             "modelNote":"Original community entry conditions reimplemented with built-in Python indicators, not the Freqtrade engine. Standardized paper stop 2%, take profit 3%.",
             "feePerSide":FEE,"slippageEstimatePerSide":SLIP,
-            "caveat":"Virtual 1x forward testing, price sampled at 30s. Intrabar stop hits may be missed; funding/liquidation excluded. No ML auto-training."}
+            "caveat":"Virtual 1x forward testing, price sampled at 30s. Auto-training selects parameters on chronological 70/30 windows, not neural ML. Trading fills/funding/liquidation are approximate; no live orders."}
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -308,8 +452,10 @@ def loop():
 def main():
     global MEM
     MEM=persisted()
+    restore_training()
     t=threading.Thread(target=loop,name="public-futures-shadow",daemon=True)
     t.start()
+    threading.Thread(target=train_loop,name="isolated-walkforward-parameter-trainer",daemon=True).start()
     http.server.ThreadingHTTPServer((HTTP_HOST,HTTP_PORT),Handler).serve_forever()
 
 if __name__=="__main__":

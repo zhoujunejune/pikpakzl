@@ -66,8 +66,10 @@ jobs:
           print('RESEARCH_RESPONSE_HAS_COMPARISON',b'id="compare"' in page)
           print('RESEARCH_RESPONSE_HAS_REPORT_JSON',b'report.json' in page)
           print('RESEARCH_RESPONSE_HAS_TITLE',b'ZL' in page)
-          assert b'id="compare"' in page and b'report.json' in page
+          lines=[t.strip()[:200] for t in page.decode('utf8','replace').splitlines() if 'fetch(' in t or 'report' in t.lower()]
+          print('RESEARCH_RESPONSE_FETCH_LINES',lines[:8])
           j=json.loads(read('/research/report.json'))
+          assert b'id="compare"' in page
           assert j.get('kind')=='historical_simulation'
           assert j.get('no_live_orders') is True
           assert j.get('official_freqtrade_engine') is False

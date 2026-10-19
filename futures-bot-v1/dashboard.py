@@ -17,10 +17,23 @@ select,input{width:100%;background:#0d1728;color:var(--fg);border:1px solid #3c4
 .formgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}label{font-size:12px;color:var(--dim);display:block;margin-bottom:5px}
 #message{min-height:25px;color:var(--dim)}.trade{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding:8px 0;font-size:13px}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius:9px;padding:12px;font-size:12px}
+.quotes .metric{border:1px solid #2c4564}.quoteprice{font-size:27px!important}.price-meta{font-size:12px;min-height:35px;margin-top:8px}
+.levels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+.level{background:#101a2b;border:1px solid #2c3c54;border-radius:12px;padding:13px}
+.level small{display:block}.level strong{font-size:21px;font-variant-numeric:tabular-nums}
+.stopnum{color:#ff858c}.tpnum{color:#4adcac}.posfoot{font-size:12px;color:var(--dim);margin-top:12px}
 @media(max-width:480px){.formgrid{grid-template-columns:1fr 1fr}.formgrid>div:last-child{grid-column:span 2}}
 </style></head><body><main>
 <div class="top"><div><h1>ZL 合约机器人</h1><div class="sub">阿里云 · BTC/ETH · USDT永续实验</div></div><span class="pill">仅模拟 · 实盘关闭</span></div>
 <div class="warn">研究测试版：无真实下单。停止新开仓不代表立即平掉已有模拟仓位；“紧急停止”会锁定新开仓，恢复前需人工检查。</div>
+<section class="card quotes">
+<div class="row"><h2>最新合约价格</h2><small>币安标记价格 · 约15秒更新</small></div>
+<div class="grid">
+ <div class="metric"><small>BTCUSDT</small><strong class="quoteprice" id="btc-price">—</strong><div class="price-meta sub" id="btc-meta">等待行情…</div></div>
+ <div class="metric"><small>ETHUSDT</small><strong class="quoteprice" id="eth-price">—</strong><div class="price-meta sub" id="eth-meta">等待行情…</div></div>
+</div>
+<small>页面每5秒刷新；行情时间以服务器实际收到数据为准。行情超时会显示“已过期”，不能视为实时成交价。</small>
+</section>
 <section class="card"><div class="row"><h2>运行概况</h2><span id="worker" class="pill">检查中</span></div>
 <div class="grid"><div class="metric"><small>模拟账户余额</small><strong id="balance">—</strong></div>
 <div class="metric"><small>累计净盈亏</small><strong id="pnl">—</strong></div>
@@ -45,11 +58,31 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 <div><label for="margin">单笔保证金比例上限</label><select id="margin"><option value="0.05">5%</option><option value="0.1">10%</option><option value="0.15">15%</option><option value="0.2">20%</option></select></div>
 </div><button class="primary" style="width:100%;margin-top:15px" onclick="saveParams()">保存模拟参数</button>
 <small>杠杆只改变仓位规模上限，并非收益倍增保证；止损可能因跳空、滑点产生额外亏损。</small></section>
-<section class="card"><h2>当前模拟持仓</h2><pre id="position">—</pre></section>
+<section class="card"><h2>当前模拟持仓</h2>
+<div id="flat" class="sub">暂无持仓</div>
+<div id="position-fields" style="display:none">
+ <div class="row"><b id="pos-symbol">—</b><b id="pos-side">—</b></div>
+ <div class="levels">
+  <div class="level"><small>模拟开仓价格</small><strong id="entry-price">—</strong></div>
+  <div class="level"><small>当前标记价格</small><strong id="mark-price">—</strong></div>
+  <div class="level"><small>自动止盈目标</small><strong class="tpnum" id="tp-price">—</strong></div>
+  <div class="level"><small>自动止损目标</small><strong class="stopnum" id="sl-price">—</strong></div>
+  <div class="level"><small>估算浮动净盈亏</small><strong id="floating-pnl">—</strong></div>
+  <div class="level"><small>持仓数量</small><strong id="pos-qty">—</strong></div>
+ </div>
+ <div class="posfoot" id="pos-time">—</div>
+ <div class="posfoot" id="pos-distance">—</div>
+ <div class="posfoot">仅模拟：止盈止损由机器人按周期检查标记价格，可能出现滑点。浮动盈亏扣除估算双边手续费，不含资金费率及真实成交滑点。</div>
+</div>
+</section>
 <section class="card"><h2>最近12笔模拟平仓</h2><div id="trades" class="sub">暂无记录</div></section>
 <section class="card"><h2>安全与数据</h2><small id="storage">状态读取中</small><p class="sub" style="font-size:12px">2026年实验版 · 模拟成交基于标记价格估算，并非交易所真实成交结果。页面需HTTPS身份验证；请勿公开密码。</p></section>
 </main><script>
-const fmt=v=>typeof v==="number"?v.toFixed(2):"—";
+const fmt=v=>typeof v==="number"&&Number.isFinite(v)?v.toFixed(2):"—";
+const priceFmt=v=>fmt(v);
+const qtyFmt=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{maximumFractionDigits:8}):"—";
+const readableTime=t=>t?new Date(t).toLocaleString("zh-CN",{hour12:false}):"未知";
+const elapsed=v=>typeof v==="number"?v+"秒前":"未获取";
 const el=id=>document.getElementById(id);let init=false,working=false;
 const safe=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function refresh(){
@@ -83,7 +116,35 @@ async function refresh(){
   el("pause").disabled=working||!c.entry_enabled||c.emergency_stop;
   el("resume").disabled=working||c.entry_enabled||c.emergency_stop;
   el("stop").disabled=working||c.emergency_stop;
-  el("position").textContent=s.position?JSON.stringify(s.position,null,2):"当前空仓";
+  const prices=(s.latestPrices&&s.latestPrices.symbols)||{};
+  for(const [symbol,prefix] of [["BTCUSDT","btc"],["ETHUSDT","eth"]]){
+    const q=prices[symbol]||{};
+    el(prefix+"-price").textContent=priceFmt(q.price);
+    el(prefix+"-price").className="quoteprice"+(q.stale?" bad":"");
+    el(prefix+"-meta").textContent=q.price===null||q.price===undefined?
+      "暂无有效价格":(q.stale?"已过期 · ":"更新正常 · ")+elapsed(q.ageSeconds)+" · "+readableTime(q.updatedAt);
+  }
+  const p=s.positionDetail;
+  el("position-fields").style.display=p?"block":"none";
+  el("flat").style.display=p?"none":"block";
+  el("flat").textContent=s.position&&!p?"持仓数据不完整，请检查机器人状态":"当前空仓，未产生模拟开仓价和止盈止损价";
+  if(p){
+    el("pos-symbol").textContent=p.symbol;
+    el("pos-side").textContent=p.side==="BUY"?"做多 / BUY":"做空 / SELL";
+    el("pos-side").className=p.side==="BUY"?"good":"bad";
+    el("entry-price").textContent=priceFmt(p.entryPrice);
+    el("mark-price").textContent=priceFmt(p.markPrice);
+    el("tp-price").textContent=priceFmt(p.takeProfitPrice);
+    el("sl-price").textContent=priceFmt(p.stopPrice);
+    el("pos-qty").textContent=qtyFmt(p.quantity);
+    const profit=p.estimatedNetPnl;
+    el("floating-pnl").textContent=profit===null?"—（行情过期）":(profit>0?"+":"")+fmt(profit)+" USDT";
+    el("floating-pnl").className=profit===null?"":profit>0?"good":profit<0?"bad":"";
+    el("pos-time").textContent="开仓时间："+(p.openAt?readableTime(p.openAt*1000):"未知")+" · 标记价格："+elapsed(p.markAgeSeconds);
+    el("pos-distance").textContent=p.markPriceStale?
+      "最新价格尚未确认，不展示止盈止损的当前距离":
+      "距止盈 "+fmt(p.distanceToTakeProfitPct)+"% · 距止损 "+fmt(p.distanceToStopPct)+"%";
+  }
   el("storage").textContent=s.storageNote||"模拟数据";
   el("trades").innerHTML=(s.lastTrades||[]).length?s.lastTrades.slice().reverse().map(x=>'<div class="trade"><span>'+safe(new Date(x.at*1000).toLocaleString())+'</span><span>'+safe(x.reason)+'</span><b>'+fmt(x.net)+' U</b></div>').join(""):"暂无已平仓交易";
   if(!init && Object.keys(c).length){
@@ -103,5 +164,5 @@ async function act(action,payload){
 }
 function stopNow(){if(confirm("确认紧急停止？会锁定新的模拟开仓，需要人工检查才能解除；已有模拟仓位仍受原止损/止盈规则管理。"))act("emergency_stop")}
 function saveParams(){act("set_params",{leverage:Number(el("lev").value),risk_fraction:Number(el("risk").value),max_margin_fraction:Number(el("margin").value)})}
-refresh();setInterval(refresh,10000);
+refresh();setInterval(refresh,5000);
 </script></body></html>"""

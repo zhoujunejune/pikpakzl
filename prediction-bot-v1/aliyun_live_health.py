@@ -142,5 +142,5 @@ for _ in range(25):
   try:raw=base64.b64decode(raw,validate=True).decode("utf8","replace")
   except:pass
   print("DIAGNOSTIC_RESULT",str(r.invocation_status),r.exit_code)
-  print(raw[-7000:])
+  print(raw[-24000:])
   break

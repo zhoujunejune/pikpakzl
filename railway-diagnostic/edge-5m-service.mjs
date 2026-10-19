@@ -122,7 +122,12 @@ export function createEdge5mService({fetcher=globalThis.fetch,clock=Date.now,
      }
      state.lastOfficialAt=now;state.officialError=null;
      const n=state.rows.filter(r=>r.probe&&valid(r.actual)).length;
-     if(n>=MIN_TRAINING_ROUNDS&&n-lastModelTrainCount>=5){
+     if(process.env.EDGE5_TRAINING_PAUSED==='true') {
+      // Fixed weights: preserve prediction rules while counting official labels.
+      // Never synthesize historical model weights from Cloudflare.
+      state.training={...state.training,status:'PAUSED_RECORD_ONLY',samples:n,
+        calibrationReady:state.model?.calibrationReady===true};
+    }else if(n>=MIN_TRAINING_ROUNDS&&n-lastModelTrainCount>=5){
        const result=trainOnOfficial(state.rows);state.training={...result};
        if(result.model){state.model=result.model;}
        lastModelTrainCount=n;changed=true;

@@ -29,12 +29,19 @@ for f in production-signal-choice.mjs index.mjs panel-stats-shell.mjs;do
 done
 grep -Fq "SELECTIVE8_MODEL='SELECTIVE_V2_FAST8_PREWARM_V1'" "$TMP/production-signal-choice.mjs"
 grep -Fq 'validateSelective8ProductionLive' "$TMP/index.mjs"
-STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-mkdir -p "$BACKUP/$STAMP"
+FILES_CHANGED=no
 for f in production-signal-choice.mjs index.mjs panel-stats-shell.mjs;do
- cp -p "$BASE/$f" "$BACKUP/$STAMP/$f"
- install -o zl-pred -g zl-pred -m 0644 "$TMP/$f" "$BASE/$f"
+ if ! cmp -s "$TMP/$f" "$BASE/$f";then FILES_CHANGED=yes;fi
 done
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+if [ "$FILES_CHANGED" = yes ];then
+ mkdir -p "$BACKUP/$STAMP"
+ for f in production-signal-choice.mjs index.mjs panel-stats-shell.mjs;do
+  cp -p "$BASE/$f" "$BACKUP/$STAMP/$f"
+  install -o zl-pred -g zl-pred -m 0644 "$TMP/$f" "$BASE/$f"
+ done
+fi
+echo "PIN_V2_SOURCE_FILES_CHANGED=$FILES_CHANGED"
 rollback(){
   echo PIN_V2_ROLLBACK_ATTEMPT
   for f in production-signal-choice.mjs index.mjs panel-stats-shell.mjs;do
@@ -42,7 +49,11 @@ rollback(){
   done
   systemctl restart zl-prediction-trade || true
 }
-if ! systemctl restart zl-prediction-trade;then rollback;exit 23;fi
+if [ "$FILES_CHANGED" = yes ];then
+ if ! systemctl restart zl-prediction-trade;then rollback;exit 23;fi
+else
+ echo 'PIN_V2_IDEMPOTENT_SKIP_TRADE_RESTART=true'
+fi
 READY=no
 for i in $(seq 1 25);do
  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:13001/healthz || true)

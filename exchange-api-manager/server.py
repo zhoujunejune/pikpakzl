@@ -78,9 +78,11 @@ button:disabled{opacity:.55}
 </div>
 <div class="actions"><button type="submit" id="save">保存或更换 API</button>
 <button type="button" id="check" style="background:#245a7b">只读连接检测</button></div>
+<button type="button" id="remove" style="background:#712d35" disabled>主动删除所选 API（需再次确认）</button>
 </form>
 <p id="message" role="status" class="muted"></p>
 </div>
+<div class="card"><h2>长期保存规则</h2><p class="muted">API 保存在阿里云持久化磁盘。切换页面、重新部署、机器人或服务器重启都不会主动清理。只有你明确执行更换或删除才改变；删除需两次确认。服务器磁盘丢失、损坏或实例重建则需要独立安全备份。</p></div>
 <div class="card"><h2>使用说明</h2><p class="muted">两个机器人的密钥分别保存在阿里云服务器文件中，只有服务器本机和对应机器人可读取。页面不会回显已保存的 Key 或 Secret。其他交易所可以预先保存密钥，但只有完成相应交易适配器后才可连接交易。不要把密钥发到聊天或上传到 GitHub。</p></div>
 </main><script>
 'use strict';
@@ -96,9 +98,11 @@ async function query(){
  try{
   const res=await fetch('api/status?bot='+encodeURIComponent(bot)+'&exchange='+encodeURIComponent(exchange),{cache:'no-store'});
   const data=await res.json();if(!res.ok)throw Error(data.error||'状态不可用');
-  $('status').textContent=(data.configured?'已保存 API 密钥':'尚未通过本页面配置 API')+
-    ' · '+(data.configured?'更新日期 '+(data.updatedAt||'未知'):'可填写新密钥')+
+  $('status').textContent=(data.configured?'长期保存中':'未配置 API')+
+    ' · '+(data.configured?'保存时间 '+(data.updatedAt||'未知'):'填写密钥后可持久化保存')+
+    ' · '+(data.configured && exchange==='binance' ? (data.runtimeConfigReady?'生效文件已同步':'生效文件未同步，请检查'):'')+
     ' · '+(data.adapterReady?'已有交易所适配代码':'暂未接入交易适配器');
+  $('remove').disabled=!data.configured;
  }catch(e){$('status').textContent='状态读取失败：'+e.message}
  show('');
 }
@@ -116,6 +120,20 @@ $('form').addEventListener('submit',async evt=>{
   await query();show('保存成功。密钥不会在页面回显，机器人交易开关未改变。','ok');
  }catch(e){show('保存失败：'+e.message,'error')}
  finally{$('save').disabled=false}
+});
+$('remove').addEventListener('click',async()=>{
+ const {bot,exchange}=selected();
+ const tag=$('bot').selectedOptions[0].text+' / '+$('exchange').selectedOptions[0].text;
+ if(!confirm('确定要主动删除「'+tag+'」的 API？不会影响另一个机器人或其他交易所。'))return;
+ if(prompt('再次确认删除，请输入 DELETE')!=='DELETE'){show('已取消删除，配置保持不变。');return}
+ $('remove').disabled=true;
+ try{
+  const res=await fetch('api/delete',{method:'POST',
+   headers:{'Content-Type':'application/json','X-ZL-API-Manager':'1'},
+   credentials:'same-origin',body:JSON.stringify({bot,exchange,confirm:'DELETE_THIS_API'})});
+  const data=await res.json();if(!res.ok)throw Error(data.error||'删除失败');
+  await query();show('已按你的指令删除这组 API；其他配置未改变。','ok');
+ }catch(e){await query();show('删除失败：'+e.message,'error')}
 });
 $('check').addEventListener('click',async()=>{
  const {bot,exchange}=selected();

@@ -86,8 +86,8 @@ EOF
 if [ ! -d "$ROOT/src/.git" ]; then
   git clone -q --depth=1 -b "$CODE_BRANCH" https://github.com/zhoujunejune/pikpakzl.git "$ROOT/src"
 else
-  git -C "$ROOT/src" fetch -q --depth=1 origin "$CODE_BRANCH"
-  git -C "$ROOT/src" checkout -q --detach FETCH_HEAD
+  su -s /bin/sh zl-pred -c "git -C $ROOT/src fetch -q --depth=1 origin $CODE_BRANCH"
+  su -s /bin/sh zl-pred -c "git -C $ROOT/src checkout -q --detach FETCH_HEAD"
 fi
 chown -R zl-pred:zl-pred "$ROOT/src"
 for folder in fast-signal-engine round-tracker railway-diagnostic;do

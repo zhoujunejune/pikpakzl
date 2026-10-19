@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Print simulation-only training audit with no key access
         env:
-          ZL_PANEL_PASSWORD: \${{ secrets.ZL_PANEL_PASSWORD }}
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
         run: |
           python3 - <<'PY'
           import os,urllib.request,json,base64,collections,time

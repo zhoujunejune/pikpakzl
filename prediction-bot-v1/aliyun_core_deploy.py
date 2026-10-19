@@ -26,12 +26,10 @@ def main():
         region_id=REGION,endpoint="swas.ap-southeast-1.aliyuncs.com"))
     command='''#!/bin/bash
 set -Eeuo pipefail
-SRC=/opt/zl-futures-bot/src
-test -d "$SRC/.git"
-git -C "$SRC" fetch -q --depth=1 origin feature/zl-futures-bot-v1
 FILE=$(mktemp)
 trap 'rm -f "$FILE"' EXIT
-git -C "$SRC" show COMMIT_SHA:prediction-bot-v1/install_original_core.sh > "$FILE"
+curl --fail --silent --show-error --location --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/install_original_core.sh" --output "$FILE"
+test -s "$FILE"
 bash -n "$FILE"
 bash "$FILE"
 '''.replace("COMMIT_SHA",sha)

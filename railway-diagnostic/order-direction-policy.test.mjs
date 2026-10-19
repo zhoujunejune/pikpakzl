@@ -106,7 +106,9 @@ test('PIN API, Redis CAS, v3 migration, dashboard controls and pre-submit refres
  const shell=fs.readFileSync(new URL('./panel-stats-shell.mjs',import.meta.url),'utf8');
  const source=fs.readFileSync(new URL('./order-direction-policy.mjs',import.meta.url),'utf8');
  assert.match(index,/setDirectionMode\(body.source,body.direction,body.mode,body.expectedRevision/);
- assert.match(index,/pinOK\(body.pin\)/);
+ assert.match(index,/pinOK\(null,req\)/);
+ assert.match(index,/process\.env\.ZL_OUTER_AUTH_ONLY!==['"]true['"]/);
+ assert.match(shell,/\['FORWARD','INVERSE','OFF'\]\.map/);
  assert.match(index,/mapping\.mappingPolicy/);
  assert.match(index,/effectiveAfterRound/);
  assert.match(wrapper,/await refreshDirectionSettings\(\)/);

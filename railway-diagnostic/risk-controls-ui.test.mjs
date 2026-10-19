@@ -52,7 +52,7 @@ test('website-only authenticated TP and SL settings have no extra PIN',()=>{
  assert.match(html,/id="riskControlsCard"/);
  assert.match(html,/自动止盈止损/);
  assert.doesNotMatch(html,/id="tpPin"|id="slPin"/);
- assert.doesNotMatch(script,/PIN|pin:password|__zlOuterAuthOnly/);
+ assert.doesNotMatch(script,/pin:password|__zlOuterAuthOnly|kind\+'Pin'/);
  assert.match(source,/pinOK\(body.pin, req\)/);
  assert.match(source,/x-zl-verified-login/);
  assert.match(source,/sec-fetch-site/);

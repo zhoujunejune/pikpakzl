@@ -78,6 +78,7 @@ button:disabled{opacity:.55}
 </div>
 <div class="actions"><button type="submit" id="save">保存或更换 API</button>
 <button type="button" id="check" style="background:#245a7b">只读连接检测</button></div>
+<p class="muted" id="saveHint">先点击「保存或更换 API」，看到“已保存”状态，再进行只读连接检测。填写输入框不等于保存成功。</p>
 <button type="button" id="remove" style="background:#712d35" disabled>主动删除所选 API（需再次确认）</button>
 </form>
 <p id="message" role="status" class="muted"></p>
@@ -86,11 +87,17 @@ button:disabled{opacity:.55}
 <div class="card"><h2>使用说明</h2><p class="muted">两个机器人的密钥分别保存在阿里云服务器文件中，只有服务器本机和对应机器人可读取。页面不会回显已保存的 Key 或 Secret。其他交易所可以预先保存密钥，但只有完成相应交易适配器后才可连接交易。不要把密钥发到聊天或上传到 GitHub。</p></div>
 </main><script>
 'use strict';
-const $=id=>document.getElementById(id), base='api/';
+const $=id=>document.getElementById(id);
+let storedAPIConfigured=false;
+let storedRuntimeReady=false;
+let statusRequestSequence=0;
 function selected(){return {bot:$('bot').value,exchange:$('exchange').value}}
 function show(msg,cls='muted'){$('message').textContent=msg;$('message').className=cls}
 async function query(){
+ const sequence=++statusRequestSequence;
  const {bot,exchange}=selected();
+ storedAPIConfigured=false;
+ storedRuntimeReady=false;
  $('walletBox').hidden=!(bot==='prediction'&&exchange==='binance');
  $('passphraseBox').hidden=exchange!=='okx';
  const supported=exchange==='binance';
@@ -98,15 +105,32 @@ async function query(){
  try{
   const res=await fetch('api/status?bot='+encodeURIComponent(bot)+'&exchange='+encodeURIComponent(exchange),{cache:'no-store'});
   const data=await res.json();if(!res.ok)throw Error(data.error||'状态不可用');
+  if(sequence!==statusRequestSequence)return;
+  storedAPIConfigured=Boolean(data.configured);
+  storedRuntimeReady=Boolean(data.runtimeConfigReady);
+  $('saveHint').textContent=storedAPIConfigured ?
+   '已保存到后台。只读连接检测只使用已保存的 API；如果你修改了上方输入框，请先保存新内容再检测。' :
+   '尚未保存：请填写 API Key 和 Secret，点击上面的「保存或更换 API」并确认；输入框有圆点不代表已经保存。';
   $('status').textContent=(data.configured?'长期保存中':'未配置 API')+
     ' · '+(data.configured?'保存时间 '+(data.updatedAt||'未知'):'填写密钥后可持久化保存')+
     ' · '+(data.configured && exchange==='binance' ? (data.runtimeConfigReady?'生效文件已同步':'生效文件未同步，请检查'):'')+
     ' · '+(data.adapterReady?'已有交易所适配代码':'暂未接入交易适配器');
   $('remove').disabled=!data.configured;
- }catch(e){$('status').textContent='状态读取失败：'+e.message}
+ }catch(e){
+  if(sequence===statusRequestSequence){
+   $('status').textContent='状态读取失败：'+e.message;
+   $('saveHint').textContent='无法确认后台配置状态，请刷新页面或检查服务器。';
+  }
+ }
  show('');
 }
-$('bot').addEventListener('change',query);$('exchange').addEventListener('change',query);
+$('bot').addEventListener('change',()=>{$('form').reset();query()});
+$('exchange').addEventListener('change',()=>{$('form').reset();query()});
+for(const key of ['apiKey','secret','passphrase','walletAddress','walletId']){
+ $(key).addEventListener('input',()=>{
+  $('saveHint').textContent='检测到尚未保存的输入内容。请先点击「保存或更换 API」，等待后台状态确认。';
+ })
+}
 $('form').addEventListener('submit',async evt=>{
  evt.preventDefault();const {bot,exchange}=selected();
  if(!confirm('确认把新的 '+$('exchange').selectedOptions[0].text+' API 保存给「'+$('bot').selectedOptions[0].text+'」？不会开启交易。'))return;
@@ -115,9 +139,14 @@ $('form').addEventListener('submit',async evt=>{
   const body={bot,exchange,apiKey:$('apiKey').value.trim(),apiSecret:$('secret').value.trim(),
    passphrase:$('passphrase').value,walletAddress:$('walletAddress').value.trim(),walletId:$('walletId').value.trim()};
   const res=await fetch('api/credentials',{method:'POST',headers:{'Content-Type':'application/json','X-ZL-API-Manager':'1'},credentials:'same-origin',body:JSON.stringify(body)});
-  const data=await res.json();if(!res.ok)throw Error(data.error||'保存失败');
+  const data=await res.json();if(!res.ok||!data.saved)throw Error(data.error||'保存失败');
   $('form').reset();$('bot').value=bot;$('exchange').value=exchange;
-  await query();show('保存成功。密钥不会在页面回显，机器人交易开关未改变。','ok');
+  await query();
+  if(!storedAPIConfigured||!storedRuntimeReady && exchange==='binance'){
+   show('服务器已接受保存，但尚未确认生效文件同步，请勿当作连接成功。','warn');
+  }else{
+   show('API 已保存在后台。现在可点击「只读连接检测」。自动交易开关未改变。','ok');
+  }
  }catch(e){show('保存失败：'+e.message,'error')}
  finally{$('save').disabled=false}
 });
@@ -138,10 +167,21 @@ $('remove').addEventListener('click',async()=>{
 $('check').addEventListener('click',async()=>{
  const {bot,exchange}=selected();
  if(exchange!=='binance'){show('此交易所的只读连接检测尚未接入。','warn');return}
- $('check').disabled=true;show('检测中：只发送只读签名请求，不会提交订单。');
+ if($('apiKey').value.trim()||$('secret').value.trim()){
+  show('你填写了尚未保存的 API。请先点击「保存或更换 API」，确认后台保存成功，再进行检测。','warn');return
+ }
+ if(!storedAPIConfigured||!storedRuntimeReady){
+  show('后台尚未配置或生效该机器人 / Binance 的 API。先保存密钥，再进行连接检测。','warn');return
+ }
+ $('check').disabled=true;show('正在使用已保存的 API 发送只读签名请求，不会提交订单。');
  try{
   const res=await fetch('api/check',{method:'POST',headers:{'Content-Type':'application/json','X-ZL-API-Manager':'1'},credentials:'same-origin',body:JSON.stringify({bot,exchange})});
   const data=await res.json();
+  if(data.reason==='API_NOT_CONFIGURED'){
+   storedAPIConfigured=false;
+   show('后台没有找到已保存的 API。请先点击「保存或更换 API」确认成功；输入框里有圆点不代表已保存。','warn');
+   await query();return;
+  }
   show((data.ok?'交易所已接受签名请求。':'未通过验证。')+' 状态：'+(data.reason||'')+(data.httpStatus?' · HTTP '+data.httpStatus:''),
        data.ok?'ok':'warn');
  }catch(e){show('连接检测失败：'+e.message,'error')}

@@ -7,9 +7,9 @@ import {
 } from './dynamic-entry-shadow-core.mjs';
 import {verifiedOfficialRoundDirections} from './novice-mix-shadow.mjs';
 const origin=String(process.env.NOVICE_MARKET_ORIGIN||
- 'https://signal-diagnostic-v3-production.up.railway.app').replace(/\/+$/,'');
+ 'http://127.0.0.1:13003').replace(/\/+$/,'');
 const officialOrigin=String(process.env.ROUND_STATS_ORIGIN||
- 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/,'');
+ 'http://127.0.0.1:13002').replace(/\/+$/,'');
 const KEY='shadow:dynamic_entry_5m_v1:isolated';
 const MAX_ROWS=1800;
 const valid=x=>x==='UP'||x==='DOWN';

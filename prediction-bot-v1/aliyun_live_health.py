@@ -35,6 +35,27 @@ for service in zl-prediction-trade zl-prediction-v2 zl-prediction-v3;do
   journalctl --no-pager -u "$service" --since '3 hours ago' -o cat 2>/dev/null |
     python3 -c 'import sys,re,collections;lines=sys.stdin.read().splitlines();rules={"heap_failure":r"heap out of memory|Allocation failed|ENOMEM|Mark-Compact|FATAL ERROR","runtime_exception":r"uncaughtException|uncaught exception|TypeError:|ReferenceError:|SyntaxError:","network_failure":r"ECONNREFUSED|ETIMEDOUT|EADDRINUSE|ERR_CONNECTION","process_exit":r"exited|SIGKILL|SIGTERM","redis_error":r"WRONGPASS|NOAUTH|Redis.*Error"};print("AUDIT_JOURNAL_TYPES",len(lines),{k:sum(bool(re.search(p,x,re.I)) for x in lines) for k,p in rules.items()})' || true
 done
+echo "AUDIT_EVENT_SUMMARY_BEGIN"
+journalctl --no-pager -u zl-prediction-trade --since '3 hours ago' -o cat |
+  python3 -c '
+import sys,json,collections
+count=collections.Counter()
+events=[]
+errors=[]
+for line in sys.stdin:
+ try:
+  o=json.loads(line)
+ except Exception:continue
+ if not isinstance(o,dict):continue
+ kind=str(o.get("event",""))
+ if not kind:continue
+ count[kind]+=1
+ if kind.endswith("_exited") or "start" in kind or "failed" in kind or "error" in kind:
+  events.append((str(o.get("at",o.get("ts","unknown")))[0:28],kind,str(o.get("code",""))[:10],str(o.get("signal",""))[:15]))
+print("AUDIT_EVENT_COUNTS",count.most_common(20))
+print("AUDIT_RECENT_PROCESS_EVENTS",events[-30:])
+' || true
+echo "AUDIT_EVENT_SUMMARY_END"
 echo "HEALTH_LOG_TRADE_ERROR_TYPES_BEGIN"
 journalctl -u zl-prediction-trade.service --no-pager --since '30 minutes ago' -o cat 2>/dev/null | python3 -c 'import re,sys;lines=[x.strip() for x in sys.stdin if re.search(r"Error:|ERR_|EACCES|ENOENT|Failed|denied|status=|signal=",x,re.I)];print("\n".join(re.sub(r"(?i)(token|secret|password|key)\s*[:=]\s*\S+",r"\1=[REDACTED]",x[:180]) for x in lines[-20:]))' || true
 echo "HEALTH_LOG_TRADE_ERROR_TYPES_END"

@@ -110,6 +110,27 @@ for host in ["47-237-188-69.sslip.io","prediction.47-237-188-69.sslip.io"]:
 PY
 fi
 echo "SITE_DEEP_AUDIT_COMPLETE"
+echo "SITE_NODE_TYPEERROR_DETAILS_BEGIN"
+journalctl -u zl-prediction-trade --since '90 minutes ago' --no-pager -o cat 2>/dev/null |
+python3 -c '
+import sys,re,collections
+rows=sys.stdin.read().splitlines()
+errors=collections.Counter()
+stacks=collections.Counter()
+for index,line in enumerate(rows):
+ if "TypeError:" not in line:continue
+ raw=line.split("TypeError:",1)[1].strip()
+ raw=re.sub(r"https?://\S+","[URL]",raw)
+ raw=re.sub(r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*\S+",r"\1=[MASKED]",raw)
+ raw=re.sub(r"[A-Za-z0-9_\-]{48,}","[LONG_VALUE_MASKED]",raw)
+ errors[raw[:170]]+=1
+ for nxt in rows[index+1:index+5]:
+  m=re.search(r"at (?:[^\s]+ )?\(?((?:file://)?/opt/[\w/.\-]+:\d+:\d+)\)?",nxt)
+  if m:stacks[m.group(1)]+=1
+print("SITE_NODE_TYPEERROR_VARIANTS",errors.most_common(12))
+print("SITE_NODE_STACK_LOCATIONS",stacks.most_common(12))
+'
+echo "SITE_NODE_TYPEERROR_DETAILS_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

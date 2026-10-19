@@ -74,14 +74,19 @@ trap 'rm -rf "$TMP"' EXIT
 ROOT="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$PRED_MIGRATION_SHA/railway-diagnostic"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$ARCHIVE/source-backups/$STAMP"
-for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs shadow-breakout20-dashboard.mjs postflip-official-stats.mjs novice-mix-shadow.mjs dynamic-entry-shadow.mjs;do
+for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs postflip-official-stats.mjs novice-mix-shadow.mjs dynamic-entry-shadow.mjs;do
   curl -fsSL --retry 3 --max-time 30 "$ROOT/$file" -o "$TMP/$file"
   "$NODE" --check "$TMP/$file"
 done
-for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs shadow-breakout20-dashboard.mjs postflip-official-stats.mjs novice-mix-shadow.mjs dynamic-entry-shadow.mjs;do
+for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs postflip-official-stats.mjs novice-mix-shadow.mjs dynamic-entry-shadow.mjs;do
   test -f "$BASE/$file" && cp -p "$BASE/$file" "$ARCHIVE/source-backups/$STAMP/$file" || true
   install -m 0644 -o zl-pred -g zl-pred "$TMP/$file" "$BASE/$file"
 done
+# Legacy breakout20 standalone page/backend was explicitly removed by owner.
+# Keep official baseline ledger and native EDGE/DYNAMIC services unchanged.
+if [ -e "$BASE/shadow-breakout20-dashboard.mjs" ];then
+  mv "$BASE/shadow-breakout20-dashboard.mjs" "$ARCHIVE/source-backups/$STAMP/shadow-breakout20-dashboard.mjs.retired"
+fi
 cat > /etc/systemd/system/zl-prediction-native-models.service <<'EOF'
 [Unit]
 Description=ZL Alibaba-native EDGE and Dynamic model engines

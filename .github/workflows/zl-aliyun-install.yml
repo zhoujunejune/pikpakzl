@@ -1,6 +1,6 @@
 name: Alibaba SWAS futures paper-only install
 # Install the paper-only BTCUSDT, ETHUSDT, BTCUSDC strategy, quotes and position panel.
-# Install the tested phone control UI locally; external HTTPS disabled until password is configured.
+# Deploy verified symbol-wise historical fill visibility, preserve persistent paper ledger.
 on:
   push:
     branches: [feature/zl-futures-bot-v1]

@@ -1,0 +1,67 @@
+name: Delete all retired prediction model runtime and stats (keep Selective8)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_remove_inactive_models.sh'
+      - 'prediction-bot-v1/aliyun_remove_inactive_models.py'
+      - '.github/workflows/zl-aliyun-remove-inactive-models.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Syntax tests
+        run: |
+          bash -n prediction-bot-v1/aliyun_remove_inactive_models.sh
+          python -m py_compile prediction-bot-v1/aliyun_remove_inactive_models.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Retire independent models and erase scoped statistics
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_remove_inactive_models.py
+      - name: HTTPS model chooser and obsolete API proof
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import json,urllib.request,urllib.error,base64,os
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(base+path,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+           try:
+            with urllib.request.urlopen(req,timeout=22) as r:return r.status,r.read()
+           except urllib.error.HTTPError as e:return e.code,e.read(3000)
+          code,c=get('/api/order-signal-model');chosen=json.loads(c)
+          assert code==200 and chosen['model']=='SELECTIVE_V2_FAST8_PREWARM_V1'
+          assert len(chosen.get('models',[]))==1
+          print('CLEANUP_PUBLIC_EXCLUSIVE_MODEL',chosen['model'])
+          code,html=get('/')
+          assert code==200 and b'orderSignalModelSelect' in html
+          assert b'orderSignalModelSave' in html
+          assert b'edgeIndependentCard' not in html
+          assert b'waitVisibilityCard' not in html
+          print('CLEANUP_PUBLIC_FUTURE_DROPDOWN_PRESENT=true')
+          for route in ('/api/shadow-breakout20/edge-5m',
+           '/api/shadow-breakout20/dynamic-entry',
+           '/api/shadow-breakout20/novice-mix',
+           '/api/postflip-official-stats','/api/training-status'):
+           code,_=get(route)
+           assert code==410,(route,code)
+           print('CLEANUP_PUBLIC_OLD_MODEL_RETIRED',route,code)
+          code,data=get('/api/round-stats')
+          j=json.loads(data)
+          assert code==200 and j['productionSignalSourceMode']=='SELECTIVE_V2_FAST8'
+          print('CLEANUP_PUBLIC_OFFICIAL_LEDGER_ROWS',len(j.get('records',[])))
+          PY

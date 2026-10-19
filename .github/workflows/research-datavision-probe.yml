@@ -1,0 +1,32 @@
+name: Research dataset source probe - Binance public archive
+on:
+  push:
+    branches: [research/freqtrade-futures-20261019]
+    paths: [".github/workflows/research-datavision-probe.yml"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Public archive connectivity (no Binance API and no credentials)
+        run: |
+          python3 - <<'PY'
+          import urllib.request,urllib.error,json
+          base="https://data.binance.vision/data/futures/um/monthly/"
+          checks=[
+           ("BTC_5M",base+"klines/BTCUSDT/5m/BTCUSDT-5m-2026-09.zip"),
+           ("ETH_5M",base+"klines/ETHUSDT/5m/ETHUSDT-5m-2026-09.zip"),
+           ("BTCUSDC_5M",base+"klines/BTCUSDC/5m/BTCUSDC-5m-2026-09.zip"),
+           ("BTC_MARK_1H",base+"markPriceKlines/BTCUSDT/1h/BTCUSDT-1h-2026-09.zip"),
+           ("BTC_FUNDING",base+"fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-09.zip")
+          ]
+          for name,url in checks:
+           try:
+            req=urllib.request.Request(url,method="HEAD",headers={"User-Agent":"ZLReadOnlyResearch/1.0"})
+            with urllib.request.urlopen(req,timeout=12) as r:
+             print("RESEARCH_ARCHIVE_SOURCE",name,"HTTP",r.status,"BYTES",r.headers.get("Content-Length","unknown"))
+           except urllib.error.HTTPError as exc:print("RESEARCH_ARCHIVE_SOURCE",name,"HTTP",exc.code)
+           except Exception as exc:print("RESEARCH_ARCHIVE_SOURCE",name,"ERROR_CLASS",type(exc).__name__)
+          PY

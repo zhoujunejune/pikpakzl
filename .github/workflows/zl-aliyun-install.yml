@@ -1,5 +1,5 @@
 name: Alibaba SWAS futures paper-only install
-# Deploy live BTC/ETH price snapshots and readable stop/take-profit position panel.
+# Install the paper-only BTCUSDT, ETHUSDT, BTCUSDC strategy, quotes and position panel.
 # Install the tested phone control UI locally; external HTTPS disabled until password is configured.
 on:
   push:

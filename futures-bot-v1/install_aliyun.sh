@@ -15,6 +15,11 @@ if ! id zlbot >/dev/null 2>&1; then
 fi
 install -d -m 0750 -o zlbot -g zlbot /var/lib/zl-futures-bot
 install -d -m 0755 /opt/zl-futures-bot
+# One-time retained copy before migrating old single paper position to multi-symbol.
+if [ -s /var/lib/zl-futures-bot/state.json ] && [ ! -e /var/lib/zl-futures-bot/state.before-multipair-v1.json ]; then
+  install -m 0600 -o zlbot -g zlbot /var/lib/zl-futures-bot/state.json /var/lib/zl-futures-bot/state.before-multipair-v1.json
+  echo "STATE_BACKUP_BEFORE_MULTIPAIR: preserved"
+fi
 python3 -m venv /opt/zl-futures-bot/venv
 /opt/zl-futures-bot/venv/bin/python -m pip install --disable-pip-version-check -r futures-bot-v1/requirements.txt
 # Absolute path is supplied by our narrowly scoped deploy driver.
@@ -71,6 +76,17 @@ systemctl enable zl-futures-bot-paper.service
 systemctl restart zl-futures-bot-paper.service
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
   if curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:10000/healthz >/dev/null; then
+    # Validate that the running service exposes the new multi-position schema.
+    curl -fsS --max-time 5 http://127.0.0.1:10000/status | /opt/zl-futures-bot/venv/bin/python -c '
+import json,sys
+s=json.load(sys.stdin)
+assert s.get("liveTradingEnabled") is False
+assert s.get("onePositionAcrossAllSymbols") is False
+assert s.get("onePositionPerSymbol") is True
+assert s.get("cooldownRemainingSeconds") == 0
+assert isinstance(s.get("positions"),list)
+print("MULTIPAIR_STATUS_SCHEMA_OK")
+'
     echo "INSTALL_OK: service responds locally"
     systemctl is-enabled zl-futures-bot-paper.service
     systemctl is-active zl-futures-bot-paper.service

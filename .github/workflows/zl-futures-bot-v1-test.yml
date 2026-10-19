@@ -25,3 +25,8 @@ jobs:
       - name: Run unit tests without network or trading keys
         working-directory: futures-bot-v1
         run: python -m unittest discover -v -p 'test_*.py'
+      - name: Check inline browser JavaScript syntax
+        working-directory: futures-bot-v1
+        run: |
+          python -c "from dashboard import PAGE; open('/tmp/zl-futures-dashboard.js','w').write(PAGE.split('<script>',1)[1].split('</script>',1)[0])"
+          node --check /tmp/zl-futures-dashboard.js

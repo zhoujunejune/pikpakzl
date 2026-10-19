@@ -12,15 +12,18 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 raw="https://raw.githubusercontent.com/zhoujunejune/pikpakzl"
 curl -fsSL --max-time 25 "$raw/$APP_SHA/futures-research-panel/live_shadow.py" -o "$scratch/live_shadow.py"
+curl -fsSL --max-time 25 "$raw/$APP_SHA/futures-research-panel/auto_train.py" -o "$scratch/auto_train.py"
 curl -fsSL --max-time 25 "$raw/$APP_SHA/futures-research-panel/index.html" -o "$scratch/index.html"
 curl -fsSL --max-time 25 "$raw/$REPORT_SHA/published-results/futures-simulation.json" -o "$scratch/report.json"
-python3 -m py_compile "$scratch/live_shadow.py"
+python3 -m py_compile "$scratch/live_shadow.py" "$scratch/auto_train.py"
 python3 - "$scratch/live_shadow.py" "$scratch/index.html" "$scratch/report.json" <<'PY'
 import sys,pathlib,json
 source=pathlib.Path(sys.argv[1]).read_text()
 page=pathlib.Path(sys.argv[2]).read_text()
 report=json.loads(pathlib.Path(sys.argv[3]).read_text())
 assert 'def do_POST' in source and 'def api(' in source
+assert 'import auto_train' in source and 'train_loop()' in source
+assert 'autoParameterTraining' in source
 assert '/fapi/v1/order' not in source and 'BINANCE_API_SECRET' not in source
 assert '/futures-lab/live.json' in page
 assert report.get('no_live_orders') and len(report.get('rows',[]))==18
@@ -31,6 +34,7 @@ if ! id zlshadow >/dev/null 2>&1; then
 fi
 install -d -m 0755 /opt/zl-futures-shadow /opt/zl-futures-research-site
 install -d -m 0700 -o zlshadow -g zlshadow /var/lib/zl-futures-shadow
+install -m 0644 "$scratch/auto_train.py" /opt/zl-futures-shadow/auto_train.py
 install -m 0644 "$scratch/live_shadow.py" /opt/zl-futures-shadow/live_shadow.py
 install -m 0644 "$scratch/index.html" /opt/zl-futures-research-site/index.html
 install -m 0644 "$scratch/report.json" /opt/zl-futures-research-site/report.json
@@ -64,7 +68,7 @@ EOF
 systemctl daemon-reload
 systemctl enable zl-futures-shadow-research.service >/dev/null
 # enable --now leaves an already-running Python process unchanged.
-# Restart ONLY the dedicated simulation service to apply the HTTP 404 fix.
+# Restart ONLY the dedicated simulation service to apply automatic training.
 # Production futures and prediction systemd units must not be restarted.
 systemctl restart zl-futures-shadow-research.service
 for i in 1 2 3 4 5 6 7 8;do

@@ -29,6 +29,54 @@ class Secrets(unittest.TestCase):
         self.assertNotEqual(api.path_for("futures","binance"),api.path_for("prediction","binance"))
         self.assertEqual((api.ROOT/"futures/binance.env").stat().st_mode & 0o777,0o600)
         self.assertEqual((api.ROOT/"prediction").stat().st_mode & 0o777,0o700)
+    def test_config_persists_across_restarts_and_other_bot_updates(self):
+        # No in-memory cache: a new process reads credentials from disk.
+        original=api.validate(self.record("futures"))
+        original["updatedAt"]="2026-10-19T10:00:00+00:00"
+        api.persist(original)
+        p=api.validate(self.record("prediction"))
+        p["apiKey"]="P"*32
+        api.persist(p)
+        self.assertTrue(api.runtime_ready(original))
+        self.assertTrue(api.runtime_ready(p))
+        self.assertEqual(api.safe_read("futures","binance"),original)
+        # Saving an unrelated exchange cannot modify the existing keys.
+        unrelated=self.record("futures","okx")
+        unrelated["apiKey"]="O"*32
+        api.persist(api.validate(unrelated))
+        self.assertEqual(api.safe_read("futures","binance"),original)
+        self.assertTrue(api.runtime_ready(original))
+
+    def test_only_explicit_delete_removes_selected_config(self):
+        f=api.validate(self.record("futures"))
+        p=api.validate(self.record("prediction"))
+        p["apiKey"]="P"*32
+        api.persist(f)
+        api.persist(p)
+        self.assertTrue(api.safe_read("futures","binance"))
+        self.assertTrue(api.delete_saved("futures","binance"))
+        self.assertIsNone(api.safe_read("futures","binance"))
+        self.assertFalse(api.runtime_ready(api.safe_read("futures","binance")))
+        self.assertEqual(api.safe_read("prediction","binance"),p)
+        self.assertTrue(api.runtime_ready(p))
+        tombstone=(api.ROOT/"futures/binance.env").read_text()
+        self.assertIn("BINANCE_API_KEY=\n",tombstone)
+        self.assertIn("BINANCE_API_SECRET=\n",tombstone)
+        self.assertFalse(api.delete_saved("futures","binance"))
+        # Replacement after deliberate deletion restores correct isolated env.
+        f["apiKey"]="N"*32
+        api.persist(f)
+        self.assertTrue(api.runtime_ready(f))
+
+    def test_deletion_for_non_binance_never_erases_binance(self):
+        f=api.validate(self.record("futures"))
+        other=api.validate(self.record("futures","bybit"))
+        api.persist(f)
+        api.persist(other)
+        self.assertTrue(api.delete_saved("futures","bybit"))
+        self.assertTrue(api.runtime_ready(f))
+        self.assertIsNone(api.safe_read("futures","bybit"))
+
     def test_future_exchange_stored_but_no_binance_env(self):
         r=self.record("futures","okx")
         r["passphrase"]="pass"

@@ -1,0 +1,25 @@
+name: Research safe Alibaba route audit - read only
+on:
+  push:
+    branches: [research/freqtrade-futures-20261019]
+    paths:
+      - '.github/workflows/research-caddy-audit.yml'
+      - 'research/freqtrade-futures-20261019/caddy_audit.py'
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip -q install alibabacloud_swas_open20200601==4.0.0
+      - name: Read only Caddy structure, no deployment or service edits
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python research/freqtrade-futures-20261019/caddy_audit.py

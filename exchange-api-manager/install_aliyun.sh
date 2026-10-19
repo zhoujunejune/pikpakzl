@@ -23,9 +23,24 @@ test -d /opt/zl-prediction-live/src/railway-diagnostic
 if ! grep -q '交易所 API 管理' "$tmp/pred-index.mjs"; then
   echo "PREDICTION_NAV_NOT_PRESENT";exit 7
 fi
-install -m 0644 -o root -g root "$tmp/server.py" "$BASE/server.py"
-install -m 0644 "$tmp/dashboard.py" /opt/zl-futures-bot/src/futures-bot-v1/dashboard.py
-install -m 0644 -o zl-pred -g zl-pred "$tmp/pred-index.mjs" /opt/zl-prediction-live/src/railway-diagnostic/index.mjs
+# Never interrupt a trading-related service for a management-page-only update.
+# Compare content, not file timestamps; preserve any saved API configuration.
+manager_changed=no
+futures_ui_changed=no
+prediction_ui_changed=no
+if ! cmp -s "$tmp/server.py" "$BASE/server.py";then
+  install -m 0644 -o root -g root "$tmp/server.py" "$BASE/server.py"
+  manager_changed=yes
+fi
+if ! cmp -s "$tmp/dashboard.py" /opt/zl-futures-bot/src/futures-bot-v1/dashboard.py;then
+  install -m 0644 "$tmp/dashboard.py" /opt/zl-futures-bot/src/futures-bot-v1/dashboard.py
+  futures_ui_changed=yes
+fi
+if ! cmp -s "$tmp/pred-index.mjs" /opt/zl-prediction-live/src/railway-diagnostic/index.mjs;then
+  install -m 0644 -o zl-pred -g zl-pred "$tmp/pred-index.mjs" /opt/zl-prediction-live/src/railway-diagnostic/index.mjs
+  prediction_ui_changed=yes
+fi
+printf 'DEPLOY_FILE_CHANGED manager=%s futures_ui=%s prediction_ui=%s\n' "$manager_changed" "$futures_ui_changed" "$prediction_ui_changed"
 # EnvironmentFile is opened by systemd's privileged manager; credentials are
 # never made readable by the bot user that is not selected.
 mkdir -p /etc/systemd/system/zl-futures-bot-paper.service.d
@@ -136,13 +151,22 @@ if ! caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
 fi
 systemctl daemon-reload
 systemctl enable zl-exchange-api-manager.service
-# Always restart the manager after installing new source; enable --now is not
-# enough to load newly deployed Python handlers in an already active process.
-systemctl restart zl-exchange-api-manager.service
+if [ "$manager_changed" = yes ];then
+  systemctl restart zl-exchange-api-manager.service
+else
+  systemctl start zl-exchange-api-manager.service
+fi
 systemctl enable --now zl-api-futures-reload.path zl-api-prediction-reload.path
-systemctl restart zl-futures-bot-paper.service
-systemctl restart zl-prediction-trade.service
+if [ "$futures_ui_changed" = yes ];then
+  systemctl restart zl-futures-bot-paper.service
+fi
+if [ "$prediction_ui_changed" = yes ];then
+  systemctl restart zl-prediction-trade.service
+fi
+# Caddy reload does not restart the Node services, and is necessary only when
+# routes actually differ. This command only changes Caddy during initial setup.
 systemctl reload caddy
+printf 'DEPLOY_BOT_RESTART futures=%s prediction=%s\n' "$futures_ui_changed" "$prediction_ui_changed"
 for i in 1 2 3 4 5 6 7 8;do
  if [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:13016/healthz)" = 403 ];then break;fi
  sleep 2

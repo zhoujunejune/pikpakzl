@@ -4,6 +4,7 @@ No fabricated prices or PnL without a fresh quote. Uses marked price and the
 same estimated 0.05% per-side taker fee as the existing paper settlement.
 """
 import math
+from symbol_config import ALLOWED_SYMBOLS, margin_asset
 
 def view(trade,quotes,fee_rate=0.0005):
     if not trade:
@@ -11,7 +12,7 @@ def view(trade,quotes,fee_rate=0.0005):
     try:
         symbol=str(trade["symbol"])
         side=str(trade["side"])
-        if side not in ("BUY","SELL") or symbol not in ("BTCUSDT","ETHUSDT"):
+        if side not in ("BUY","SELL") or symbol not in ALLOWED_SYMBOLS:
             return None
         entry=float(trade["entry"])
         qty=float(trade["qty"])
@@ -35,7 +36,7 @@ def view(trade,quotes,fee_rate=0.0005):
         gross=(price-entry)*qty*sign
         net=gross-(entry+price)*qty*fee_rate
     return {
-        "symbol":symbol,"side":side,"quantity":qty,
+        "symbol":symbol,"side":side,"quantity":qty,"marginAsset":margin_asset(symbol),
         "entryPrice":entry,"stopPrice":stop,"takeProfitPrice":take_profit,
         "openAt":trade.get("at"),"isPaper":trade.get("paper",False),
         "markPrice":price,"markPriceStale":not live,

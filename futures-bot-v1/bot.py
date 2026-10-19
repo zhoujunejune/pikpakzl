@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated Binance USDT-M futures experiment. NOT a proven profitable strategy.
+"""Isolated Binance USD(S)-M futures experiment. NOT a proven profitable strategy.
 MODE=paper default. No external packages except requests.
 Requires ONE-WAY mode, independent account/portfolio, durable storage for live mode.
 """
@@ -19,13 +19,14 @@ from urllib.parse import urlencode
 import requests
 from controls import read_control
 from market_health import record as record_market_response, record_error as record_market_error
+from symbol_config import ALLOWED_SYMBOLS, DEFAULT_SYMBOLS, margin_asset
 
 def env_float(k, d):
     return float(os.getenv(k, d))
 
 MODE = os.getenv("MODE", "paper").lower()
 BASE_URL = os.getenv("BINANCE_BASE_URL", "https://fapi.binance.com").rstrip("/")
-SYMBOLS = [s.strip().upper() for s in os.getenv("SYMBOLS", "BTCUSDT,ETHUSDT").split(",") if s.strip()]
+SYMBOLS = [s.strip().upper() for s in os.getenv("SYMBOLS", DEFAULT_SYMBOLS).split(",") if s.strip()]
 LEVERAGE = int(os.getenv("LEVERAGE", "10"))
 RISK_FRACTION = env_float("RISK_FRACTION", ".015")
 MARGIN_FRACTION = env_float("MAX_MARGIN_FRACTION", ".15")
@@ -51,7 +52,7 @@ assert MODE in ("paper", "live"), "MODE must be paper or live"
 assert 1 <= LEVERAGE <= 20, "This bot caps leverage at 20x"
 assert 0 < RISK_FRACTION <= .03 and 0 < MARGIN_FRACTION <= .20
 assert 0 < DAILY_LOSS_FRACTION <= .20
-assert SYMBOLS and set(SYMBOLS).issubset({"BTCUSDT", "ETHUSDT"})
+assert SYMBOLS and len(SYMBOLS)==len(set(SYMBOLS)) and set(SYMBOLS).issubset(ALLOWED_SYMBOLS)
 assert BASE_URL in ("https://fapi.binance.com", "https://testnet.binancefuture.com")
 if MODE == "live":
     assert os.getenv("ALLOW_REAL_TRADING") == "I_ACCEPT_REAL_TRADING"
@@ -130,9 +131,15 @@ class API:
     def positions(self):
         return [p for p in self.call("GET","/fapi/v3/positionRisk",signed=True)
                 if abs(float(p["positionAmt"]))>0.000000001]
-    def balance(self):
+    def balances(self):
+        """Read each settlement wallet; USDC contracts do not use the USDT wallet."""
         rows=self.call("GET","/fapi/v3/balance",signed=True)
-        return float(next(x["balance"] for x in rows if x["asset"]=="USDT"))
+        available={row["asset"]:float(row["balance"]) for row in rows if row.get("asset") in ("USDT","USDC")}
+        return {asset:available.get(asset,0.) for asset in ("USDT","USDC")}
+    def balance(self, asset="USDT"):
+        if asset not in ("USDT","USDC"):
+            raise ValueError("Unsupported margin asset")
+        return self.balances()[asset]
     def mark(self,symbol):
         return float(self.call("GET","/fapi/v1/premiumIndex",{"symbol":symbol})["markPrice"])
     def candles(self,symbol,interval,limit=160):
@@ -378,9 +385,20 @@ def tick(api,state):
     if time.time()-state.get("last_exit",0)<1800:
         return
     today=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    balance=state["balance"] if MODE=="paper" else api.balance()
-    if state.get("day")!=today:
-        state["day"]=today; state["day_start"]=balance;save(state)
+    # Paper uses one synthetic U wallet, USDT and USDC accounted 1:1.
+    # Live sizes using settlement-specific wallets; daily loss aggregates both,
+    # approximating a 1:1 stablecoin peg (not a guaranteed conversion).
+    live_balances=api.balances() if MODE=="live" else None
+    balance=state["balance"] if MODE=="paper" else sum(live_balances.values())
+    if state.get("day")!=today or (MODE=="live" and not isinstance(state.get("day_start_assets"),dict)):
+        previous_usdt=state.get("day_start") if MODE=="live" and state.get("day")==today else None
+        if MODE=="live":
+            state["day_start_assets"]={
+                "USDT":live_balances["USDT"] if previous_usdt is None else float(previous_usdt),
+                "USDC":live_balances["USDC"]}
+        state["day"]=today
+        state["day_start"]=balance if MODE=="paper" else sum(state["day_start_assets"].values())
+        save(state)
     if balance < state["day_start"]*(1-DAILY_LOSS_FRACTION):
         log("daily_loss_limit",current=balance,reference=state["day_start"])
         return
@@ -390,6 +408,12 @@ def tick(api,state):
     markets=api.info()
     candidates=[]
     for sym in SYMBOLS:
+        contract=markets.get(sym)
+        if (not contract or contract.get("status")!="TRADING"
+            or contract.get("contractType")!="PERPETUAL"
+            or contract.get("marginAsset")!=margin_asset(sym)):
+            log("symbol_unavailable_or_margin_mismatch",symbol=sym)
+            continue
         s=signal(api.candles(sym,"5m"),api.candles(sym,"1h",90))
         if s:
             s["symbol"]=sym
@@ -404,7 +428,8 @@ def tick(api,state):
         if abs(current-s["price"])/s["price"]>.002:
             log("stale_signal_price_drift",symbol=s["symbol"])
             continue
-        q=quantity_for(balance,current,s["distance"],markets[s["symbol"]],
+        wallet=state["balance"] if MODE=="paper" else live_balances[margin_asset(s["symbol"])]
+        q=quantity_for(wallet,current,s["distance"],markets[s["symbol"]],
                        risk_fraction=control["risk_fraction"] if control else None,
                        margin_fraction=control["max_margin_fraction"] if control else None,
                        leverage=control["leverage"] if control else None)

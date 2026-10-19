@@ -7,7 +7,7 @@ No key values, balances or detailed positions are logged.
 import json
 import os
 import sys
-from bot import API, seconds_until_binance_retry, BINANCE_RETRY_NOT_BEFORE_UTC
+from bot import API, SYMBOLS, seconds_until_binance_retry, BINANCE_RETRY_NOT_BEFORE_UTC
 
 def assess(api=None, allow_trade_test=False):
     remaining=seconds_until_binance_retry()
@@ -44,7 +44,7 @@ def assess(api=None, allow_trade_test=False):
             result["blocker"]="existing_positions_or_hedge_mode"
             return result
         orders=[]
-        for symbol in ("BTCUSDT","ETHUSDT"):
+        for symbol in SYMBOLS:
             orders.extend(client.algo_open(symbol))
         result["protectiveOrderCount"]=len(orders)
         if orders:

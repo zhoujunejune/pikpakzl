@@ -9,8 +9,9 @@ import datetime as dt
 import math
 import threading
 import time
+from symbol_config import ALLOWED_SYMBOLS
 
-SYMBOLS=("BTCUSDT","ETHUSDT")
+SYMBOLS=ALLOWED_SYMBOLS
 LOCK=threading.Lock()
 VALUES={}
 ERROR=None

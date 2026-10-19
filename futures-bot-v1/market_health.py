@@ -6,6 +6,7 @@ requests. A healthy worker thread alone is not proof of live market data.
 import datetime as dt
 import threading
 import time
+from symbol_config import ALLOWED_SYMBOLS
 
 _LOCK=threading.Lock()
 _LAST=None
@@ -41,7 +42,7 @@ def record(path,params,payload,now=None):
             source=interval+" K线"
         except (ValueError,TypeError,IndexError,OverflowError):
             return False
-    if not valid or symbol not in ("BTCUSDT","ETHUSDT"):
+    if not valid or symbol not in ALLOWED_SYMBOLS:
         return False
     with _LOCK:
         _LAST={"receivedAt":now,"sourceAt":source_timestamp,"symbol":symbol,"source":source}

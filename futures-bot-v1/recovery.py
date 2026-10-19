@@ -9,7 +9,7 @@ import time
 class ManualReviewRequired(RuntimeError):
     pass
 
-def reconstruct_owned_position(positions, algos, allowed_symbols=("BTCUSDT","ETHUSDT")):
+def reconstruct_owned_position(positions, algos, allowed_symbols=("BTCUSDT","ETHUSDT","BTCUSDC")):
     """Return None if flat with no owned algos, or an owned position snapshot.
 
     Raise ManualReviewRequired if unknown/ambiguous. Never infer ownership from

@@ -32,8 +32,8 @@ jobs:
           assert "['systemctl','reload','caddy']" in installer
           assert 'zl-futures-bot-paper' in installer
           assert 'basic_auth' in installer
-          import re
-          embedded=re.findall(r"python3 -.*?<<'PY'\\n(.*?)\\nPY",installer,re.S)
+          embedded=installer.split("<<'PY'"+chr(10))[1:]
+          embedded=[part.split(chr(10)+"PY",1)[0] for part in embedded]
           assert len(embedded)==2
           for snippet in embedded:compile(snippet,'caddy-installer-check','exec')
           PY

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZL 合约研究 · 模拟回测</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC","Microsoft Yahei",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:#0c1422;color:#ebf2fb}main{max-width:1100px;margin:auto;padding:18px 14px 60px}
+a{color:#92ccff}nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:20px}nav a{border:1px solid #334a66;border-radius:8px;padding:8px 12px;background:#14253a;text-decoration:none}
+h1{font-size:25px;margin:8px 0 10px}h2{font-size:17px;margin:0 0 14px}.muted,.caption{color:#b3c3d9}.caption{font-size:12px;line-height:1.7}
+.card{background:#172336;border:1px solid #33445d;border-radius:14px;padding:16px;margin:14px 0}
+.controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+select,input{width:100%;min-height:44px;border:1px solid #547094;border-radius:8px;background:#101d2d;color:#f0f5ff;font-size:15px;padding:8px}
+label{display:block;font-size:13px;color:#bdcbe0;margin-bottom:5px}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.mbox{background:#102034;border-radius:11px;padding:14px;overflow:hidden}.mbox small{color:#bdcbe0;display:block}.mbox strong{display:block;font-size:22px;font-variant-numeric:tabular-nums;margin-top:4px}
+.up{color:#54dbaa}.down{color:#ff8495}.warning{color:#ffd479}.ok{color:#53dba8}
+.pill{border-radius:30px;border:1px solid #49627f;padding:4px 10px;font-size:12px;display:inline-block}
+.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{padding:9px 10px;border-bottom:1px solid #30465d;text-align:right}th:first-child,td:first-child{text-align:left}
+button{background:#2467aa;border:1px solid #5585b5;padding:9px 14px;color:white;border-radius:8px;cursor:pointer}
+svg{width:100%;height:190px;display:block}.empty{padding:20px;color:#a9c1dc}
+.flex{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#chart text{fill:#97aec9;font-size:11px}#chart .gridline{stroke:#304961;stroke-width:1}
+@media(max-width:730px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.controls{grid-template-columns:1fr}}
+</style></head>
+<body><main>
+<nav><a href="/">合约机器人</a><a href="/prediction/">预测机器人</a><a href="/research/">模拟研究中心</a><a href="/api-keys/">API 管理</a></nav>
+<div class="flex"><div><h1>合约策略 · 模拟研究中心</h1><div class="muted">独立历史回放 · 公开 Binance USD-M 数据 · 不使用 API 密钥或真实余额</div></div><span class="pill" id="status">加载研究数据中</span></div>
+<div class="card"><h2>回测范围与研究状态</h2>
+<div class="metrics">
+<div class="mbox"><small>数据覆盖率</small><strong id="coverage">—</strong></div>
+<div class="mbox"><small>策略回放已完成</small><strong id="jobs">—</strong></div>
+<div class="mbox"><small>运行周期</small><strong style="font-size:16px">历史离线回测</strong></div>
+<div class="mbox"><small>最后生成时间 (UTC)</small><strong style="font-size:15px" id="updated">—</strong></div></div>
+<p class="caption">这些是历史回放与策略对比，<b>不是机器学习训练、实时模拟持仓或真实获利</b>。收益含估算交易手续费（双边各 0.05%）和不利滑点（双边各 0.03%），不含资金费、强平风险和交易所实际成交差异。</p>
+</div>
+<div class="card"><h2>查看某个交易对 / 策略的模拟收益</h2>
+<div class="controls">
+<div><label for="symbol">合约交易对</label><select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>BTCUSDC</option></select></div>
+<div><label for="strategy">开源策略</label><select id="strategy"><option>TrendFollowingStrategy</option><option>FSampleStrategy</option><option>FAdxSmaStrategy</option></select></div>
+<div><label for="stage">数据区间</label><select id="stage"><option value="train">样本内（8/15–9/14）</option><option value="holdout" selected>样本外（9/15–10/15）</option></select></div>
+</div>
+<p class="caption">三种策略的原始进出场信号取自固定 GitHub 提交；使用独立 OHLC 回放，不是 Freqtrade 官方回测引擎。5 分钟与 1 小时策略频率不同。模拟资金每组合独立从 1,000 USDT/USDC 开始，单次名义仓位约 100，1×。</p>
+<div class="metrics">
+<div class="mbox"><small>模拟净收益</small><strong id="profit">—</strong></div>
+<div class="mbox"><small>模拟收益率</small><strong id="profitPct">—</strong></div>
+<div class="mbox"><small>策略信号成交 / 盈利</small><strong id="tradeCount">—</strong></div>
+<div class="mbox"><small>模拟胜率</small><strong id="winrate">—</strong></div>
+<div class="mbox"><small>最大回撤</small><strong id="drawdown">—</strong></div>
+<div class="mbox"><small>盈利因子</small><strong id="pf">—</strong></div>
+<div class="mbox"><small>开仓周期</small><strong id="timeframe">—</strong></div>
+<div class="mbox"><small>证据可靠度</small><strong id="sample" style="font-size:16px">—</strong></div>
+</div></div>
+<div class="card"><div class="flex"><h2>模拟权益曲线</h2><span class="caption">历史时间按比例取点 · 纵轴为模拟资产</span></div>
+<svg id="chart" viewBox="0 0 900 190" aria-label="历史模拟权益曲线"></svg>
+<p class="caption">可对照样本内/样本外，但不能凭少数交易确定长期盈利能力。</p></div>
+<div class="card"><div class="flex"><h2>三种策略横向对照</h2><span class="caption">固定当前交易对与同一时间窗口</span></div>
+<div class="table-wrap"><table><thead><tr><th>开源策略</th><th>模拟成交</th><th>收益率</th><th>最大回撤</th><th>胜率</th><th>数据状态</th></tr></thead><tbody id="compare"></tbody></table></div></div>
+<div class="card"><h2>模拟平仓记录</h2><div class="table-wrap"><table><thead><tr><th>模拟平仓日期（UTC）</th><th>方向</th><th>入场价</th><th>出场价</th><th>盈亏 (模拟)</th><th>原因</th></tr></thead><tbody id="trades"></tbody></table></div></div>
+<div class="card"><h2>数据真实性与下一阶段</h2>
+<p>行情来自 Binance 官方公开的 <code>data.binance.vision</code> 永续合约 OHLC 档案。不会调用有地区限制的实盘交易接口，不会切换你的真实持仓模式。</p>
+<p>本期只有历史 K 线复盘。<b>没有实时前向模拟下单，也没有持续训练的模型权重。</b> 如果后续要显示实时纸面持仓，需要独立的行情及持仓账本，不能把历史回测曲线冒充正在进行的模拟账户。</p>
+<p class="caption">策略固定源码：<a href="https://github.com/freqtrade/freqtrade-strategies/tree/f3340ce11f5bdf62f598522e64d1f5638eaa13f5/user_data/strategies/futures" target="_blank" rel="noopener">Freqtrade 社区策略代码</a>　<a href="https://github.com/zhoujunejune/pikpakzl/tree/research/freqtrade-futures-20261019" target="_blank" rel="noopener">独立研究分支</a></p></div>
+</main><script>
+const $=id=>document.getElementById(id);let data=null;
+const number=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
+function fmt(v,d=2){const n=number(v);return n===null?'—':n.toFixed(d)}
+function signed(v,suffix=''){return v===null?'—':(v>0?'+':'')+fmt(v)+suffix}
+function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function group(){return data.rows.find(x=>x.symbol===$('symbol').value&&x.strategy===$('strategy').value&&x.stage===$('stage').value)}
+function setProfit(id,n,suffix=''){const e=$(id);e.textContent=signed(n,suffix);e.className=n===null?'':n<0?'down':'up'}
+function draw(curve){
+const svg=$('chart');svg.replaceChildren();
+if(!curve||curve.length<2){svg.innerHTML='<text x="50" y="90">该组合尚无可展示的模拟权益数据</text>';return}
+const ys=curve.map(x=>Number(x.equity)).filter(Number.isFinite);if(ys.length<2)return;
+const lo=Math.min(...ys),hi=Math.max(...ys),span=Math.max(hi-lo,1);
+for(let i=0;i<4;i++){const y=20+i*47;
+ svg.insertAdjacentHTML('beforeend','<line class="gridline" x1="64" y1="'+y+'" x2="892" y2="'+y+'"/>');
+ svg.insertAdjacentHTML('beforeend','<text x="3" y="'+(y-5)+'">'+(hi-i*span/3).toFixed(2)+'</text>')}
+const points=curve.map((x,i)=>(64+828*i/(curve.length-1)).toFixed(1)+','+(20+141*(hi-Number(x.equity))/span).toFixed(1)).join(' ');
+svg.insertAdjacentHTML('beforeend','<polyline fill="none" stroke="#63baff" stroke-width="2.5" points="'+points+'"/>');
+svg.insertAdjacentHTML('beforeend','<text x="65" y="186">'+esc(String(curve[0].t).slice(0,10))+'</text><text x="795" y="186">'+esc(String(curve.at(-1).t).slice(0,10))+'</text>');
+}
+function redraw(){
+if(!data)return;
+const x=group(),cc=$('symbol').value.endsWith('USDC')?'USDC':'USDT';
+if(!x){$('status').textContent='没有选择结果';return}
+const ok=x.status==='SIMULATED';
+setProfit('profit',ok?number(x.net_profit_abs):null,' '+cc);
+setProfit('profitPct',ok?number(x.net_profit_pct):null,'%');
+$('tradeCount').textContent=ok?String(x.trades)+' / '+String(x.wins):'无数据';
+$('winrate').textContent=ok&&number(x.winrate_pct)!==null?fmt(x.winrate_pct)+'%':'—';
+$('drawdown').textContent=ok?fmt(x.max_drawdown_pct)+'%':'—';
+$('pf').textContent=ok?fmt(x.profit_factor):'—';
+$('timeframe').textContent=x.strategy==='TrendFollowingStrategy'?'5分钟':'1小时';
+$('sample').textContent=!ok?'数据缺失':x.trades<30?'样本不足':'有限历史样本';
+$('sample').className=x.trades<30?'warning':'ok';
+const rows=data.rows.filter(y=>y.symbol===$('symbol').value&&y.stage===$('stage').value);
+$('compare').innerHTML=rows.map(y=>'<tr><td>'+esc(y.strategy)+'</td><td>'+esc(y.trades??'—')+'</td><td>'+fmt(y.net_profit_pct)+'%</td><td>'+fmt(y.max_drawdown_pct)+'%</td><td>'+fmt(y.winrate_pct)+'%</td><td>'+esc(y.status)+'</td></tr>').join('');
+const k=[x.symbol,x.strategy,x.stage].join('_'),detail=data.details?.[k]||{};
+draw(detail.curve);
+$('trades').innerHTML=(detail.trades||[]).slice(-35).reverse().map(t=>'<tr><td>'+esc(String(t.exit_time).slice(0,16))+'</td><td>'+esc(t.side)+'</td><td>'+fmt(t.entry,4)+'</td><td>'+fmt(t.exit,4)+'</td><td class="'+(t.pnl<0?'down':'up')+'">'+signed(t.pnl)+'</td><td>'+esc(t.reason)+'</td></tr>').join('')||'<tr><td colspan="6" class="empty">这个组合没有模拟平仓记录</td></tr>';
+}
+async function load(){
+try{const res=await fetch('./data.json?ts='+Date.now(),{cache:'no-store'});if(!res.ok)throw Error('HTTP '+res.status);data=await res.json();
+if(data.kind!=='historical_simulation'||data.never_live_orders!==true)throw Error('结果格式未通过安全校验');
+$('status').textContent='历史模拟已完成 · 无真实下单';
+const all=Object.values(data.data_coverage||{});
+$('coverage').textContent=all.length?Math.min(...all.map(x=>x.coverage*100)).toFixed(2)+'%':'—';
+$('jobs').textContent=data.rows.filter(x=>x.status==='SIMULATED').length+' / '+data.rows.length;
+$('updated').textContent=(data.generated_at||'—').slice(0,16).replace('T',' ');
+['symbol','strategy','stage'].forEach(k=>$(k).addEventListener('change',redraw));redraw();
+}catch(e){$('status').textContent='研究数据读取失败';$('jobs').textContent='—';$('trades').innerHTML='<tr><td colspan="6">'+esc(e.message)+'</td></tr>';}
+}
+load();
+</script></body></html>

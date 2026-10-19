@@ -1,0 +1,28 @@
+name: Verify confirmed direction controls without old PIN
+on:
+  push:
+    branches: [feature/zl-prediction-aliyun]
+    paths:
+      - 'railway-diagnostic/order-direction-policy.mjs'
+      - 'railway-diagnostic/index.mjs'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'railway-diagnostic/test-direction-no-extra-pin.mjs'
+      - '.github/workflows/zl-direction-no-pin-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: npm install --prefix railway-diagnostic --omit=dev --no-audit --no-fund --silent
+      - name: Syntax and authenticated control unit tests
+        run: |
+          node --check railway-diagnostic/order-direction-policy.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check railway-diagnostic/index.mjs
+          node --test railway-diagnostic/test-direction-no-extra-pin.mjs

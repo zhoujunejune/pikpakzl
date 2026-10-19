@@ -53,7 +53,7 @@ jobs:
           import os,base64,urllib.request,urllib.error,json
           base='https://47-237-188-69.sslip.io'
           try:
-           urllib.request.urlopen(base+'/research/',timeout=15)
+           urllib.request.urlopen(base+'/futures-lab/',timeout=15)
            raise AssertionError('RESEARCH_ANONYMOUS_ACCESS_NOT_BLOCKED')
           except urllib.error.HTTPError as e:
            assert e.code==401,('ANONYMOUS_HTTP',e.code)
@@ -61,14 +61,14 @@ jobs:
           def read(path):
            req=urllib.request.Request(base+path,headers={'Authorization':auth,'Cache-Control':'no-cache'})
            with urllib.request.urlopen(req,timeout=20) as r:return r.read()
-          page=read('/research/')
+          page=read('/futures-lab/')
           print('RESEARCH_RESPONSE_PAGE_BYTES',len(page))
           print('RESEARCH_RESPONSE_HAS_COMPARISON',b'id="compare"' in page)
           print('RESEARCH_RESPONSE_HAS_REPORT_JSON',b'report.json' in page)
           print('RESEARCH_RESPONSE_HAS_TITLE',b'ZL' in page)
           lines=[t.strip()[:200] for t in page.decode('utf8','replace').splitlines() if 'fetch(' in t or 'report' in t.lower()]
           print('RESEARCH_RESPONSE_FETCH_LINES',lines[:8])
-          j=json.loads(read('/research/report.json'))
+          j=json.loads(read('/futures-lab/report.json'))
           assert b'id="compare"' in page
           assert j.get('kind')=='historical_simulation'
           assert j.get('no_live_orders') is True

@@ -1211,8 +1211,15 @@ http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/api/direction-mode') {
     const body=await readBody(req);
-    if(!pinOK(body.pin, req))return send(res,401,{ok:false,error:'控制 PIN 错误'});
-    if(!directionSettingsSnapshot().ready)return send(res,503,{ok:false,error:'方向配置尚未同步'});
+    // Alibaba outer HTTPS login is the ONLY authority for saving direction
+    // settings. No page-level PIN, no implicit PIN fallback on this endpoint.
+    // A direct localhost POST or cross-origin request must not change orders.
+    if(process.env.ZL_OUTER_AUTH_ONLY!=='true'||!pinOK(null,req))
+      return send(res,401,{ok:false,error:'站点登录未通过或请求来源无效，请重新登录'});
+    if(!directionSettingsSnapshot().ready) {
+      try{await refreshDirectionSettings()}
+      catch(error){return send(res,503,{ok:false,error:'方向配置尚未同步：'+String(error?.message||error)})}
+    }
     if(['SUBMITTING','QUOTING'].includes(pendingAction?.state))return send(res,409,{ok:false,error:'有订单正在处理，暂不能切换'});
     try{
       const data=await setDirectionMode(body.source,body.direction,body.mode,body.expectedRevision,currentRoundMs());

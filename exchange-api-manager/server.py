@@ -113,7 +113,7 @@ $('form').addEventListener('submit',async evt=>{
   const res=await fetch('api/credentials',{method:'POST',headers:{'Content-Type':'application/json','X-ZL-API-Manager':'1'},credentials:'same-origin',body:JSON.stringify(body)});
   const data=await res.json();if(!res.ok)throw Error(data.error||'保存失败');
   $('form').reset();$('bot').value=bot;$('exchange').value=exchange;
-  show('保存成功。密钥不会在页面回显，机器人交易开关未改变。','ok');await query();
+  await query();show('保存成功。密钥不会在页面回显，机器人交易开关未改变。','ok');
  }catch(e){show('保存失败：'+e.message,'error')}
  finally{$('save').disabled=false}
 });

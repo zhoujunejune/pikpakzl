@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy paper-only futures bot through Alibaba SWAS RunCommand.
+"""Deploy authenticated live-capable futures bot through Alibaba SWAS RunCommand.
 Uses hardcoded target and audited command template; GH secrets never leave the
 runner. Source is checked out at this workflow run's immutable commit SHA.
 """
@@ -50,9 +50,9 @@ bash futures-bot-v1/install_aliyun.sh
     try:
         print("DEPLOY_TARGET_ID:",INSTANCE)
         print("DEPLOY_COMMIT:",sha)
-        print("DEPLOY_MODE: paper only; no Binance credentials")
+        print("DEPLOY_MODE: owner-controlled live, default OFF, credential values never logged")
         r=client.run_command(m.RunCommandRequest(region_id=REGION,instance_id=INSTANCE,
-            name="zl-futures-v1-paper-install",type="RunShellScript",
+            name="zl-futures-v1-owner-live-install",type="RunShellScript",
             command_content=cmd,working_user="root",timeout=1000))
         invoke_id=r.body.invoke_id
         if not invoke_id:

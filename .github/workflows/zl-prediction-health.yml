@@ -22,3 +22,32 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_live_health.py
+
+      - name: Verify authenticated prediction page without old PIN
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,time,urllib.request,urllib.error
+          host="https://prediction.47-237-188-69.sslip.io"
+          pw=os.environ["ZL_PANEL_PASSWORD"]
+          header="Basic "+base64.b64encode(("zl:"+pw).encode()).decode()
+          def get(path,auth):
+            req=urllib.request.Request(host+path,headers={"Authorization":header} if auth else {})
+            try:
+              with urllib.request.urlopen(req,timeout=12) as r:
+                return r.status,r.read(300000)
+            except urllib.error.HTTPError as err:return err.code,b""
+          for n in range(6):
+            try:
+              anon,_=get("/",False)
+              status,html=get("/",True)
+              if anon==401 and status==200:break
+            except Exception:pass
+            time.sleep(5)
+          print("PREDICTION_PUBLIC_UNAUTH_STATUS",anon)
+          print("PREDICTION_PUBLIC_AUTH_STATUS",status)
+          print("PREDICTION_HAS_LEGACY_PIN_INPUT",b'id="pin" type="password"' in html)
+          print("PREDICTION_UI_AUTH_PASS",anon==401 and status==200 and b'id="pin" type="hidden"' in html)
+          assert anon==401 and status==200 and b'id="pin" type="hidden"' in html
+          PY

@@ -20,9 +20,9 @@ TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
 curl -fsSL --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/INSTALL_SHA/prediction-bot-v1/aliyun_remove_trade_progress.sh" -o "$TMP"
 bash -n "$TMP"
-export FLOW_SOURCE_SHA=SOURCE_SHA
+export FLOW_SOURCE_SHA=__MODEL_COMMIT__
 bash "$TMP"
-'''.replace('INSTALL_SHA',sha).replace('SOURCE_SHA',SOURCE_SHA)
+'''.replace('INSTALL_SHA',sha).replace('__MODEL_COMMIT__',SOURCE_SHA)
  try:
   job=client.run_command(sw.RunCommandRequest(region_id=REGION,instance_id=INSTANCE,
    name='zl-retire-trade-progress-ui',type='RunShellScript',

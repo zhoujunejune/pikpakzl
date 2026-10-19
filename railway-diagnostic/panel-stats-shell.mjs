@@ -271,7 +271,9 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
     style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
     <option value="SELECTIVE_V2_FAST8_PREWARM_V1">唯一生产：Selective V2 + Edge Rescue + 行情兜底（8秒）</option>
   </select>
-  <div class="muted" style="margin-top:9px">生产信号固定为 SELECTIVE_V2_FAST8_PREWARM_V1；从下一轮开始应用。其他模型不会成为真实下单信号。</div>
+  <button id="orderSignalModelSave" type="button" disabled
+    style="margin-top:9px;padding:10px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存模型切换</button>
+  <div class="muted" style="margin-top:9px">仅当前 Selective V2 模型可用；保留下拉框及保存入口，未来新增经过后台验证的模型后才允许切换。</div>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
   <div class="muted" style="margin-top:7px">仅采用 V2 前8秒锁定的三个顺序分支：Selective V2 → Edge Rescue → 第7秒真实行情方向兜底（同一版本）。维持原有 UP/DOWN 正反向开关；只有你自行开启自动跟随，才允许真实下单。历史 34.62% 是混合分支的官方命中率，不保证未来准确率或收益。</div>
@@ -319,7 +321,7 @@ function escModel(v){return String(v).replace(/[&<>"']/g,function(c){return {'&'
 var policy='',revision='';
 var chosenOrderModel='SELECTIVE_V2_FAST8_PREWARM_V1';
 var hasLiveOrderModelSelection=false;
-var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false;
+var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false,availableOrderModels=[];
 function chosenModelName(model){
  if(model==='SELECTIVE_V2_FAST8_PREWARM_V1')return '唯一生产 · Selective V2 + Edge Rescue + 行情兜底（8秒）';
  return model==='EDGE_5M_V1'?'EDGE_5M_V1 · 8秒概率优势':
@@ -334,6 +336,7 @@ async function loadOrderModelChoice(){
   if(!response.ok||data.ok!==true||data.ready!==true)throw Error(data.error||'下单源配置未就绪');
   if(!Array.isArray(data.models)||!data.models.some(function(x){return x.id===data.model;}))
    throw Error('下单模型白名单无效');
+  availableOrderModels=data.models.map(function(m){return m.id});
   var previouslyChosen=chosenOrderModel;
   chosenOrderModel=data.model;choiceRevision=data.revision;choiceReady=true;
   globalThis.__orderModelStatsSelection=chosenOrderModel;
@@ -343,7 +346,19 @@ async function loadOrderModelChoice(){
    load();
   }
   var select=e('orderSignalModelSelect');
-  if(select&&!choiceDirty)select.value=chosenOrderModel;
+  if(select){
+    var snapshot=choiceDirty?select.value:chosenOrderModel;
+    select.replaceChildren();
+    data.models.forEach(function(m){
+      var option=document.createElement('option');
+      option.value=m.id;option.textContent=m.name||m.id;
+      select.appendChild(option);
+    });
+    select.value=availableOrderModels.includes(snapshot)?snapshot:chosenOrderModel;
+    select.disabled=availableOrderModels.length<=1;
+    var save=e('orderSignalModelSave');
+    if(save)save.disabled=availableOrderModels.length<=1;
+  }
   e('orderSignalModelState').textContent='当前真实下单信号：'+chosenModelName(chosenOrderModel)
     +(data.effectiveAfterRound!=null&&Date.now()<Number(data.effectiveAfterRound)+300000?' · 下一轮生效':' · 已生效')
     +' · 模型已固定';
@@ -399,7 +414,7 @@ async function saveOrderModelChoice(){
  var select=e('orderSignalModelSelect'),pin=e('pin');
  if(!select||!pin){e('orderSignalModelState').textContent='请通过页面登录认证';return}
  var next=select.value;
- if(next!=='SELECTIVE_V2_FAST8_PREWARM_V1')return;
+ if(!availableOrderModels.includes(next))return;
  if(next===chosenOrderModel){choiceDirty=false;e('orderSignalModelState').textContent='当前已是所选模型，无需切换';return}
  if(!window.confirm('确认从下一轮开始，用 '+chosenModelName(next)+' 作为真实下单信号？这会改变实际订单方向，当前轮次不切换。'))return;
  choiceBusy=true;

@@ -7,7 +7,7 @@ test "$(id -u)" -eq 0
 ROOT=/opt/zl-prediction-live
 DATA=/var/lib/zl-prediction
 CONF=/etc/zl-prediction
-CODE_BRANCH=migration/render-blueprint-20261018
+CODE_BRANCH=feature/zl-prediction-aliyun
 HOST=prediction.47-237-188-69.sslip.io
 mkdir -p "$ROOT" "$DATA/rounds" "$DATA/redis" "$DATA/archive" "$CONF" "$ROOT/.npm"
 chmod 755 "$ROOT" "$DATA" "$CONF"
@@ -124,6 +124,8 @@ ROUND_STATS_ORIGIN=http://127.0.0.1:13002
 ROUND_STATS_PUBLIC_ORIGIN=http://127.0.0.1:13002
 SIGNAL_WS_URL=ws://127.0.0.1:13002/ws/locked-signal
 SITE_ORIGIN=https://prediction.47-237-188-69.sslip.io
+ZL_OUTER_AUTH_ONLY=true
+ZL_PUBLIC_ORIGIN=https://prediction.47-237-188-69.sslip.io
 AUTO_CONFIRM_ENABLED=false
 AUTO_TAKE_PROFIT_ENABLED=false
 AUTO_STOP_LOSS_ENABLED=false
@@ -181,7 +183,7 @@ prediction.47-237-188-69.sslip.io {
   basic_auth {
     zl HASH_PLACEHOLDER
   }
-  reverse_proxy 127.0.0.1:13001
+  reverse_proxy 127.0.0.1:13001 {\n    header_up X-ZL-Verified-Login 1\n    header_up -Authorization\n  }
   header {
     Strict-Transport-Security "max-age=31536000"
     X-Content-Type-Options "nosniff"

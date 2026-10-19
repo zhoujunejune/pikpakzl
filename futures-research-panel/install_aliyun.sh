@@ -38,7 +38,11 @@ from pathlib import Path
 import shutil,subprocess,datetime,re
 p=Path('/etc/caddy/Caddyfile')
 src=p.read_text()
-matches=list(re.finditer(r'(?m)^47-237-188-69\\.sslip\\.io \\{
+site_lines=src.splitlines(keepends=True)
+matches=[sum(len(z) for z in site_lines[:i]) for i,line in enumerate(site_lines)
+         if line.strip()=="47-237-188-69.sslip.io {"]
+assert len(matches)==1,"MAIN_HOST_AMBIGUOUS"
+start=matches[0]
 end=src.find('\n}\n',start)
 assert end>start
 block=src[start:end]

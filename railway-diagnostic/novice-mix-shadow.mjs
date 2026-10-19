@@ -3,8 +3,8 @@
 import { createClient } from 'redis';
 import { MODEL,INPUT_VERSION,BASE_WEIGHTS,predictMarket,summarize,fitExperimentalWeights } from './novice-mix-core.mjs';
 const ROUND_MS=300000,MAX_ROWS=1800;
-const DATA_ORIGIN=String(process.env.NOVICE_MARKET_ORIGIN||'https://signal-diagnostic-v3-production.up.railway.app').replace(/\/+$/,'');
-const OFFICIAL_ORIGIN=String(process.env.ROUND_STATS_ORIGIN||'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/,'');
+const DATA_ORIGIN=String(process.env.NOVICE_MARKET_ORIGIN||'http://127.0.0.1:13003').replace(/\/+$/,'');
+const OFFICIAL_ORIGIN=String(process.env.ROUND_STATS_ORIGIN||'http://127.0.0.1:13002').replace(/\/+$/,'');
 const REDIS_KEY='breakout20:research:rsi_only_14_v1:state'; // new model epoch; preserve old mixed-feature history
 const valid=d=>d==='UP'||d==='DOWN';
 const summaryClock=()=>Date.now();

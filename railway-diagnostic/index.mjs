@@ -5,8 +5,8 @@ import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
 import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,refreshDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
-import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
-  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,validateEdgeSignal,RSI_INPUT_VERSION,
+import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL,SELECTIVE8_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
+  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,validateEdgeSignal,validateSelective8ProductionLive,RSI_INPUT_VERSION,
   MAX_ORDER_SUBMIT_ATTEMPTS,claimOrderSubmitAttempt,closeOrderSubmitRound,releaseRejectedOrderSubmitAttempt,retryableRejectedOrderPost} from './production-signal-choice.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -22,6 +22,7 @@ const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
 const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
 const SIGNAL_WS_URL = String(process.env.SIGNAL_WS_URL || '').trim();
 const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MODEL_V1');
+const SELECTIVE8_LOCAL_URL='http://127.0.0.1:13002/api/production-signal';
 const NOVICE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/novice-mix';
 const DYNAMIC_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/dynamic-entry';
 const EDGE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/edge-5m';
@@ -336,7 +337,32 @@ async function getSignal({ forceHttp = false } = {}) {
   try{choice=await refreshModelSelection()}catch{return null}
   const round=currentRoundMs();
   if(!selectionPermitsRound(round,choice))return null;
-  if(![NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL,EDGE_MODEL].includes(choice.model))return null;
+  if(choice.model!==SELECTIVE8_MODEL)return null;
+  if(choice.model===SELECTIVE8_MODEL){
+    // The user-selected source is the exact original V2 3-tier immutable
+    // 8-second route (Selective, Edge Rescue, real-market fallback).
+    // No RSI-only, EDGE5, dynamic or synthetic fallback may enter orders.
+    try{
+      const response=await fetch(SELECTIVE8_LOCAL_URL,{cache:'no-store',
+        signal:AbortSignal.timeout(2800),headers:{accept:'application/json'}});
+      if(!response.ok)return null;
+      const validated=validateSelective8ProductionLive(await response.json());
+      if(!validated.ok)return null;
+      return {
+        round:validated.round,status:'LOCKED',direction:validated.direction,
+        rawDirection:validated.direction,randomFlipApplied:false,
+        model:SIGNAL_MODEL_NAME,upstreamModel:SELECTIVE8_MODEL,
+        source:validated.source,generatedAt:validated.lockedAt,
+        lockedAt:validated.lockedAt,score:validated.score,
+        confidence:null,modelProbability:null,
+        inputVersion:validated.inputVersion,
+        qualityGate:validated.fallbackUsed?
+          'UNVERIFIED_REAL_MARKET_DIRECTION':'QUALIFIED_SELECTIVE8',
+        frozen:true,executionEligible:validated.executionEligible,
+        signalId:SIGNAL_MODEL_NAME+':'+validated.round+':'+SELECTIVE8_MODEL+':'+validated.source+':'+validated.direction,
+        transport:'aliyun_v2_selective_8sec_locked_source'};
+    }catch{return null}
+  }
   if(choice.model===EDGE_MODEL){
     try{
       const response=await fetch(EDGE_LOCAL_URL,{cache:'no-store',
@@ -637,13 +663,15 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   let choice;
   try{choice=await refreshModelSelection()}catch{return}
   if(!selectionPermitsRound(currentRoundMs(),choice))return;
-  if(signalOverride && choice.model!==BASE_MODEL)return;
+  if(signalOverride && choice.model!==SELECTIVE8_MODEL)return;
   const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
   if(choice.model===NOVICE_MODEL&&signal.upstreamModel!==NOVICE_MODEL)return;
   if(choice.model===DYNAMIC_MODEL&&signal.upstreamModel!==DYNAMIC_MODEL)return;
   if(choice.model===EDGE_MODEL&&signal.upstreamModel!==EDGE_MODEL)return;
-  // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
+  if(choice.model===SELECTIVE8_MODEL&&signal.upstreamModel!==SELECTIVE8_MODEL)return;
+  // Reject unverified or stale directional hints; validated genuine previous
+  // and current market fallback from Selective8 is distinct and eligible.
   if (signal.executionEligible===false) {
     console.log(JSON.stringify({event:'unverified_signal_order_blocked',
       round:signal.round,source:signal.source,qualityGate:signal.qualityGate}));

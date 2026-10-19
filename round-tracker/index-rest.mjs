@@ -6765,7 +6765,7 @@ signalHttpServer.on('upgrade', (req, socket, head) => {
   });
 });
 
-signalHttpServer.listen(PORT, '0.0.0.0', () => {
+signalHttpServer.listen(PORT, '127.0.0.1', () => {
   const startupForward = candidateForwardSummary();
   log('round_tracker_started', {
     port: PORT,

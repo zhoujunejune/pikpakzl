@@ -135,6 +135,8 @@ chmod 640 "$CONF/"{v2,v3,panel}.env
 # Use the original production backends. They are not simulators.
 for spec in "v3:fast-signal-engine:freeze-wrapper.mjs:13003" "v2:round-tracker:index-rest.mjs:13002" "trade:railway-diagnostic:panel-stats-shell.mjs:13001"; do
   IFS=: read -r short folder entry port <<< "$spec"
+  env_name="$short"
+  if [ "$short" = "trade" ]; then env_name="panel"; fi
   cat > "/etc/systemd/system/zl-prediction-$short.service" <<EOF
 [Unit]
 Description=ZL prediction original production $short component (live engine)
@@ -148,7 +150,7 @@ Group=zl-pred
 WorkingDirectory=$ROOT/src/$folder
 Environment=PATH=/opt/zl-prediction-node/bin:/usr/bin:/bin
 EnvironmentFile=$CONF/redis.env
-EnvironmentFile=$CONF/$short.env
+EnvironmentFile=$CONF/$env_name.env
 EnvironmentFile=-$CONF/trading.env
 ExecStart=$NODE $entry
 Restart=on-failure
@@ -205,7 +207,8 @@ systemctl daemon-reload
 systemctl enable --now zl-prediction-redis.service
 systemctl enable --now zl-prediction-v3.service
 systemctl enable --now zl-prediction-v2.service
-systemctl enable --now zl-prediction-trade.service
+systemctl enable zl-prediction-trade.service
+systemctl restart zl-prediction-trade.service
 systemctl reload caddy
 # Only a readiness audit. Never claim real orders without actual fill proof.
 for component in v3 v2 trade; do

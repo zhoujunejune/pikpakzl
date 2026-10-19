@@ -44,8 +44,8 @@ def main():
         raise RuntimeError("Unexpected live credential in research environment")
     RESULTS.mkdir(exist_ok=True)
     print("RESEARCH_ONLY=TRUE; ALIBABA_DEPLOYMENT=NEVER; REAL_ORDERS=NEVER", flush=True)
-    from prepare import main as prepare
-    prepare()
+    import runpy
+    runpy.run_path(str(ROOT / "prepare.py"), run_name="__main__")
     if not execute("docker-pull", ["docker", "pull", IMAGE]):
         raise RuntimeError("Pinned Freqtrade Docker image unavailable")
     if not execute("freqtrade-version",ft("--version")):

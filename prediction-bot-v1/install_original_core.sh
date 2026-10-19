@@ -154,7 +154,7 @@ LimitNOFILE=32768
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=$DATA/rounds $DATA/archive
+ReadWritePaths=$DATA/rounds $DATA/archive $ROOT/src/$folder
 [Install]
 WantedBy=multi-user.target
 EOF

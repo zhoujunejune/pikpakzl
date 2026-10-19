@@ -154,7 +154,7 @@ for port in 10000 13001;do
     if [ "$code" = 200 ];then ready=yes;break;fi
     sleep 2
   done
-  echo "API_MANAGER_EXISTING_SERVICE_PORT_$port_READY=$ready"
+  printf 'API_MANAGER_SERVICE_PORT_%s_READY=%s\n' "$port" "$ready"
   test "$ready" = yes
 done
 echo "API_MANAGER_DEPLOYED=true"

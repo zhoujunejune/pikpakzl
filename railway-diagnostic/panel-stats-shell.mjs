@@ -631,15 +631,14 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div style="border:1px solid #45546b;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
   <div class="k" style="font-size:14px">实盘下单信号来源 · 模型选择</div>
   <select id="orderSignalModelSelect" aria-label="选择真实下单信号模型"
+    disabled
     style="width:100%;margin-top:8px;padding:12px 9px;background:#0d1016;color:#e6edf7;border:1px solid #435069;border-radius:9px;font-size:15px">
-    <option value="BREAKOUT20_RSI_MACD_RANGE_V1">BASELINE · RSI(14)单指标</option>
-    <option value="EDGE_5M_V1">EDGE_5M_V1 · 真实行情8秒锁定</option>
+    <option value="SELECTIVE_V2_FAST8_PREWARM_V1">唯一生产：Selective V2 + Edge Rescue + 行情兜底（8秒）</option>
   </select>
-  <button id="orderSignalModelSave" type="button"
-    style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号</button>
+  <div class="muted" style="margin-top:9px">生产信号固定为 SELECTIVE_V2_FAST8_PREWARM_V1；从下一轮开始应用。其他模型不会成为真实下单信号。</div>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
-  <div class="muted" style="margin-top:7px">生产下拉框仅保留 BASELINE 与 EDGE_5M_V1。基线复用原 RSI 行情输入，不再展示退役 NOVICE/DYNAMIC 策略。EDGE 必须按真实行情前8秒锁定；训练样本和概率校准只供统计，不阻止你手动授权的跟随。报价无效、无有效锁定或开关关闭时仍不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
+  <div class="muted" style="margin-top:7px">仅采用 V2 前8秒锁定的三个顺序分支：Selective V2 → Edge Rescue → 第7秒真实行情方向兜底（同一版本）。维持原有 UP/DOWN 正反向开关；只有你自行开启自动跟随，才允许真实下单。历史 34.62% 是混合分支的官方命中率，不保证未来准确率或收益。</div>
 </div>
 <div id="liveOrderFlowCard" role="region" aria-label="本轮交易进度" style="border:1px solid #4e6079;border-radius:12px;margin:12px 0;padding:12px;background:#111723">
  <div style="font-size:16px;font-weight:800">本轮交易进度 · 不等于模型胜率</div>
@@ -682,10 +681,11 @@ function e(x){return document.getElementById(x)}
 function pct(v){return v==null?'-':Number(v).toFixed(2)+'%'}
 function escModel(v){return String(v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 var policy='',revision='';
-var chosenOrderModel='BREAKOUT20_RSI_MACD_RANGE_V1';
+var chosenOrderModel='SELECTIVE_V2_FAST8_PREWARM_V1';
 var hasLiveOrderModelSelection=false;
 var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false;
 function chosenModelName(model){
+ if(model==='SELECTIVE_V2_FAST8_PREWARM_V1')return '唯一生产 · Selective V2 + Edge Rescue + 行情兜底（8秒）';
  return model==='EDGE_5M_V1'?'EDGE_5M_V1 · 8秒概率优势':
  model==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'5分钟动态入场 DYNAMIC_ENTRY_5M_SHADOW_V1':
  model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
@@ -710,13 +710,37 @@ async function loadOrderModelChoice(){
   if(select&&!choiceDirty)select.value=chosenOrderModel;
   e('orderSignalModelState').textContent='当前真实下单信号：'+chosenModelName(chosenOrderModel)
     +(data.effectiveAfterRound!=null&&Date.now()<Number(data.effectiveAfterRound)+300000?' · 下一轮生效':' · 已生效')
-    +' · 选择后请点保存';
+    +' · 模型已固定';
   loadOrderModelStats();
  }catch(err){choiceReady=false;e('orderSignalModelState').textContent='下单信号配置读取失败，禁止切换：'+(err.message||err);}
 }
 async function loadOrderModelStats(){
  if(!e('orderSignalModelStats'))return;
  try{
+  if(chosenOrderModel==='SELECTIVE_V2_FAST8_PREWARM_V1'){
+    var resp=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});
+    if(!resp.ok)throw Error('V2 统计 HTTP '+resp.status);
+    var j=await resp.json();
+    if(j?.productionSignalSourceMode!=='SELECTIVE_V2_FAST8')throw Error('V2 模型并非唯一生产');
+    var records=(Array.isArray(j.records)?j.records:[]).filter(function(x){
+      return x.productionModel==='SELECTIVE_V2_FAST8_PREWARM_V1'&&
+             x.productionModelVersion==='SELECTIVE_V2_FAST8_PREWARM_V1'&&
+             ['UP','DOWN'].includes(x.productionActual)&&
+             ['UP','DOWN'].includes(x.productionPrediction);
+    });
+    var hits=records.filter(function(x){return x.productionPrediction===x.productionActual}).length;
+    var fmt=function(n,d){return d?(100*n/d).toFixed(2)+'%':'暂无'};
+    var parts=['SELECTIVE_V2_FAST8_PRIMARY','EDGE_RESCUE_FAST8_PRIMARY','SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION']
+      .map(function(src){
+        var arr=records.filter(function(x){return x.productionSource===src});
+        var hit=arr.filter(function(x){return x.productionPrediction===x.productionActual}).length;
+        return src.replace('SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION','第7秒行情兜底')
+          .replace('SELECTIVE_V2_FAST8_PRIMARY','Selective V2')
+          .replace('EDGE_RESCUE_FAST8_PRIMARY','Edge Rescue')+' '+hit+'/'+arr.length;
+      });
+    e('orderSignalModelStats').textContent='固定生产 V2 官方命中率 '+fmt(hits,records.length)+' ('+hits+'/'+records.length+') · '+parts.join(' · ');
+    return;
+  }
   var endpoint=chosenOrderModel==='EDGE_5M_V1'?'/api/shadow-breakout20/edge-5m':
  chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'/api/shadow-breakout20/dynamic-entry':
  chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':
@@ -739,7 +763,7 @@ async function saveOrderModelChoice(){
  var select=e('orderSignalModelSelect'),pin=e('pin');
  if(!select||!pin){e('orderSignalModelState').textContent='请通过页面登录认证';return}
  var next=select.value;
- if(!['BREAKOUT20_RSI_MACD_RANGE_V1','EDGE_5M_V1'].includes(next))return;
+ if(next!=='SELECTIVE_V2_FAST8_PREWARM_V1')return;
  if(next===chosenOrderModel){choiceDirty=false;e('orderSignalModelState').textContent='当前已是所选模型，无需切换';return}
  if(!window.confirm('确认从下一轮开始，用 '+chosenModelName(next)+' 作为真实下单信号？这会改变实际订单方向，当前轮次不切换。'))return;
  choiceBusy=true;

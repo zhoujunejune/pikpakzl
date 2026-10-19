@@ -1,0 +1,37 @@
+name: Test Alibaba protected stop-profit stop-loss controls
+on:
+  push:
+    branches: [feature/zl-prediction-aliyun]
+    paths:
+      - 'railway-diagnostic/risk-config-storage.mjs'
+      - 'railway-diagnostic/control-shell.mjs'
+      - 'railway-diagnostic/risk-runner.mjs'
+      - 'railway-diagnostic/risk-worker.mjs'
+      - 'railway-diagnostic/risk-controls-ui.test.mjs'
+      - 'railway-diagnostic/risk-persistence-status.test.mjs'
+      - 'railway-diagnostic/index.mjs'
+      - '.github/workflows/zl-aliyun-test-risk-persistence.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate all modified JavaScript
+        run: |
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/control-shell.mjs
+          node --check railway-diagnostic/risk-config-storage.mjs
+          node --check railway-diagnostic/risk-runner.mjs
+          node --check railway-diagnostic/risk-worker.mjs
+          node --check railway-diagnostic/risk-controls-ui.test.mjs
+          node --check railway-diagnostic/risk-persistence-status.test.mjs
+      - name: Verify authenticated switches, persistent settings, idle runner and no extra PIN
+        run: |
+          node --test railway-diagnostic/risk-controls-ui.test.mjs railway-diagnostic/risk-persistence-status.test.mjs railway-diagnostic/real-risk-monitor.test.mjs

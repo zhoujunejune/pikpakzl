@@ -135,7 +135,10 @@ if ! caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
   echo "CADDY_VALIDATION_FAILED_RESTORED_BACKUP";exit 11
 fi
 systemctl daemon-reload
-systemctl enable --now zl-exchange-api-manager.service
+systemctl enable zl-exchange-api-manager.service
+# Always restart the manager after installing new source; enable --now is not
+# enough to load newly deployed Python handlers in an already active process.
+systemctl restart zl-exchange-api-manager.service
 systemctl enable --now zl-api-futures-reload.path zl-api-prediction-reload.path
 systemctl restart zl-futures-bot-paper.service
 systemctl restart zl-prediction-trade.service
@@ -161,3 +164,13 @@ echo "API_MANAGER_DEPLOYED=true"
 echo "API_MANAGER_LOCALHOST_ONLY=true"
 echo "API_MANAGER_ROBOTS_INDEPENDENT=true"
 echo "API_MANAGER_TRADING_MODE_UNCHANGED=true"
+for bot in futures prediction;do
+  keydir="$STATE/$bot"
+  test -d "$keydir"
+  test "$(stat -c '%U:%G %a' "$keydir")" = 'zlkeys:zlkeys 700'
+  echo "API_MANAGER_PERSISTENT_CREDENTIAL_DIR_${bot}=yes"
+done
+test "$(systemctl is-enabled zl-exchange-api-manager.service)" = enabled
+test "$(systemctl is-enabled zl-api-futures-reload.path)" = enabled
+test "$(systemctl is-enabled zl-api-prediction-reload.path)" = enabled
+echo "API_MANAGER_RESTART_AND_RELOAD_WATCHERS_ENABLED=true"

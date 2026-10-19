@@ -13,7 +13,7 @@ p=Path('/etc/caddy/Caddyfile')
 src=p.read_text()
 main='47-237-188-69.sslip.io {'
 pred='prediction.47-237-188-69.sslip.io {'
-assert len(re.findall(r'(?m)^'+re.escape(main)+r'
+assert src.startswith(main) and src.count('\n'+pred)==1, 'unexpected Caddy hosts'
 first=src[:src.index(pred)]
 old='redir https://prediction.47-237-188-69.sslip.io/{path} 302'
 new='redir https://prediction.47-237-188-69.sslip.io{uri} 302'

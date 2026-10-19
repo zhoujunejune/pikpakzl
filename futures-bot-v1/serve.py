@@ -16,10 +16,31 @@ from position_view import view as paper_position_view
 from paper_portfolio import positions_for_display, reserved_margin
 import quotes
 from preflight import assess
+from wallet_view import parse_futures_wallet, public_wallet
 
 BOOT_AT=dt.datetime.now(dt.timezone.utc).isoformat()
-WORKER={"running":False,"error":None,"finished_at":None,"preflight":None}
+WORKER={"running":False,"error":None,"finished_at":None,"preflight":None,"wallet":None}
 QUOTE_STOP=threading.Event()
+
+def refresh_wallet():
+    """Read-only Binance account wallet refresh (120s), independent of paper PnL.
+
+    Never places orders. Stops further polling on Binance 418/429/451.
+    """
+    while not QUOTE_STOP.wait(120):
+        try:
+            api=bot.API()
+            api.server_time()
+            fresh=parse_futures_wallet(api.call("GET","/fapi/v3/balance",signed=True))
+            WORKER["wallet"]=fresh
+        except Exception as e:
+            msg=str(e)
+            status="exchange_restricted" if any("HTTP "+str(code) in msg for code in (418,429,451)) else "refresh_failed"
+            prev=WORKER.get("wallet") or {"assets":{},"asOf":None}
+            WORKER["wallet"]={**prev,"status":status}
+            if status=="exchange_restricted":
+                return
+
 
 def worker():
     WORKER["running"]=True
@@ -27,6 +48,7 @@ def worker():
         # No outbound requests during Binance 418 cooldown. After expiry, allow a
         # one-off test order permission check (does not enter matching engine).
         check=assess(allow_trade_test=True)
+        WORKER["wallet"]=check.get("wallet")
         WORKER["preflight"]={
             "outboundAllowed":check.get("outboundAllowed",False),
             "credentialNamesPresent":check.get("keyPresent",False) and check.get("secretPresent",False),
@@ -40,6 +62,9 @@ def worker():
         # Failure with 418/429/451 stops this collector, not an IP bypass/retry.
         threading.Thread(target=quotes.run_quotes,args=(lambda:WORKER["running"],QUOTE_STOP),
                          name="paper-market-prices",daemon=True).start()
+        if check.get("authenticated") and check.get("wallet"):
+            threading.Thread(target=refresh_wallet,
+                             name="readonly-futures-wallet",daemon=True).start()
         bot.main()
     except Exception as e:
         WORKER["error"]=str(e)[:200]
@@ -76,6 +101,15 @@ def public_snapshot():
         positions=list(paper_positions.values())
         position_details=[paper_position_view(trade,latest_prices,bot.TAKER_FEE) for trade in positions]
         position_details=[p for p in position_details if p is not None]
+        simulation_reserved_by_asset={"USDT":0.0,"USDC":0.0}
+        for trade in positions:
+            asset="USDC" if trade["symbol"]=="BTCUSDC" else "USDT"
+            simulation_reserved_by_asset[asset]+=reserved_margin({trade["symbol"]:trade},read_control()["leverage"])
+        for asset in simulation_reserved_by_asset:
+            simulation_reserved_by_asset[asset]=round(simulation_reserved_by_asset[asset],4)
+        total_reserved=sum(simulation_reserved_by_asset.values())
+        usdc_realized=round(sum(float(t.get("net",0)) for t in trades
+                               if (t.get("trade") or {}).get("symbol")=="BTCUSDC"),4)
         # A worker thread is not by itself evidence of fresh Binance prices.
         if WORKER["error"] and any(x in WORKER["error"] for x in ("418","429","451")):
             market["status"]="exchange_restricted"
@@ -99,7 +133,11 @@ def public_snapshot():
             "onePositionPerSymbol":True,
             "cooldownRemainingSeconds":0,
             "maxConcurrentPaperPositions":len(bot.SYMBOLS),
-            "paperReservedMargin":round(reserved_margin(paper_positions,read_control()["leverage"]),4),
+            "paperReservedMargin":round(total_reserved,4),
+            "paperMarginByAsset":simulation_reserved_by_asset,
+            "paperFreeMargin":round(max(0.,balance-total_reserved),4),
+            "paperUSDCRealizedPnL":usdc_realized,
+            "futuresWallet":public_wallet(WORKER.get("wallet")),
             "lastTrades":[{"symbol":str((t.get("trade") or {}).get("symbol","UNKNOWN")),
                            "side":str((t.get("trade") or {}).get("side","")),
                            "net":round(float(t.get("net",0)),4),

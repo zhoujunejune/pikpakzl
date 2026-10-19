@@ -8,6 +8,7 @@ import json
 import os
 import sys
 from bot import API, SYMBOLS, seconds_until_binance_retry, BINANCE_RETRY_NOT_BEFORE_UTC
+from wallet_view import parse_futures_wallet
 
 def assess(api=None, allow_trade_test=False):
     remaining=seconds_until_binance_retry()
@@ -34,6 +35,7 @@ def assess(api=None, allow_trade_test=False):
     try:
         client.server_time()
         balances=client.call("GET","/fapi/v3/balance",signed=True)
+        result["wallet"]=parse_futures_wallet(balances)
         positions=client.positions()
         hedge=client.call("GET","/fapi/v1/positionSide/dual",signed=True)
         result["authenticated"]=True

@@ -54,6 +54,27 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 <div class="row"><small>行情诊断</small><b id="exchange">检测中</b></div>
 <div class="row" style="align-items:start"><small>最后获取成功</small><span id="market-age" style="text-align:right;max-width:70%;font-size:12px">—</span></div>
 <div id="error" class="warn" style="display:none"></div></section>
+<section class="card">
+<h2>币安合约账户余额（只读 · 真实钱包）</h2>
+<div class="grid">
+ <div class="metric"><small>USDT 钱包余额</small><strong id="real-usdt-wallet">—</strong></div>
+ <div class="metric"><small>USDC 钱包余额</small><strong id="real-usdc-wallet">—</strong></div>
+ <div class="metric"><small>USDT 可用余额</small><strong id="real-usdt-available">—</strong></div>
+ <div class="metric"><small>USDC 可用余额</small><strong id="real-usdc-available">—</strong></div>
+</div>
+<small id="real-wallet-status">等待只读账户查询…</small>
+<div class="warn">这里只读取币安 USDⓈ-M 合约钱包，不代表机器人已经实盘开仓；账户余额不会增加模拟资金池的本金。</div>
+</section>
+<section class="card">
+<h2>模拟资金明细（USDT / USDC 等值）</h2>
+<div class="grid">
+ <div class="metric"><small>共享模拟可用保证金额度</small><strong id="paper-margin-free">—</strong></div>
+ <div class="metric"><small>USDT 合约占用模拟保证金</small><strong id="paper-margin-usdt">—</strong></div>
+ <div class="metric"><small>BTCUSDC 占用模拟保证金</small><strong id="paper-margin-usdc">—</strong></div>
+ <div class="metric"><small>BTCUSDC 累计已实现模拟盈亏</small><strong id="paper-pnl-usdc">—</strong></div>
+</div>
+<small>USDC等值是模拟记账，并不是独立的USDC账户余额。三个币对共用上面的U资金池，USDT和USDC保证金不能重复使用同一份资金。</small>
+</section>
 <section class="card"><h2>交易控制</h2>
 <div class="buttons">
 <button id="pause" onclick="act('pause')">暂停新开仓</button>
@@ -107,6 +128,24 @@ async function refresh(){
   const r=await fetch("/status",{cache:"no-store"});if(!r.ok)throw Error("HTTP "+r.status);
   const s=await r.json(),c=s.control||{};
   el("balance").textContent=fmt(s.simulatedBalance)+" U（模拟）";
+  const wallet=s.futuresWallet||{},assets=wallet.assets||{},usdt=assets.USDT||{},usdc=assets.USDC||{};
+  const money=v=>typeof v==="number"&&Number.isFinite(v)?v.toFixed(4):"—";
+  el("real-usdt-wallet").textContent=money(usdt.walletBalance)+" USDT";
+  el("real-usdc-wallet").textContent=money(usdc.walletBalance)+" USDC";
+  el("real-usdt-available").textContent=money(usdt.availableBalance)+" USDT";
+  el("real-usdc-available").textContent=money(usdc.availableBalance)+" USDC";
+  const walletLabels={ok:"账户数据已更新",stale:"账户余额已过期，暂未更新",refresh_failed:"本次读取失败，下面显示上次成功的数据",
+    exchange_restricted:"交易所限制访问；数据不再刷新",unavailable:"未取得账户余额（可能未配置账户权限）"};
+  el("real-wallet-status").textContent=(walletLabels[wallet.status]||"账户余额尚未获取")+
+    (wallet.asOf?" · 数据时间："+readableTime(wallet.asOf):"")+
+    " · 只读，不用于模拟仓位";
+  const margin=s.paperMarginByAsset||{};
+  el("paper-margin-free").textContent=fmt(s.paperFreeMargin)+" U";
+  el("paper-margin-usdt").textContent=fmt(margin.USDT)+" USDT等值";
+  el("paper-margin-usdc").textContent=fmt(margin.USDC)+" USDC等值";
+  const usdcNet=s.paperUSDCRealizedPnL;
+  el("paper-pnl-usdc").textContent=(usdcNet>0?"+":"")+fmt(usdcNet)+" USDC";
+  el("paper-pnl-usdc").className=usdcNet>0?"good":usdcNet<0?"bad":"";
   let v=s.simulatedPnL;el("pnl").textContent=(v>0?"+":"")+fmt(v)+" U（模拟）";el("pnl").className=v>0?"good":v<0?"bad":"";
   el("wins").textContent=(s.closedTrades||0)+" / "+(s.wins||0);
   el("winrate").textContent=s.closedTrades?((s.wins||0)*100/s.closedTrades).toFixed(1)+"%":"—";

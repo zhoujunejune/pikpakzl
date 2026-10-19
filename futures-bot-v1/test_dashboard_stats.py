@@ -32,6 +32,11 @@ class DashboardSymbolStatsTests(unittest.TestCase):
         self.assertTrue(data["onePositionPerSymbol"])
         self.assertEqual(data["cooldownRemainingSeconds"],0)
         self.assertEqual(len(data["positions"]),1)
+        self.assertAlmostEqual(data["paperMarginByAsset"]["USDT"],24)
+        self.assertEqual(data["paperMarginByAsset"]["USDC"],0)
+        self.assertAlmostEqual(data["paperFreeMargin"],175.8)
+        self.assertEqual(data["paperUSDCRealizedPnL"],0)
+        self.assertEqual(data["futuresWallet"]["status"],"unavailable")
 
 if __name__=="__main__":
     unittest.main()

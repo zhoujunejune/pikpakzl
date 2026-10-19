@@ -114,22 +114,29 @@ python3 - <<'PY'
 import os,subprocess,sys
 from pathlib import Path
 try:
+ phase='locate_process'
  pid=int(subprocess.check_output(['systemctl','show','zl-futures-bot-paper.service','-p','MainPID','--value'],text=True).strip())
  if pid<2:raise RuntimeError('inactive')
+ phase='read_environment'
  raw=(Path('/proc')/str(pid)/'environ').read_bytes().decode('utf8','replace')
  for cell in raw.split('\0'):
   k,sep,v=cell.partition('=')
   if sep and k in ('BINANCE_API_KEY','BINANCE_API_SECRET','BINANCE_BASE_URL','BINANCE_RETRY_NOT_BEFORE_UTC'):os.environ[k]=v
  sys.path.insert(0,'/opt/zl-futures-bot/src/futures-bot-v1')
+ phase='import_bot'
  import bot
  api=bot.API()
+ phase='binance_server_time'
  api.server_time()
+ phase='hedge_mode_query'
  h=api.call('GET','/fapi/v1/positionSide/dual',signed=True)
+ phase='positions_query'
  p=api.positions()
  print('FUTURES_HEDGE_MODE',str(h.get('dualSidePosition')).lower()=='true')
  print('FUTURES_OPEN_POSITION_COUNT',len(p))
  print('FUTURES_BOT_SYMBOL_OPEN_COUNT',sum(x.get('symbol') in ('BTCUSDT','ETHUSDT','BTCUSDC') for x in p))
 except Exception as exc:
+ print('FUTURES_ACCOUNT_SIDE_AUDIT_PHASE',phase)
  print('FUTURES_ACCOUNT_SIDE_AUDIT_ERROR_CLASS',type(exc).__name__)
  print('FUTURES_ACCOUNT_SIDE_AUDIT_ACCESS_RESTRICTED',any('HTTP '+str(k) in str(exc) for k in (418,429,451)))
 PY

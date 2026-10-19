@@ -9,7 +9,7 @@ permissions:
   contents: read
 concurrency:
   group: zl-futures-research-static-page
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   deploy:
     runs-on: ubuntu-latest

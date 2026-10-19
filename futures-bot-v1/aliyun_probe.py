@@ -68,6 +68,8 @@ try:
     print("LIVE_SWITCH_ENABLED:",s.get("liveTradingEnabled"))
     print("LIVE_ENGINE_HALTED:",s.get("halted"))
     print("LIVE_CONFIRMED_POSITION_COUNT:",len(s.get("positions") or []))
+    print("LIVE_PARAM_FIELDS:",json.dumps(s.get("control") or {},sort_keys=True))
+    print("LIVE_PENDING_UNCERTAIN:",s.get("pendingOrderUncertain"))
     print("ENGINE_ERROR:",str(s.get("workerError") or "")[:170])
     print("MARKET_HEALTH:",(s.get("marketHealth") or {}).get("status"))
     print("CONFIGURED_SYMBOLS:",s.get("configuredSymbols"))

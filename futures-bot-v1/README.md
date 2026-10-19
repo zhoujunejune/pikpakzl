@@ -6,6 +6,7 @@ A standalone trend-breakout Binance **USD(S)-M futures** bot for a 200 U synthet
 
 - Alibaba Cloud runs a **paper-only** instance. Live trading is disabled and not production-certified.
 - MODE=paper by default. Uses real Binance public market data for paper simulated entries/exits, including an estimated taker fee; does not simulate exchange order-book fills or slippage. Paper results may be optimistic.
+- The authenticated console separately labels actual USD-M USDT and USDC futures wallet/available balances from signed read-only exchange APIs. Account data is observed at preflight and then refreshed every 120 seconds (stale if older than 300 seconds; refresh stops on 418/429/451). The same screen shows reserved USDT/USDC-equivalent *simulated* margin and realized BTCUSDC simulated PnL; there is only one simulated U wallet, not a fabricated second USDC wallet. Never print signed account balances to public workflow logs.
 - MODE=live provides API integration, but should not be enabled without validating contract filters, account configuration, stop orders, recovery, journal, and Binance account/region permissions. It is **not yet production-certified**.
 - Never paste exchange API secrets into GitHub or chat. Put them in Railway encrypted variables. Enable futures only, disable withdrawals, restrict IP if possible.
 - Never work around Binance HTTP 451 or other geographic restrictions.

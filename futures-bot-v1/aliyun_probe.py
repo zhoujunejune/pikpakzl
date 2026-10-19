@@ -24,7 +24,18 @@ echo "PROBE_END"
 echo "SERVICE_CHECK_BEGIN"
 systemctl is-active zl-futures-bot-paper.service || true
 systemctl is-enabled zl-futures-bot-paper.service || true
-curl -fsS --max-time 5 http://127.0.0.1:10000/status || true
+# Do not print full /status: it now contains private read-only exchange balances.
+curl -fsS --max-time 5 http://127.0.0.1:10000/status | python3 -c '
+import json,sys
+s=json.load(sys.stdin)
+wallet=s.get("futuresWallet") or {}
+print("SERVICE_HEALTH:","paper" if s.get("mode")=="paper" else "unexpected")
+print("SERVICE_WORKER_RUNNING:",s.get("workerRunning"))
+print("SERVICE_MARKET_STATUS:",(s.get("marketHealth") or {}).get("status"))
+print("SERVICE_WALLET_READER_STATUS:",wallet.get("status"))
+print("SERVICE_WALLET_READER_HAS_USDC_ROW:","USDC" in (wallet.get("assets") or {}))
+print("SERVICE_WALLET_READER_HAS_USDT_ROW:","USDT" in (wallet.get("assets") or {}))
+' || true
 echo
 echo "SERVICE_RECENT_EVENTS"
 journalctl -u zl-futures-bot-paper.service --since "20 minutes ago" --no-pager -o cat 2>/dev/null | grep -E 'worker_failed|cycle_error|exchange_|render_paper_http_ready|started|paper_open|paper_closed' | tail -n 12 || true

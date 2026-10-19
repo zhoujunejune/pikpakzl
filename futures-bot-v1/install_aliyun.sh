@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Standalone systemd installation of the paper-only futures experiment.
+# Standalone systemd live-futures installation; owner switch OFF by default.
 set -Eeuo pipefail
 test "$(id -u)" -eq 0 || { echo "FAILED: requires Cloud Assistant root"; exit 20; }
 test -f /etc/os-release || exit 21
@@ -26,7 +26,7 @@ python3 -m venv /opt/zl-futures-bot/venv
 SRC="$(pwd)"
 cat >/etc/systemd/system/zl-futures-bot-paper.service <<EOF
 [Unit]
-Description=ZL Futures Bot V1 - research only, PAPER trading
+Description=ZL Futures Bot V1 - owner controlled REAL trading
 Wants=network-online.target
 After=network-online.target
 
@@ -35,7 +35,7 @@ Type=simple
 User=zlbot
 Group=zlbot
 WorkingDirectory=$SRC
-Environment=MODE=paper
+Environment=MODE=live\nEnvironment=ALLOW_REAL_TRADING=I_ACCEPT_REAL_TRADING\nEnvironment=DURABLE_STORAGE_CONFIRMED=YES\nEnvironment=LIVE_CONTROL_FILE=/var/lib/zl-futures-bot/live-control.json
 Environment=PAPER_BALANCE=200
 Environment=SYMBOLS=BTCUSDT,ETHUSDT,BTCUSDC
 Environment=LEVERAGE=10
@@ -43,7 +43,7 @@ Environment=RISK_FRACTION=0.015
 Environment=MAX_MARGIN_FRACTION=0.15
 Environment=MAX_DAILY_LOSS_FRACTION=0.08
 Environment=PAPER_TAKER_FEE=0.0005
-Environment=STATE_FILE=/var/lib/zl-futures-bot/state.json
+Environment=STATE_FILE=/var/lib/zl-futures-bot/live-state.json
 Environment=CONTROL_FILE=/var/lib/zl-futures-bot/control.json
 EnvironmentFile=-/etc/zl-futures-bot-panel.env
 Environment=PORT=10000
@@ -80,17 +80,17 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
     curl -fsS --max-time 5 http://127.0.0.1:10000/status | /opt/zl-futures-bot/venv/bin/python -c '
 import json,sys
 s=json.load(sys.stdin)
-assert s.get("liveTradingEnabled") is False
-assert s.get("onePositionAcrossAllSymbols") is False
-assert s.get("onePositionPerSymbol") is True
-assert s.get("cooldownRemainingSeconds") == 0
+assert s.get("liveTradingEnabled") is False\nassert s.get("mode")=="live"
+assert s.get("perSymbolPositionLimit")==1
+assert s.get("postCloseCooldownSeconds")==0
+# Owner has not armed live yet
 assert isinstance(s.get("positions"),list)
-print("MULTIPAIR_STATUS_SCHEMA_OK")
+print("REAL_FUTURES_LIVE_OFF_STATUS_OK")
 '
     echo "INSTALL_OK: service responds locally"
     systemctl is-enabled zl-futures-bot-paper.service
     systemctl is-active zl-futures-bot-paper.service
-    echo "REAL_TRADING=false"
+    echo "REAL_TRADING_CAPABILITY=installed; SWITCH=off"
     echo "INBOUND_PORT_OPENED=false"
     exit 0
   fi

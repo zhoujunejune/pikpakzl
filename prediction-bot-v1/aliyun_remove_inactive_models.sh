@@ -28,13 +28,13 @@ restore(){
 }
 trap restore EXIT
 ROOT="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$PRED_CLEANUP_SHA"
-curl -fsSL --retry 3 "$ROOT/railway-diagnostic/panel-stats-shell.mjs" -o "$T/panel.new"
-curl -fsSL --retry 3 "$ROOT/round-tracker/index-rest.mjs" -o "$T/v2.new"
-"$NODE" --check "$T/panel.new"
-"$NODE" --check "$T/v2.new"
-grep -Fq "MODEL_RETIRED" "$T/panel.new"
-grep -Fq "LEGACY_SIGNAL_MODEL_RETIRED" "$T/v2.new"
-grep -Fq "map(onlyActiveModelRow)" "$T/v2.new"
+curl -fsSL --retry 3 "$ROOT/railway-diagnostic/panel-stats-shell.mjs" -o "$T/panel.new.mjs"
+curl -fsSL --retry 3 "$ROOT/round-tracker/index-rest.mjs" -o "$T/v2.new.mjs"
+"$NODE" --check "$T/panel.new.mjs"
+"$NODE" --check "$T/v2.new.mjs"
+grep -Fq "MODEL_RETIRED" "$T/panel.new.mjs"
+grep -Fq "LEGACY_SIGNAL_MODEL_RETIRED" "$T/v2.new.mjs"
+grep -Fq "map(onlyActiveModelRow)" "$T/v2.new.mjs"
 cp -p "$B/panel-stats-shell.mjs" "$T/panel.old"
 cp -p "$V/index-rest.mjs" "$T/v2.old"
 cp -a "$D/rounds" "$T/rounds.old"
@@ -89,8 +89,8 @@ for p in sorted((root/'round-history.json.archive').glob('v6-rounds-*.jsonl')):
  write(p,''.join(json.dumps(r,separators=(',',':'))+'\n' for r in new))
  print('CLEANUP_ARCHIVE',p.name,'BEFORE',len(old),'AFTER',len(new))
 PY
-install -o zl-pred -g zl-pred -m 0644 "$T/v2.new" "$V/index-rest.mjs"
-install -o zl-pred -g zl-pred -m 0644 "$T/panel.new" "$B/panel-stats-shell.mjs"
+install -o zl-pred -g zl-pred -m 0644 "$T/v2.new.mjs" "$V/index-rest.mjs"
+install -o zl-pred -g zl-pred -m 0644 "$T/panel.new.mjs" "$B/panel-stats-shell.mjs"
 systemctl start zl-prediction-v2
 v2_ok=no
 for i in $(seq 1 28);do

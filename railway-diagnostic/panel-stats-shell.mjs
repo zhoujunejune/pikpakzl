@@ -630,7 +630,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
     <option value="EDGE_5M_V1">EDGE_5M_V1 · 真实行情8秒锁定</option>
   </select>
   <button id="orderSignalModelSave" type="button"
-    style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号（需控制 PIN）</button>
+    style="margin-top:9px;padding:12px;background:#2b4158;color:#f1f5f9;border-radius:9px;font-size:14px">保存下单信号</button>
   <div id="orderSignalModelState" class="muted" role="status" aria-live="polite" style="margin-top:8px">下单模型配置读取中...</div>
   <div id="orderSignalModelStats" class="muted" style="margin-top:5px">所选模型独立胜率读取中...</div>
   <div class="muted" style="margin-top:7px">生产下拉框仅保留 BASELINE 与 EDGE_5M_V1。基线复用原 RSI 行情输入，不再展示退役 NOVICE/DYNAMIC 策略。EDGE 必须按真实行情前8秒锁定；训练样本和概率校准只供统计，不阻止你手动授权的跟随。报价无效、无有效锁定或开关关闭时仍不下单。所有模型沿用原有分方向开关，UP/DOWN 不代表成交。</div>
@@ -658,7 +658,7 @@ const primaryCard = `<div class="c" id="activeFast8ModelCard">
 <div class="kv"><div class="k">实际锁定轮次</div><div class="v" id="activeFast8Coverage">-</div></div>
 </div>
 <div class="k" style="margin-top:14px">当前活跃模型 · 已支持来源的 UP/DOWN 独立开关</div>
-<div class="muted" style="margin-top:6px">每个来源分别选择 UP 正向/反向、DOWN 正向/反向；同方向互斥，均关闭则只显示预测、不下单。需控制 PIN，下一轮生效。</div>
+<div class="muted" style="margin-top:6px">每个来源分别选择 UP 正向/反向、DOWN 正向/反向；同方向互斥，均关闭则只显示预测、不下单。需通过阿里云账户认证，下一轮生效。</div>
 <div id="directionModeChoices" style="margin-top:9px;display:grid;gap:8px"><div class="muted">后台配置读取中...</div></div>
 <div id="directionModeMessage" role="status" aria-live="polite" class="muted" style="margin-top:8px"></div>
 <div class="k" style="margin-top:14px">活跃信号模型 · 自动同步展示与分方向胜率</div>
@@ -730,7 +730,7 @@ async function loadOrderModelStats(){
 async function saveOrderModelChoice(){
  if(!choiceReady||choiceBusy)return;
  var select=e('orderSignalModelSelect'),pin=e('pin');
- if(!select||!pin||!pin.value){e('orderSignalModelState').textContent='请先在页面上方填写控制 PIN';return}
+ if(!select||!pin){e('orderSignalModelState').textContent='请通过页面登录认证';return}
  var next=select.value;
  if(!['BREAKOUT20_RSI_MACD_RANGE_V1','EDGE_5M_V1'].includes(next))return;
  if(next===chosenOrderModel){choiceDirty=false;e('orderSignalModelState').textContent='当前已是所选模型，无需切换';return}
@@ -844,7 +844,7 @@ async function setDirectionModeFromUI(index,side,selectedMode){
  var modelName=activeSourceName(src.id);
  if(!modelName){e('directionModeMessage').textContent='该信号来源已非当前活跃模型，请刷新后重试';return}
  var pin=e('pin');
- if(!pin||!pin.value){e('directionModeMessage').textContent='请先在上方填写控制 PIN';return}
+ if(!pin){e('directionModeMessage').textContent='请通过页面登录认证';return}
  var description=mode==='OFF'?'关闭该预测方向自动下单':'切换到'+modeLabel(mode)+'下单';
  if(!window.confirm('将 '+modelName+' 的 '+side+' '+description+'？下一轮生效。'))return;
  directionModeBusy=true;renderDirectionModes();e('directionModeMessage').textContent='保存中...';
@@ -937,7 +937,7 @@ async function renderDynamicPrimary(){
  var modes=src&&directionModeReady?'UP：'+modeLabel(src.modes.UP)+' / DOWN：'+modeLabel(src.modes.DOWN):'模式未就绪';
  function rate(side){var z=r[side]||{};return z.samples?z.hits+'/'+z.samples+' · '+pct(100*z.hits/z.samples):'暂无'}
  e('sourceRateRows').innerHTML='<tr><td>5分钟动态入场</td><td>'+escModel(modes)+'</td><td>'+(n?hits+'/'+n+' · '+pct(100*hits/n):'暂无')+'</td><td>'+rate('up')+'</td><td>'+rate('down')+'</td><td>'+(allowed.length?pct(100*mappedHits/allowed.length):'暂无')+'</td></tr>';
- e('activeFast8Note').textContent='本表只看动态模型影子模拟入场后的官方结果，非实际订单；真实下单以控制 PIN 选中、原有方向开关及订单有效期为准。';
+ e('activeFast8Note').textContent='本表只看动态模型影子模拟入场后的官方结果，非实际订单；真实下单通过页面授权选中、原有方向开关及订单有效期为准。';
  renderDirectionModes();
 }
 async function renderPostflipPrimary(){

@@ -82,3 +82,26 @@ jobs:
           assert anonymous==401 and authorized==200 and b'id="apiKey"' in body
           assert status==200 and j.get("autoTradingEnabled")==False and forbidden==403
           PY
+
+      - name: Verify read-only POST works with gateway login and no former PIN
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request,urllib.error
+          base="https://prediction.47-237-188-69.sslip.io"
+          auth="Basic "+base64.b64encode(("zl:"+os.environ["ZL_PANEL_PASSWORD"]).encode()).decode()
+          headers={"Authorization":auth,"Origin":base,"Sec-Fetch-Site":"same-origin","Content-Type":"application/json"}
+          req=urllib.request.Request(base+"/api/egress-ip",headers=headers,method="POST",data=b'{"pin":""}')
+          try:
+            with urllib.request.urlopen(req,timeout=16) as r:
+              code=r.status
+              obj=json.loads(r.read(6000))
+          except urllib.error.HTTPError as e:
+            code=e.code
+            try:obj=json.loads(e.read(6000))
+            except:obj={}
+          print("SECOND_PIN_DISABLED_PROXY_POST_STATUS",code)
+          print("SECOND_PIN_DISABLED_REJECTED_AS_PIN",code==401 and "PIN" in str(obj.get("error","")).upper())
+          assert not(code==401 and "PIN" in str(obj.get("error","")).upper())
+          PY

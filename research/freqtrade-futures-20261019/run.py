@@ -29,8 +29,7 @@ def execute(name, command):
     return finished.returncode == 0
 
 def ft(*args):
-    return ["docker", "run", "--rm", "--user", str(os.getuid())+":"+str(os.getgid()),
-        "--env", "HOME=/tmp",
+    return ["docker", "run", "--rm",
         "--mount", "type=bind,source="+str(USERDIR)+",target=/freqtrade/user_data",
         "--mount", "type=bind,source="+str(RESULTS)+",target=/freqtrade/results",
         IMAGE, *args]
@@ -50,6 +49,9 @@ def main():
     print("RESEARCH_ONLY=TRUE; ALIBABA_DEPLOYMENT=NEVER; REAL_ORDERS=NEVER", flush=True)
     import runpy
     runpy.run_path(str(ROOT / "prepare.py"), run_name="__main__")
+    # Official Docker image uses its own ftuser; allow it to write only within
+    # ephemeral research bind mounts, never production paths.
+    subprocess.run(["chmod", "-R", "a+rwX", str(USERDIR), str(RESULTS)], check=True)
     if not execute("docker-pull", ["docker", "pull", IMAGE]):
         raise RuntimeError("Pinned Freqtrade Docker image unavailable")
     if not execute("freqtrade-version",ft("--version")):

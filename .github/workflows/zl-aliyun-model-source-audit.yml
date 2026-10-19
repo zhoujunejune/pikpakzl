@@ -1,0 +1,22 @@
+name: Audit exact Selective 8-second model source and live order selection
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['prediction-bot-v1/aliyun_model_source_audit.py','.github/workflows/zl-aliyun-model-source-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Audit original immutable official outcome source and current order model
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_model_source_audit.py

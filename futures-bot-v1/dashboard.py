@@ -24,7 +24,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 .stopnum{color:#ff858c}.tpnum{color:#4adcac}.posfoot{font-size:12px;color:var(--dim);margin-top:12px}
 @media(max-width:480px){.formgrid{grid-template-columns:1fr 1fr}.formgrid>div:last-child{grid-column:span 2}}
 
-.bot-nav{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0}
+.bot-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0}
 .bot-nav a{display:block;padding:12px 8px;text-align:center;text-decoration:none;color:var(--fg);border:1px solid #3c4d6e;background:#142239;border-radius:11px;font-weight:650}
 .bot-nav a.active{background:#196bb6;border-color:#2786df}
 </style></head><body><main>
@@ -33,6 +33,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
 <nav class="bot-nav" aria-label="选择机器人">
 <a href="/dashboard/" class="active" aria-current="page">合约机器人</a>
 <a href="/prediction/">预测机器人</a>
+<a href="/api-keys/">交易所 API 管理</a>
 </nav>
 <div class="warn">研究测试版：无真实下单。停止新开仓不代表立即平掉已有模拟仓位；“紧急停止”会锁定新开仓，恢复前需人工检查。</div>
 <section class="card quotes">

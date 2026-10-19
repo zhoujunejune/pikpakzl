@@ -147,8 +147,16 @@ done
 test "$(systemctl is-active zl-exchange-api-manager.service)" = active
 test "$(systemctl is-active zl-futures-bot-paper.service)" = active
 test "$(systemctl is-active zl-prediction-trade.service)" = active
-test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:10000/healthz)" = 200
-test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:13001/healthz)" = 200
+for port in 10000 13001;do
+  ready=no
+  for attempt in $(seq 1 15);do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$port/healthz" || true)
+    if [ "$code" = 200 ];then ready=yes;break;fi
+    sleep 2
+  done
+  echo "API_MANAGER_EXISTING_SERVICE_PORT_$port_READY=$ready"
+  test "$ready" = yes
+done
 echo "API_MANAGER_DEPLOYED=true"
 echo "API_MANAGER_LOCALHOST_ONLY=true"
 echo "API_MANAGER_ROBOTS_INDEPENDENT=true"

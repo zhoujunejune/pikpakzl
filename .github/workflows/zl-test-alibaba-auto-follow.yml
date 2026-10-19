@@ -1,0 +1,27 @@
+name: Verify Alibaba owner-controlled automatic following
+on:
+  push:
+    branches: [feature/zl-prediction-aliyun]
+    paths:
+      - 'railway-diagnostic/index.mjs'
+      - 'railway-diagnostic/wrapper.mjs'
+      - 'railway-diagnostic/test-alibaba-auto-follow.mjs'
+      - '.github/workflows/zl-test-alibaba-auto-follow.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify production code syntax
+        run: |
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+      - name: Verify gated owner toggle, automatic single-submit and legacy PIN removal
+        run: node --test railway-diagnostic/test-alibaba-auto-follow.mjs

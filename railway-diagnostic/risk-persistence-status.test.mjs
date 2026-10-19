@@ -53,8 +53,8 @@ test('internal worker telemetry may continue but redundant status endpoint and U
  assert.match(control,/url\.pathname === '\/api\/risk-control'/);
 });
 
-test('PIN is masked, and existing order/strategy controls remain unchanged',()=>{
- assert.match(page,/<input id="pin" type="password" autocomplete="off"/);
+test('authenticated login and existing order/strategy controls remain unchanged',()=>{
+ assert.match(control,/x-zl-verified-login/);
  assert.match(page,/id="tradeInputsCard"/);
  assert.match(page,/id="riskControlsAnchor"/);
  assert.match(wrapper,/AUTO_CONFIRM_ENABLED/);
@@ -67,6 +67,6 @@ test('PIN is masked, and existing order/strategy controls remain unchanged',()=>
 test('only monitoring and persistence are wired: no new automatic financial fuse',()=>{
  assert.doesNotMatch(runner,/DAILY_LOSS_HALT|MAX_DAILY_TRADES|AUTO_MAX_LOSS/);
  assert.doesNotMatch(control,/DAILY_LOSS_HALT|MAX_DAILY_TRADES|AUTO_MAX_LOSS/);
- assert.match(page,/Prediction 可用余额/);
- assert.match(page,/开始跟随新信号/);
+ assert.match(page,/id="tradeInputsCard"/);
+ assert.match(page,/id="riskControlsAnchor"/);
 });

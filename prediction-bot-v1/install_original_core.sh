@@ -9,9 +9,10 @@ DATA=/var/lib/zl-prediction
 CONF=/etc/zl-prediction
 CODE_BRANCH=migration/render-blueprint-20261018
 HOST=prediction.47-237-188-69.sslip.io
-mkdir -p "$ROOT" "$DATA/rounds" "$DATA/redis" "$DATA/archive" "$CONF"
+mkdir -p "$ROOT" "$DATA/rounds" "$DATA/redis" "$DATA/archive" "$CONF" "$ROOT/.npm"
+chmod 755 "$ROOT" "$DATA" "$CONF"
 if ! id zl-pred >/dev/null 2>&1;then useradd --system --home-dir "$ROOT" --shell /usr/sbin/nologin zl-pred; fi
-chown -R zl-pred:zl-pred "$ROOT" "$DATA/rounds" "$DATA/archive"
+chown -R zl-pred:zl-pred "$ROOT/.npm" "$DATA/rounds" "$DATA/archive"
 # If the Node 22 binary is not already present, download the Node project
 # binary and independently verify its SHA-256 from the official same-version file.
 if [ ! -x /opt/zl-prediction-node/bin/node ]; then
@@ -25,6 +26,7 @@ if [ ! -x /opt/zl-prediction-node/bin/node ]; then
   mkdir -p /opt/zl-prediction-node
   tar -xJf "$TEMP_DIR/$NODE_NAME" --strip-components=1 -C /opt/zl-prediction-node
 fi
+chmod -R a+rX /opt/zl-prediction-node
 NODE=/opt/zl-prediction-node/bin/node
 NPM=/opt/zl-prediction-node/bin/npm
 "$NODE" --version
@@ -89,7 +91,7 @@ else
 fi
 chown -R zl-pred:zl-pred "$ROOT/src"
 for folder in fast-signal-engine round-tracker railway-diagnostic;do
-  (cd "$ROOT/src/$folder";su -s /bin/sh zl-pred -c "PATH=/opt/zl-prediction-node/bin:/usr/bin:/bin npm install --omit=dev --no-audit --no-fund --silent")
+  (cd "$ROOT/src/$folder";su -s /bin/sh zl-pred -c "PATH=/opt/zl-prediction-node/bin:/usr/bin:/bin npm_config_cache=/opt/zl-prediction-live/.npm npm install --omit=dev --no-audit --no-fund --silent")
 done
 # The V2 signal + official resolution cache is durable for NEW records.
 # Old Railway volume contents are intentionally NOT overwritten/fabricated.

@@ -20,6 +20,6 @@ jobs:
       - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
       - name: Verify active model source files and V2 official evidence locally on Alibaba
         env:
-          ALIBABA_CLOUD_ACCESS${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}ID: _KEY_
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_cutover_audit.py

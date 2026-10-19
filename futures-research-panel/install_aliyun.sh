@@ -48,18 +48,18 @@ assert end>start
 block=src[start:end]
 assert 'basic_auth {' in block,'LOGIN_MISSING'
 assert 'reverse_proxy 127.0.0.1:10000' in block,'FUTURES_ROUTE_MISSING'
-addon='''  handle_path /research/* {
+addon='''  handle_path /futures-lab/* {
     root * /opt/zl-futures-research-site
     file_server
     header Cache-Control "no-store"
   }
-  handle /research {
-    redir /research/ 308
+  handle /futures-lab {
+    redir /futures-lab/ 308
   }
 '''
-if 'handle_path /research/* {' in block:
-    assert block.count('handle_path /research/* {')==1
-    print('RESEARCH_ROUTE_ALREADY_PRESENT=true')
+if 'handle_path /futures-lab/* {' in block:
+    assert block.count('handle_path /futures-lab/* {')==1
+    print('FUTURES_LAB_ROUTE_ALREADY_PRESENT=true')
 else:
     pos=block.find('  handle ')
     if pos<0:raise RuntimeError('CADDY_HANDLE_NOT_FOUND')
@@ -77,12 +77,12 @@ else:
         shutil.copy2(backup,p)
         subprocess.run(['systemctl','reload','caddy'],timeout=15)
         raise RuntimeError('CADDY_RELOAD_FAILED_RESTORED')
-    print('RESEARCH_ROUTE_INSTALLED=true')
+    print('FUTURES_LAB_ROUTE_INSTALLED=true')
 PY
 test "$before_futures" = "$(systemctl show zl-futures-bot-paper.service -p MainPID --value)" || exit 63
 test "$before_prediction" = "$(systemctl show zl-prediction-trade.service -p MainPID --value)" || exit 64
 test "$(systemctl is-active caddy.service)" = active
-status=$(curl -sk --resolve 47-237-188-69.sslip.io:443:127.0.0.1 -o /dev/null -w '%{http_code}' --max-time 5 'https://47-237-188-69.sslip.io/research/')
+status=$(curl -sk --resolve 47-237-188-69.sslip.io:443:127.0.0.1 -o /dev/null -w '%{http_code}' --max-time 5 'https://47-237-188-69.sslip.io/futures-lab/')
 test "$status" = 401 || { echo "RESEARCH_AUTH_FAIL=$status";exit 65; }
 echo "RESEARCH_PANEL_INSTALLED=true"
 echo "RESEARCH_PANEL_EXISTING_BASIC_AUTH=true"

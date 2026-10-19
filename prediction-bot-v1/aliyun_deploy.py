@@ -42,6 +42,17 @@ git -C "$SRC" show __SHA__:prediction-bot-v1/serve.py > "$DEST/serve.py.tmp"
 python3 -m py_compile "$DEST/serve.py.tmp"
 install -m 0644 "$DEST/serve.py.tmp" "$DEST/serve.py"
 rm -f "$DEST/serve.py.tmp"
+# The futures HTML is loaded at Python startup. Update ONLY its HTML module
+# and restart the existing PAPER process once if the menu changed. Durable
+# futures state and controls files are not touched.
+DASH="$SRC/futures-bot-v1/dashboard.py"
+git -C "$SRC" show __SHA__:futures-bot-v1/dashboard.py > "$DEST/dashboard.py.tmp"
+python3 -m py_compile "$DEST/dashboard.py.tmp"
+if ! cmp -s "$DEST/dashboard.py.tmp" "$DASH"; then
+  install -m 0644 "$DEST/dashboard.py.tmp" "$DASH"
+  systemctl restart zl-futures-bot-paper.service
+fi
+rm -f "$DEST/dashboard.py.tmp"
 cat > /etc/systemd/system/zl-prediction-readonly.service <<'UNIT'
 [Unit]
 Description=ZL Prediction Migration Readonly Monitor (separate from futures)

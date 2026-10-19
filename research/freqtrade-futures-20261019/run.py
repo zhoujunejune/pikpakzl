@@ -22,6 +22,10 @@ def execute(name, command):
     with logpath.open("w") as log:
         finished = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
                                   check=False, timeout=1500)
+    if finished.returncode != 0:
+        print("SANDBOX_COMMAND_FAILED",name,"exit",finished.returncode,flush=True)
+        for line in logpath.read_text(errors="replace").splitlines()[-15:]:
+            print("SANDBOX_LOG",line[:400],flush=True)
     return finished.returncode == 0
 
 def ft(*args):

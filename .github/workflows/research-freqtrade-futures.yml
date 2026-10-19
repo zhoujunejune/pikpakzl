@@ -1,0 +1,47 @@
+name: RESEARCH ONLY - Freqtrade Binance futures 3-pair backtests
+on:
+  push:
+    branches:
+      - research/freqtrade-futures-20261019
+    paths:
+      - "research/freqtrade-futures-20261019/**"
+      - ".github/workflows/research-freqtrade-futures.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freqtrade-research-three-pairs-isolated
+  cancel-in-progress: false
+
+jobs:
+  research-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout research branch only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Enforce research branch and no exchange keys
+        run: |
+          test "$GITHUB_REF_NAME" = "research/freqtrade-futures-20261019"
+          echo "GITHUB_HOSTED_RESEARCH_ONLY=TRUE"
+          echo "REAL_TRADING_AND_ALIBABA_DEPLOYMENTS=DISABLED"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Static syntax checks
+        run: |
+          python -m py_compile research/freqtrade-futures-20261019/prepare.py research/freqtrade-futures-20261019/run.py research/freqtrade-futures-20261019/summarize.py
+      - name: Download public futures candles and compare strategies
+        run: python research/freqtrade-futures-20261019/run.py
+      - name: Archive report, provenance, and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freqtrade-research-three-futures-pairs
+          path: research/freqtrade-futures-20261019/results/
+          if-no-files-found: warn
+          retention-days: 7

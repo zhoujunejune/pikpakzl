@@ -1,0 +1,22 @@
+name: Diagnose current Alibaba TP SL persistence and login routing
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['prediction-bot-v1/audit_risk_controls.sh','prediction-bot-v1/audit_risk_controls.py','.github/workflows/zl-audit-risk-controls.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read actual risk control persistence status and Redis health
+        env:
+          ALIBABA_CLOUD_ACCESS${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}ID: _KEY_
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/audit_risk_controls.py

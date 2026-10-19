@@ -29,7 +29,7 @@ code{color:#9bc8f7;font-size:12px}
 .notice{padding:12px;border:1px solid #6a4a34;border-radius:12px;background:#262018;color:#f1d5af}
 @media(max-width:700px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.selects{grid-template-columns:1fr}}
 </style></head><body><main>
-<nav><a href="/dashboard/">合约机器人 · 实盘</a><a href="/prediction/">预测机器人</a><a href="/research/">策略模拟 · 当前页面</a></nav>
+<nav><a href="/dashboard/">合约机器人 · 实盘</a><a href="/prediction/">预测机器人</a><a href="/futures-lab/">策略模拟 · 当前页面</a></nav>
 <h1>合约策略模拟训练中心</h1>
 <div class="row"><div class="sub">Freqtrade 社区策略原始信号 · 历史合约数据 · 独立离线回放</div><span class="flag">仅模拟 · 不连接实盘下单</span></div>
 <div class="notice" style="margin-top:14px">这不是实盘收益，也不是模型自动学习中的收益。页面展示真实 Binance 历史 K 线上的<strong>历史策略模拟回放</strong>。成交使用独立模拟引擎，不是 Freqtrade 官方回测引擎，且不包含真实资金费、强平或订单簿滑点。</div>
@@ -118,7 +118,7 @@ function renderCompare(){
 async function loadReport(){
  txt('status','正在读取 GitHub 已验证的离线模拟报告…');
  try{
-  const r=await fetch('/research/report.json?t='+Date.now(),{cache:'no-store'});
+  const r=await fetch('/futures-lab/report.json?t='+Date.now(),{cache:'no-store'});
   if(!r.ok)throw Error('报告尚未发布 (HTTP '+r.status+')');
   const j=await r.json();
   if(j.kind!=='historical_simulation'||j.no_live_orders!==true||j.official_freqtrade_engine!==false||!Array.isArray(j.rows))throw Error('报告校验未通过');

@@ -1610,7 +1610,7 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/training-status') return proxyTrainingStatus(res);
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxyInner(req, res, true);
   return proxyInner(req, res, false);
-}).listen(PORT, '0.0.0.0', () => {
+}).listen(PORT, '127.0.0.1', () => {
   // DYNAMIC_ENTRY_5M_SHADOW_V1 retired: no independent timer, REST polling or training.
   // EDGE model collection/training is Cloudflare-only; no extra Railway polling process.
   void noviceMixShadow.start()

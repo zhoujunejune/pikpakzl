@@ -151,6 +151,51 @@ else:
   print("SITE_RUNTIME_SOURCE_LINE",n,line[:220])
 PY
 echo "SITE_RUNTIME_955_INSPECT_END"
+echo "FOLLOW_GATE_AUDIT_BEGIN"
+python3 - <<'PY'
+import os,json,hashlib,subprocess
+from pathlib import Path
+from urllib.request import urlopen
+KEYS=('ZL_OUTER_AUTH_ONLY','ZL_PUBLIC_ORIGIN','RENDER_TRADING_USER_ARMED','RENDER_MIGRATION_PREVIEW','AUTO_CONFIRM_ENABLED','AUTO_ORDER_DISABLED')
+def safe_env(lines):
+ d={}
+ for line in lines:
+  if '=' not in line:continue
+  key,val=line.split('=',1)
+  if key in KEYS:d[key]=val.strip().strip('"').strip("'")
+ return d
+def printable(d):
+ return {k:(v if k!='ZL_PUBLIC_ORIGIN' else ('EXPECTED_ORIGIN' if v=='https://prediction.47-237-188-69.sslip.io' else 'NONMATCH_ORIGIN')) for k,v in d.items()}
+conf=Path('/etc/zl-prediction/panel.env')
+file_env=safe_env(conf.read_text().splitlines()) if conf.exists() else {}
+print('FOLLOW_PANEL_ENV',json.dumps(printable(file_env),sort_keys=True))
+try:
+ pid=int(subprocess.check_output(['systemctl','show','zl-prediction-trade.service','-p','MainPID','--value'],text=True).strip())
+ p=Path('/proc')/str(pid)/'environ'
+ proc_env=safe_env(p.read_bytes().decode('utf8','replace').split('\0')) if pid>1 and p.exists() else {}
+ print('FOLLOW_MAINPID_RUNNING',pid>1)
+ print('FOLLOW_PROCESS_ENV',json.dumps(printable(proc_env),sort_keys=True))
+ d=proc_env or file_env
+ print('FOLLOW_GATE_COMPUTED_ALLOW',bool(
+  (d.get('ZL_OUTER_AUTH_ONLY')=='true' and d.get('ZL_PUBLIC_ORIGIN')=='https://prediction.47-237-188-69.sslip.io')
+  or d.get('RENDER_TRADING_USER_ARMED')=='true'))
+except Exception as exc:print('FOLLOW_PROCESS_AUDIT_ERROR',type(exc).__name__)
+root=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for name in ('index.mjs','wrapper.mjs','panel-stats-shell.mjs','trade-control-fixed.mjs'):
+ p=root/name
+ if p.exists():
+  src=p.read_bytes()
+  print('FOLLOW_SOURCE',name,'sha256_12',hashlib.sha256(src).hexdigest()[:12],
+   'bytes',len(src),'has_deployment_gate',b'deploymentAllowsLiveFollowing' in src)
+ else:print('FOLLOW_SOURCE',name,'ABSENT')
+for path in ('/api/status','/api/order-signal-model','/healthz'):
+ try:
+  with urlopen('http://127.0.0.1:13001'+path,timeout=8) as resp:j=json.load(resp)
+  keys=('ok','enabled','autoConfirmEnabled','autoConfirmHalted','model','ready','status','signalStatus','source')
+  print('FOLLOW_ENDPOINT',path,json.dumps({k:j.get(k) for k in keys if k in j},ensure_ascii=False))
+ except Exception as exc:print('FOLLOW_ENDPOINT_ERROR',path,type(exc).__name__)
+PY
+echo "FOLLOW_GATE_AUDIT_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

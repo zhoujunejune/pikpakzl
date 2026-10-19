@@ -37,7 +37,7 @@ class LiveExecutionSafetyTests(unittest.TestCase):
             "leverage":10,"risk_fraction":.015,"max_margin_fraction":.15}
         with patch.object(live_engine,"read_control",return_value=controls), \
              patch.object(live_engine.live_control,"read",return_value={"enabled":False}), \
-             patch.object(live_engine.bot.KILL_FILE,"exists",return_value=False):
+             patch.object(live_engine.bot,"KILL_FILE",new=MagicMock(exists=lambda:False)):
             live_engine.tick(api,state,True)
         api.call.assert_not_called()
         api.positions.assert_not_called()

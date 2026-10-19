@@ -196,6 +196,57 @@ for path in ('/api/status','/api/order-signal-model','/healthz'):
  except Exception as exc:print('FOLLOW_ENDPOINT_ERROR',path,type(exc).__name__)
 PY
 echo "FOLLOW_GATE_AUDIT_END"
+echo "FOLLOW_ROUTING_AUDIT_BEGIN"
+python3 - <<'PY'
+import os,re,subprocess,json
+from pathlib import Path
+from urllib.request import urlopen
+from urllib.error import HTTPError
+base=Path('/opt/zl-prediction-live')
+roots=[base/'src'/ 'railway-diagnostic',Path('/app'),Path('/opt/zl-prediction-live')]
+needle='实盘开关尚未获得部署授权'.encode()
+seen=set()
+for root in roots:
+ if not root.exists():continue
+ for p in root.rglob('*'):
+  if not p.is_file() or p.suffix not in ('.js','.mjs','.html'):continue
+  try:
+   if p.stat().st_size > 500000 or str(p) in seen:continue
+   seen.add(str(p));src=p.read_bytes()
+   marks={k:(v in src) for k,v in {
+    'EXACT_ALERT':needle,'LIVE_GATE':b'deploymentAllowsLiveFollowing',
+    'RENDER_ARMED':b'RENDER_TRADING_USER_ARMED',
+    'LEGACY_PIN':b'PIN \xe9\x94\x99\xe8\xaf\xaf',
+    'CONTROL_ROUTE':b'/api/control'
+   }.items()}
+   if marks['EXACT_ALERT'] or marks['LIVE_GATE'] or (marks['CONTROL_ROUTE'] and len(seen)<140):
+    print('FOLLOW_FILE_MARKERS',str(p),json.dumps(marks))
+  except Exception as e:print('FOLLOW_SOURCE_SCAN_ERROR',type(e).__name__)
+print('FOLLOW_SCAN_TOTAL',len(seen))
+try:
+ s=subprocess.check_output(['systemctl','show','zl-prediction-trade.service','-p','ExecStart','--value'],text=True)
+ print('FOLLOW_EXECSTART_MATCHES',{k:(k in s) for k in ('index.mjs','wrapper.mjs','panel-stats-shell.mjs','node','trade-control-fixed.mjs')})
+except Exception as e:print('FOLLOW_EXECSTART_ERROR',type(e).__name__)
+for port in (13001,13005):
+ for pth in ('/','/api/status'):
+  try:
+   with urlopen(f'http://127.0.0.1:{port}{pth}',timeout=5) as r:
+    body=r.read(160000)
+    print('FOLLOW_ROUTE',port,pth,'HTTP',r.status,
+     'HAS_ALERT',needle in body,
+     'HAS_LEGACY_IP',b'Railway' in body,
+     'HAS_CONTROL',b'/api/control' in body)
+  except HTTPError as e:print('FOLLOW_ROUTE',port,pth,'HTTP',e.code)
+  except Exception as e:print('FOLLOW_ROUTE',port,pth,type(e).__name__)
+try:
+ caddy=Path('/etc/caddy/Caddyfile').read_text()
+ for line in caddy.splitlines():
+  if 'reverse_proxy' in line or 'prediction.47-' in line or 'handle_path' in line:
+   clean=re.sub(r'(?i)(token|secret|password|api[_-]?key)\s*[:=]\s*\S+',r'\1=[REDACTED]',line)
+   print('FOLLOW_CADDY_ROUTE',clean.strip()[:180])
+except Exception as e:print('FOLLOW_CADDY_SCAN_ERROR',type(e).__name__)
+PY
+echo "FOLLOW_ROUTING_AUDIT_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

@@ -1,0 +1,33 @@
+name: Alibaba prediction authenticated single-login regression
+on:
+  push:
+    branches:
+      - feature/zl-prediction-aliyun
+    paths:
+      - 'railway-diagnostic/index.mjs'
+      - 'railway-diagnostic/control-shell.mjs'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'fast-signal-engine/index.mjs'
+      - 'round-tracker/index-rest.mjs'
+      - 'scripts/aliyun-no-pin.test.mjs'
+      - '.github/workflows/zl-aliyun-no-pin-verify.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify all Node modules parse
+        run: |
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/control-shell.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check fast-signal-engine/index.mjs
+          node --check round-tracker/index-rest.mjs
+      - name: Verify no-PIN authenticated gateway checks and loopback isolation
+        run: node --test scripts/aliyun-no-pin.test.mjs

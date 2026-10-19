@@ -28,6 +28,45 @@ curl -fsS --max-time 5 http://127.0.0.1:10000/status || true
 echo
 echo "SERVICE_RECENT_EVENTS"
 journalctl -u zl-futures-bot-paper.service --since "20 minutes ago" --no-pager -o cat 2>/dev/null | grep -E 'worker_failed|cycle_error|exchange_|render_paper_http_ready|started|paper_open|paper_closed' | tail -n 12 || true
+echo "FUTURES_PAPER_DIAGNOSTICS_BEGIN"
+python3 - <<'PY'
+import json, pathlib, collections, time, urllib.request
+path=pathlib.Path("/var/lib/zl-futures-bot/state.json")
+if path.exists():
+    try:
+        s=json.loads(path.read_text())
+        history=s.get("history") or []
+        counts=collections.Counter(str((row.get("trade") or {}).get("symbol") or "UNKNOWN") for row in history)
+        print("CLOSED_TRADE_TOTAL:",len(history))
+        print("CLOSED_TRADE_COUNTS:",dict(sorted(counts.items())))
+        active=s.get("trade") or {}
+        print("CURRENT_POSITION_SYMBOL:",active.get("symbol","NONE"))
+        print("CURRENT_POSITION_SIDE:",active.get("side","NONE"))
+        print("CURRENT_POSITION_AGE_SECONDS:",int(time.time()-float(active.get("at") or time.time())) if active else "NONE")
+        print("HALTED:",bool(s.get("halt")))
+        print("LAST_SIGNAL:",s.get("last_signal"))
+        print("LAST_EXIT_SECONDS_AGO:",int(time.time()-float(s.get("last_exit"))) if s.get("last_exit") else "NONE")
+        print("LATEST_CLOSED_SYMBOLS:",[(x.get("trade") or {}).get("symbol") for x in history[-12:]])
+    except Exception as e:print("STATE_READ_ERROR_CLASS:",type(e).__name__)
+else:print("STATE_FILE_ABSENT")
+try:
+    with urllib.request.urlopen("http://127.0.0.1:10000/status",timeout=4) as resp:
+        s=json.load(resp)
+    print("ENGINE_RUNNING:",s.get("workerRunning"))
+    print("ENGINE_ERROR:",str(s.get("workerError") or "")[:170])
+    print("MARKET_HEALTH:",(s.get("marketHealth") or {}).get("status"))
+    print("CONFIGURED_SYMBOLS:",s.get("configuredSymbols"))
+    print("SUPPORTED_SYMBOLS:",s.get("supportedSymbols"))
+    print("NEW_ENTRIES_ENABLED:",(s.get("control") or {}).get("entry_enabled"))
+    print("EMERGENCY_STOP:",(s.get("control") or {}).get("emergency_stop"))
+    for key in ("BTCUSDT","ETHUSDT","BTCUSDC"):
+        quote=((s.get("latestPrices") or {}).get("symbols") or {}).get(key) or {}
+        print("QUOTE_"+key+":",{"exists":quote.get("price") is not None,"stale":quote.get("stale"),"age_seconds":quote.get("ageSeconds")})
+except Exception as e:print("LOCAL_STATUS_ERROR_CLASS:",type(e).__name__)
+PY
+echo "RECENT_SIGNAL_EVENTS"
+journalctl -u zl-futures-bot-paper.service --since "12 hours ago" --no-pager -o cat 2>/dev/null | grep -E 'paper_open|paper_closed|symbol_unavailable|skip_below_minimum|stale_signal|daily_loss_limit|worker_failed|cycle_error|exchange_restricted|foreign_position' | tail -n 24 || true
+echo "FUTURES_PAPER_DIAGNOSTICS_END"
 echo "SERVICE_CHECK_END"
 """
 

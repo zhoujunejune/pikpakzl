@@ -1,6 +1,6 @@
 name: Alibaba SWAS futures paper-only install
 # Deploy the tested independently managed BTCUSDT/ETHUSDT/BTCUSDC paper positions with no post-close cooldown.
-# Deploy verified symbol-wise historical fill visibility, preserve persistent paper ledger.
+# Deploy read-only Binance USDT/USDC wallet cards and paper margin breakdown; preserve ledger.
 on:
   push:
     branches: [feature/zl-futures-bot-v1]

@@ -1,5 +1,5 @@
 name: Alibaba SWAS futures paper-only install
-# Install the paper-only BTCUSDT, ETHUSDT, BTCUSDC strategy, quotes and position panel.
+# Deploy the tested independently managed BTCUSDT/ETHUSDT/BTCUSDC paper positions with no post-close cooldown.
 # Deploy verified symbol-wise historical fill visibility, preserve persistent paper ledger.
 on:
   push:

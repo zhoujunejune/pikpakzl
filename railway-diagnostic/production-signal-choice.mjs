@@ -129,7 +129,8 @@ export function validateSelective8ProductionLive(body,now=Date.now()){
     !Number.isFinite(lockedAt)||lockedAt<round||lockedAt>=round+8000||
     lockedAt>now+250||!['UP','DOWN'].includes(direction)||
     live.executionEligible!==true||
-    live.fast8Quality?.inputVersion!==SELECTIVE8_INPUT_VERSION)
+    (live.fast8Quality?.inputVersion!=null &&
+      live.fast8Quality.inputVersion!==SELECTIVE8_INPUT_VERSION))
    return {ok:false,reason:'INVALID_LOCK_OR_MARKET_EVIDENCE'};
  const isFallback=live.source==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';
  if(Boolean(live.fallbackUsed)!==isFallback||

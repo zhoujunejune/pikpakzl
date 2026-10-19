@@ -59,6 +59,12 @@ try:
     print("SUPPORTED_SYMBOLS:",s.get("supportedSymbols"))
     print("SYMBOL_STATS:",s.get("symbolStats"))
     print("LAST_TRADES_SYMBOLS:",[x.get("symbol") for x in (s.get("lastTrades") or [])])
+    print("MULTIPAIR_SUPPORTED:",s.get("onePositionPerSymbol") is True)
+    print("SINGLE_GLOBAL_POSITION_REMOVED:",s.get("onePositionAcrossAllSymbols") is False)
+    print("POST_CLOSE_COOLDOWN_SECONDS:",s.get("cooldownRemainingSeconds"))
+    print("ACTIVE_SYMBOLS:",[x.get("symbol") for x in (s.get("positions") or [])])
+    print("ACTIVE_POSITION_COUNT:",len(s.get("positions") or []))
+    print("BACKUP_BEFORE_MULTIPAIR_EXISTS:",pathlib.Path("/var/lib/zl-futures-bot/state.before-multipair-v1.json").exists())
     print("NEW_ENTRIES_ENABLED:",(s.get("control") or {}).get("entry_enabled"))
     print("EMERGENCY_STOP:",(s.get("control") or {}).get("emergency_stop"))
     for key in ("BTCUSDT","ETHUSDT","BTCUSDC"):

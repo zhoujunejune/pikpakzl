@@ -6,6 +6,25 @@ test -f /etc/os-release || exit 21
 . /etc/os-release
 test "$ID" = ubuntu || { echo "FAILED: not Ubuntu"; exit 22; }
 test -f futures-bot-v1/serve.py || { echo "FAILED: source missing"; exit 23; }
+# Never interrupt an enabled real-trading engine or a server with owned positions.
+# Fail before replacing the service configuration; open exchange-side stops remain untouched.
+check_safe_to_restart() {
+ python3 - <<'PY'
+import json
+from pathlib import Path
+ctl=Path('/var/lib/zl-futures-bot/live-control.json')
+state=Path('/var/lib/zl-futures-bot/live-state.json')
+if ctl.exists():
+ c=json.loads(ctl.read_text())
+ assert c.get('enabled') is False, 'LIVE_OWNER_SWITCH_IS_ON_ABORT_REDEPLOY'
+if state.exists():
+ s=json.loads(state.read_text())
+ assert not s.get('live_positions'), 'LIVE_OWNED_POSITIONS_PRESENT_ABORT_REDEPLOY'
+ assert not s.get('pending'), 'LIVE_ORDER_PENDING_ABORT_REDEPLOY'
+print('FUTURES_SAFE_RESTART_CHECK=PASS')
+PY
+}
+check_safe_to_restart
 echo "INSTALL: preparing Ubuntu Python venv"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -76,6 +95,7 @@ systemctl daemon-reload
 systemctl enable zl-futures-bot-paper.service
 # enable --now does not restart an already running process after a code update.
 # Reload the active Python service to apply new browser routing without touching state.
+check_safe_to_restart
 systemctl restart zl-futures-bot-paper.service
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
   if curl -fsS --connect-timeout 2 --max-time 3 http://127.0.0.1:10000/healthz >/dev/null; then

@@ -259,7 +259,7 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) return proxy(req, res, { transformHtml: true });
   return proxy(req, res);
-}).listen(PORT, '0.0.0.0', () => {
+}).listen(PORT, '127.0.0.1', () => {
   log('control_shell_started', { port: PORT, innerPort: INNER_PORT, riskControlFile: RISK_CONTROL_FILE });
 });
 

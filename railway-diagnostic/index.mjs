@@ -66,6 +66,17 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
 // For Alibaba only: the entire public entrypoint is behind Caddy Basic Auth.
 // Do not accept a request merely because a PIN was omitted. The proxy must
 // assert authenticated ingress, and POSTs must be same-origin browser requests.
+// Alibaba is an owner-authenticated HTTPS production site, not Render's
+// separately gated preview environment. This does not authorize a request:
+// /api/control still requires the Caddy-issued login assertion and same origin.
+// Automatic submissions are allowed only after the owner explicitly enabled
+// following with /api/control and remain restricted by order safeguards.
+function deploymentAllowsLiveFollowing(){
+  return process.env.ZL_OUTER_AUTH_ONLY==='true' &&
+    process.env.ZL_PUBLIC_ORIGIN==='https://prediction.47-237-188-69.sslip.io'
+      || process.env.RENDER_TRADING_USER_ARMED==='true';
+}
+
 function pinOK(pin, req) {
   if (process.env.ZL_OUTER_AUTH_ONLY === 'true') {
     const origin = String(process.env.ZL_PUBLIC_ORIGIN || '');
@@ -778,7 +789,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
     // Only a PIN-authenticated user can enable following. Run exactly one
     // backend confirmation attempt when a fresh signed intent becomes READY.
     // No browser needs to remain open; no signal if controls are OFF.
-    if(enabled && process.env.RENDER_TRADING_USER_ARMED==='true' &&
+    if(enabled && deploymentAllowsLiveFollowing() &&
        process.env.AUTO_CONFIRM_ENABLED==='true'){
       const ready=pendingAction;
       setImmediate(()=>{
@@ -949,7 +960,7 @@ async function readBody(req) {
 
 
 async function processOrderConfirmation(res,body,{automatic=false}={}){
-  if(automatic && (!enabled || process.env.RENDER_TRADING_USER_ARMED!=='true' ||
+  if(automatic && (!enabled || !deploymentAllowsLiveFollowing() ||
      process.env.AUTO_CONFIRM_ENABLED!=='true')){
     return send(res,409,{ok:false,error:'自动跟随已经关闭'});
   }
@@ -1283,10 +1294,10 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/control') {
     const body = await readBody(req);
-    if (body.enabled === true && process.env.RENDER_TRADING_USER_ARMED !== 'true') {
-      return send(res, 403, {ok:false,error:'实盘开关尚未获得部署授权'});
+    if (body.enabled === true && !deploymentAllowsLiveFollowing()) {
+      return send(res, 403, {ok:false,error:'当前部署不允许实盘跟随'});
     }
-    if (!pinOK(body.pin, req)) return send(res, 401, { ok: false, error: 'PIN 错误' });
+    if (!pinOK(body.pin, req)) return send(res, 401, { ok: false, error: '请先通过站点登录验证' });
     const nextEnabled = Boolean(body.enabled);
     if (nextEnabled) {
       if (lastOrder?.state === 'RECONCILIATION_REQUIRED')

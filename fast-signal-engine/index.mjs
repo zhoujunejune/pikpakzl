@@ -1956,7 +1956,7 @@ http.createServer(async (req, res) => {
 
   res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ ok: false, error: 'Not found' }));
-}).listen(PORT, '0.0.0.0', () => {
+}).listen(PORT, '127.0.0.1', () => {
   console.log(JSON.stringify({
     event: 'fast_signal_engine_started',
     port: PORT,

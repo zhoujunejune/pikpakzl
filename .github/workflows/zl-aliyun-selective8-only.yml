@@ -52,11 +52,13 @@ jobs:
           print('PUBLIC_8SEC_HISTORIC_WINS',summary.get('correct'))
           print('PUBLIC_8SEC_HISTORIC_LOSSES',summary.get('wrong'))
           print('PUBLIC_8SEC_BASIS',summary.get('decidedRounds'))
-          live=json.loads(get('/api/production-signal'))
-          assert live.get('ok') is True
-          if live.get('live',{}).get('status')=='LOCKED':
-            assert live['live'].get('model')=='SELECTIVE_V2_FAST8_PREWARM_V1'
-          print('PUBLIC_8SEC_LOCK_MODEL',live.get('live',{}).get('model'))
+          # /api/production-signal is intentionally localhost-only (V2:13002)
+          # and is verified by the Alibaba deployment step. Do not expose
+          # this internal signal endpoint just to make a public smoke test pass.
+          assert [x['source'] for x in j.get('activeSignalModels',[])]==[
+            'SELECTIVE_V2_FAST8_PRIMARY','EDGE_RESCUE_FAST8_PRIMARY',
+            'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION']
+          print('PUBLIC_8SEC_REAL_MODEL_SOURCES_VERIFIED=true')
           html=get('/').decode('utf8','replace')
           assert '<option value="SELECTIVE_V2_FAST8_PREWARM_V1">' in html
           assert '<option value="EDGE_5M_V1">' not in html

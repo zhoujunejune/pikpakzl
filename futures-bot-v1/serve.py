@@ -12,10 +12,13 @@ import bot
 from controls import read_control, change
 from dashboard import PAGE
 from market_health import snapshot as market_snapshot
+from position_view import view as paper_position_view
+import quotes
 from preflight import assess
 
 BOOT_AT=dt.datetime.now(dt.timezone.utc).isoformat()
 WORKER={"running":False,"error":None,"finished_at":None,"preflight":None}
+QUOTE_STOP=threading.Event()
 
 def worker():
     WORKER["running"]=True
@@ -32,6 +35,10 @@ def worker():
         }
         if not check.get("outboundAllowed"):
             raise RuntimeError("Exchange ban/cooldown until "+str(check.get("retryNotBefore")))
+        # One aggregated public mark-price request every 15s; no trade keys used.
+        # Failure with 418/429/451 stops this collector, not an IP bypass/retry.
+        threading.Thread(target=quotes.run_quotes,args=(lambda:WORKER["running"],QUOTE_STOP),
+                         name="paper-market-prices",daemon=True).start()
         bot.main()
     except Exception as e:
         WORKER["error"]=str(e)[:200]
@@ -39,6 +46,7 @@ def worker():
         bot.log("worker_failed", error=str(e)[:200])
     finally:
         WORKER["running"]=False
+        QUOTE_STOP.set()
 
 def public_snapshot():
     try:
@@ -47,6 +55,8 @@ def public_snapshot():
         balance=float(current.get("balance",bot.PAPER_BALANCE))
         days=[round(float(t.get("net",0)),6) for t in trades]
         market=market_snapshot(WORKER["running"])
+        latest_prices=quotes.current()
+        position_detail=paper_position_view(current.get("trade"),latest_prices,bot.TAKER_FEE)
         # A worker thread is not by itself evidence of fresh Binance prices.
         if WORKER["error"] and any(x in WORKER["error"] for x in ("418","429","451")):
             market["status"]="exchange_restricted"
@@ -65,6 +75,8 @@ def public_snapshot():
             "lastTrades":[{"net":round(float(t.get("net",0)),4),"reason":str(t.get("reason",""))[:30],
                            "at":t.get("at")} for t in trades[-12:]],
             "position":current.get("trade"),
+            "positionDetail":position_detail,
+            "latestPrices":latest_prices,
             "halted":bool(current.get("halt",False)),
             "workerRunning":WORKER["running"],
             "workerError":WORKER["error"],
@@ -76,6 +88,7 @@ def public_snapshot():
             "leverageMaximum":20,
             "riskPerTradePercent":round(bot.RISK_FRACTION*100,2),
             "instanceBootAt":BOOT_AT,
+            "serverNow":dt.datetime.now(dt.timezone.utc).isoformat(),
             "note":"Paper trades use reference mark prices, estimated fees, no order-book fill/slippage. Not proof of profit.",
         }
     except Exception as e:

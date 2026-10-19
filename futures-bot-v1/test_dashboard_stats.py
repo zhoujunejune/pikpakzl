@@ -19,7 +19,7 @@ class DashboardSymbolStatsTests(unittest.TestCase):
              patch.object(serve,"market_snapshot",return_value={"status":"market_data_received"}), \
              patch.object(serve.quotes,"current",return_value={"symbols":{}}), \
              patch.object(serve,"paper_position_view",return_value={"symbol":"BTCUSDT"}), \
-             patch.object(serve,"read_control",return_value={"entry_enabled":True,"emergency_stop":False}):
+             patch.object(serve,"read_control",return_value={"entry_enabled":True,"emergency_stop":False,"leverage":10}):
             data=serve.public_snapshot()
         self.assertEqual(data["closedTrades"],2)
         self.assertEqual(data["symbolStats"]["ETHUSDT"]["closed"],2)

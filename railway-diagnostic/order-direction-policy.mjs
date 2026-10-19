@@ -14,6 +14,13 @@ const MODE_VALUES=['FORWARD','INVERSE','OFF'];
 let state={ready:false,modes:{},revision:null,updatedAt:null,effectiveAfterRound:null};
 let redis=null,opening=null,writing=false;
 
+// When no saved v4/v3 switches exist, never enable trading implicitly.
+export function initialOffDirectionModes(){
+  return Object.fromEntries(ORDER_SOURCES.map(source=>[
+    source,{UP:'OFF',DOWN:'OFF'}
+  ]));
+}
+
 export function validateDirectionModes(modes){
   if(!modes||typeof modes!=='object'||Array.isArray(modes))throw Error('INVALID_MODES');
   const clean={};
@@ -103,9 +110,7 @@ export async function hydrateDirectionSettings(){
         modes=migrateLegacyModes(legacy?.modes);
         migration='RESTORED_LEGACY_V3';
       }else{
-        modes=Object.fromEntries(ORDER_SOURCES.map(source=>[
-          source,{UP:'OFF',DOWN:'OFF'}
-        ]));
+        modes=initialOffDirectionModes();
         migration='INITIALIZED_ALL_OFF';
       }
       const migrated={modes,revision:crypto.randomUUID(),

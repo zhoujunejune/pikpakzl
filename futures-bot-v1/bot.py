@@ -101,7 +101,7 @@ class API:
             query=urlencode(params)
             params["signature"]=hmac.new(self.secret.encode(), query.encode(), hashlib.sha256).hexdigest()
         headers={"X-MBX-APIKEY":self.key} if signed else {}
-        market_request=(not signed and path in ("/fapi/v1/klines","/fapi/v1/premiumIndex"))
+        market_request=(not signed and bool(params.get("symbol")) and path in ("/fapi/v1/klines","/fapi/v1/premiumIndex"))
         try:
             r=self.session.request(method,BASE_URL+path,params=params if method=="GET" else None,
                                    data=params if method!="GET" else None,

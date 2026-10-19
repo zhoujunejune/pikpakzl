@@ -3,7 +3,10 @@
 import fs from 'node:fs';
 import { createClient } from 'redis';
 
-export const RISK_CONFIG_FILE = '/tmp/risk-control.json';
+// Alibaba's strict systemd sandbox forbids writing /tmp; the location is
+// explicitly provided by the authenticated service environment. Older hosts
+// may continue to use /tmp for compatibility.
+export const RISK_CONFIG_FILE = process.env.RISK_CONTROL_FILE || '/tmp/risk-control.json';
 export const RISK_REDIS_KEY = 'trade-control:risk-config:v1';
 let client = null;
 let connecting = null;

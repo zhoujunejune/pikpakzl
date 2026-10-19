@@ -16,6 +16,12 @@ class PositionViewTests(unittest.TestCase):
         self.assertEqual(d["takeProfitPrice"],100900)
         self.assertAlmostEqual(d["estimatedGrossPnl"],2)
         self.assertAlmostEqual(d["estimatedNetPnl"],2-(100000+100200)*.01*.0005)
+    def test_btcusdc_position(self):
+        trade={**TRADE,"symbol":"BTCUSDC"}
+        q={"symbols":{"BTCUSDC":{"price":100200,"stale":False,"ageSeconds":3}}}
+        result=view(trade,q)
+        self.assertEqual(result["marginAsset"],"USDC")
+        self.assertIsNotNone(result["estimatedNetPnl"])
     def test_sell_unrealized(self):
         p={**TRADE,"side":"SELL","stop":100500,"tp":99100}
         d=view(p,quote(99800))

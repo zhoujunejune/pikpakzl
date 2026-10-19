@@ -24,6 +24,24 @@ class RiskTests(unittest.TestCase):
     def test_pnl_includes_fees(self):
         t={"side":"BUY","entry":100,"qty":1}
         self.assertAlmostEqual(pnl(t,101),1-(100+101)*.0005)
+    def test_btcusdc_margin_wallet_and_quantity(self):
+        from bot import SYMBOLS, API
+        from symbol_config import margin_asset
+        self.assertIn("BTCUSDC", SYMBOLS)
+        self.assertEqual(margin_asset("BTCUSDC"),"USDC")
+        self.assertEqual(margin_asset("BTCUSDT"),"USDT")
+        api=API()
+        def fake_call(method,path,params=None,signed=False):
+            self.assertEqual(path,"/fapi/v3/balance")
+            return [{"asset":"USDT","balance":"0"},{"asset":"USDC","balance":"200"}]
+        api.call=fake_call
+        self.assertEqual(api.balance("USDC"),200)
+        self.assertEqual(api.balance("USDT"),0)
+        rules={"filters":[
+            {"filterType":"MARKET_LOT_SIZE","stepSize":"0.001","minQty":"0.001","maxQty":"50"},
+            {"filterType":"MIN_NOTIONAL","notional":"50"}]}
+        self.assertAlmostEqual(quantity_for(api.balance("USDC"),120000,480,rules),0.002)
+        self.assertEqual(quantity_for(api.balance("USDT"),120000,480,rules),0.)
     def test_ban_response_is_not_retried(self):
         from bot import API
         class FakeResp:

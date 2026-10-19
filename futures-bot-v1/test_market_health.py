@@ -22,6 +22,11 @@ class MarketFreshnessTests(unittest.TestCase):
         self.assertEqual(s["status"],"market_data_received")
         self.assertEqual(s["lastSuccessAgeSeconds"],30)
         self.assertEqual(s["symbol"],"BTCUSDT")
+    def test_usdc_5m_candle(self):
+        self.assertTrue(market_health.record("/fapi/v1/klines",
+              {"symbol":"BTCUSDC","interval":"5m"},
+              [[900000,0,0,0,"100"]],now=1000))
+        self.assertEqual(market_health.snapshot(True,now=1010)["symbol"],"BTCUSDC")
     def test_stale_input_not_counted_as_success(self):
         self.assertFalse(market_health.record("/fapi/v1/klines",
                           {"symbol":"BTCUSDT","interval":"5m"},

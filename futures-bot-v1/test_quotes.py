@@ -11,11 +11,13 @@ class QuoteTests(unittest.TestCase):
         self.o.stop();self.e.stop()
     def test_both_mark_prices(self):
         data=[{"symbol":"BTCUSDT","markPrice":"120000.25","time":1000000},
-              {"symbol":"ETHUSDT","markPrice":"4400.01","time":1000000}]
-        self.assertEqual(quotes.ingest(data,now=1000),2)
+              {"symbol":"ETHUSDT","markPrice":"4400.01","time":1000000},
+              {"symbol":"BTCUSDC","markPrice":"120001.25","time":1000000}]
+        self.assertEqual(quotes.ingest(data,now=1000),3)
         snap=quotes.current(now=1010)
         self.assertEqual(snap["symbols"]["BTCUSDT"]["price"],120000.25)
         self.assertFalse(snap["symbols"]["ETHUSDT"]["stale"])
+        self.assertEqual(snap["symbols"]["BTCUSDC"]["price"],120001.25)
     def test_missing_timestamp_or_bad_values_not_live(self):
         self.assertEqual(quotes.ingest([{"symbol":"BTCUSDT","markPrice":"1"}],now=1000),0)
         self.assertIsNone(quotes.current(now=1000)["symbols"]["BTCUSDT"]["price"])

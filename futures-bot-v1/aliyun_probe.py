@@ -85,6 +85,31 @@ except Exception as e:print("LOCAL_STATUS_ERROR_CLASS:",type(e).__name__)
 PY
 echo "RECENT_SIGNAL_EVENTS"
 journalctl -u zl-futures-bot-paper.service --since "12 hours ago" --no-pager -o cat 2>/dev/null | grep -E 'paper_open|paper_closed|symbol_unavailable|skip_below_minimum|stale_signal|daily_loss_limit|worker_failed|cycle_error|exchange_restricted|foreign_position' | tail -n 24 || true
+echo "FUTURES_LIVE_READINESS_BEGIN"
+python3 - <<'PY'
+from pathlib import Path
+import urllib.request,json,subprocess
+p=Path('/var/lib/zl-exchange-api/futures/binance.env')
+flags={'BINANCE_API_KEY':False,'BINANCE_API_SECRET':False}
+if p.exists():
+ for line in p.read_text(errors='replace').splitlines():
+  for k in flags:
+   if line.startswith(k+'=') and len(line.partition('=')[2].strip())>2:flags[k]=True
+print('FUTURES_API_CONFIG_EXISTS',p.exists())
+print('FUTURES_SIGNED_CREDENTIALS_PRESENT',all(flags.values()))
+try:
+ with urllib.request.urlopen('http://127.0.0.1:10000/status',timeout=7) as resp:s=json.load(resp)
+ pr=s.get('preflight') or {}
+ print('FUTURES_PREFLIGHT',json.dumps({k:pr.get(k) for k in ('authenticated','testOrderPermission','outboundAllowed','blocker','credentialNamesPresent')},ensure_ascii=False))
+ print('FUTURES_MODE',s.get('mode'),'LIVE_TRADING_ENABLED',s.get('liveTradingEnabled'),'WORKER',s.get('workerRunning'))
+ print('FUTURES_CONTROL',json.dumps({k:v for k,v in (s.get('control') or {}).items() if k in ('entry_enabled','emergency_stop')},ensure_ascii=False))
+except Exception as e:print('FUTURES_PREFLIGHT_READ_ERROR',type(e).__name__)
+from pathlib import Path
+s=Path('/var/lib/zl-futures-bot/state.json')
+print('FUTURES_LEDGER_EXISTS',s.exists())
+print('FUTURES_LEDGER_PERSISTED',s.is_file() and s.stat().st_size>0)
+PY
+echo "FUTURES_LIVE_READINESS_END"
 echo "FUTURES_PAPER_DIAGNOSTICS_END"
 echo "SERVICE_CHECK_END"
 """

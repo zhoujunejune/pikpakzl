@@ -122,6 +122,11 @@ async function reload(){
   update('edgeAlwaysPending',Number(r.pending||0)+' 轮');
   update('edgeAlwaysCoverage',Number(r.locked||0)+' / '+Number(r.observedRounds||0));
   var note='阿里云原生模型新纪元 · 只计算可核实的 Binance Prediction 官方结果 · 实盘交易未启用；旧 Cloudflare 模型历史未混入';
+  if(d.legacyArchive?.overall){
+    var a=d.legacyArchive.overall;
+    note+=' · 旧 Cloudflare 归档：已结算 '+Number(a.samples||0)+' 轮 / 命中 '+Number(a.hits||0)+
+      ' 轮（独立历史快照，非完整明细；不计入本地新模型胜率）';
+  }
   if(d.health?.officialError)note+=' · 结算异常：'+String(d.health.officialError).slice(0,80);
   if(d.health?.marketError)note+=' · 行情提示：'+String(d.health.marketError).slice(0,80);
   update('edgeAlwaysNote',note);

@@ -13,7 +13,58 @@ mkdir -p "$ROOT" "$DATA/rounds" "$DATA/redis" "$DATA/archive" "$CONF" "$ROOT/.np
 chmod 755 "$ROOT" "$DATA" "$CONF"
 if ! id zl-pred >/dev/null 2>&1;then useradd --system --home-dir "$ROOT" --shell /usr/sbin/nologin zl-pred; fi
 chown -R zl-pred:zl-pred "$ROOT/.npm" "$DATA/rounds" "$DATA/archive"
-install -d -m 0700 -o zl-pred -g zl-pred "$CONF/owner-secrets"
+# Transfer any browser-saved credentials into root-only server configuration.
+# Preserve a second prior file as an offline root-only backup if necessary.
+systemctl disable --now zl-prediction-credentials-reload.path >/dev/null 2>&1 || true
+systemctl stop zl-prediction-credential-console.service >/dev/null 2>&1 || true
+if [ -f "$CONF/owner-secrets/binance.env" ]; then
+  if [ ! -s "$CONF/trading.env" ]; then
+    mv "$CONF/owner-secrets/binance.env" "$CONF/trading.env"
+  else
+    mv "$CONF/owner-secrets/binance.env" "$CONF/retired-browser-binance.env"
+    chown root:root "$CONF/retired-browser-binance.env"
+    chmod 600 "$CONF/retired-browser-binance.env"
+  fi
+fi
+touch "$CONF/trading.env"
+chown root:root "$CONF/trading.env"
+chmod 600 "$CONF/trading.env"
+# Run via Aliyun's interactive server terminal; never paste credentials into chat.
+cat > /usr/local/sbin/zl-prediction-set-api <<'API_SCRIPT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+if [ "$(id -u)" -ne 0 ] || ! [ -t 0 ];then
+  echo '请在阿里云服务器交互终端通过 sudo 运行。' >&2
+  exit 2
+fi
+read -r -s -p '新的 Binance Prediction API Key：' API_KEY; echo
+read -r -s -p '新的 Binance Prediction API Secret：' API_SECRET; echo
+read -r -p 'Prediction 钱包地址（可选，回车跳过）：' WALLET_ADDRESS
+read -r -p 'Prediction 钱包 ID（可选，回车跳过）：' WALLET_ID
+if ! [[ "$API_KEY" =~ ^[A-Za-z0-9_-]{10,256}$ && "$API_SECRET" =~ ^[A-Za-z0-9_-]{10,256}$ ]]; then
+  echo '密钥格式错误，未保存。' >&2; exit 3
+fi
+if ! [[ "$WALLET_ADDRESS" =~ ^[A-Za-z0-9_-]{0,160}$ && "$WALLET_ID" =~ ^[A-Za-z0-9_-]{0,160}$ ]]; then
+  echo '钱包字段格式错误，未保存。' >&2; exit 4
+fi
+FILE=/etc/zl-prediction/trading.env
+TEMP=$(mktemp /etc/zl-prediction/.trading.XXXXXXXX)
+trap 'rm -f "$TEMP"; unset API_KEY API_SECRET WALLET_ADDRESS WALLET_ID' EXIT
+{
+  printf 'BINANCE_PREDICTION_API_KEY=%s\n' "$API_KEY"
+  printf 'BINANCE_PREDICTION_API_SECRET=%s\n' "$API_SECRET"
+  if [ -n "$WALLET_ADDRESS" ];then printf 'BINANCE_PREDICTION_WALLET_ADDRESS=%s\n' "$WALLET_ADDRESS"; fi
+  if [ -n "$WALLET_ID" ];then printf 'BINANCE_PREDICTION_WALLET_ID=%s\n' "$WALLET_ID"; fi
+} > "$TEMP"
+chown root:root "$TEMP"
+chmod 600 "$TEMP"
+mv -f "$TEMP" "$FILE"
+unset API_KEY API_SECRET WALLET_ADDRESS WALLET_ID
+systemctl try-restart zl-prediction-v3.service zl-prediction-v2.service zl-prediction-trade.service
+echo '已保存到阿里云服务端并重新加载；自动实盘下单开关没有改变。'
+API_SCRIPT
+chmod 700 /usr/local/sbin/zl-prediction-set-api
 # If the Node 22 binary is not already present, download the Node project
 # binary and independently verify its SHA-256 from the official same-version file.
 if [ ! -x /opt/zl-prediction-node/bin/node ]; then
@@ -152,8 +203,7 @@ WorkingDirectory=$ROOT/src/$folder
 Environment=PATH=/opt/zl-prediction-node/bin:/usr/bin:/bin
 EnvironmentFile=$CONF/redis.env
 EnvironmentFile=$CONF/$env_name.env
-EnvironmentFile=-$CONF/trading.env
-EnvironmentFile=-$CONF/owner-secrets/binance.env
+EnvironmentFile=$CONF/trading.env
 ExecStart=$NODE $entry
 Restart=on-failure
 RestartSec=8
@@ -167,43 +217,13 @@ ReadWritePaths=$DATA/rounds $DATA/archive $ROOT/src/$folder
 WantedBy=multi-user.target
 EOF
 done
-# New API keys are entered by the owner via the authenticated UI and kept locally.
-cat > /etc/systemd/system/zl-prediction-credential-console.service <<EOF
-[Unit]
-Description=ZL authenticated prediction API settings
-After=network-online.target
-[Service]
-Type=simple
-User=zl-pred
-Group=zl-pred
-WorkingDirectory=$ROOT/src/aliyun-credential-console
-ExecStart=/usr/bin/python3 $ROOT/src/aliyun-credential-console/server.py
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-ReadWritePaths=$CONF/owner-secrets
-[Install]
-WantedBy=multi-user.target
-EOF
-cat > /etc/systemd/system/zl-prediction-credentials-reload.service <<EOF
-[Unit]
-Description=Reload prediction API credentials
-[Service]
-Type=oneshot
-ExecStart=/bin/systemctl try-restart zl-prediction-v2.service zl-prediction-v3.service zl-prediction-trade.service
-EOF
-cat > /etc/systemd/system/zl-prediction-credentials-reload.path <<EOF
-[Unit]
-Description=Watch prediction API settings
-[Path]
-PathChanged=$CONF/owner-secrets
-Unit=zl-prediction-credentials-reload.service
-[Install]
-WantedBy=multi-user.target
-EOF
+# Disable obsolete public credential editor and associated watch unit.
+systemctl disable --now zl-prediction-credential-console.service >/dev/null 2>&1 || true
+systemctl disable --now zl-prediction-credentials-reload.path >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/zl-prediction-credential-console.service \
+      /etc/systemd/system/zl-prediction-credentials-reload.service \
+      /etc/systemd/system/zl-prediction-credentials-reload.path
+
 # Preserve preexisting futures Caddy authentication by reusing its bcrypt
 # password hash; never print or commit it.
 python3 - <<'PY'
@@ -224,11 +244,11 @@ prediction.47-237-188-69.sslip.io {
   basic_auth {
     zl HASH_PLACEHOLDER
   }
-  handle_path /settings/* {
-    reverse_proxy 127.0.0.1:13006 {
-      header_up X-ZL-Verified-Login 1
-      header_up -Authorization
-    }
+  handle /settings/* {
+    respond "Not Found" 404
+  }
+  handle /settings {
+    respond "Not Found" 404
   }
   handle {
     reverse_proxy 127.0.0.1:13001 {
@@ -250,26 +270,25 @@ prediction.47-237-188-69.sslip.io {
 marker="  handle_path /prediction/* {\n    reverse_proxy 127.0.0.1:11000\n  }"
 if marker in contents:
     contents=contents.replace(marker,'  handle_path /prediction/* {\n    redir https://'+host+'/{path} 302\n  }')
-# Upgrade only the known previously installed prediction proxy block.
-if host in contents and 'handle_path /settings/*' not in contents:
-    old = """  reverse_proxy 127.0.0.1:13001 {
-    header_up X-ZL-Verified-Login 1
-    header_up -Authorization
-  }"""
-    new = """  handle_path /settings/* {
+# Update the existing deployed Caddy site in place without exposing API input.
+old_settings = """  handle_path /settings/* {
     reverse_proxy 127.0.0.1:13006 {
       header_up X-ZL-Verified-Login 1
       header_up -Authorization
     }
-  }
-  handle {
-    reverse_proxy 127.0.0.1:13001 {
-      header_up X-ZL-Verified-Login 1
-      header_up -Authorization
-    }
   }"""
-    if contents.count(old)!=1:raise SystemExit("SAFE_CADDY_UPDATE_NOT_POSSIBLE")
-    contents=contents.replace(old,new)
+deny_settings = """  handle /settings/* {
+    respond "Not Found" 404
+  }
+  handle /settings {
+    respond "Not Found" 404
+  }"""
+if old_settings in contents:
+    if contents.count(old_settings) != 1:
+        raise SystemExit("DUPLICATE_SETTINGS_ROUTE")
+    contents = contents.replace(old_settings, deny_settings)
+elif deny_settings not in contents:
+    raise SystemExit("UNKNOWN_SETTINGS_ROUTE_LAYOUT")
 p.write_text(contents)
 PY
 caddy validate --config /etc/caddy/Caddyfile >/dev/null
@@ -279,8 +298,6 @@ systemctl enable --now zl-prediction-v3.service
 systemctl enable --now zl-prediction-v2.service
 systemctl enable zl-prediction-trade.service
 systemctl restart zl-prediction-trade.service
-systemctl enable --now zl-prediction-credential-console.service
-systemctl enable --now zl-prediction-credentials-reload.path
 systemctl reload caddy
 # Only a readiness audit. Never claim real orders without actual fill proof.
 for component in v3 v2 trade; do
@@ -292,4 +309,6 @@ done
 test "$(systemctl is-active zl-futures-bot-paper.service)" = active
 echo "PRED_CORE_FUTURES_UNCHANGED=true"
 echo "PRED_CORE_AUTO_ORDER_DISABLED=true"
-echo "PRED_API_CONFIG_HTTP_13006=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:13006/ || true)"
+echo "PRED_API_CONSOLE_SERVICE=$(systemctl is-active zl-prediction-credential-console.service || true)"
+echo "PRED_API_CONFIG_PORT_13006=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:13006/ || true)"
+echo "PRED_API_ROOT_ONLY=$(stat -c '%U:%G %a' "$CONF/trading.env" | grep -qx 'root:root 600' && echo true || echo false)"

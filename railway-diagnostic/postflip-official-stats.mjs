@@ -101,7 +101,7 @@ export function createPostflipAccumulator(initial=[],resetAt=POSTFLIP_START_ROUN
 }
 export function createPostflipStatsService({
  fetcher=globalThis.fetch,clock=Date.now,
- officialUrl=String(process.env.ROUND_STATS_ORIGIN||'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/,'')+'/api/round-stats',
+ officialUrl=String(process.env.ROUND_STATS_ORIGIN||'http://127.0.0.1:13002').replace(/\/+$/,'')+'/api/round-stats',
  noviceRows=()=>[],
  redisUrl=String(process.env.SIGNAL_REDIS_URL||'')
 }={}){

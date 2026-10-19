@@ -6,9 +6,9 @@ import {EDGE_MODEL,INPUT_VERSION,ROUND_MS,roundAt,extractFeatures,scoreDirection
   trainOnOfficial,summarize,MIN_TRAINING_ROUNDS} from './edge-5m-core.mjs';
 import {verifiedOfficialRoundDirections} from './novice-mix-shadow.mjs';
 const MARKET_ORIGIN=String(process.env.NOVICE_MARKET_ORIGIN||
-  'https://signal-diagnostic-v3-production.up.railway.app').replace(/\/+$/,'');
+  'http://127.0.0.1:13003').replace(/\/+$/,'');
 const OFFICIAL_ORIGIN=String(process.env.ROUND_STATS_ORIGIN||
-  'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/,'');
+  'http://127.0.0.1:13002').replace(/\/+$/,'');
 const KEY='shadow:edge_5m_v1:isolated:v1';
 const MAX_ROWS=7500;
 const valid=x=>x==='UP'||x==='DOWN';

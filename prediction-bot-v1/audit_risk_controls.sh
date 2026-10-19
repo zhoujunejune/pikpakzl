@@ -34,19 +34,26 @@ if pw.exists():
   print('RISK_AUDIT_REDIS',arg[0],arg[1] if len(arg)>1 else '',r.returncode,r.stdout.strip()[:120])
 print('RISK_AUDIT_RUNTIME_RISK_FILE',pathlib.Path('/tmp/risk-control.json').exists())
 PY
-echo 'RISK_AUDIT_LOG_SUMMARY_BEGIN'
-journalctl -u zl-prediction-trade --since '120 minutes ago' --no-pager -o cat |
-python3 -c 'import sys,re,collections,json
- lines=sys.stdin.read().splitlines()
- pats={"redis_connect":r"RISK_REDIS_CONNECT_FAILED|RISK_REDIS_URL_NOT_CONFIGURED|RISK_REDIS_UNAVAILABLE",
- "risk_restore_failed":r"risk_persistence_restore_failed",
- "risk_write_failed":r"保存风险配置失败|risk_control_updated|risk_config_write",
- "auth_rejected":r"PIN 错误|401|403",
- "uncaught":r"uncaughtException|SyntaxError|ERR_|FATAL ERROR"}
- print("RISK_AUDIT_LOG_COUNTS",json.dumps({k:sum(bool(re.search(p,x,re.I)) for x in lines) for k,p in pats.items()}))
- for s in lines[-120:]:
-  if any(x in s for x in ("risk_persistence_restore_failed","risk_control_updated","RISK_REDIS_CONNECT_FAILED","RISK_REDIS_URL_NOT_CONFIGURED")):
-   try:
-    j=json.loads(s)
-    print("RISK_AUDIT_LOG_EVENT",j.get("event"),j.get("error"),j.get("at"))
-   except Exception: print("RISK_AUDIT_LOG_EVENT_UNPARSED")'
+python3 - <<'PY'
+import json,subprocess,os,pathlib
+env=os.environ.copy()
+env['REDISCLI_AUTH']=pathlib.Path('/etc/zl-prediction/redis-auth').read_text().strip()
+r=subprocess.run(['redis-cli','--raw','-p','6385','GET','trade-control:risk-config:v1'],env=env,text=True,capture_output=True,timeout=12)
+try:
+ j=json.loads(r.stdout)
+ print('RISK_AUDIT_CONFIG_REDIS_VALUE_TYPES',{k:type(v).__name__ for k,v in j.items()})
+ print('RISK_AUDIT_CONFIG_REDIS_METADATA',{k:j.get(k) for k in ('takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent','updatedAt')})
+except Exception as e:print('RISK_AUDIT_CONFIG_REDIS_INVALID',type(e).__name__)
+for p in ('/tmp','/var/lib/zl-prediction/rounds'):
+ q=subprocess.run(['runuser','-u','zl-pred','--','test','-w',p],capture_output=True)
+ print('RISK_AUDIT_SERVICE_USER_CAN_WRITE',p,q.returncode==0)
+r=subprocess.run(['journalctl','-u','zl-prediction-trade','--since','120 minutes ago','--no-pager','-o','cat'],capture_output=True,text=True)
+hits=[]
+for line in r.stdout.splitlines():
+ if 'risk_persistence_restore_failed' in line or 'risk_control_updated' in line:
+  try:
+   val=json.loads(line)
+   hits.append({'event':val.get('event'),'error':val.get('error'),'at':val.get('at')})
+  except: pass
+print('RISK_AUDIT_LIVE_ERRORS',hits[-8:])
+PY

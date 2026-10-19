@@ -1,0 +1,49 @@
+name: RESEARCH - Binance public archives strategy simulator
+on:
+  push:
+    branches: [research/freqtrade-futures-20261019]
+    paths:
+      - "research/freqtrade-futures-20261019/archive_download.py"
+      - "research/freqtrade-futures-20261019/offline_replay.py"
+      - ".github/workflows/research-archive-simulator.yml"
+permissions:
+  contents: read
+concurrency:
+  group: zl-public-archive-offline-simulator
+  cancel-in-progress: false
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Offline Python syntax
+        run: |
+          python -m py_compile research/freqtrade-futures-20261019/archive_download.py research/freqtrade-futures-20261019/offline_replay.py
+      - name: Pin and download source strategy files (public GitHub)
+        run: python research/freqtrade-futures-20261019/prepare.py
+      - name: Download Binance publisher's public OHLCV archives, without exchange API
+        run: python research/freqtrade-futures-20261019/archive_download.py
+      - name: Use pinned Freqtrade container libraries for offline strategy-signal replay
+        run: |
+          docker pull freqtradeorg/freqtrade:2026.9
+          chmod -R a+rX research/freqtrade-futures-20261019/
+          chmod -R a+rwX research/freqtrade-futures-20261019/results/
+          docker run --rm --entrypoint python3 \
+            --mount type=bind,source="$PWD/research/freqtrade-futures-20261019",target=/freqtrade/research \
+            freqtradeorg/freqtrade:2026.9 /freqtrade/research/offline_replay.py
+      - name: Upload ONLY offline simulation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zl-offline-futures-strategies-public-archive
+          path: |
+            research/freqtrade-futures-20261019/results/historical_simulation.json
+            research/freqtrade-futures-20261019/results/archive_coverage.json
+          if-no-files-found: warn
+          retention-days: 7

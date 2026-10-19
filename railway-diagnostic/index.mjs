@@ -1285,7 +1285,7 @@ http.createServer(async (req, res) => {
   }
 
   return send(res, 404, { ok: false, error: 'Not found' });
-}).listen(PORT, '0.0.0.0', async () => {
+}).listen(PORT, '127.0.0.1', async () => {
   console.log(JSON.stringify({
     event: 'control_panel_started',
     port: PORT,

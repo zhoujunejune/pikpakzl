@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';
 import { noviceMixShadow } from './novice-mix-shadow.mjs';
-// EDGE_5M_V1 runs in an isolated Cloudflare Free Worker; this panel only reads its status.
+// EDGE_5M_V1 and DYNAMIC_ENTRY are hosted locally on Alibaba; no external worker in the runtime path.
 import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';
 import { spawn } from 'node:child_process';
 import { handleRenderPreviewAuth } from './render-preview-auth.mjs';
@@ -33,10 +33,12 @@ void (async () => {
 
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PANEL_PORT = Number(process.env.INNER_PANEL_PORT || 3002);
-const EDGE5_CF_STATUS_URL = String(process.env.EDGE5_CF_STATUS_URL||
- 'https://edge-5m-v1.zl528094-3ba.workers.dev/status').trim();
-const ROUND_STATS_ORIGIN = String(process.env.ROUND_STATS_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');
-const ROUND_STATS_PUBLIC_ORIGIN = String(process.env.ROUND_STATS_PUBLIC_ORIGIN || 'https://signal-diagnostic-v2-production.up.railway.app').replace(/\/+$/, '');
+const EDGE5_LOCAL_STATUS_URL = String(process.env.EDGE5_LOCAL_STATUS_URL||
+ 'http://127.0.0.1:13007/edge-5m').trim();
+const DYNAMIC_LOCAL_STATUS_URL = String(process.env.DYNAMIC_LOCAL_STATUS_URL||
+ 'http://127.0.0.1:13007/dynamic-entry').trim();
+const ROUND_STATS_ORIGIN = String(process.env.ROUND_STATS_ORIGIN || 'http://127.0.0.1:13002').replace(/\/+$/, '');
+const ROUND_STATS_PUBLIC_ORIGIN = String(process.env.ROUND_STATS_PUBLIC_ORIGIN || 'http://127.0.0.1:13002').replace(/\/+$/, '');
 const STATS_PROXY_PRIMARY_TIMEOUT_MS = Math.max(1000, Number(process.env.STATS_PROXY_PRIMARY_TIMEOUT_MS || 2500));
 const STATS_PROXY_FALLBACK_TIMEOUT_MS = Math.max(3000, Number(process.env.STATS_PROXY_FALLBACK_TIMEOUT_MS || 7000));
 const STATS_PROXY_RETRY_MS = Math.max(100, Number(process.env.STATS_PROXY_RETRY_MS || 250));
@@ -113,13 +115,13 @@ async function reload(){
    throw Error('EDGE 官方统计来源未就绪');
   var r=d.results||{},overall=r.overall||{},up=r.up||{},down=r.down||{};
   var n=Number(overall.samples||0),hits=Number(overall.hits||0);
-  update('edgeAlwaysHeadline','EDGE 模型 · 自动试训练 · 官方结算记录');
+  update('edgeAlwaysHeadline','EDGE 模型 · 阿里云独立记录 · 官方结算');
   update('edgeAlwaysOverall',rate(overall));
   update('edgeAlwaysHitMiss',hits+' / '+Math.max(0,n-hits)+'（'+n+'轮）');
   update('edgeAlwaysUp',rate(up));update('edgeAlwaysDown',rate(down));
   update('edgeAlwaysPending',Number(r.pending||0)+' 轮');
   update('edgeAlwaysCoverage',Number(r.locked||0)+' / '+Number(r.observedRounds||0));
-  var note='真实官方结算 · 仅统计已冻结预测 · 自动实盘交易未启用';
+  var note='阿里云原生模型新纪元 · 只计算可核实的 Binance Prediction 官方结果 · 实盘交易未启用；旧 Cloudflare 模型历史未混入';
   if(d.health?.officialError)note+=' · 结算异常：'+String(d.health.officialError).slice(0,80);
   if(d.health?.marketError)note+=' · 行情提示：'+String(d.health.marketError).slice(0,80);
   update('edgeAlwaysNote',note);
@@ -1579,20 +1581,39 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/edge-5m'){
     void (async()=>{
       try{
-        const r=await fetch(EDGE5_CF_STATUS_URL,{cache:'no-store',headers:{accept:'application/json'},
-          signal:AbortSignal.timeout(2400)});
-        if(!r.ok)throw Error('EDGE_CLOUDFLARE_HTTP_'+r.status);
+        const r=await fetch(EDGE5_LOCAL_STATUS_URL,{cache:'no-store',headers:{accept:'application/json'},
+          signal:AbortSignal.timeout(3400)});
+        if(!r.ok)throw Error('EDGE_ALIYUN_LOCAL_HTTP_'+r.status);
         const body=await r.json();
         if(body?.ok!==true||body.model!=='EDGE_5M_V1'||body.readOnly!==true||
            body.orders!==false||body.productionIntegration!==false||
            body.statsScope!=='EDGE5_CAUSAL_OFFICIAL_RESOLUTION_ONLY')
-          throw Error('EDGE_CLOUDFLARE_UNTRUSTED_SOURCE');
+          throw Error('EDGE_ALIYUN_LOCAL_UNTRUSTED_SOURCE');
         res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
         res.end(JSON.stringify(body));
       }catch(e){
         res.writeHead(502,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
-        res.end(JSON.stringify({ok:false,model:'EDGE_5M_V1',error:'EDGE_CLOUDFLARE_READ_FAILED',
+        res.end(JSON.stringify({ok:false,model:'EDGE_5M_V1',error:'EDGE_ALIYUN_LOCAL_READ_FAILED',
           reason:String(e?.message||e).slice(0,150)}));
+      }
+    })();return;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/dynamic-entry'){
+    void (async()=>{
+      try{
+        const resp=await fetch(DYNAMIC_LOCAL_STATUS_URL,{cache:'no-store',
+          signal:AbortSignal.timeout(3800)});
+        if(!resp.ok)throw Error('DYNAMIC_ALIYUN_HTTP_'+resp.status);
+        const data=await resp.json();
+        if(data?.ok!==true||data.model!=='DYNAMIC_ENTRY_5M_SHADOW_V1'||
+          data.statsScope!=='STRICT_FORWARD_VIRTUAL_ENTRIES_OFFICIAL_RESOLUTION_ONLY')
+          throw Error('DYNAMIC_LOCAL_INVALID');
+        res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+        res.end(JSON.stringify(data));
+      }catch(e){
+        res.writeHead(503,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+        res.end(JSON.stringify({ok:false,error:'DYNAMIC_LOCAL_READ_FAILED',
+          reason:String(e?.message||e).slice(0,120)}));
       }
     })();return;
   }

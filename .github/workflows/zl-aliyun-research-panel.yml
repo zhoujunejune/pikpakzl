@@ -1,0 +1,73 @@
+name: Alibaba SWAS - independent research results page, no trading restarts
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [".github/workflows/zl-aliyun-research-panel.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: zl-futures-research-static-page
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Validate offline static page and non-restarting installer
+        run: |
+          bash -n futures-research-panel/install_aliyun.sh
+          python -m py_compile futures-research-panel/aliyun_deploy.py
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('futures-research-panel/index.html').read_text()
+          js=s.split('<script>',1)[1].split('</script>',1)[0]
+          Path('/tmp/research-ui.js').write_text(js)
+          installer=Path('futures-research-panel/install_aliyun.sh').read_text()
+          assert 'systemctl restart' not in installer
+          assert 'systemctl reload' in installer
+          assert 'zl-futures-bot-paper' in installer
+          assert 'basic_auth' in installer
+          PY
+          node --check /tmp/research-ui.js
+      - name: Install Alibaba SWAS API SDK
+        run: pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy only static historical simulation page to existing HTTPS domain
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python futures-research-panel/aliyun_deploy.py
+      - name: Verify anonymous access rejected and actual synthetic metrics visible
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,urllib.error,json
+          base='https://47-237-188-69.sslip.io'
+          try:
+           urllib.request.urlopen(base+'/research/',timeout=15)
+           raise AssertionError('RESEARCH_ANONYMOUS_ACCESS_NOT_BLOCKED')
+          except urllib.error.HTTPError as e:
+           assert e.code==401,('ANONYMOUS_HTTP',e.code)
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def read(path):
+           req=urllib.request.Request(base+path,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+           with urllib.request.urlopen(req,timeout=20) as r:return r.read()
+          page=read('/research/')
+          assert b'id="compare"' in page and b'report.json' in page
+          j=json.loads(read('/research/report.json'))
+          assert j.get('kind')=='historical_simulation'
+          assert j.get('no_live_orders') is True
+          assert j.get('official_freqtrade_engine') is False
+          assert len(j.get('rows',[]))==18
+          assert sum(x.get('status')=='SIMULATED' for x in j['rows'])==18
+          print('RESEARCH_FRONTEND_AUTHENTICATED_HTTP_200=true')
+          print('RESEARCH_REAL_SIMULATED_METRICS=18')
+          print('RESEARCH_GITHUB_SOURCE_RUN_ID',j['source_run_id'])
+          status=json.loads(read('/status'))
+          assert status.get('mode')=='live'
+          print('PRODUCTION_FUTURES_STILL_LIVE_MODE=true')
+          print('TRADING_ENGINE_DEPLOYMENT_UNCHANGED=true')
+          PY

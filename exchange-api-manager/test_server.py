@@ -98,6 +98,15 @@ class Secrets(unittest.TestCase):
             "configured":bool(api.safe_read("futures","binance")),
             "updatedAt":api.safe_read("futures","binance").get("updatedAt")
         }))
+    def test_unsaved_inputs_cannot_be_mistaken_for_configured_api(self):
+        # Protect users against clicking 'test' on an unsaved password field.
+        self.assertIn("if(!storedAPIConfigured||!storedRuntimeReady)",api.PAGE)
+        self.assertIn("API_NOT_CONFIGURED",api.PAGE)
+        self.assertIn("填写输入框不等于保存成功",api.PAGE)
+        self.assertIn("你填写了尚未保存的 API",api.PAGE)
+        self.assertIn("请先点击",api.PAGE)
+        self.assertNotIn('API Key 已验证成功',api.PAGE)
+
     def test_login_and_origin_required(self):
         handler=object.__new__(api.Handler)
         class FakeHeaders(dict):

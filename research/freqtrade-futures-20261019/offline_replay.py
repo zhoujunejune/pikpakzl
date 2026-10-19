@@ -194,7 +194,7 @@ def main():
      metrics,trades,curve=simulate(frame,model,tag,start,end)
      row={**tag,**metrics}
      rows.append(row)
-     details[symbol+"_"+name+"_"+label]={"trades":trades,"curve":curve[-2000:]}
+     details[symbol+"_"+name+"_"+label]={"trades":trades[-80:],"curve":curve[::max(1,len(curve)//160)][-160:]+([curve[-1]] if curve else [])}
      print("REPLAY_RESULT",symbol,name,label,"trades",row["trades"],
            "pct",row["net_profit_pct"],"wins",row["wins"],flush=True)
     except Exception as e:
@@ -202,6 +202,8 @@ def main():
      print("REPLAY_ERROR",symbol,name,label,type(e).__name__,str(e)[:110],flush=True)
  output={
    "kind":"historical_simulation",
+   "generated_at":datetime.now(timezone.utc).isoformat(),
+   "replay_progress":"18 strategy-window jobs planned; no continuous model training",
    "official_freqtrade_engine":False,
    "public_data_source":"data.binance.vision Binance USD-M 5m archives",
    "strategy_code_source":"freqtrade/freqtrade-strategies commit f3340ce11f5bdf62f598522e64d1f5638eaa13f5",

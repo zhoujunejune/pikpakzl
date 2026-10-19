@@ -59,7 +59,7 @@ def worker():
             "credentialNamesPresent":check.get("keyPresent",False) and check.get("secretPresent",False),
             "authenticated":check.get("authenticated",False),
             "testOrderPermission":check.get("tradePermissionTested",False),
-            "blocker":check.get("blocker"),
+            "blocker":("双向持仓模式已兼容，开启时验证交易权限" if bot.MODE=="live" and check.get("authenticated") and check.get("blocker")=="existing_positions_or_hedge_mode" else check.get("blocker")),
         }
         if not check.get("outboundAllowed"):
             raise RuntimeError("Exchange ban/cooldown until "+str(check.get("retryNotBefore")))

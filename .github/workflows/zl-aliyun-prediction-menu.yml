@@ -27,12 +27,12 @@ jobs:
         run: python -m pip install --disable-pip-version-check alibabacloud_swas_open20200601==4.0.0
       - name: Deploy independent prediction monitor using existing Alibaba secrets
         env:
-          ALIBABA_CLOUD_ACCESS_KEY_ID: \${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
-          ALIBABA_CLOUD_ACCESS_KEY_SECRET: \${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_deploy.py
       - name: Verify HTTPS protection and both independent pages
         env:
-          ZL_PANEL_PASSWORD: \${{ secrets.ZL_PANEL_PASSWORD }}
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
         run: |
           python - <<'PY'
           import base64, json, os, urllib.request, urllib.error

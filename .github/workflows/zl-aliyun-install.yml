@@ -28,6 +28,22 @@ jobs:
           node --check /tmp/futures-live-page.js
       - name: Install Alibaba Cloud API client
         run: python -m pip install --disable-pip-version-check alibabacloud_swas_open20200601==4.0.0
+      - name: Refuse redeploy if owner enabled trading or has active real positions
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,json,urllib.request
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          req=urllib.request.Request('https://47-237-188-69.sslip.io/status',
+             headers={'Authorization':auth,'Cache-Control':'no-cache'})
+          with urllib.request.urlopen(req,timeout=20) as r:s=json.load(r)
+          assert s.get('mode')=='live'
+          assert s.get('liveTradingEnabled') is False, 'OWNER_SWITCH_ON_ABANDON_DEPLOY'
+          assert not s.get('positions'), 'ACTIVE_REAL_POSITIONS_ABANDON_DEPLOY'
+          assert s.get('pendingOrderUncertain') is False, 'UNCERTAIN_ORDER_ABANDON_DEPLOY'
+          print('FUTURES_PREDEPLOY_LIVE_OFF_AND_FLAT=true')
+          PY
       - name: Install real-capable futures engine with live switch OFF
         env:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
@@ -53,12 +69,20 @@ jobs:
             assert s.get('perSymbolPositionLimit')==1
             assert s.get('postCloseCooldownSeconds')==0
             assert s.get('configuredSymbols')==['BTCUSDT','ETHUSDT','BTCUSDC']
+            settings=s.get('control') or {}
+            assert settings.get('leverage') in (1,2,3,5,10,15,20)
+            assert .001 <= float(settings.get('risk_fraction',-1)) <= .02
+            assert .02 <= float(settings.get('max_margin_fraction',-1)) <= .2
+            print('FUTURES_REAL_SIZING_SETTINGS_READABLE=true')
             print('FUTURES_LIVE_MODE_INSTALLED=true')
             print('FUTURES_SWITCH_STAYS_OFF=true')
             print('FUTURES_THREE_SYMBOLS_NO_COOLDOWN=true')
             code,page=get('/')
             assert code==200
             assert b'live_on' in page and b'live_off' in page
+            assert b'id="lev"' in page and b'id="marginPct"' in page and b'id="riskPct"' in page
+            assert b'action:"set_params"' in page
+            print('FUTURES_LEVERAGE_INVESTMENT_RISK_CONTROL_VISIBLE=true')
             print('FUTURES_OWNER_LIVE_SWITCH_VISIBLE=true')
             print('FUTURES_REAL_ORDERS_SUBMITTED_BY_DEPLOY=0')
             break

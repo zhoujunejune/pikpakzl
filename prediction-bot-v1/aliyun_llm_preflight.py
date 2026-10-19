@@ -41,6 +41,20 @@ for port,path in [(13001,'/healthz'),(13001,'/api/order-signal-model'),(13002,'/
     print('LLM_SELECTION_READY',j.get('ready'))
  except Exception as err: print('LLM_LOCAL_ERROR',port,path,type(err).__name__)
 PY
+python3 - <<'PY'
+import json,urllib.request
+for port,path in [(13003,'/api/shadow-market-data'),(13003,'/api/market-data'),(13002,'/api/round-stats')]:
+ try:
+  with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}',timeout=6) as r:data=json.load(r)
+  print('LLM_MARKET_ENDPOINT',port,path,'http',200,'type',type(data).__name__)
+  if isinstance(data,dict):
+   print('LLM_MARKET_TOP_KEYS',list(data.keys())[:40])
+   for k in ('data','market','snapshot','indicators','btc','features','live','latest','candles','orderBook','ticker'):
+    v=data.get(k)
+    if isinstance(v,dict):print('LLM_MARKET_NESTED_KEYS',k,list(v.keys())[:35])
+    if isinstance(v,list):print('LLM_MARKET_LIST',k,'len',len(v),'lasttype',type(v[-1]).__name__ if v else 'none')
+ except Exception as err:print('LLM_MARKET_ENDPOINT',port,path,'error',type(err).__name__)
+PY
 echo "LLM_PREFLIGHT_COMPLETE=true"
 '''
 def main():

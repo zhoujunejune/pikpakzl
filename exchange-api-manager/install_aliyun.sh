@@ -111,6 +111,11 @@ Unit=zl-api-prediction-reload.service
 [Install]
 WantedBy=multi-user.target
 EOF
+# Save the *current* Caddy configuration for safe rollback, never use a stale
+# backup that could erase newer prediction or API manager routes.
+caddy_current_backup=$(mktemp)
+cp /etc/caddy/Caddyfile "$caddy_current_backup"
+trap 'rm -rf "$tmp"; rm -f "$caddy_current_backup"' EXIT
 # Only attach to the two existing authenticated Caddy virtual hosts.
 python3 - <<'PY'
 from pathlib import Path
@@ -141,13 +146,42 @@ for host in HOSTS:
     if marker<0:raise SystemExit('CADDY_HANDLE_MISSING')
     block=block[:marker]+snippet+block[marker:]
     src=src[:start]+block+src[end:]
-backup=Path('/etc/caddy/Caddyfile.before-api-manager')
-if not backup.exists():backup.write_text(p.read_text())
-p.write_text(src)
+# During legitimate service upgrades, allow GET/HEAD requests to wait briefly
+# for the prediction backend instead of immediately returning HTTP 502.
+# Never replay a money-moving POST after an upstream round trip.
+host='prediction.47-237-188-69.sslip.io'
+start=src.find(host+' {')
+end=src.find('\n}\n',start)
+if start<0 or end<0:raise SystemExit('PREDICTION_SITE_NOT_FOUND')
+part=src[start:end]
+old_proxy="""reverse_proxy 127.0.0.1:13001 {
+      header_up X-ZL-Verified-Login 1
+      header_up -Authorization
+    }"""
+new_proxy="""reverse_proxy 127.0.0.1:13001 {
+      header_up X-ZL-Verified-Login 1
+      header_up -Authorization
+      lb_try_duration 12s
+      lb_try_interval 500ms
+      lb_retry_match {
+        method GET HEAD
+      }
+    }"""
+if old_proxy in part:
+    part=part.replace(old_proxy,new_proxy,1)
+elif new_proxy not in part:
+    raise SystemExit('PREDICTION_PROXY_LAYOUT_UNRECOGNIZED')
+src=src[:start]+part+src[end:]
+if src!=p.read_text():p.write_text(src)
 PY
 if ! caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
-  cp /etc/caddy/Caddyfile.before-api-manager /etc/caddy/Caddyfile
-  echo "CADDY_VALIDATION_FAILED_RESTORED_BACKUP";exit 11
+  cp "$caddy_current_backup" /etc/caddy/Caddyfile
+  echo "CADDY_VALIDATION_FAILED_RESTORED_CURRENT_CONFIG";exit 11
+fi
+if ! cmp -s "$caddy_current_backup" /etc/caddy/Caddyfile;then
+  caddy_changed=yes
+else
+  caddy_changed=no
 fi
 systemctl daemon-reload
 systemctl enable zl-exchange-api-manager.service
@@ -165,8 +199,10 @@ if [ "$prediction_ui_changed" = yes ];then
 fi
 # Caddy reload does not restart the Node services, and is necessary only when
 # routes actually differ. This command only changes Caddy during initial setup.
-systemctl reload caddy
-printf 'DEPLOY_BOT_RESTART futures=%s prediction=%s\n' "$futures_ui_changed" "$prediction_ui_changed"
+if [ "$caddy_changed" = yes ];then
+  systemctl reload caddy
+fi
+printf 'DEPLOY_BOT_RESTART futures=%s prediction=%s caddy_reloaded=%s\n' "$futures_ui_changed" "$prediction_ui_changed" "$caddy_changed"
 for i in 1 2 3 4 5 6 7 8;do
  if [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:13016/healthz)" = 403 ];then break;fi
  sleep 2

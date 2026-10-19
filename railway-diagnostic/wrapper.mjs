@@ -626,7 +626,7 @@ const notFoundIndex = source.indexOf(notFoundMarker, confirmStartIndex);
 if (confirmStartIndex < 0 || notFoundIndex < 0) throw new Error('CONFIRM_ROUTE_MARKERS_NOT_FOUND');
 const newConfirmRoute = String.raw`  if (req.method === 'POST' && url.pathname === '/api/confirm') {
     const body = await readBody(req);
-    if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
+    if (!pinOK(body.pin, req)) return send(res, 401, { ok: false, error: '请先通过站点登录验证' });
 
     const p = pendingAction;
     if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
@@ -804,10 +804,10 @@ const clientJs = String.raw`(function(){
   };
 
   window.setV=function(v){
-    var amountEl=el('amount'),pinEl=el('pin');
+    var amountEl=el('amount');
     var a=Number(amountEl&&amountEl.value);
     if(v&&amountEl&&amountEl.value&&(!isFinite(a)||a<1)){ alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准'); return; }
-    request('POST','/api/control',{enabled:v,amount:v&&amountEl?amountEl.value:undefined,pin:pinEl?pinEl.value:''},function(code,j){
+    request('POST','/api/control',{enabled:v,amount:v&&amountEl?amountEl.value:undefined},function(code,j){
       if(code<200||code>=300){ alert((j&&j.error)||'操作失败'); return; }
       refresh();
     });
@@ -816,9 +816,9 @@ const clientJs = String.raw`(function(){
   window.confirmOrder=function(){
     if(autoMode) return;
     if(!currentPending||currentPending.state!=='READY') return;
-    var btn=el('confirmBtn'),pinEl=el('pin');
+    var btn=el('confirmBtn');
     if(btn){ btn.disabled=true; btn.textContent='正在获取最新 Quote 并提交...'; }
-    request('POST','/api/confirm',{pin:pinEl?pinEl.value:'',confirmationToken:currentPending.confirmationToken},function(code,j){
+    request('POST','/api/confirm',{confirmationToken:currentPending.confirmationToken},function(code,j){
       if(code<200||code>=300){ alert(((j&&j.error)||'下单失败')+(j&&j.code!=null?' ('+j.code+')':'')); }
       refresh();
     });

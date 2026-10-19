@@ -299,12 +299,12 @@ function renderDirectionModes(){
     ['UP','DOWN'].map(function(side){
      return '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px;margin:6px 0">'+
        '<div style="font-size:12px;min-width:80px"><strong>'+side+'</strong>：'+(directionModeReady?modeLabel(src.modes[side]):'未就绪')+'</div>'+
-       '<div style="display:flex;gap:6px;flex-wrap:wrap">'+['FORWARD','INVERSE'].map(function(mode){
+       '<div style="display:flex;gap:6px;flex-wrap:wrap">'+['FORWARD','INVERSE','OFF'].map(function(mode){
          var selected=directionModeReady&&src.modes[side]===mode;
          return '<button type="button" data-dir-index="'+i+'" data-dir-side="'+side+'" data-dir-mode="'+mode+'" aria-pressed="'+selected+'" '+
            (!directionModeReady||directionModeBusy?'disabled ':'')+
            'style="width:auto;min-width:72px;margin:0;padding:9px 12px;font-size:12px;border:1px solid '+(selected?'#3ddc84':'#435069')+
-           ';background:'+(selected?'#17392b':'#222838')+';color:'+(selected?'#7ff0b0':'#b6c0d0')+'">'+side+' '+modeLabel(mode)+'</button>';
+           ';background:'+(selected?'#17392b':'#222838')+';color:'+(selected?'#7ff0b0':'#b6c0d0')+'">'+(mode==='OFF'?'关闭':side+' '+modeLabel(mode))+'</button>';
        }).join('')+'</div></div>';
     }).join('')+'</div>';
  }).join(''):'<div class="muted">当前活跃模型没有匹配的旧版来源开关；不显示已暂停的三类来源，原有后台方向规则保持不变。</div>';
@@ -335,24 +335,25 @@ async function loadDirectionModes(){
 }
 async function setDirectionModeFromUI(index,side,selectedMode){
  if(!directionModeReady||directionModeBusy||!sources[index]||!['UP','DOWN'].includes(side)||
-    !['FORWARD','INVERSE'].includes(selectedMode))return;
- var src=sources[index],mode=src.modes[side]===selectedMode?'OFF':selectedMode;
+    !['FORWARD','INVERSE','OFF'].includes(selectedMode))return;
+ var src=sources[index],mode=selectedMode;
+ if(src.modes[side]===selectedMode){
+   e('directionModeMessage').textContent='当前已经是 '+side+' '+modeLabel(mode)+'，无需重复保存';return;
+ }
  // A source identifier may be reused by a newer model. Never present its old
  // source alias as the production model name, nor edit a retired source.
  var modelName=activeSourceName(src.id);
  if(!modelName){e('directionModeMessage').textContent='该信号来源已非当前活跃模型，请刷新后重试';return}
- var pin=e('pin');
- if(!pin){e('directionModeMessage').textContent='请通过页面登录认证';return}
  var description=mode==='OFF'?'关闭该预测方向自动下单':'切换到'+modeLabel(mode)+'下单';
  if(!window.confirm('将 '+modelName+' 的 '+side+' '+description+'？下一轮生效。'))return;
  directionModeBusy=true;renderDirectionModes();e('directionModeMessage').textContent='保存中...';
  try{
   var response=await fetch('/api/direction-mode',{method:'POST',headers:{'content-type':'application/json'},
-   body:JSON.stringify({source:src.id,direction:side,mode:mode,expectedRevision:revision,pin:pin.value})});
+   body:JSON.stringify({source:src.id,direction:side,mode:mode,expectedRevision:revision})});
   var data=await response.json();
   if(!response.ok||!data.ok)throw Error((response.status===409?'配置冲突，请刷新重试：':'')+(data.error||'保存失败'));
   acceptSettings(data);
-  e('directionModeMessage').textContent='保存成功，下一轮生效：'+(activeSourceName(src.id)||modelName)+' '+side+' → '+modeLabel(mode);
+  e('directionModeMessage').textContent='保存成功，已写入阿里云后台；下一轮生效：'+(activeSourceName(src.id)||modelName)+' '+side+' → '+modeLabel(mode);
   updateOrderSignal();load();
  }catch(err){
   directionModeReady=false;policy='';revision='';

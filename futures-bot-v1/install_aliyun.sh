@@ -35,7 +35,10 @@ Type=simple
 User=zlbot
 Group=zlbot
 WorkingDirectory=$SRC
-Environment=MODE=live\nEnvironment=ALLOW_REAL_TRADING=I_ACCEPT_REAL_TRADING\nEnvironment=DURABLE_STORAGE_CONFIRMED=YES\nEnvironment=LIVE_CONTROL_FILE=/var/lib/zl-futures-bot/live-control.json
+Environment=MODE=live
+Environment=ALLOW_REAL_TRADING=I_ACCEPT_REAL_TRADING
+Environment=DURABLE_STORAGE_CONFIRMED=YES
+Environment=LIVE_CONTROL_FILE=/var/lib/zl-futures-bot/live-control.json
 Environment=PAPER_BALANCE=200
 Environment=SYMBOLS=BTCUSDT,ETHUSDT,BTCUSDC
 Environment=LEVERAGE=10
@@ -80,7 +83,8 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
     curl -fsS --max-time 5 http://127.0.0.1:10000/status | /opt/zl-futures-bot/venv/bin/python -c '
 import json,sys
 s=json.load(sys.stdin)
-assert s.get("liveTradingEnabled") is False\nassert s.get("mode")=="live"
+assert s.get("liveTradingEnabled") is False
+assert s.get("mode")=="live"
 assert s.get("perSymbolPositionLimit")==1
 assert s.get("postCloseCooldownSeconds")==0
 # Owner has not armed live yet

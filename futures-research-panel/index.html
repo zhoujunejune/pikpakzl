@@ -31,11 +31,11 @@ code{color:#9bc8f7;font-size:12px}
 </style></head><body><main>
 <nav><a href="/dashboard/">合约机器人 · 实盘</a><a href="/prediction/">预测机器人</a><a href="/futures-lab/">策略模拟 · 当前页面</a></nav>
 <h1>合约策略模拟训练中心</h1>
-<div class="row"><div class="sub">Freqtrade 社区策略原始信号 · 历史合约数据 · 独立离线回放</div><span class="flag">仅模拟 · 不连接实盘下单</span></div>
+<div class="row"><div class="sub">实时影子模拟 + 70/30 历史样本自动调参 · 9 组独立学习</div><span class="flag">自动训练 · 不连接实盘下单</span></div>
 <div class="notice" style="margin-top:14px">这不是实盘收益，也不是模型自动学习中的收益。页面展示真实 Binance 历史 K 线上的<strong>历史策略模拟回放</strong>。成交使用独立模拟引擎，不是 Freqtrade 官方回测引擎，且不包含真实资金费、强平或订单簿滑点。</div>
 <section class="card" id="live-forward">
  <div class="row"><h2>实时行情 · 独立模拟机器人</h2><span class="flag">纯模拟 · 订单数 0</span></div>
- <div class="notice">使用阿里云独立进程读取 Binance 官方合约行情。**固定开源规则**实时出信号、记虚拟仓位及收益；这不是机器学习自动调参，也不会触发实盘订单。实时模拟从启动之后的新K线开始，历史回测数据不冒充实时胜率。</div>
+ <div class="notice">独立模拟程序使用币安公开合约行情生成虚拟交易，并且每天自动搜索策略参数、进行 70% 训练与 30% 样本外检验。只有满足交易数量、收益和回撤约束才会提升虚拟账户版本。**不是神经网络模型**，不会触发任何真实订单；历史回测收益不计入实时收益。</div>
  <div class="row" style="margin-top:12px"><strong id="forwardStatus">正在连接实时模拟服务…</strong><small class="sub" id="forwardTime"></small><button onclick="loadForward()">刷新实时结果</button></div>
  <div class="selects" style="margin-top:12px">
   <div><label for="forwardPair">实时交易对</label><select id="forwardPair" onchange="showForward()"><option>BTCUSDT</option><option>ETHUSDT</option><option>BTCUSDC</option></select></div>
@@ -51,8 +51,26 @@ code{color:#9bc8f7;font-size:12px}
  <div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>交易对</th><th>策略</th><th>模拟净收益</th><th>模拟已平仓胜率</th><th>交易笔数</th><th>虚拟仓位</th></tr></thead><tbody id="forwardCompare"><tr><td colspan="6">等待实时行情</td></tr></tbody></table></div>
  <div class="sub" style="margin-top:8px">模拟约定：每组初始 1,000 USDT/USDC，1×、名义仓位约 100；单边手续费 0.05%，估计滑点 0.03%，模拟止损 2%、止盈 3%。每 30 秒采样标记价，可能遗漏采样间的触价。资金费率、强平和真实成交偏差尚未计入。市场数据过期时禁止生成新信号。</div>
 </section>
+<section class="card" id="auto-trainer">
+ <div class="row"><h2>9 组独立策略 · 自动训练记录</h2><span class="flag">每 24 小时自动重训 · 仅模拟</span></div>
+ <div class="grid" style="margin-bottom:12px">
+  <div class="stat"><small>训练任务状态</small><strong id="learnStatus" style="font-size:16px">读取中…</strong></div>
+  <div class="stat"><small>累计训练任务轮数</small><strong id="learnRuns">—</strong></div>
+  <div class="stat"><small>最近一次训练</small><strong id="learnLast" style="font-size:13px">—</strong></div>
+  <div class="stat"><small>下次自动训练</small><strong id="learnNext" style="font-size:13px">—</strong></div>
+ </div>
+ <div class="row sub"><span>当前选择的模型版本：<b id="learnVersion">基线 V0</b></span><span>候选状态：<b id="learnCandidate">等待自动验证</b></span></div>
+ <div class="sub" style="overflow-wrap:anywhere;margin:8px 0">当前模拟参数：<code id="learnParams">—</code></div>
+ <div class="row sub"><span>最近候选样本外收益：<b id="learnHoldout">—</b></span><span>原始基线样本外收益：<b id="learnBaseline">—</b></span></div>
+ <div class="sub" style="margin:9px 0 12px">请注意：样本外历史模拟收益不能代表未来盈利。交易样本不足时不晋级；已开虚拟仓位继续使用入场时参数。</div>
+ <div class="tablewrap"><table>
+  <thead><tr><th>交易对</th><th>策略</th><th>版本</th><th>训练状态</th><th>训练成交数</th><th>样本外成交数</th><th>样本外收益</th><th>更新日期</th></tr></thead>
+  <tbody id="learnTable"><tr><td colspan="8">等待训练服务初始化…</td></tr></tbody>
+ </table></div>
+ <div class="sub" id="learnWarning">不修改真实下单，不调用实盘私钥，不保证盈利。</div>
+</section>
 <section class="card">
- <div class="row"><h2>模拟任务与数据状态</h2><button onclick="loadReport()">刷新报告</button></div>
+ <div class="row"><h2>历史模拟任务与数据状态</h2><button onclick="loadReport()">刷新报告</button></div>
  <div class="row"><div id="status" class="sub">读取中…</div><div id="stamp" class="sub"></div></div>
  <div id="progress" class="sub" style="margin:8px 0"></div>
  <div class="row sub"><span>模拟本金：每组 1,000 USDT / USDC · 1× · 每次约 100 单位名义仓位</span>
@@ -87,7 +105,7 @@ code{color:#9bc8f7;font-size:12px}
  <div class="tablewrap"><table><thead><tr><th>时间 (UTC)</th><th>方向</th><th>入场价</th><th>离场价</th><th>模拟盈亏</th><th>离场原因</th></tr></thead><tbody id="trades"><tr><td colspan="6">等待数据</td></tr></tbody></table></div>
 </section>
 <section class="card">
- <h2>训练说明</h2><div class="sub">当前是固定参数的策略<strong>历史回放</strong>，没有进行自动机器学习或参数优化。策略信号参考 GitHub Freqtrade 社区源代码；BTC、ETH 的 5m 期货 K 线来自 Binance 官方公开历史数据档案。手续费按单边 0.05%、额外模拟不利滑点按单边 0.03%，资金费率和强平未纳入。</div>
+ <h2>研究方法与限制</h2><div class="sub">上方实时影子机器人每天执行一次固定候选网格搜索，先根据历史前 70% 选择候选参数，再使用后 30% 样本外区间验证。未通过最少交易数、收益、回撤要求则继续使用当前模拟版本。下方历史研究报告是此前单独计算的模拟收益，二者不混算。两者均不是 Freqtrade 官方回测引擎，也非神经网络自主学习；真实资金费率、强平及交易所真实成交尚未纳入。</div>
  <p class="sub">若要判断策略是否值得真实使用，还需要更多样本外交易、行情分段测试、资金费数据和真实成交闭环验证。</p>
 </section>
 </main><script>
@@ -168,7 +186,38 @@ function showForward(){
  txt('forwardPosition',stream?.position?.side||'空仓');
  txt('forwardEntry',stream?.position?'入场 '+fixed(stream.position.entry,4)+' · 止损 '+fixed(stream.position.stop,4):'等待下一根已收盘K线信号');
  txt('forwardBars',stream?String(stream.seenNewBars):'—');
- txt('forwardSignal',stream?.lastSignal?'最近信号 '+stream.lastSignal.side+' '+stream.lastSignal.at:'策略固定参数 · 未自动调参');
+ txt('forwardSignal',stream?.lastSignal?'最近信号 '+stream.lastSignal.side+' '+stream.lastSignal.at:'等待已收盘K线的信号');
+ updateSelectedTraining(stream);
+}
+function fmtClock(iso){
+ if(!iso)return '未完成';
+ const d=new Date(iso);
+ return Number.isNaN(d.valueOf())?'未知':d.toLocaleString('zh-CN',{hour12:false});
+}
+function updateSelectedTraining(stream){
+ const t=stream?.learning||{};
+ txt('learnVersion','V'+(Number.isFinite(t.version)?t.version:0));
+ txt('learnCandidate',t.status||'等待自动训练');
+ txt('learnParams',t.activeParams?JSON.stringify(t.activeParams):'默认基线参数');
+ txt('learnHoldout',Number.isFinite(t.holdoutNetPct)?pct(t.holdoutNetPct):'证据不足');
+ txt('learnBaseline',Number.isFinite(t.baselineHoldoutNetPct)?pct(t.baselineHoldoutNetPct):'未计算');
+}
+function showLearningTable(){
+ const l=FORWARD?.learning||{};
+ txt('learnStatus',l.running?'训练中':l.error?'训练故障':'自动训练已启用');
+ txt('learnRuns',Number.isFinite(l.completedRuns)?String(l.completedRuns):'—');
+ txt('learnLast',fmtClock(l.lastRun));
+ txt('learnNext',fmtClock(l.nextRun));
+ txt('learnWarning',l.error?'训练状态：'+l.error:
+   '训练与收益分开记录；版本仅对未来虚拟交易生效；样本不足不会晋级。');
+ const list=FORWARD?.streams||[];
+ $('learnTable').innerHTML=list.length?list.map(x=>{
+  const t=x.learning||{};
+  return '<tr><td>'+esc(x.symbol)+'</td><td>'+esc(x.strategy.replace('Strategy',''))+
+    '</td><td>V'+esc(t.version??0)+'</td><td>'+esc(t.status||'等待训练')+
+    '</td><td>'+esc(t.trainTrades??'—')+'</td><td>'+esc(t.holdoutTrades??'—')+
+    '</td><td>'+pct(t.holdoutNetPct)+'</td><td>'+esc(t.lastTrainedAt?fmtClock(t.lastTrainedAt):'—')+'</td></tr>';
+ }).join(''):'<tr><td colspan="8">训练账户尚未就绪</td></tr>';
 }
 function showForwardCompare(){
  const list=FORWARD?.streams||[];
@@ -184,13 +233,13 @@ async function loadForward(){
   txt('forwardStatus',j.error?'行情异常 / 已暂停更新：'+j.error:(j.fresh?'真实行情连接正常 · 正在实时模拟':'行情未就绪或过期 · 等待恢复'));
   $('forwardStatus').className=j.fresh&&!j.error?'good':'warn';
   txt('forwardTime','行情更新时间 '+(j.updatedAt||'暂无'));
-  showForward();showForwardCompare();
+  showForward();showForwardCompare();showLearningTable();
  }catch(e){
   FORWARD=null;
   txt('forwardStatus','实时模拟服务暂未就绪：'+e.message);
   $('forwardStatus').className='warn';
   txt('forwardTime','历史回测可继续查看');
-  showForward();showForwardCompare();
+  showForward();showForwardCompare();showLearningTable();
  }
 }
 loadForward();

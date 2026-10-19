@@ -2,7 +2,9 @@ name: Alibaba SWAS - independent research results page, no trading restarts
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
-    paths: [".github/workflows/zl-aliyun-research-panel.yml"]
+    paths:
+      - ".github/workflows/zl-aliyun-research-panel.yml"
+      - "futures-research-panel/install_aliyun.sh"
 permissions:
   contents: read
 concurrency:
@@ -30,6 +32,10 @@ jobs:
           assert "['systemctl','reload','caddy']" in installer
           assert 'zl-futures-bot-paper' in installer
           assert 'basic_auth' in installer
+          import re
+          embedded=re.findall(r"python3 -.*?<<'PY'\\n(.*?)\\nPY",installer,re.S)
+          assert len(embedded)==2
+          for snippet in embedded:compile(snippet,'caddy-installer-check','exec')
           PY
           node --check /tmp/research-ui.js
       - name: Install Alibaba SWAS API SDK

@@ -1,0 +1,32 @@
+name: Verify sole production Selective V2 8-second model
+on:
+  push:
+    branches: [feature/zl-prediction-aliyun]
+    paths:
+      - 'railway-diagnostic/production-signal-choice.mjs'
+      - 'railway-diagnostic/index.mjs'
+      - 'railway-diagnostic/panel-stats-shell.mjs'
+      - 'railway-diagnostic/test-selective8-only.mjs'
+      - '.github/workflows/zl-selective8-only-verify.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate JavaScript module syntax
+        run: |
+          node --check railway-diagnostic/production-signal-choice.mjs
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/panel-stats-shell.mjs
+          node --check railway-diagnostic/test-selective8-only.mjs
+      - name: Install production dependencies
+        run: npm install --prefix railway-diagnostic --omit=dev --no-audit --no-fund --silent
+      - name: Verify immutable 8-second router without submitting orders
+        run: node --test railway-diagnostic/test-selective8-only.mjs

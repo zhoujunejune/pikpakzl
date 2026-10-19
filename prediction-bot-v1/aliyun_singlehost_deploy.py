@@ -5,7 +5,7 @@ from alibabacloud_swas_open20200601.client import Client
 from alibabacloud_swas_open20200601 import models as sw
 from alibabacloud_tea_openapi import models as api
 REGION="ap-southeast-1"; INSTANCE="b67374069bb3457ba6a3a2ede9305d3f"
-PRED_SHA="643fe0a2668fc195e27689365a7acdce33b08a67"
+PRED_SHA="f624279f17126a4e41e9703a15adf604d9997ceb"
 def main():
  sha=os.getenv("GITHUB_SHA","")
  if os.getenv("GITHUB_REF_NAME")!="feature/zl-futures-bot-v1" or not re.fullmatch("[a-f0-9]{40}",sha):return 2

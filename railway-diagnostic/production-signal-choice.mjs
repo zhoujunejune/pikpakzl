@@ -10,11 +10,17 @@ export const BASE_MODEL='BREAKOUT20_RSI_MACD_RANGE_V1';
 export const NOVICE_MODEL='NOVICE_MIX_LOW_V1';
 export const DYNAMIC_MODEL='DYNAMIC_ENTRY_5M_SHADOW_V1';
 export const EDGE_MODEL='EDGE_5M_V1';
+export const SELECTIVE8_MODEL='SELECTIVE_V2_FAST8_PREWARM_V1';
+export const SELECTIVE8_INPUT_VERSION='SELECTIVE_V2_FAST8_PRIOR_REAL_MARKET_V1';
+export const SELECTIVE8_SOURCES=Object.freeze([
+ 'SELECTIVE_V2_FAST8_PRIMARY',
+ 'EDGE_RESCUE_FAST8_PRIMARY',
+ 'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION'
+]);
 export const EDGE_INPUT_VERSION='EDGE5_REAL_ORDERBOOK_FLOW_BASIS_V1';
 export const RSI_INPUT_VERSION='RSI_ONLY_14_V1';
 export const ORDER_SIGNAL_MODELS=Object.freeze([
- {id:BASE_MODEL,name:'BASELINE（RSI14单指标 · Railway 信号）'},
- {id:EDGE_MODEL,name:'EDGE_5M_V1（前8秒 · 训练与方向分离）'}
+ {id:SELECTIVE8_MODEL,name:'Selective V2 + Edge Rescue + 行情方向兜底（8秒）'}
 ]);
 const isChoice=m=>ORDER_SIGNAL_MODELS.some(x=>x.id===m);
 const roundOf=t=>Math.floor(t/300000)*300000;
@@ -68,18 +74,18 @@ export async function refreshModelSelection(){
    const redis=await db();
    let raw=await redis.get(MODEL_CHOICE_KEY);
    if(!raw){
-     const initial=JSON.stringify({model:BASE_MODEL,revision:crypto.randomUUID(),
+     const initial=JSON.stringify({model:SELECTIVE8_MODEL,revision:crypto.randomUUID(),
        updatedAt:new Date().toISOString(),effectiveAfterRound:null});
      const created=await redis.set(MODEL_CHOICE_KEY,initial,{NX:true});
      raw=created==='OK'?initial:await redis.get(MODEL_CHOICE_KEY);
    }
    if(!raw)throw Error('MODEL_CHOICE_NOT_PERSISTED');
-   // Retired selections are not re-enabled after a restart.
-   // Change revision to invalidate any pending order from the retired model,
-   // and only allow baseline from the following five-minute round.
+   // Owner pinned exactly the original three-stage V2 8-second router.
+   // Migrate all prior order models with a NEW revision and next-round fence.
+   // A pending order with the old model/revision must not be submitted.
    const saved=JSON.parse(raw);
-   if(saved.model===NOVICE_MODEL||saved.model===DYNAMIC_MODEL){
-     const migrated=JSON.stringify({model:BASE_MODEL,revision:crypto.randomUUID(),
+   if(saved.model!==SELECTIVE8_MODEL){
+     const migrated=JSON.stringify({model:SELECTIVE8_MODEL,revision:crypto.randomUUID(),
        updatedAt:new Date().toISOString(),effectiveAfterRound:roundOf(Date.now())});
      const swapped=await redis.eval(CAS,{keys:[MODEL_CHOICE_KEY],arguments:[raw,migrated]});
      if(swapped==='OK')raw=migrated;
@@ -109,6 +115,33 @@ export async function setModelSelection(model,expectedRevision,now=Date.now()){
    throw err;
  }finally{updating=false}
 }
+// The *same* immutable three-stage V2 live source that powers the screenshot.
+// This path never synthesizes a quote, direction, confidence or a 5m outcome.
+export function validateSelective8ProductionLive(body,now=Date.now()){
+ const live=body?.live,round=roundOf(now);
+ if(body?.ok!==true||!live||live.status!=='LOCKED'||
+    live.model!==SELECTIVE8_MODEL||live.modelVersion!==SELECTIVE8_MODEL||
+    !SELECTIVE8_SOURCES.includes(live.source))
+   return {ok:false,reason:'INVALID_SELECTIVE8_SOURCE_OR_MODEL'};
+ const lockedAt=Number(live.productionLockedAt??live.generatedAt);
+ const direction=live.signal?.direction;
+ if(!Number.isSafeInteger(live.round)||live.round!==round||
+    !Number.isFinite(lockedAt)||lockedAt<round||lockedAt>=round+8000||
+    lockedAt>now+250||!['UP','DOWN'].includes(direction)||
+    live.executionEligible!==true||
+    live.fast8Quality?.inputVersion!==SELECTIVE8_INPUT_VERSION)
+   return {ok:false,reason:'INVALID_LOCK_OR_MARKET_EVIDENCE'};
+ const isFallback=live.source==='SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION';
+ if(Boolean(live.fallbackUsed)!==isFallback||
+   (isFallback&&live.fallbackReason!=='UNVERIFIED_REAL_MARKET_DIRECTION'))
+   return {ok:false,reason:'FALLBACK_PROVENANCE_MISMATCH'};
+ return {ok:true,round,direction,lockedAt,source:live.source,
+    model:SELECTIVE8_MODEL,inputVersion:SELECTIVE8_INPUT_VERSION,
+    fallbackUsed:isFallback,executionEligible:true,
+    score:typeof live.signal?.score==='number'&&Number.isFinite(live.signal.score)?
+     live.signal.score:null};
+}
+
 export function validateNoviceSignal(body,now=Date.now()){
  const round=roundOf(now),lock=body?.latest;
  if(body?.ok!==true||body?.model!==NOVICE_MODEL||body?.inputVersion!==RSI_INPUT_VERSION||

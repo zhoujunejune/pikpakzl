@@ -11,6 +11,9 @@ import traceback
 import bot
 from controls import read_control, change
 from dashboard import PAGE
+from live_dashboard import PAGE as LIVE_PAGE
+import live_control
+import live_engine
 from market_health import snapshot as market_snapshot
 from position_view import view as paper_position_view
 from paper_portfolio import positions_for_display, reserved_margin
@@ -45,9 +48,11 @@ def refresh_wallet():
 def worker():
     WORKER["running"]=True
     try:
+        if bot.MODE=="live":
+            live_control.disarm_at_startup()  # A restart must never auto-enable real money orders.
         # No outbound requests during Binance 418 cooldown. After expiry, allow a
         # one-off test order permission check (does not enter matching engine).
-        check=assess(allow_trade_test=True)
+        check=assess(allow_trade_test=bot.MODE=="paper")
         WORKER["wallet"]=check.get("wallet")
         WORKER["preflight"]={
             "outboundAllowed":check.get("outboundAllowed",False),
@@ -65,7 +70,10 @@ def worker():
         if check.get("authenticated") and check.get("wallet"):
             threading.Thread(target=refresh_wallet,
                              name="readonly-futures-wallet",daemon=True).start()
-        bot.main()
+        if bot.MODE=="live":
+            live_engine.main()
+        else:
+            bot.main()
     except Exception as e:
         WORKER["error"]=str(e)[:200]
         WORKER["finished_at"]=dt.datetime.now(dt.timezone.utc).isoformat()
@@ -75,6 +83,12 @@ def worker():
         QUOTE_STOP.set()
 
 def public_snapshot():
+    if bot.MODE=="live":
+        try:
+            return live_engine.snapshot(WORKER,quotes.current())
+        except Exception as e:
+            return {"mode":"live","liveTradingEnabled":False,"workerRunning":WORKER["running"],
+                    "error":"live_state_unavailable","halted":True}
     try:
         current=bot.load()
         trades=current.get("history") or []
@@ -172,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
         # Without a configured origin all writes are disabled, including localhost calls.
         import urllib.parse
         origin=os.environ.get("PUBLIC_ORIGIN","")
-        if bot.MODE!="paper" or not origin or not origin.startswith("https://"):
+        if bot.MODE not in ("paper","live") or not origin or not origin.startswith("https://"):
             self.send_json({"error":"remote controls are not configured"},503);return
         expected_host=urllib.parse.urlsplit(origin).netloc
         if (self.path!="/api/control" or self.headers.get("Origin","")!=origin
@@ -190,7 +204,38 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("invalid command")
             action=obj.get("action")
             if not isinstance(action,str):raise ValueError("action must be a string")
-            result=change(action,obj.get("payload"))
+            if bot.MODE=="live":
+                if action=="live_off":
+                    result=live_control.save_enabled(False)
+                elif action=="live_on":
+                    if not WORKER["running"] or WORKER["error"]:
+                        raise ValueError("实盘引擎尚未正常运行")
+                    if bot.KILL_FILE.exists():
+                        raise ValueError("存在紧急锁定文件，禁止实盘开启")
+                    state=live_engine.load()
+                    if state.get("halt") or state.get("pending"):
+                        raise ValueError("实盘流水存在未确认或锁定状态，禁止开启")
+                    params=read_control()
+                    if params["emergency_stop"] or not params["entry_enabled"]:
+                        raise ValueError("交易控制仍是暂停或紧急锁定状态")
+                    api=bot.API()
+                    api.server_time()
+                    hedge=str(api.call("GET","/fapi/v1/positionSide/dual",signed=True).get("dualSidePosition")).lower()=="true"
+                    if api.positions():
+                        raise ValueError("交易所已有持仓，先核对仓位，禁止机器人接管")
+                    if any(api.algo_open(sym) for sym in bot.SYMBOLS):
+                        raise ValueError("交易所存在原有止盈止损单，禁止自动接管")
+                    test={"symbol":"BTCUSDT","side":"BUY","type":"MARKET","quantity":"0.002"}
+                    if hedge:test["positionSide"]="LONG"
+                    # Binance documented test-order endpoint never enters matching engine.
+                    api.call("POST","/fapi/v1/order/test",test,signed=True)
+                    if not bot.STATE_FILE.exists():
+                        live_engine.persist(live_engine.blank())
+                    result=live_control.save_enabled(True)
+                else:
+                    raise ValueError("实盘页面只支持开启或关闭实盘新开仓")
+            else:
+                result=change(action,obj.get("payload"))
             self.send_json({"ok":True,"control":result})
         except (ValueError,TypeError,json.JSONDecodeError) as e:
             self.send_json({"error":str(e)[:160]},400)
@@ -203,12 +248,12 @@ class Handler(BaseHTTPRequestHandler):
         from urllib.parse import urlsplit
         path=urlsplit(self.path).path
         if path in ("/healthz","/health"):
-            payload={"ok":True,"mode":"paper","workerRunning":WORKER["running"],"bootAt":BOOT_AT}
+            payload={"ok":True,"mode":bot.MODE,"workerRunning":WORKER["running"],"bootAt":BOOT_AT}
             self.send_json(payload)
         elif path=="/status":
             self.send_json(public_snapshot())
         elif path in ("/","/index.html","/dashboard","/dashboard/"):
-            payload=PAGE.encode()
+            payload=(LIVE_PAGE if bot.MODE=="live" else PAGE).encode()
             self.send_response(200)
             self.send_header("Content-Type","text/html; charset=utf-8")
             self.send_header("Cache-Control","no-store")
@@ -229,9 +274,9 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 def main():
-    if bot.MODE!="paper":
-        raise RuntimeError("Render preview is paper-only: refuse live mode in web service")
-    t=threading.Thread(target=worker,name="paper-engine",daemon=True)
+    if bot.MODE not in ("paper","live"):
+        raise RuntimeError("Invalid futures engine mode")
+    t=threading.Thread(target=worker,name="futures-engine",daemon=True)
     t.start()
     port=int(os.environ.get("PORT","10000"))
     bot.log("paper_control_http_ready",port=port,boundHost=os.environ.get("BIND_HOST", "127.0.0.1"))

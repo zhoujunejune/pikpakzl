@@ -1,0 +1,112 @@
+name: RESEARCH - publish isolated Freqtrade strategy simulation console
+on:
+  push:
+    branches: [research/freqtrade-futures-20261019]
+    paths:
+      - "research/freqtrade-futures-20261019/index.html"
+      - "research/freqtrade-futures-20261019/deploy_research.py"
+      - ".github/workflows/research-front-publish.yml"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: zl-research-ui-public-archive-only
+  cancel-in-progress: false
+jobs:
+  backtest-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate branch, research-only scripts and no trade command
+        run: |
+          test "$GITHUB_REF_NAME" = "research/freqtrade-futures-20261019"
+          python -m py_compile research/freqtrade-futures-20261019/archive_download.py research/freqtrade-futures-20261019/offline_replay.py research/freqtrade-futures-20261019/deploy_research.py
+          python - <<'PY'
+          from pathlib import Path
+          s=Path("research/freqtrade-futures-20261019/index.html").read_text()
+          assert "真实收益" in s and "离线" in s
+          print("RESEARCH_UI_DISCLAIMER_PRESENT=true")
+          PY
+      - name: Download pinned open source trading strategies
+        run: python research/freqtrade-futures-20261019/prepare.py
+      - name: Download complete public Binance USD-M kline archives
+        run: python research/freqtrade-futures-20261019/archive_download.py
+      - name: Run conservative research-only offline historical simulation
+        run: |
+          docker pull freqtradeorg/freqtrade:2026.9
+          chmod -R a+rX research/freqtrade-futures-20261019/
+          chmod -R a+rwX research/freqtrade-futures-20261019/results/
+          docker run --rm --entrypoint python3 \
+            --mount type=bind,source="$PWD/research/freqtrade-futures-20261019",target=/freqtrade/research \
+            freqtradeorg/freqtrade:2026.9 /freqtrade/research/offline_replay.py
+      - name: Validate and publish simulated data only to research branch
+        id: publish
+        run: |
+          python - <<'PY'
+          import json,pathlib,shutil
+          d=pathlib.Path("research/freqtrade-futures-20261019")
+          o=json.loads((d/"results/historical_simulation.json").read_text())
+          assert o["kind"]=="historical_simulation"
+          assert o["never_live_orders"] is True
+          assert len(o["rows"])==18
+          assert all(x["status"]=="SIMULATED" for x in o["rows"])
+          assert all(float(x["coverage"])>.99 and not x["missing_files"] for x in o["data_coverage"].values())
+          folder=d/"published";folder.mkdir(parents=True,exist_ok=True)
+          shutil.copyfile(d/"results/historical_simulation.json",folder/"data.json")
+          print("RESEARCH_DATA_PUBLICATION_VALIDATED=true")
+          PY
+          git config user.name "ZL Research Only"
+          git config user.email "zl-research-only@users.noreply.github.com"
+          git add -- research/freqtrade-futures-20261019/published/data.json
+          if ! git diff --cached --quiet; then
+            git commit -m "research(report): publish verified offline 3-pair historical simulations"
+            git push origin HEAD:research/freqtrade-futures-20261019
+          fi
+          echo "published_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install Alibaba SWAS SDK (for static research page only)
+        run: python -m pip -q install alibabacloud_swas_open20200601==4.0.0
+      - name: Publish only separate static files and add auth-protected /research route
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          RESEARCH_PUBLISHED_SHA: ${{ steps.publish.outputs.published_sha }}
+        run: python research/freqtrade-futures-20261019/deploy_research.py
+      - name: External HTTPS read-only smoke; live bot must still respond
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,urllib.request
+          root="https://47-237-188-69.sslip.io"
+          basic=base64.b64encode(("zl:"+os.environ["ZL_PANEL_PASSWORD"]).encode()).decode()
+          def get(path):
+           request=urllib.request.Request(root+path,headers={"Authorization":"Basic "+basic,"Cache-Control":"no-store"})
+           with urllib.request.urlopen(request,timeout=20) as r:return r.status,r.read()
+          code,raw=get("/research/data.json")
+          d=json.loads(raw)
+          assert code==200 and d["never_live_orders"] is True and len(d["rows"])==18
+          assert all(x["status"]=="SIMULATED" for x in d["rows"])
+          code,html=get("/research/")
+          assert code==200 and b'id="strategy"' in html and b'id="chart"' in html and b'id="profit"' in html
+          code,raw=get("/status")
+          d=json.loads(raw)
+          assert code==200 and d.get("mode")=="live"
+          print("RESEARCH_PANEL_HTTPS_AUTHENTICATED=true")
+          print("RESEARCH_PANEL_18_SIMULATIONS_VISIBLE=true")
+          print("PRODUCTION_FUTURES_HTTPS_STILL_RESPONDS=true")
+          print("REAL_ORDERS_BY_THIS_WORKFLOW=0")
+          PY
+      - name: Save simulated data and reproducible logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zl-futures-research-console-results
+          path: |
+            research/freqtrade-futures-20261019/results/historical_simulation.json
+            research/freqtrade-futures-20261019/results/archive_coverage.json
+          if-no-files-found: warn
+          retention-days: 7

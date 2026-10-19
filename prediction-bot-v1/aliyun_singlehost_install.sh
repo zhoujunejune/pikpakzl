@@ -40,6 +40,31 @@ PY
   fi
   rm -f "$temp"
 fi
+# Breakout20 Worker historic public counts also retained as an *archive*
+# only. Full Durable Object data and model weights are not represented here.
+if [ ! -f "$ARCHIVE/breakout20-cloudflare-last-public-snapshot.json" ];then
+  tmp_b=$(mktemp)
+  if curl -fsSL --max-time 14 \
+    https://breakout20-shadow.zl528094-3ba.workers.dev/status -o "$tmp_b";then
+    python3 - "$tmp_b" "$ARCHIVE/breakout20-cloudflare-last-public-snapshot.json" <<'PY' || true
+import json,os,sys
+data=json.load(open(sys.argv[1]))
+assert data.get('name')=='突破20%即可'
+p=sys.argv[2]
+with open(p+'.tmp','w') as f:
+ json.dump({'scope':'ARCHIVED_PUBLIC_SHADOW_STATUS_NOT_OFFICIAL_V2_OR_COMPLETE_DO',
+  'capturedAt':data.get('generatedAt'),
+  'results':data.get('results'),'training':data.get('training')},f)
+ f.flush();os.fsync(f.fileno())
+os.replace(p+'.tmp',p)
+PY
+  fi
+  rm -f "$tmp_b"
+fi
+if [ -f "$ARCHIVE/breakout20-cloudflare-last-public-snapshot.json" ];then
+  chown zl-pred:zl-pred "$ARCHIVE/breakout20-cloudflare-last-public-snapshot.json"
+  chmod 640 "$ARCHIVE/breakout20-cloudflare-last-public-snapshot.json"
+fi
 if [ -f "$ARCHIVE/edge-cloudflare-last-public-snapshot.json" ];then
  chown zl-pred:zl-pred "$ARCHIVE/edge-cloudflare-last-public-snapshot.json"
  chmod 640 "$ARCHIVE/edge-cloudflare-last-public-snapshot.json"
@@ -49,11 +74,11 @@ trap 'rm -rf "$TMP"' EXIT
 ROOT="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$PRED_MIGRATION_SHA/railway-diagnostic"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$ARCHIVE/source-backups/$STAMP"
-for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs shadow-breakout20-dashboard.mjs postflip-official-stats.mjs;do
+for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs shadow-breakout20-dashboard.mjs postflip-official-stats.mjs novice-mix-shadow.mjs dynamic-entry-shadow.mjs;do
   curl -fsSL --retry 3 --max-time 30 "$ROOT/$file" -o "$TMP/$file"
   "$NODE" --check "$TMP/$file"
 done
-for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs shadow-breakout20-dashboard.mjs postflip-official-stats.mjs;do
+for file in local-model-host.mjs edge-5m-service.mjs panel-stats-shell.mjs shadow-breakout20-dashboard.mjs postflip-official-stats.mjs novice-mix-shadow.mjs dynamic-entry-shadow.mjs;do
   test -f "$BASE/$file" && cp -p "$BASE/$file" "$ARCHIVE/source-backups/$STAMP/$file" || true
   install -m 0644 -o zl-pred -g zl-pred "$TMP/$file" "$BASE/$file"
 done

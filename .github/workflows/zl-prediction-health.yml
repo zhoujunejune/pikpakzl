@@ -52,35 +52,35 @@ jobs:
           assert anon==401 and status==200 and b'id="pin" type="hidden"' in html
           PY
 
-      - name: Verify protected API settings entry and CSRF rejection
+      - name: Verify obsolete Binance API editor is removed from frontend and server
         env:
           ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
         run: |
           python - <<'PY'
-          import base64,os,json,urllib.request,urllib.error
+          import base64,os,urllib.request,urllib.error
           base="https://prediction.47-237-188-69.sslip.io"
-          pw=os.environ["ZL_PANEL_PASSWORD"]
-          auth="Basic "+base64.b64encode(("zl:"+pw).encode()).decode()
-          def call(path,login=True,method="GET",payload=None,origin=None):
-            head={"Authorization":auth} if login else {}
-            if payload is not None:head["Content-Type"]="application/json"
-            if origin:head["Origin"]=origin
-            req=urllib.request.Request(base+path,headers=head,data=payload,method=method)
+          auth="Basic "+base64.b64encode(("zl:"+os.environ["ZL_PANEL_PASSWORD"]).encode()).decode()
+          def fetch(path,login=True,method="GET"):
+            headers={"Authorization":auth} if login else {}
+            if method=="POST":
+              headers.update({"Origin":base,"Sec-Fetch-Site":"same-origin","Content-Type":"application/json"})
+            req=urllib.request.Request(base+path,headers=headers,method=method,
+                data=b'{"apiKey":"deleted"}' if method=="POST" else None)
             try:
-              with urllib.request.urlopen(req,timeout=14) as resp:return resp.status,resp.read(100000)
-            except urllib.error.HTTPError as err:return err.code,err.read(100000)
-          anonymous,_=call("/settings/",False)
-          authorized,body=call("/settings/")
-          status,response=call("/settings/status")
-          forbidden,_=call("/settings/credentials",method="POST",payload=b"{}",origin="https://untrusted.invalid")
-          j=json.loads(response) if status==200 else {}
-          print("API_SETTINGS_UNAUTH_STATUS",anonymous)
-          print("API_SETTINGS_AUTH_STATUS",authorized)
-          print("API_SETTINGS_STATUS_CODE",status)
-          print("API_SETTINGS_CONFIGURATION_EXISTS",bool(j.get("configured")))
-          print("API_SETTINGS_CSRF_REJECT_STATUS",forbidden)
-          assert anonymous==401 and authorized==200 and b'id="apiKey"' in body
-          assert status==200 and j.get("autoTradingEnabled")==False and forbidden==403
+              with urllib.request.urlopen(req,timeout=15) as r:return r.status,r.read(80000)
+            except urllib.error.HTTPError as e:return e.code,e.read(80000)
+          anon,_=fetch("/settings/",False)
+          auth_page,_=fetch("/settings/")
+          auth_status,_=fetch("/settings/status")
+          auth_post,_=fetch("/settings/credentials",method="POST")
+          main_code,main=fetch("/")
+          print("OLD_SETTINGS_UNAUTH",anon)
+          print("OLD_SETTINGS_AUTH",auth_page)
+          print("OLD_SETTINGS_STATUS",auth_status)
+          print("OLD_SETTINGS_POST",auth_post)
+          print("FRONTEND_LINK_REMOVED",b'href="/settings/"' not in main)
+          assert (anon,auth_page,auth_status,auth_post)==(401,404,404,404)
+          assert main_code==200 and b'href="/settings/"' not in main
           PY
 
       - name: Verify read-only POST works with gateway login and no former PIN

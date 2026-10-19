@@ -62,7 +62,11 @@ MemoryMax=160M
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now zl-futures-shadow-research.service
+systemctl enable zl-futures-shadow-research.service >/dev/null
+# enable --now leaves an already-running Python process unchanged.
+# Restart ONLY the dedicated simulation service to apply the HTTP 404 fix.
+# Production futures and prediction systemd units must not be restarted.
+systemctl restart zl-futures-shadow-research.service
 for i in 1 2 3 4 5 6 7 8;do
  if curl -fsS --max-time 3 http://127.0.0.1:13017/healthz >/dev/null;then break;fi
  sleep 2

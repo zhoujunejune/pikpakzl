@@ -13,6 +13,7 @@ mkdir -p "$ROOT" "$DATA/rounds" "$DATA/redis" "$DATA/archive" "$CONF" "$ROOT/.np
 chmod 755 "$ROOT" "$DATA" "$CONF"
 if ! id zl-pred >/dev/null 2>&1;then useradd --system --home-dir "$ROOT" --shell /usr/sbin/nologin zl-pred; fi
 chown -R zl-pred:zl-pred "$ROOT/.npm" "$DATA/rounds" "$DATA/archive"
+install -d -m 0700 -o zl-pred -g zl-pred "$CONF/owner-secrets"
 # If the Node 22 binary is not already present, download the Node project
 # binary and independently verify its SHA-256 from the official same-version file.
 if [ ! -x /opt/zl-prediction-node/bin/node ]; then
@@ -152,6 +153,7 @@ Environment=PATH=/opt/zl-prediction-node/bin:/usr/bin:/bin
 EnvironmentFile=$CONF/redis.env
 EnvironmentFile=$CONF/$env_name.env
 EnvironmentFile=-$CONF/trading.env
+EnvironmentFile=-$CONF/owner-secrets/binance.env
 ExecStart=$NODE $entry
 Restart=on-failure
 RestartSec=8
@@ -165,6 +167,43 @@ ReadWritePaths=$DATA/rounds $DATA/archive $ROOT/src/$folder
 WantedBy=multi-user.target
 EOF
 done
+# New API keys are entered by the owner via the authenticated UI and kept locally.
+cat > /etc/systemd/system/zl-prediction-credential-console.service <<EOF
+[Unit]
+Description=ZL authenticated prediction API settings
+After=network-online.target
+[Service]
+Type=simple
+User=zl-pred
+Group=zl-pred
+WorkingDirectory=$ROOT/src/aliyun-credential-console
+ExecStart=/usr/bin/python3 $ROOT/src/aliyun-credential-console/server.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=$CONF/owner-secrets
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/zl-prediction-credentials-reload.service <<EOF
+[Unit]
+Description=Reload prediction API credentials
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl try-restart zl-prediction-v2.service zl-prediction-v3.service zl-prediction-trade.service
+EOF
+cat > /etc/systemd/system/zl-prediction-credentials-reload.path <<EOF
+[Unit]
+Description=Watch prediction API settings
+[Path]
+PathChanged=$CONF/owner-secrets
+Unit=zl-prediction-credentials-reload.service
+[Install]
+WantedBy=multi-user.target
+EOF
 # Preserve preexisting futures Caddy authentication by reusing its bcrypt
 # password hash; never print or commit it.
 python3 - <<'PY'
@@ -185,7 +224,18 @@ prediction.47-237-188-69.sslip.io {
   basic_auth {
     zl HASH_PLACEHOLDER
   }
-  reverse_proxy 127.0.0.1:13001 {\n    header_up X-ZL-Verified-Login 1\n    header_up -Authorization\n  }
+  handle_path /settings/* {
+    reverse_proxy 127.0.0.1:13006 {
+      header_up X-ZL-Verified-Login 1
+      header_up -Authorization
+    }
+  }
+  handle {
+    reverse_proxy 127.0.0.1:13001 {
+      header_up X-ZL-Verified-Login 1
+      header_up -Authorization
+    }
+  }
   header {
     Strict-Transport-Security "max-age=31536000"
     X-Content-Type-Options "nosniff"
@@ -200,6 +250,26 @@ prediction.47-237-188-69.sslip.io {
 marker="  handle_path /prediction/* {\n    reverse_proxy 127.0.0.1:11000\n  }"
 if marker in contents:
     contents=contents.replace(marker,'  handle_path /prediction/* {\n    redir https://'+host+'/{path} 302\n  }')
+# Upgrade only the known previously installed prediction proxy block.
+if host in contents and 'handle_path /settings/*' not in contents:
+    old = """  reverse_proxy 127.0.0.1:13001 {
+    header_up X-ZL-Verified-Login 1
+    header_up -Authorization
+  }"""
+    new = """  handle_path /settings/* {
+    reverse_proxy 127.0.0.1:13006 {
+      header_up X-ZL-Verified-Login 1
+      header_up -Authorization
+    }
+  }
+  handle {
+    reverse_proxy 127.0.0.1:13001 {
+      header_up X-ZL-Verified-Login 1
+      header_up -Authorization
+    }
+  }"""
+    if contents.count(old)!=1:raise SystemExit("SAFE_CADDY_UPDATE_NOT_POSSIBLE")
+    contents=contents.replace(old,new)
 p.write_text(contents)
 PY
 caddy validate --config /etc/caddy/Caddyfile >/dev/null
@@ -209,6 +279,8 @@ systemctl enable --now zl-prediction-v3.service
 systemctl enable --now zl-prediction-v2.service
 systemctl enable zl-prediction-trade.service
 systemctl restart zl-prediction-trade.service
+systemctl enable --now zl-prediction-credential-console.service
+systemctl enable --now zl-prediction-credentials-reload.path
 systemctl reload caddy
 # Only a readiness audit. Never claim real orders without actual fill proof.
 for component in v3 v2 trade; do
@@ -220,3 +292,4 @@ done
 test "$(systemctl is-active zl-futures-bot-paper.service)" = active
 echo "PRED_CORE_FUTURES_UNCHANGED=true"
 echo "PRED_CORE_AUTO_ORDER_DISABLED=true"
+echo "PRED_API_CONFIG_HTTP_13006=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:13006/ || true)"

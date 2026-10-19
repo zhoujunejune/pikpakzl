@@ -114,14 +114,12 @@ python3 - <<'PY'
 import os,subprocess,sys
 from pathlib import Path
 try:
- phase='locate_process'
- pid=int(subprocess.check_output(['systemctl','show','zl-futures-bot-paper.service','-p','MainPID','--value'],text=True).strip())
- if pid<2:raise RuntimeError('inactive')
- phase='read_environment'
- raw=(Path('/proc')/str(pid)/'environ').read_bytes().decode('utf8','replace')
- for cell in raw.split('\0'):
-  k,sep,v=cell.partition('=')
-  if sep and k in ('BINANCE_API_KEY','BINANCE_API_SECRET','BINANCE_BASE_URL','BINANCE_RETRY_NOT_BEFORE_UTC'):os.environ[k]=v
+ phase='read_secret_file'
+ envpath=Path('/var/lib/zl-exchange-api/futures/binance.env')
+ for cell in envpath.read_text().splitlines():
+  key,sep,val=cell.partition('=')
+  if sep and key in ('BINANCE_API_KEY','BINANCE_API_SECRET'):
+   os.environ[key]=val.strip().strip("'").strip('"')
  sys.path.insert(0,'/opt/zl-futures-bot/src/futures-bot-v1')
  phase='import_bot'
  import bot

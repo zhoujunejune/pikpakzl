@@ -59,12 +59,43 @@ def main():
             print("HTTPS_PAGE_VARIANT:",p,nav_status)
             if nav_status != 200 or b"ZL" not in nav_body:
                 return 13
+        # The phone homepage must visibly contain the new quotes and TP/SL cards.
+        for marker in (b'id="btc-price"',b'id="eth-price"',b'id="entry-price"',
+                       b'id="sl-price"',b'id="tp-price"',b'id="floating-pnl"'):
+            if marker not in root_body:
+                print("PANEL_VERIFY_FAILED: missing mobile quote/position field")
+                return 16
+        print("HTTPS_PRICE_POSITION_UI_PRESENT: true")
         status,raw=probe("/status",pw)
         print("HTTPS_STATUS_ENDPOINT:",status)
         if status!=200:return 6
         data=json.loads(raw)
         print("HTTPS_REAL_TRADING_ENABLED:",data.get("liveTradingEnabled"))
         print("HTTPS_HAS_CONTROL:",isinstance(data.get("control"),dict))
+        quotes=data.get("latestPrices")
+        if not isinstance(quotes,dict) or not isinstance(quotes.get("symbols"),dict):
+            print("PANEL_VERIFY_FAILED: quote payload missing")
+            return 17
+        for symbol in ("BTCUSDT","ETHUSDT"):
+            quote=quotes["symbols"].get(symbol)
+            if not isinstance(quote,dict) or "price" not in quote or "stale" not in quote or "ageSeconds" not in quote:
+                print("PANEL_VERIFY_FAILED: required symbol quote missing")
+                return 18
+            print("MARK_PRICE_SYMBOL:",symbol)
+            print("MARK_PRICE:",quote.get("price"))
+            print("MARK_PRICE_AGE_SECONDS:",quote.get("ageSeconds"))
+            print("MARK_PRICE_STALE:",quote.get("stale"))
+            if quote.get("price") is not None and float(quote["price"]) <= 0:
+                return 19
+        if data.get("position") and not isinstance(data.get("positionDetail"),dict):
+            print("PANEL_VERIFY_FAILED: nonempty position without detail")
+            return 20
+        if isinstance(data.get("positionDetail"),dict):
+            p=data["positionDetail"]
+            for field in ("entryPrice","stopPrice","takeProfitPrice","quantity","markPriceStale"):
+                if field not in p:
+                    return 21
+        print("PAPER_POSITION_DETAIL_API: verified")
         health=data.get("marketHealth")
         print("MARKET_DIAG_SCHEMA_OK:",isinstance(health,dict))
         if isinstance(health,dict):

@@ -54,6 +54,23 @@ def public_snapshot():
         trades=current.get("history") or []
         balance=float(current.get("balance",bot.PAPER_BALANCE))
         days=[round(float(t.get("net",0)),6) for t in trades]
+        stats={symbol:{"closed":0,"wins":0,"net":0.0,"open":False}
+               for symbol in bot.SYMBOLS}
+        for t in trades:
+            symbol=(t.get("trade") or {}).get("symbol")
+            if symbol in stats:
+                st=stats[symbol]
+                net=float(t.get("net",0))
+                st["closed"]+=1
+                st["wins"]+=int(net>0)
+                st["net"]+=net
+        position=current.get("trade") or {}
+        if position.get("symbol") in stats:
+            stats[position["symbol"]]["open"]=True
+        for st in stats.values():
+            st["net"]=round(st["net"],4)
+        last_exit=float(current.get("last_exit") or 0)
+        cooldown_remaining=max(0,int(1800-max(0,time.time()-last_exit))) if last_exit else 0
         market=market_snapshot(WORKER["running"])
         latest_prices=quotes.current()
         position_detail=paper_position_view(current.get("trade"),latest_prices,bot.TAKER_FEE)
@@ -75,8 +92,15 @@ def public_snapshot():
             "closedTrades":len(trades),
             "wins":sum(1 for x in days if x>0),
             "losses":sum(1 for x in days if x<=0),
-            "lastTrades":[{"net":round(float(t.get("net",0)),4),"reason":str(t.get("reason",""))[:30],
-                           "at":t.get("at"),"marginAsset":"USDC" if (t.get("trade") or {}).get("symbol")=="BTCUSDC" else "USDT"} for t in trades[-12:]],
+            "symbolStats":stats,
+            "onePositionAcrossAllSymbols":True,
+            "cooldownRemainingSeconds":cooldown_remaining,
+            "lastTrades":[{"symbol":str((t.get("trade") or {}).get("symbol","UNKNOWN")),
+                           "side":str((t.get("trade") or {}).get("side","")),
+                           "net":round(float(t.get("net",0)),4),
+                           "reason":str(t.get("reason",""))[:30],
+                           "at":t.get("at"),
+                           "marginAsset":"USDC" if (t.get("trade") or {}).get("symbol")=="BTCUSDC" else "USDT"} for t in trades[-12:]],
             "position":current.get("trade"),
             "positionDetail":position_detail,
             "latestPrices":latest_prices,

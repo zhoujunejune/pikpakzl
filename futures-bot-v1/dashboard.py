@@ -86,7 +86,12 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0d1728;border-radius
  <div class="posfoot">仅模拟：止盈止损由机器人按周期检查标记价格，可能出现滑点。浮动盈亏扣除估算双边手续费，不含资金费率及真实成交滑点。</div>
 </div>
 </section>
-<section class="card"><h2>最近12笔模拟平仓</h2><div id="trades" class="sub">暂无记录</div></section>
+<section class="card"><h2>各交易对模拟统计</h2>
+<div id="symbol-stats" class="sub">正在读取…</div>
+<div class="row" style="margin-top:12px;align-items:start"><small>为什么暂时没有其他开仓？</small><b id="entry-reason" style="text-align:right;max-width:69%;font-size:12px">正在读取…</b></div>
+<small>全机器人只允许一个持仓，已有持仓期间不再新开其他币对；平仓后冷却30分钟。即使空仓，也要符合突破、成交量和趋势条件。这里展示真实记录，不代表每个交易对都必须成交。</small>
+</section>
+<section class="card"><h2>最近12笔模拟平仓（含交易对）</h2><div id="trades" class="sub">暂无记录</div></section>
 <section class="card"><h2>安全与数据</h2><small id="storage">状态读取中</small><p class="sub" style="font-size:12px">2026年实验版 · 模拟成交基于标记价格估算，并非交易所真实成交结果。页面需HTTPS身份验证；请勿公开密码。</p></section>
 </main><script>
 const fmt=v=>typeof v==="number"&&Number.isFinite(v)?v.toFixed(2):"—";
@@ -157,8 +162,25 @@ async function refresh(){
       "最新价格尚未确认，不展示止盈止损的当前距离":
       "距止盈 "+fmt(p.distanceToTakeProfitPct)+"% · 距止损 "+fmt(p.distanceToStopPct)+"%";
   }
+  const stats=s.symbolStats||{};
+  el("symbol-stats").innerHTML=(s.configuredSymbols||["BTCUSDT","ETHUSDT","BTCUSDC"]).map(sym=>{
+    const item=stats[sym]||{},closed=item.closed||0,wins=item.wins||0;
+    const wr=closed?(wins*100/closed).toFixed(1)+"%":"—";
+    const net=typeof item.net==="number"?((item.net>0?"+":"")+fmt(item.net)):"—";
+    return '<div class="trade"><span><b>'+safe(sym)+'</b>'+(item.open?' · <b class="good">当前持仓</b>':' · 空仓')+
+      '</span><span>平仓 '+closed+' · 胜 '+wins+' · '+wr+'</span><b>'+net+' U</b></div>';
+  }).join("");
+  const blocked=s.halted?"内部安全锁定":c.emergency_stop?"紧急锁定":!c.entry_enabled?"已暂停新开仓":
+    s.position?"当前 "+safe(s.position.symbol)+" 已持仓，其他币对等待":
+    s.cooldownRemainingSeconds>0?"平仓冷却中，剩余 "+Math.ceil(s.cooldownRemainingSeconds/60)+" 分钟":
+    "允许扫描，等待符合策略条件的信号";
+  el("entry-reason").textContent=blocked;
   el("storage").textContent=s.storageNote||"模拟数据";
-  el("trades").innerHTML=(s.lastTrades||[]).length?s.lastTrades.slice().reverse().map(x=>'<div class="trade"><span>'+safe(new Date(x.at*1000).toLocaleString())+'</span><span>'+safe(x.reason)+'</span><b>'+fmt(x.net)+' '+safe(x.marginAsset||'USDT')+'（模拟）</b></div>').join(""):"暂无已平仓交易";
+  el("trades").innerHTML=(s.lastTrades||[]).length?s.lastTrades.slice().reverse().map(x=>
+    '<div class="trade"><span>'+safe(new Date(x.at*1000).toLocaleString())+' · <b>'+safe(x.symbol||"未知币对")+
+    '</b> · '+(x.side==="BUY"?"做多":x.side==="SELL"?"做空":"")+
+    '</span><span>'+safe(x.reason)+'</span><b>'+fmt(x.net)+' '+safe(x.marginAsset||'USDT')+'</b></div>'
+  ).join(""):"暂无已平仓交易";
   if(!init && Object.keys(c).length){
    el("lev").value=String(c.leverage);el("risk").value=String(c.risk_fraction);el("margin").value=String(c.max_margin_fraction);init=true;
   }

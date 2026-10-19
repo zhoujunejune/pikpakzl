@@ -26,7 +26,7 @@ let paymentCacheAt = 0;
 const topicCache = new Map();
 const sellState = new Map();
 // Read-only health output for the control panel. No trade inputs or decisions depend on it.
-const WORKER_HEALTH_FILE = '/tmp/risk-worker-health.json';
+const WORKER_HEALTH_FILE = process.env.RISK_WORKER_HEALTH_FILE || '/tmp/risk-worker-health.json';
 const health = {
   at: null,
   pid: process.pid,

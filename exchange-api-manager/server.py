@@ -207,6 +207,54 @@ def persist(record):
     finally:
         if os.path.exists(temp):os.unlink(temp)
 
+def runtime_ready(record):
+    # Compare locally; never reveal API secret values to the browser.
+    if not record or record["exchange"]!="binance":
+        return bool(record)
+    filepath=ROOT / record["bot"] / "binance.env"
+    try:
+        names={"futures":("BINANCE_API_KEY","BINANCE_API_SECRET"),
+               "prediction":("BINANCE_PREDICTION_API_KEY","BINANCE_PREDICTION_API_SECRET")}
+        first,second=names[record["bot"]]
+        values=dict(line.split("=",1) for line in filepath.read_text(encoding="utf8").splitlines()
+                    if "=" in line)
+        return values.get(first)==record["apiKey"] and values.get(second)==record["apiSecret"]
+    except (OSError,ValueError,KeyError):
+        return False
+
+
+def delete_saved(bot,exchange):
+    # An API remains present until the owner explicitly confirms removal.
+    original=safe_read(bot,exchange)
+    if original is None:return False
+    target=path_for(bot,exchange)
+    if exchange=="binance":
+        # An empty higher-priority EnvironmentFile masks legacy /etc secrets
+        # after bot restart, rather than silently falling back to an old API.
+        parent=ROOT / bot
+        names={"futures":("BINANCE_API_KEY","BINANCE_API_SECRET"),
+               "prediction":("BINANCE_PREDICTION_API_KEY","BINANCE_PREDICTION_API_SECRET")}
+        first,second=names[bot]
+        fd,temp=tempfile.mkstemp(prefix=".revoke-",dir=str(parent))
+        try:
+            os.fchmod(fd,0o600)
+            with os.fdopen(fd,"w",encoding="utf8") as fp:
+                fp.write(first+"=\n"+second+"=\n")
+                if bot=="prediction":
+                    fp.write("BINANCE_PREDICTION_WALLET_ADDRESS=\nBINANCE_PREDICTION_WALLET_ID=\n")
+                fp.flush();os.fsync(fp.fileno())
+            os.replace(temp,parent/"binance.env")
+        finally:
+            if os.path.exists(temp):os.unlink(temp)
+    target.unlink()
+    try:
+        d=os.open(str(target.parent),os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(d)
+        finally:os.close(d)
+    except OSError:pass
+    return True
+
+
 def validate(body):
     if not isinstance(body,dict) or set(body)!={"bot","exchange","apiKey","apiSecret","passphrase","walletAddress","walletId"}:
         raise ValueError("INVALID_FIELDS")
@@ -292,13 +340,15 @@ class Handler(BaseHTTPRequestHandler):
                 rec=safe_read(bot,exchange)
             return self.send(200,{"ok":True,"configured":bool(rec),
                 "bot":bot,"exchange":exchange,"updatedAt":rec.get("updatedAt") if rec else None,
+                "runtimeConfigReady":runtime_ready(rec),"persistentStorage":True,
                 "adapterReady":exchange in AUTHORIZED[bot]})
         if url.path=="/healthz":return self.send(200,{"ok":True,"service":"exchange-api-manager"})
         return self.send(404,{"ok":False,"error":"NOT_FOUND"})
     def do_POST(self):
         if not self.post_security():return self.send(403,{"ok":False,"error":"AUTH_AND_ORIGIN_REQUIRED"})
         path=urlsplit(self.path).path
-        if path not in ("/api/credentials","/api/check"):return self.send(404,{"error":"NOT_FOUND"})
+        if path not in ("/api/credentials","/api/check","/api/delete"):
+            return self.send(404,{"error":"NOT_FOUND"})
         try:
             size=int(self.headers.get("Content-Length","0"))
             if not 0<size<=4096:return self.send(413,{"error":"BODY_TOO_LARGE_OR_EMPTY"})
@@ -311,6 +361,18 @@ class Handler(BaseHTTPRequestHandler):
                 # restarts only that bot. No live trading flags are modified here.
                 return self.send(200,{"ok":True,"saved":True,"bot":record["bot"],
                                       "exchange":record["exchange"],"tradingEnabledBySave":False})
+            if path=="/api/delete":
+                if not isinstance(body,dict) or set(body)!={"bot","exchange","confirm"}:
+                    raise ValueError("INVALID_DELETE_FIELDS")
+                bot,exchange=body["bot"],body["exchange"]
+                if body["confirm"]!="DELETE_THIS_API":
+                    raise ValueError("EXPLICIT_CONFIRMATION_REQUIRED")
+                if bot not in BOTS or exchange not in EXCHANGES:
+                    raise ValueError("INVALID_SELECTION")
+                with STORE_LOCK: removed=delete_saved(bot,exchange)
+                if not removed:
+                    return self.send(404,{"ok":False,"error":"API_NOT_CONFIGURED"})
+                return self.send(200,{"ok":True,"deleted":True,"bot":bot,"exchange":exchange})
             if not isinstance(body,dict) or set(body)!={"bot","exchange"}:
                 raise ValueError("INVALID_SELECTION")
             bot,exchange=body["bot"],body["exchange"]

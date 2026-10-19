@@ -71,6 +71,9 @@ export function createDynamicEntryShadow({
     state.model=saved.model;
    if(saved.training?.status)state.training=saved.training;
    state.lastTrainedCount=Number(saved.lastTrainedCount)||0;
+   // Redis has confirmed persisted rows/model state: a service restart must
+   // not incorrectly display them as unsaved in the phone UI.
+   state.persisted=true;
   }catch{
    state.storage='MEMORY_ONLY';
    try{await client?.disconnect();}catch{}

@@ -56,6 +56,78 @@ print("AUDIT_EVENT_COUNTS",count.most_common(20))
 print("AUDIT_RECENT_PROCESS_EVENTS",events[-30:])
 ' || true
 echo "AUDIT_EVENT_SUMMARY_END"
+echo "EDGE_SETTLEMENT_SOURCE_AUDIT_BEGIN"
+python3 - <<'PY'
+import json,time,datetime,urllib.request,urllib.error
+urls={
+ 'EDGE_WORKER':'https://edge-5m-v1.zl528094-3ba.workers.dev/status',
+ 'RENDER_V2':'https://zl-signal-v2-migration.onrender.com/api/round-stats',
+ 'ALIYUN_V2':'http://127.0.0.1:13002/api/round-stats',
+ 'ALIYUN_EDGE_PROXY':'http://127.0.0.1:13001/api/shadow-breakout20/edge-5m',
+}
+observations={}
+def utc(v):
+ try:
+  n=float(v)
+  if n<1e9:return str(v)
+  if n>1e11:n/=1000
+  return datetime.datetime.fromtimestamp(n,datetime.timezone.utc).isoformat(timespec='minutes')
+ except:return "invalid"
+for label,url in urls.items():
+ try:
+  req=urllib.request.Request(url,headers={'Accept':'application/json','User-Agent':'zl-edge-resolution-audit/1.0'})
+  with urllib.request.urlopen(req,timeout=16) as response:
+   status=response.status
+   data=json.loads(response.read(2_500_000))
+  out={'http':status,'ok':data.get('ok') if isinstance(data,dict) else None}
+  if label in ('EDGE_WORKER','ALIYUN_EDGE_PROXY'):
+   recent=data.get('recent',[]) if isinstance(data,dict) else []
+   results=data.get('results',{}) if isinstance(data,dict) else {}
+   health=data.get('health',{}) if isinstance(data,dict) else {}
+   out.update({'model':data.get('model'),'statsScope':data.get('statsScope'),
+    'results':{x:results.get(x) for x in ('pending','locked','observedRounds','overall','up','down')},
+    'health':{str(k):str(v)[:170] for k,v in health.items() if not any(z in str(k).lower() for z in ['secret','token','password','key','auth','url','address'])},
+    'last_twelve':[{'round':x.get('round'),'roundUtc':utc(x.get('round')),'actual':x.get('actual'),'direction':x.get('direction'),
+      'pendingReason':str(x.get('pendingReason') or '')[:90],'officialStatus':str(x.get('officialStatus') or '')[:55]}
+      for x in recent[:12] if isinstance(x,dict)]})
+   observations[label]=recent
+  else:
+   records=data.get('records',[]) if isinstance(data,dict) else []
+   out.update({'totalRecordCount':len(records),'settlementSource':data.get('settlementSource'),
+     'summary':{k:data.get('summary',{}).get(k) for k in ('settled','pending','samples','hits')},
+     'latestRecords':[{'round':x.get('roundStartMs'),'roundUtc':utc(x.get('roundStartMs')),
+      'officialDirection':x.get('officialDirection'),'actual':x.get('actual'),
+      'resolutionEvidence':str(x.get('resolutionEvidence') or '')[:95],
+      'settledAt':utc(x.get('officialSettledAt') or x.get('settledAt') or 0)}
+      for x in records[:15] if isinstance(x,dict)]})
+   observations[label]=records
+  print("EDGE_AUDIT",label,json.dumps(out,ensure_ascii=False,default=str)[:6500])
+ except urllib.error.HTTPError as e:
+  print("EDGE_AUDIT",label,json.dumps({'http':e.code,'error':'HTTP_FAILURE'}))
+ except Exception as e:
+  print("EDGE_AUDIT",label,json.dumps({'error':type(e).__name__,'description':str(e)[:85]}))
+edge=observations.get('EDGE_WORKER') or []
+for source in ('RENDER_V2','ALIYUN_V2'):
+ rows=observations.get(source) or []
+ m={}
+ for row in rows:
+  if isinstance(row,dict):
+   try:m[int(row.get('roundStartMs'))]=row
+   except:pass
+ paired=[]
+ for x in edge[:30]:
+  if not isinstance(x,dict):continue
+  try:rr=int(x.get('round'))
+  except:continue
+  if rr in m:
+   y=m[rr]
+   paired.append({'roundUtc':utc(rr),'edgeActual':x.get('actual'),
+    'sourceOfficial':y.get('officialDirection'),'sourceActual':y.get('actual'),
+    'sourceEvidence':str(y.get('resolutionEvidence') or '')[:70]})
+ print('EDGE_AUDIT_MATCH',source,json.dumps({'edgeWindow':len(edge[:30]),'sourceRows':len(rows),
+  'matchedRounds':len(paired),'matched':paired[:12]},ensure_ascii=False))
+PY
+echo "EDGE_SETTLEMENT_SOURCE_AUDIT_END"
 echo "HEALTH_LOG_TRADE_ERROR_TYPES_BEGIN"
 journalctl -u zl-prediction-trade.service --no-pager --since '30 minutes ago' -o cat 2>/dev/null | python3 -c 'import re,sys;lines=[x.strip() for x in sys.stdin if re.search(r"Error:|ERR_|EACCES|ENOENT|Failed|denied|status=|signal=",x,re.I)];print("\n".join(re.sub(r"(?i)(token|secret|password|key)\s*[:=]\s*\S+",r"\1=[REDACTED]",x[:180]) for x in lines[-20:]))' || true
 echo "HEALTH_LOG_TRADE_ERROR_TYPES_END"

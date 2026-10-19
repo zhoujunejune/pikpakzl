@@ -20,6 +20,31 @@ if [ ! -f /etc/apt/sources.list.d/caddy-stable.list ]; then
   apt-get update -qq
 fi
 apt-get install -y -qq caddy
+# Preserve the prediction host and exchange-manager routes on future
+# phone-panel redeploys. Rotate the existing site's bcrypt hash in place.
+if test -f /etc/caddy/Caddyfile && \
+   grep -Fq 'prediction.47-237-188-69.sslip.io {' /etc/caddy/Caddyfile && \
+   grep -Fq 'handle_path /api-keys/* {' /etc/caddy/Caddyfile; then
+  python3 - <<'PY'
+from pathlib import Path
+import os,re
+p=Path('/etc/caddy/Caddyfile')
+content=p.read_text()
+new_hash=os.environ['PANEL_BCRYPT_HASH']
+hosts=[os.environ['PANEL_DOMAIN'],'prediction.47-237-188-69.sslip.io']
+for host in hosts:
+    start=content.find(host+' {')
+    if start<0:raise SystemExit('PANEL_AUTH_HOST_MISSING')
+    end=content.find('\n}\n',start)
+    if end<0:raise SystemExit('PANEL_AUTH_END_MISSING')
+    block=content[start:end]
+    old=re.search(r'(basic_auth\s*{\s*zl\s+)(\$2[aby]\$[^\s}]+)',block)
+    if not old:raise SystemExit('PANEL_BCRYPT_MISSING')
+    block=block[:old.start(2)]+new_hash+block[old.end(2):]
+    content=content[:start]+block+content[end:]
+p.write_text(content)
+PY
+else
 cat >/etc/caddy/Caddyfile <<EOF
 $PANEL_DOMAIN {
   encode zstd gzip
@@ -44,6 +69,7 @@ $PANEL_DOMAIN {
   }
 }
 EOF
+fi
 chmod 0644 /etc/caddy/Caddyfile
 caddy validate --config /etc/caddy/Caddyfile >/dev/null
 printf 'PUBLIC_ORIGIN=https://%s\n' "$PANEL_DOMAIN" > /etc/zl-futures-bot-panel.env

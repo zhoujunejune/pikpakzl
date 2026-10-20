@@ -98,6 +98,27 @@ if 'const previewCard =' in new:
  new=new[:start]+new[finish:]
 assert 'const primaryCard =' not in new and 'const previewCard =' not in new
 print('DEEPSEEK_UNUSED_LEGACY_RENDERER_SOURCE_REMOVED=true')
+# Remove inactive shadow modules and expose explicit retired-model responses.
+obsolete_route="  if (req.method === 'GET' && url.pathname === '/api/shadow-breakout20/status')"
+normal_route="  if (req.method === 'GET' && url.pathname === '/api/round-stats')"
+if obsolete_route in new:
+ a=new.index(obsolete_route);b=new.index(normal_route,a)
+ removed=new[a:b]
+ assert 'noviceMixShadow.handler' in removed and 'postflipStats.snapshot' in removed
+ retired="  if (req.method === 'GET' && (url.pathname.startsWith('/api/shadow-breakout20/') || url.pathname === '/api/postflip-official-stats')) {\n    res.writeHead(410, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'});\n    return res.end(JSON.stringify({ok:false,error:'RETIRED_MODEL_DEEPSEEK_ONLY'}));\n  }\n"
+ new=new[:a]+retired+new[b:]
+for module in (
+ "import { shadowCard, shadowScript, proxyShadowStatus } from './shadow-breakout20-dashboard.mjs';\n",
+ "import { noviceMixShadow } from './novice-mix-shadow.mjs';\n",
+ "import {createPostflipStatsService,POSTFLIP_START_ROUND} from './postflip-official-stats.mjs';\n"):
+ if module in new:new=new.replace(module,'',1)
+obsolete_init='const postflipStats=createPostflipStatsService('
+if obsolete_init in new:
+ a=new.index(obsolete_init);b=new.index('\n',a)
+ new=new[:a]+new[b+1:]
+assert 'noviceMixShadow' not in new and 'postflipStats' not in new
+assert 'proxyShadowStatus' not in new and 'shadowCard' not in new
+print('DEEPSEEK_OBSOLETE_SHADOW_BACKEND_DETACHED=true')
 assert 'renderDeepSeekRoundStats' in new
 assert '/deepseek/api/history?limit=80' in new
 assert 'async function load(){' in new

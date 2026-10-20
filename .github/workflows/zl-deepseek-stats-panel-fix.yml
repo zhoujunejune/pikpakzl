@@ -2,7 +2,9 @@ name: Deploy DeepSeek-only statistics display to production panel
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
-    paths: [.github/workflows/zl-deepseek-stats-panel-fix.yml]
+    paths:
+      - .github/workflows/zl-deepseek-stats-panel-fix.yml
+      - prediction-bot-v1/aliyun_deepseek_stats_panel_fix.py
   workflow_dispatch:
 permissions:
   contents: read

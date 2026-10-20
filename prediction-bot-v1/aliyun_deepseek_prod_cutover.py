@@ -204,6 +204,9 @@ def main():
   assert "validateDeepSeekProductionLive" in patches['trade']
   assert "90000" in patches['wrapper']
   print('DEEPSEEK_OFFLINE_SYNTAX_AND_ROUTE_TEST_PASSED=true',flush=True)
+  if os.environ.get('DEEPSEEK_CUTOVER_DRY_RUN')=='1':
+   print('DEEPSEEK_CUTOVER_DRY_RUN_PASSED=true',flush=True)
+   return
   archive=pathlib.Path('/var/lib/zl-prediction/archive/source-backups')
   backup=archive/('deepseek-prod-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
   backup.mkdir(parents=True,exist_ok=False)

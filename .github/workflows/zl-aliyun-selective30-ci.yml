@@ -1,0 +1,56 @@
+name: Test Alibaba prediction Selective V2 30s qualified dual-source migration
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_selective30_patch.py'
+      - '.github/workflows/zl-aliyun-selective30-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify Python source syntax
+        run: python -m py_compile prediction-bot-v1/aliyun_selective30_patch.py prediction-bot-v1/aliyun_selective30_deploy.py
+      - name: Patch the exact known production code versions in disposable files
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import importlib.util, tempfile, urllib.request, subprocess
+          modfile='prediction-bot-v1/aliyun_selective30_patch.py'
+          spec=importlib.util.spec_from_file_location('selective30',modfile)
+          p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+          p.NODE='node'
+          refs={
+           'router':('f295b1624c0af5a4ff1b7b31571d0ca4c7503a2b','round-tracker/selective-v2-fast8-router.mjs'),
+           'tracker':('5cc579e7cc70239a3d90a054d034f620adfd0d16','round-tracker/index-rest.mjs'),
+           'choice':('f295b1624c0af5a4ff1b7b31571d0ca4c7503a2b','railway-diagnostic/production-signal-choice.mjs'),
+           'trade':('f295b1624c0af5a4ff1b7b31571d0ca4c7503a2b','railway-diagnostic/index.mjs'),
+           'panel':('5cc579e7cc70239a3d90a054d034f620adfd0d16','railway-diagnostic/panel-stats-shell.mjs'),
+          }
+          with tempfile.TemporaryDirectory() as directory:
+           paths={}
+           for name,(sha,source) in refs.items():
+            url='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/'+source
+            with urllib.request.urlopen(url,timeout=30) as r: original=r.read().decode()
+            patched=p.PATCHES[name](original)
+            filename=Path(directory)/(name+'.mjs')
+            filename.write_text(patched)
+            subprocess.run(['node','--check',str(filename)],check=True)
+            paths[name]=filename
+            print('OFFLINE_PATCH_VALID',name,len(patched))
+           p.node_test_router(paths['router'])
+           assert 'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION' not in paths['choice'].read_text()
+           assert "name:'行情方向兜底（8秒）'" not in paths['tracker'].read_text()
+           assert "id:'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION',name:'低置信度行情兜底'" not in paths['panel'].read_text()
+           assert p.NEW in paths['choice'].read_text()
+           assert p.NEW in paths['tracker'].read_text() or 'SELECTIVE8_VERSION' in paths['tracker'].read_text()
+           print('OFFLINE_30S_TWO_SOURCE_TEST_SUCCEEDED')
+          PY

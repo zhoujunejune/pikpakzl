@@ -106,7 +106,7 @@ python3 - <<'PY'
 import json,urllib.request,subprocess
 def get(port,url):
  with urllib.request.urlopen('http://127.0.0.1:'+str(port)+url,timeout=8) as r:return json.load(r)
-data=get(13019,'/api/status')
+data=get(13029,'/api/status')
 assert data['ok'] is True and data['model']=='DEEPSEEK_5M_V1'
 assert data['realOrderEnabled'] is False and data['tradeIntegration'] is False
 print('DEEPSEEK_STAGE_ALI_SERVICE_ACTIVE',subprocess.check_output(['systemctl','is-active','zl-prediction-deepseek5'],text=True).strip())

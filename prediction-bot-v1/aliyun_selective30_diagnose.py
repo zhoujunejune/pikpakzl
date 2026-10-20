@@ -63,6 +63,42 @@ f=up.get('facts') or {}
 keys=('currentScore','normalizedMomentum15s','currentTrendScore','normalizedMomentum30s','normalizedMomentum60s','regimeScore','liveScore','predictionMarketUpMid','predictionMarketTopicId','absorptionRisk','depthAgeMs','predBookAgeMs','roundOpenAligned','lastAggTradeAgeMs','predictionMarketUpdateTimestampMs')
 show('V3_LIVE',{k:up.get(k) for k in ('round','factsCalculatedAt','status','source','generatedAt','model')})
 show('V3_CAUSAL_INPUTS',{k:f.get(k,'NOT_PRESENT') for k in keys})
+# Only actual rows under the live 30s model; older 8s history is not comparable.
+model='SELECTIVE_V2_30S_CURRENT_ROUND_V2'
+cohort=sorted((x for x in records if x.get('productionModel')==model),key=lambda x:int(x.get('roundStartMs') or 0))
+start_at=int(datetime.datetime(2026,10,20,1,51,tzinfo=datetime.timezone.utc).timestamp()*1000)
+cohort_all=sorted((x for x in records if int(x.get('roundStartMs') or 0)>=start_at),key=lambda x:int(x.get('roundStartMs') or 0))
+locked=[x for x in cohort if x.get('productionPrediction') in ('UP','DOWN')]
+timings=sorted([float(x.get('productionDelayMs')) for x in locked if isinstance(x.get('productionDelayMs'),(int,float))])
+settled=[x for x in locked if x.get('productionActual') in ('UP','DOWN')]
+hit=sum(1 for x in settled if x.get('productionActual')==x.get('productionPrediction'))
+print('CURRENT_30S_MODEL_COARSE_AUDIT',json.dumps({
+ 'audit_now_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+ 'all_rounds_since_deploy_in_last_100':len(cohort_all),
+ 'new_model_locked_in_last_100':len(locked),
+ 'no_lock_in_last_100_since_deploy':sum(1 for x in cohort_all if x.get('productionPrediction') not in ('UP','DOWN')),
+ 'source_counts':dict(collections.Counter(x.get('productionSource') for x in locked)),
+ 'lock_delay_ms_min':min(timings) if timings else None,
+ 'lock_delay_ms_median':timings[len(timings)//2] if timings else None,
+ 'lock_delay_ms_max':max(timings) if timings else None,
+ 'on_time_locks':sum(1 for t in timings if 23000<=t<30000),
+ 'settled_locks':len(settled),
+ 'settled_correct':hit,
+ 'official_pending_locks':len(locked)-len(settled),
+ 'newest_record_round':max((x.get('roundStartMs') or 0 for x in records),default=0),
+ 'newest_new_model_round':max((x.get('roundStartMs') or 0 for x in locked),default=0),
+},ensure_ascii=False))
+# The 8s prewarm unit is still in the codebase but should not be an input to
+# the 30-second model. Verify the deployed JS names, not just the repo version.
+srcpath=pathlib.Path('/opt/zl-prediction-live/src/round-tracker/index-rest.mjs')
+src=srcpath.read_text()
+print('CURRENT_INPUT_CODE_MARKERS',json.dumps({
+ 'has_current_round_feature_array':'selective30FeatureSamples' in src,
+ 'current_facts_from_v3':'const currentFacts=causal&&live.facts' in src,
+ 'no_previous_trend_features':'fromPrevious:[],fromEarlierPrevious:[]' in src,
+ 'current_feature_weight_70pct':'latest*0.7+mean*0.3' in src,
+ 'saw_legacy_latency_filter_removed':"filter(x=>x!=='LOCK_DELAY_ABOVE_ADAPTIVE_MAX')" in src,
+},ensure_ascii=False))
 path=pathlib.Path('/opt/zl-prediction-live/src/round-tracker/selective-v2-fast8-router.mjs')
 if path.exists():
  txt=path.read_text()

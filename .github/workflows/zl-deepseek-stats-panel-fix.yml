@@ -42,6 +42,10 @@ jobs:
           text=get('/').decode('utf-8','replace')
           assert 'renderDeepSeekRoundStats' in text
           assert '/deepseek/api/history?limit=80' in text
+          assert 'id="activeFast8ModelCard"' not in text
+          assert 'id="directionModeChoices"' not in text
+          assert 'id="orderSignalModelSave"' not in text
+          assert 'id="sourceRateRows"' not in text
           ledger=json.loads(get('/deepseek/api/history?limit=10'))
           assert ledger.get('ok') and ledger.get('model')=='DEEPSEEK_5M_V1'
           assert isinstance(ledger.get('records'),list)

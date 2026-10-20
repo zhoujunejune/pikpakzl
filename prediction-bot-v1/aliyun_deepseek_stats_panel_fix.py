@@ -71,6 +71,18 @@ for row in rows:
 assert assembly+already_assembly==1 and client_scripts+already_script==1, 'DEEPSEEK_UI_COMPOSITION_CONTEXT_MISMATCH'
 new=''.join(outlines)
 assert 'primaryCard}${statsCard}' not in new
+# Stop legacy model-only background work in the dashboard process.
+# DeepSeek itself runs independently in zl-prediction-deepseek5.
+retired_begin='  void noviceMixShadow.start()'
+retired_end="  log('panel_stats_shell_started',"
+if retired_begin in new:
+ begin=new.index(retired_begin)
+ end=new.index(retired_end,begin)
+ block=new[begin:end]
+ assert 'postflipStats.start()' in block and 'novice_shadow_start_error' in block
+ new=new[:begin]+new[end:]
+assert retired_begin not in new
+print('DEEPSEEK_LEGACY_SHADOW_JOBS_STOPPED=true')
 assert 'renderDeepSeekRoundStats' in new
 assert '/deepseek/api/history?limit=80' in new
 assert 'async function load(){' in new

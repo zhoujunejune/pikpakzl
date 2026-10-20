@@ -22,3 +22,5 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_deepseek_panel_process_audit.py
+
+# Re-run read-only live layout probe to align precise patch anchors.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install isolated read-only Qwen signal service through preauthorized SWAS Cloud Assistant."""
+"""Install isolated read-only DeepSeek signal service through preauthorized SWAS Cloud Assistant."""
 import base64,os,re,time,sys
 REGION='ap-southeast-1';INSTANCE='b67374069bb3457ba6a3a2ede9305d3f'
 def main():
@@ -21,7 +21,7 @@ NODE=/opt/zl-prediction-node/bin/node
 test -x "$NODE"
 TMP=$(mktemp --suffix=.mjs)
 trap 'rm -f "$TMP"' EXIT
-curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/zhoujunejune/pikpakzl/REV/prediction-bot-v1/llm-5m-engine.mjs -o "$TMP"
+curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/zhoujunejune/pikpakzl/REV/prediction-bot-v1/deepseek-5m-engine.mjs -o "$TMP"
 "$NODE" --check "$TMP"
 mkdir -p /opt/zl-prediction-live/llm5 /var/lib/zl-prediction/llm5
 chown zl-pred:zl-pred /opt/zl-prediction-live/llm5 /var/lib/zl-prediction/llm5
@@ -44,7 +44,7 @@ chown root:root /etc/zl-prediction/llm5.env
 chmod 0600 /etc/zl-prediction/llm5.env
 cat > /etc/systemd/system/zl-prediction-llm5.service <<'EOF'
 [Unit]
-Description=ZL Qwen five-minute independent market signal source (no orders)
+Description=ZL DeepSeek five-minute independent market signal source (no orders)
 After=network-online.target zl-prediction-v3.service
 Wants=network-online.target zl-prediction-v3.service
 [Service]

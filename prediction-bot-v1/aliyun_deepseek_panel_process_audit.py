@@ -39,6 +39,20 @@ if p.is_file():
   for n in range(i+1,min(i+5,len(lines))):
    if any(x in lines[n] for x in ('API_KEY','API_SECRET','PASSWORD','SECRET','AUTHORIZATION')):continue
    print('LIVE_PANEL_CONTEXT',n+1,repr(lines[n][:180]))
+ print('LIVE_STATS_STRUCTURE_BEGIN')
+ print('LIVE_STATS_CARD_HEADING',repr(s[s.find('const statsCard ='):s.find('const statsCard =')+320]))
+ for needle in ('const statsScript =','async function getStats(){','async function load(){',' // Only the two currently selectable','const policyScript =','const policyCard =','const primaryScript =','async function loadOrderModelStats(){','function chosenModelName(model){','function syncActiveCatalog(j){'):
+  ii=[];start=0
+  while len(ii)<10:
+   at=s.find(needle,start)
+   if at<0:break
+   ii.append(at);start=at+len(needle)
+  print('LIVE_STATS_NEEDLE',repr(needle),'COUNT',s.count(needle),'OFFSETS',ii)
+  for at in ii[:2]:
+   snippet=s[at:at+430]
+   if any(v in snippet for v in ('API_KEY','API_SECRET','PASSWORD','SECRET','AUTHORIZATION')):continue
+   print('LIVE_STATS_SNIP',repr(needle),repr(snippet))
+ print('LIVE_STATS_STRUCTURE_END')
  print('LIVE_PANEL_ANCHORS_END')
 else:print('LIVE_PANEL_EXISTS=false')
 PY

@@ -48,6 +48,23 @@ i,j,old=extract(before,'production')
 new=before[:i]+donor+before[j:]
 assert new[:i]==before[:i]
 assert new[i+len(donor):]==before[j:]
+# Replace only HTML assembly for the read-only statistics module.
+# Do not modify order control scripts or source policy files.
+rows=new.splitlines(keepends=True)
+outlines=[]
+assembly=0
+client_scripts=0
+for row in rows:
+ if row.lstrip().startswith('let out = html.includes(marker) ? html.replace(marker,'):
+  row="  let out = html.includes(marker) ? html.replace(marker, statsCard + marker) : html.replace('</body>', statsCard + '</body>');\n"
+  assembly+=1
+ elif row.lstrip().startswith("return out.replace('</body>',") and 'primaryScript' in row:
+  row="  return out.replace('</body>', statsScript + '</body>');\n"
+  client_scripts+=1
+ outlines.append(row)
+assert assembly==1 and client_scripts==1, 'DEEPSEEK_UI_COMPOSITION_CONTEXT_MISMATCH'
+new=''.join(outlines)
+assert 'primaryCard}${statsCard}' not in new
 assert 'renderDeepSeekRoundStats' in new
 assert '/deepseek/api/history?limit=80' in new
 assert 'async function load(){' in new

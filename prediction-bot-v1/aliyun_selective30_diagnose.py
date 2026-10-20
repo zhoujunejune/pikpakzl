@@ -50,7 +50,7 @@ show('V2_HEALTH_FROM_STATS',{k:v for k,v in (v2.get('health') or {}).items() if 
 records=v2.get('records') or []
 selected=records[-30:]
 if selected and selected[0].get('roundStartMs',0)>selected[-1].get('roundStartMs',0):selected=list(reversed(selected))
-for r in selected[-18:]:
+for r in selected[-2:]:
  print('LAST_ROUND',json.dumps({k:r.get(k) for k in ('roundStartMs','productionModel','productionModelVersion','productionSource','productionPrediction','productionActual','productionDelayMs','productionFallbackReason','productionInputVersion','result','productionResult')},ensure_ascii=False))
 # Investigate user-reported 10:55 Beijing (=02:55 UTC) round.
 target=int(datetime.datetime(2026,10,20,2,55,tzinfo=datetime.timezone.utc).timestamp()*1000)
@@ -175,7 +175,7 @@ try:
     lines.append(safe)
   except:continue
  print('RECENT_V2_LOG_COUNT',len(lines))
- for j in lines[-45:]:show('V2_LOG',j)
+ for j in lines[-3:]:show('V2_LOG',j)
 except Exception as e:print('LOG_READ_ERROR',type(e).__name__)
 PY
 """

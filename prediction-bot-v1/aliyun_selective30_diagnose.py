@@ -52,6 +52,66 @@ selected=records[-30:]
 if selected and selected[0].get('roundStartMs',0)>selected[-1].get('roundStartMs',0):selected=list(reversed(selected))
 for r in selected[-18:]:
  print('LAST_ROUND',json.dumps({k:r.get(k) for k in ('roundStartMs','productionModel','productionModelVersion','productionSource','productionPrediction','productionActual','productionDelayMs','productionFallbackReason','productionInputVersion','result','productionResult')},ensure_ascii=False))
+# Investigate user-reported 10:55 Beijing (=02:55 UTC) round.
+target=int(datetime.datetime(2026,10,20,2,55,tzinfo=datetime.timezone.utc).timestamp()*1000)
+print('TARGET_ROUND_START_MS',target)
+match=[x for x in records if int(x.get('roundStartMs') or 0)==target]
+if match:
+ v=match[0]
+ show('TARGET_1055_V2_SIGNAL',{k:v.get(k) for k in (
+  'roundStartMs','productionModel','productionModelVersion','productionPrediction',
+  'productionSource','productionGeneratedAt','productionLockedAt','productionDelayMs',
+  'productionInputVersion','productionExecutionEligible','productionActual','productionResult',
+  'predictionMarketTopicId','productionFallbackReason')})
+else:
+ print('TARGET_1055_V2_SIGNAL','NOT_IN_LATEST_100_RECORDS')
+controller=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic/wrapper.mjs')
+if controller.exists():
+ t=controller.read_text()
+ show('TARGET_1055_DEPLOYED_DEADLINE_CODE',{'has_15s_deadline':'ORDER_SUBMIT_DEADLINE_MS = 15000' in t,
+    'has_selective_30s_special_case':bool(re.search(r'SELECTIVE8_MODEL\s*\?\s*(?:\d+|[A-Z_]+)',t)),
+    'has_order_window_early_guard':'if (!orderSubmitWindowOpen(signal.round,Date.now(),choice.model)) return;' in t,
+    'has_auto_confirm_submit':'await submitPendingOrder(pendingAction' in t,
+    'controller_module':'wrapper.mjs'})
+for service in ('zl-prediction-v2','zl-prediction-trade'):
+ try:
+  ps=subprocess.run(['journalctl','-u',service,'--since','2026-10-20 02:50:00 UTC',
+    '--until','2026-10-20 03:02:00 UTC','--utc','--no-pager','-o','json'],
+    capture_output=True,text=True,timeout=30)
+  matched=[]
+  by_event=collections.Counter()
+  all_lines=ps.stdout.splitlines()
+  for line in all_lines:
+   try:
+    sysj=json.loads(line)
+    msg=str(sysj.get('MESSAGE') or '')
+    payload=json.loads(msg) if msg.startswith('{') else None
+    if not isinstance(payload,dict):continue
+    event=str(payload.get('event') or '')
+    at_us=int(sysj.get('__REALTIME_TIMESTAMP') or 0)
+    at=datetime.datetime.fromtimestamp(at_us/1000000,datetime.timezone.utc).isoformat() if at_us else None
+    rr=payload.get('round') or payload.get('roundStartMs') or payload.get('roundId')
+    by_event[event or 'NO_EVENT_NAME']+=1
+    if service=='zl-prediction-trade':
+     keep = any(z in event for z in ('order','submit','intent','control','follow','confirm','quote','direction','wallet','payment','ready','lock','model','error','enable','start','stop'))
+    else:
+     keep = any(z in event for z in ('selective','production_signal','locked_signal','poll','order','round_settle'))
+    if not keep:continue
+    if rr is not None and str(rr).isdigit() and abs(int(rr)-target)>600000:continue
+    allowed=('event','round','roundStartMs','status','state','source','stage','trigger',
+      'direction','productionSignal','orderSignal','mappingMode','productionSource','signalModelChoice',
+      'deadlineMs','elapsedMs','signalGeneratedAt','error','code','httpStatus','reason',
+      'enabled','amount','at','orderSubmitWindowOpen','amountConfigured','quoteRemainingAtSubmitMs')
+    safe={k:payload[k] for k in allowed if k in payload}
+    matched.append({'atUTC':at,**safe})
+   except Exception:pass
+  print('TARGET_1055_JOURNAL_META',json.dumps({'service':service,'json_messages':len(all_lines),
+     'parsed_events':sum(by_event.values()),'top_events':by_event.most_common(18),'output_err_type':ps.returncode},ensure_ascii=False))
+  for x in matched[-75:]:
+   print('TARGET_1055_JOURNAL_EVENT',json.dumps({'service':service,**x},ensure_ascii=False)[:750])
+ except Exception as exc:
+  print('TARGET_1055_JOURNAL_READ_ERROR',service,type(exc).__name__)
+
 stats=collections.Counter((x.get('productionModel') or 'NONE',x.get('productionSource') or 'NONE',x.get('productionPrediction') or 'NONE') for x in records)
 for k,v in stats.most_common(15):print('SIGNAL_COUNT',str(k),v)
 sig=read(13002,'/api/production-signal')

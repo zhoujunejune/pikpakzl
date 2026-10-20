@@ -269,6 +269,17 @@ for name in ('index.mjs','trade-control-fixed.mjs'):
    print('FOLLOW_ALERT_CODE',name,i+1,raw)
 PY
 echo "FOLLOW_ALERT_SOURCE_CONTEXT_END"
+echo "SITE_NODE_LAST_ERRORS_BEGIN"
+journalctl -u zl-prediction-trade -n 270 --no-pager -o cat 2>/dev/null | python3 -c '
+import re,sys
+ls=sys.stdin.read().splitlines()
+found=[x for x in ls if re.search(r"Error:|^\\s*at |failed to|MODULE_NOT_FOUND|unhandled|uncaught|exit.code|exited.*status|bad import|cannot find",x,re.I)]
+for raw in found[-24:]:
+ x=re.sub(r"https?://\\S+","[URL]",raw)
+ x=re.sub(r"(?i)(sk-[A-Za-z0-9_-]{10,}|[A-Za-z0-9+/=]{55,})","[REDACTED]",x)
+ print("SITE_NODE_LAST_ERROR",x[:215])
+'
+echo "SITE_NODE_LAST_ERRORS_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

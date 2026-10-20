@@ -57,11 +57,13 @@ from pathlib import Path
 import os,tempfile
 p=Path('/etc/zl-prediction/deepseek5.env')
 original=p.read_text()
+if '\\n' in original:
+ original=original.replace('\\n','\n')
 lines=[x for x in original.splitlines() if not x.startswith('LLM_SERVICE_PORT=')]
 lines.append('LLM_SERVICE_PORT=13029')
 fd,tmp=tempfile.mkstemp(dir=str(p.parent),prefix='.deepseek-env-')
 try:
- with os.fdopen(fd,'w') as f:f.write('\\n'.join(lines)+'\\n')
+ with os.fdopen(fd,'w') as f:f.write('\n'.join(lines)+'\n')
  os.chmod(tmp,0o600)
  os.replace(tmp,p)
 finally:

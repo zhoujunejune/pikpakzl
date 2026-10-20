@@ -35,18 +35,21 @@ NODE=/opt/zl-prediction-node/bin/node
 test -x "$NODE"
 WORK=$(mktemp -d /tmp/zl-deepseek5-stage.XXXXXXXX)
 trap 'rm -rf "$WORK"' EXIT
-curl -fsSL --retry 3 --max-time 30 \
- "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/deepseek-5m-engine.mjs" \
- -o "$WORK/deepseek-5m-engine.mjs"
-"$NODE" --check "$WORK/deepseek-5m-engine.mjs"
+for name in deepseek-5m-features.mjs deepseek-5m-learner.mjs deepseek-5m-engine.mjs;do
+  curl -fsSL --retry 3 --max-time 30 \
+ "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/$name" \
+ -o "$WORK/$name"
+ "$NODE" --check "$WORK/$name"
+done
 install -d -o zl-pred -g zl-pred -m 0750 /opt/zl-prediction-live/deepseek5 /var/lib/zl-prediction/deepseek5
-if test -f /opt/zl-prediction-live/deepseek5/deepseek-5m-engine.mjs; then
+for name in deepseek-5m-features.mjs deepseek-5m-learner.mjs deepseek-5m-engine.mjs;do
+ if test -f "/opt/zl-prediction-live/deepseek5/$name";then
   mkdir -p /var/lib/zl-prediction/archive/source-backups/deepseek5
-  cp -p /opt/zl-prediction-live/deepseek5/deepseek-5m-engine.mjs \
-   /var/lib/zl-prediction/archive/source-backups/deepseek5/deepseek-5m-engine-before-stage.mjs
-fi
-install -o zl-pred -g zl-pred -m 0644 "$WORK/deepseek-5m-engine.mjs" \
- /opt/zl-prediction-live/deepseek5/deepseek-5m-engine.mjs
+  cp -p "/opt/zl-prediction-live/deepseek5/$name" \
+   "/var/lib/zl-prediction/archive/source-backups/deepseek5/$name.before-stage"
+ fi
+ install -o zl-pred -g zl-pred -m 0644 "$WORK/$name" "/opt/zl-prediction-live/deepseek5/$name"
+done
 if ! test -e /etc/zl-prediction/deepseek5.env; then
  cat > /etc/zl-prediction/deepseek5.env <<'EOF'
 LLM_SERVICE_PORT=13029

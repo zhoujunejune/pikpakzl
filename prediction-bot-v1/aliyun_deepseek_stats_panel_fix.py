@@ -33,33 +33,21 @@ live,repo,out=[pathlib.Path(x) for x in sys.argv[1:4]]
 before=live.read_text()
 latest=repo.read_text()
 start='const statsScript = \x60<script>'
-end='</script>\x60;'
-def extract(s):
- assert s.count(start)==1
+next_card='const primaryCard ='
+def extract(s,kind):
+ assert s.count(start)==1,kind+': stats script anchor must be unique'
  i=s.index(start)
- j=s.index(end,i)+len(end)
- assert s[i:j].count('async function renderDeepSeekRoundStats()')==1 or (
-  'renderDeepSeekRoundStats' in s[i:j])
- return i,j,s[i:j]
-a,b,_=extract(latest)
-i=before.index(start)
-assert before.count(start)==1
-endpos=before.find(end,i)
-if endpos>=0:
- j=endpos+len(end)
-else:
- # Distinguish historic embedded stat scripts (template literals) from the new
- # one. Do not patch if no unique safe script terminator can be found.
- print('LEGACY_STATS_DELIMITERS',{
-  'literal_close':before.find('</script>',i)-i,
-  'escaped_close':before.find('<\\/script>',i)-i,
-  'next_policy':before.find('const primaryScript',i)-i,
-  'next_script':before.find('const primaryCard',i)-i,
-  'start_excerpt':repr(before[i:i+95])
- })
- raise RuntimeError('OLD_STATS_TEMPLATE_TERMINATOR_UNRECOGNIZED')
-assert before[i:j].startswith(start)
-new=before[:i]+latest[a:b]+before[j:]
+ j=s.index(next_card,i)
+ section=s[i:j]
+ assert section.count('</script>\x60;')==1,kind+': unexpected stats script terminator'
+ return i,j,section
+a,b,donor=extract(latest,'donor')
+assert 'async function renderDeepSeekRoundStats()' in donor
+assert '/deepseek/api/history?limit=80' in donor
+i,j,old=extract(before,'production')
+new=before[:i]+donor+before[j:]
+assert new[:i]==before[:i]
+assert new[i+len(donor):]==before[j:]
 assert 'renderDeepSeekRoundStats' in new
 assert '/deepseek/api/history?limit=80' in new
 assert 'async function load(){' in new

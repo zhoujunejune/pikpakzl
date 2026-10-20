@@ -206,11 +206,11 @@ def main():
   installed=[]
   try:
    for name,p in FILES.items():
-    st=p.stat();tempfile=p.with_name(p.name+'.deepseek-pending')
-    tempfile.write_text(patches[name])
-    os.chown(tempfile,st.st_uid,st.st_gid)
-    os.chmod(tempfile,st.st_mode&0o777)
-    os.replace(tempfile,p)
+    st=p.stat();staged=p.with_name(p.name+'.deepseek-pending')
+    staged.write_text(patches[name])
+    os.chown(staged,st.st_uid,st.st_gid)
+    os.chmod(staged,st.st_mode&0o777)
+    os.replace(staged,p)
     installed.append(name)
    run('systemctl','restart','zl-prediction-trade.service')
    # Startup migration atomically invalidates all old pending-order revisions

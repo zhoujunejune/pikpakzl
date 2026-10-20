@@ -120,6 +120,7 @@ async function load(){
   e('spNotice').textContent='不能从旧统计推断生产状态：'+(err.message||err);return;
  }
  // Legacy model registry intentionally not used for production status.
+ try{
 
   // The live round-stats model catalog is authoritative; training registry is
   // historical and must never relabel the currently selected production route.

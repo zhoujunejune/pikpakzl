@@ -24,8 +24,12 @@ for svc in zl-prediction-v2 zl-prediction-v3 zl-prediction-trade zl-futures-bot-
   test "$(systemctl is-active "$svc")" = active
 done
 if ss -H -tln '( sport = :13029 )' | grep -q .; then
- echo 'DEEPSEEK_STAGE_TARGET_PORT_OCCUPIED=true'
- exit 9
+ ownpid=$(systemctl show --value -p MainPID zl-prediction-deepseek5.service 2>/dev/null || echo 0)
+ if test "$ownpid" = 0 || ! ss -H -tlnp '( sport = :13029 )' | grep -Fq "pid=$ownpid,";then
+  echo 'DEEPSEEK_STAGE_TARGET_PORT_OCCUPIED_BY_OTHER=true'
+  exit 9
+ fi
+ echo 'DEEPSEEK_STAGE_PORT_ALREADY_OWNED_BY_SERVICE=true'
 fi
 NODE=/opt/zl-prediction-node/bin/node
 test -x "$NODE"

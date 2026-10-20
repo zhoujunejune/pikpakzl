@@ -32,7 +32,11 @@ def patch(original,donor):
    '仅统计 DEEPSEEK_5M_V1 自身预测与币安官方结算；旧 Selective V2 不混入。','DESCRIPTION')
  ]
  out=original
- for a,b,k in changes:out=exactly(out,a,b,k)
+ for a,b,k in changes:
+  if k=='DESCRIPTION' and a not in out:
+   print('DEEPSEEK_UI_DESCRIPTION_TEXT_DIFFERS_SKIP_SAFE=true',flush=True)
+   continue
+  out=exactly(out,a,b,k)
  # The panel loads several independent client scripts with functions named load().
  # Restrict both changes to their exact unique signatures to avoid touching trade logic.
  donorHelper=between(donor,"async function renderDeepSeekRoundStats(){",

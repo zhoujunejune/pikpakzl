@@ -116,7 +116,7 @@ export function createEngine({env=process.env,clock=()=>Date.now(),fetcher=fetch
  async function tick(){
   const now=clock(),r=roundOf(now);
   // Non-blocking learning. Never replace settlement outcomes with live price movement.
-  void pollSettlements(now);
+  if(key)void pollSettlements(now);
   if(!key||busy||now<r+1000||now>=r+SIGNAL_DEADLINE_MS)return status();
   if(round!==r){round=r;tries=0;retryAt=0;error=null;waitReason=null;lastFeatures=null}
   if(signal?.round===r||tries>=MAX_CALLS_PER_ROUND||now<retryAt)return status();

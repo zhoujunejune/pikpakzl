@@ -2,7 +2,10 @@ name: Repair live Alibaba front-end to show DeepSeek-only official statistics
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
-    paths: [.github/workflows/zl-deepseek-ui-hotfix.yml]
+    paths:
+      - .github/workflows/zl-deepseek-ui-hotfix.yml
+      - prediction-bot-v1/aliyun_deepseek_ui_hotfix.py
+      - prediction-bot-v1/aliyun_deepseek_ui_launch.py
   workflow_dispatch:
 permissions:
   contents: read

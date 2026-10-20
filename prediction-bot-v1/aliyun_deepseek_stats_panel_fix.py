@@ -33,13 +33,15 @@ live,repo,out=[pathlib.Path(x) for x in sys.argv[1:4]]
 before=live.read_text()
 latest=repo.read_text()
 start='const statsScript = \x60<script>'
-next_card='const primaryCard ='
+# The old model renderer may already have been removed by a previous successful deployment.
+# Bound the script at its own closing tag so the patch works on both old and cleaned panels.
+script_end='</script>\x60;'
 def extract(s,kind):
  assert s.count(start)==1,kind+': stats script anchor must be unique'
  i=s.index(start)
- j=s.index(next_card,i)
+ j=s.index(script_end,i)+len(script_end)
  section=s[i:j]
- assert section.count('</script>\x60;')==1,kind+': unexpected stats script terminator'
+ assert section.count(script_end)==1,kind+': unexpected stats script terminator'
  return i,j,section
 a,b,donor=extract(latest,'donor')
 assert 'async function renderDeepSeekRoundStats()' in donor

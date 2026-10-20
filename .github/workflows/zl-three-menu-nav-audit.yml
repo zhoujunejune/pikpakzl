@@ -1,0 +1,39 @@
+name: ZL three-menu navigation readonly audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-three-menu-nav-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read actual live HTML and check links
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import urllib.request,urllib.error,base64,os,html.parser,json
+          origin='https://47-237-188-69.sslip.io'
+          pred='https://prediction.47-237-188-69.sslip.io'
+          token=base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          class Links(html.parser.HTMLParser):
+            def __init__(self):super().__init__();self.links=[];self.current=None
+            def handle_starttag(self,tag,attrs):
+              if tag=='a':self.current={'href':dict(attrs).get('href',''),'text':''}
+            def handle_data(self,s):
+              if self.current is not None:self.current['text']+=s
+            def handle_endtag(self,tag):
+              if tag=='a' and self.current is not None:self.links.append(self.current);self.current=None
+          for site in (origin+'/dashboard/',pred+'/',origin+'/futures-lab/'):
+            req=urllib.request.Request(site,headers={'Authorization':'Basic '+token,'Cache-Control':'no-cache'})
+            try:
+              with urllib.request.urlopen(req,timeout=15) as r:body=r.read().decode('utf8','replace');status=r.status
+              parsed=Links();parsed.feed(body)
+              nav=[x for x in parsed.links if any(z in (x['text']+x['href']) for z in ('机器人','模拟','影子','训练','dashboard','prediction','futures-lab','api-keys'))]
+              print('NAV_AUDIT_SITE',site,'STATUS',status,'TITLE_START',body.find('<title'),'LINKS',json.dumps(nav,ensure_ascii=False)[:1800])
+            except Exception as exc:print('NAV_AUDIT_ERROR',site,type(exc).__name__,str(exc)[:80])
+          PY

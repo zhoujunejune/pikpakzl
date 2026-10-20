@@ -8,18 +8,25 @@ from alibabacloud_swas_open20200601 import models as sw
 from alibabacloud_tea_openapi import models as api
 SCRIPT=r"""#!/bin/bash
 set -Eeuo pipefail
+trap 'echo DEEPSEEK_STATS_FAILURE_LINE=$LINENO' ERR
+echo DEEPSEEK_STATS_STEP=start
 node=/opt/zl-prediction-node/bin/node
 live=/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs
 work=$(mktemp -d /tmp/zl-deepseek-stats-view.XXXXXXXX)
 trap 'rm -rf "$work"' EXIT
+echo DEEPSEEK_STATS_STEP=node_check
 test -x "$node"
 test -f "$live"
+echo DEEPSEEK_STATS_TRADE_SERVICE=$(systemctl is-active zl-prediction-trade || true)
 test "$(systemctl is-active zl-prediction-trade)" = active
+echo DEEPSEEK_STATS_AI_SERVICE=$(systemctl is-active zl-prediction-deepseek5 || true)
 test "$(systemctl is-active zl-prediction-deepseek5)" = active
 curl -fsSL --retry 3 --max-time 30 \
  "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/railway-diagnostic/panel-stats-shell.mjs" \
  -o "$work/git-panel.mjs"
+echo DEEPSEEK_STATS_STEP=source_downloaded
 "$node" --check "$work/git-panel.mjs"
+echo DEEPSEEK_STATS_STEP=before_patch
 python3 - "$live" "$work/git-panel.mjs" "$work/new.mjs" <<'PY'
 import sys,pathlib
 live,repo,out=[pathlib.Path(x) for x in sys.argv[1:4]]
@@ -59,6 +66,7 @@ assert 'async function load(){' in new
 out.write_text(new)
 print('DEEPSEEK_STATS_PATCH_ONLY_LENGTH',len(new))
 PY
+echo DEEPSEEK_STATS_STEP=after_patch
 "$node" --check "$work/new.mjs"
 python3 - <<'PY'
 import json,urllib.request,subprocess

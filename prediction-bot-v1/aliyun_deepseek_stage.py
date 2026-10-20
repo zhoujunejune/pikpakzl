@@ -121,8 +121,8 @@ print('DEEPSEEK_STAGE_PROVIDER',data['providerModel'])
 print('DEEPSEEK_STAGE_CONFIGURED',data['configured'])
 print('DEEPSEEK_STAGE_ORDER_ENABLED',data['realOrderEnabled'])
 choice=get(13001,'/api/order-signal-model')
-print('DEEPSEEK_STAGE_PRODUCTION_MODEL_UNCHANGED',choice.get('model'))
-assert choice.get('model')!='DEEPSEEK_5M_V1'
+print('DEEPSEEK_STAGE_PRODUCTION_MODEL',choice.get('model'))
+assert choice.get('model')=='DEEPSEEK_5M_V1'
 for name in ('zl-prediction-trade','zl-prediction-v2','zl-futures-bot-paper'):
  assert subprocess.check_output(['systemctl','is-active',name],text=True).strip()=='active'
 print('DEEPSEEK_STAGE_PRODUCTION_SERVICES_STILL_ACTIVE=true')

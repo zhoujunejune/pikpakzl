@@ -32,7 +32,7 @@ if p.is_file():
  print('LIVE_PANEL_HAS_LEGACY_TITLE','每轮判断与真实结果' in s)
  print('LIVE_PANEL_ANCHORS_START')
  lines=s.splitlines()
- tokens=('async function load(){','Only the two currently selectable','if(!e(\\'signalPolicyCard\\'))','function chosenModelName(','async function loadOrderModelStats(){','const statsCard =','const statsScript =','const policyScript =','function render','getStats()')
+ tokens=('async function load(){','Only the two currently selectable','signalPolicyCard','function chosenModelName(','async function loadOrderModelStats(){','const statsCard =','const statsScript =','const policyScript =','function render','getStats()')
  inds=[i for i,t in enumerate(lines) if any(k in t for k in tokens)]
  for i in inds[:45]:
   print('LIVE_PANEL_ANCHOR',i+1,repr(lines[i][:190]))

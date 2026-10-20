@@ -172,7 +172,7 @@ export function createEngine({env=process.env,clock=()=>Date.now(),fetcher=fetch
   finally{busy=false}
   return status();
  }
- return {status,tick};
+ return {status,tick,history:(limit)=>learner.history(limit)};
 }
 export function serve(engine,port=Number(process.env.LLM_SERVICE_PORT||13029)){
  const server=http.createServer((req,res)=>{
@@ -182,6 +182,11 @@ export function serve(engine,port=Number(process.env.LLM_SERVICE_PORT||13029)){
   if(['/healthz','/status','/api/status'].includes(url.pathname)){
    res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
    return res.end(JSON.stringify(data));
+  }
+  if(url.pathname==='/api/history'){
+   const history=engine.history?.(url.searchParams.get('limit'));
+   res.writeHead(history?.ok?200:503,{'content-type':'application/json','cache-control':'no-store'});
+   return res.end(JSON.stringify(history||{ok:false,error:'HISTORY_UNAVAILABLE'}));
   }
   if(url.pathname==='/signal'){
    res.writeHead(data.signal?200:503,{'content-type':'application/json','cache-control':'no-store'});

@@ -23,6 +23,10 @@ test "$(id -u)" -eq 0
 for svc in zl-prediction-v2 zl-prediction-v3 zl-prediction-trade zl-futures-bot-paper; do
   test "$(systemctl is-active "$svc")" = active
 done
+if ss -H -tln '( sport = :13029 )' | grep -q .; then
+ echo 'DEEPSEEK_STAGE_TARGET_PORT_OCCUPIED=true'
+ exit 9
+fi
 NODE=/opt/zl-prediction-node/bin/node
 test -x "$NODE"
 WORK=$(mktemp -d /tmp/zl-deepseek5-stage.XXXXXXXX)
@@ -41,13 +45,28 @@ install -o zl-pred -g zl-pred -m 0644 "$WORK/deepseek-5m-engine.mjs" \
  /opt/zl-prediction-live/deepseek5/deepseek-5m-engine.mjs
 if ! test -e /etc/zl-prediction/deepseek5.env; then
  cat > /etc/zl-prediction/deepseek5.env <<'EOF'
-LLM_SERVICE_PORT=13019
+LLM_SERVICE_PORT=13029
 LLM_MARKET_URL=http://127.0.0.1:13003/api/shadow-market-data
 LLM_STATE_FILE=/var/lib/zl-prediction/deepseek5/signal.json
 DEEPSEEK_MODEL=deepseek-flash
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
 EOF
 fi
+python3 - <<'PY'
+from pathlib import Path
+import os,tempfile
+p=Path('/etc/zl-prediction/deepseek5.env')
+original=p.read_text()
+lines=[x for x in original.splitlines() if not x.startswith('LLM_SERVICE_PORT=')]
+lines.append('LLM_SERVICE_PORT=13029')
+fd,tmp=tempfile.mkstemp(dir=str(p.parent),prefix='.deepseek-env-')
+try:
+ with os.fdopen(fd,'w') as f:f.write('\\n'.join(lines)+'\\n')
+ os.chmod(tmp,0o600)
+ os.replace(tmp,p)
+finally:
+ if os.path.exists(tmp):os.remove(tmp)
+PY
 test ! -L /etc/zl-prediction/deepseek5.env
 chown root:root /etc/zl-prediction/deepseek5.env
 chmod 0600 /etc/zl-prediction/deepseek5.env
@@ -77,9 +96,10 @@ systemctl daemon-reload
 systemctl enable zl-prediction-deepseek5.service
 systemctl restart zl-prediction-deepseek5.service
 for i in $(seq 1 18); do
- if curl -fsS --max-time 3 http://127.0.0.1:13019/healthz -o "$WORK/health.json"; then break;fi
+ if curl -fsS --max-time 3 http://127.0.0.1:13029/healthz -o "$WORK/health.json"; then break;fi
  sleep 2
 done
+test -s "$WORK/health.json"
 python3 - <<'PY'
 import json,urllib.request,subprocess
 def get(port,url):

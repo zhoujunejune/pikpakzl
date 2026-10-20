@@ -1,0 +1,53 @@
+name: Deploy DeepSeek-only statistics display to production panel
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/zl-deepseek-stats-panel-fix.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check source syntax
+        run: python -m py_compile prediction-bot-v1/aliyun_deepseek_stats_panel_fix.py
+      - name: Install Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Apply backed-up read-only dashboard-only statistics source change
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_stats_panel_fix.py
+      - name: Verify authenticated public HTML and DeepSeek-only ledger API
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,json
+          origin='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+              req=urllib.request.Request(origin+path,headers={'Authorization':auth,'Cache-Control':'no-store'})
+              with urllib.request.urlopen(req,timeout=20) as r:return r.read()
+          text=get('/').decode('utf-8','replace')
+          assert 'renderDeepSeekRoundStats' in text
+          assert '/deepseek/api/history?limit=80' in text
+          ledger=json.loads(get('/deepseek/api/history?limit=10'))
+          assert ledger.get('ok') and ledger.get('model')=='DEEPSEEK_5M_V1'
+          assert isinstance(ledger.get('records'),list)
+          assert all(x.get('provider')=='deepseek-flash' for x in ledger['records'])
+          selector=json.loads(get('/api/order-signal-model'))
+          assert selector.get('model')=='DEEPSEEK_5M_V1'
+          print('DEEPSEEK_PANEL_PUBLIC_HTML_LIVE=true')
+          print('DEEPSEEK_PANEL_ONLY_MODEL=true')
+          print('DEEPSEEK_PANEL_INDEPENDENT_STATS_COUNT',len(ledger['records']))
+          print('DEEPSEEK_PANEL_LEGACY_TABLE_NOT_USED=true')
+          PY

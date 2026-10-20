@@ -16,7 +16,7 @@ for f in /etc/zl-prediction/llm.env /etc/zl-prediction/panel.env /etc/zl-predict
   done
  fi
 done
-for n in zl-prediction-trade zl-prediction-v2 zl-prediction-v3 zl-prediction-redis zl-futures-bot-paper;do
+for n in zl-prediction-llm5 zl-prediction-trade zl-prediction-v2 zl-prediction-v3 zl-prediction-redis zl-futures-bot-paper;do
  echo "LLM_SERVICE_$n=$(systemctl is-active "$n" || true)"
 done
 echo "LLM_PROCESSES=$(ps -eo comm | grep -xc node || true)"
@@ -30,10 +30,16 @@ for n in ('index.mjs','wrapper.mjs','production-signal-choice.mjs','order-direct
  print('LLM_MODULE',n,'lines',len(c.splitlines()),'sha256',hashlib.sha256(c.encode()).hexdigest()[:16])
  for marker in ('DYNAMIC_ORDER_DEADLINE_MS','ORDER_SIGNAL_MODELS=','MODEL_CHOICE_KEY=','async function getSignal(', 'async function prepareWorker(', 'AUTO_CONFIRM_ENABLED','order-signal-model','ZL_INVALID_REQUEST_URL_400_GUARD_V1'):
   if marker in c:print('LLM_MARKER',n,marker)
-for port,path in [(13001,'/healthz'),(13001,'/api/order-signal-model'),(13002,'/api/round-stats'),(13003,'/healthz')]:
+for port,path in [(13018,'/api/status'),(13001,'/healthz'),(13001,'/api/order-signal-model'),(13002,'/api/round-stats'),(13003,'/healthz')]:
  try:
   with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}',timeout=5) as response:
    print('LLM_LOCAL_HTTP',port,path,response.status)
+   if path=='/api/status' and port==13018:
+    j=json.load(response)
+    print('LLM_RUNTIME_CONFIGURED',j.get('configured'))
+    print('LLM_RUNTIME_PROVIDER',j.get('providerModel'))
+    print('LLM_RUNTIME_ERROR_TYPE',str(j.get('error'))[:100])
+    print('LLM_RUNTIME_ORDER_OFF',j.get('realOrderEnabled') is False and j.get('tradeIntegration') is False)
    if path=='/api/order-signal-model':
     j=json.load(response)
     print('LLM_SELECTION_MODELS',[v.get('id') for v in j.get('models',[])])

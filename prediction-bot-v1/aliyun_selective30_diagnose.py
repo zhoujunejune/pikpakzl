@@ -89,3 +89,5 @@ def main():
             return 0 if s=="Success" and int(r.exit_code)==0 else 5
     print("DIAG_TIMEOUT");return 6
 if __name__=="__main__":sys.exit(main())
+
+# Post-repair read-only follow-up: signal transport and panel state.

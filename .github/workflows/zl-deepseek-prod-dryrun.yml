@@ -1,0 +1,31 @@
+name: Verify DeepSeek-only production cutover against live code (dry run)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_deepseek_prod_cutover.py
+      - prediction-bot-v1/aliyun_deepseek_cutover_launch.py
+      - .github/workflows/zl-deepseek-prod-dryrun.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate syntax first
+        run: python -m py_compile prediction-bot-v1/aliyun_deepseek_prod_cutover.py prediction-bot-v1/aliyun_deepseek_cutover_launch.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read live files and validate proposed model-only patch without saving anything
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          DEEPSEEK_CUTOVER_DRY_RUN: '1'
+        run: python prediction-bot-v1/aliyun_deepseek_cutover_launch.py

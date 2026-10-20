@@ -1,0 +1,24 @@
+name: Validate isolated DeepSeek signal engine (no orders)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/deepseek-5m-engine.mjs
+      - prediction-bot-v1/deepseek-5m-engine.test.mjs
+      - .github/workflows/zl-deepseek-5m-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify isolated signal generator and strict no-orders
+        run: |
+          node --check prediction-bot-v1/deepseek-5m-engine.mjs
+          node --test prediction-bot-v1/deepseek-5m-engine.test.mjs

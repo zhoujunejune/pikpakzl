@@ -61,6 +61,43 @@ for port,path in [(13003,'/api/shadow-market-data'),(13003,'/api/market-data'),(
     if isinstance(v,list):print('LLM_MARKET_LIST',k,'len',len(v),'lasttype',type(v[-1]).__name__ if v else 'none')
  except Exception as err:print('LLM_MARKET_ENDPOINT',port,path,'error',type(err).__name__)
 PY
+python3 - <<'QWEN_PROBE'
+import json
+from pathlib import Path
+from urllib import request,error
+p=Path('/etc/zl-prediction/llm5.env')
+env={}
+if p.is_file():
+ for line in p.read_text().splitlines():
+  if '=' in line and not line.startswith('#'):
+   k,v=line.split('=',1)
+   if k in ('DASHSCOPE_API_KEY','QWEN_MODEL','QWEN_API_URL'):env[k]=v.strip().strip('"')
+key=env.get('DASHSCOPE_API_KEY','')
+print('QWEN_SECRET_LOADED',bool(key))
+if key:
+ model=env.get('QWEN_MODEL','qwen-flash')
+ endpoints=[
+  ('configured',env.get('QWEN_API_URL','')),
+  ('workspace','https://ws-iyku7a7ql0evg7vu.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions')]
+ body=json.dumps({'model':model,'messages':[{'role':'user','content':'Reply OK'}],'max_tokens':3}).encode()
+ for label,url in endpoints:
+  if not url.startswith('https://'):continue
+  req=request.Request(url,data=body,method='POST',headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+  try:
+   with request.urlopen(req,timeout=15) as response:
+    print('QWEN_PROBE',label,'http',response.status,'result','ok')
+  except error.HTTPError as err:
+   code='UNKNOWN'
+   try:
+    x=json.loads(err.read(4096).decode('utf-8','replace'))
+    code=str(x.get('code') or x.get('error',{}).get('code') or x.get('error',{}).get('type') or 'UNKNOWN')
+   except Exception:pass
+   import re
+   code=re.sub('[^a-zA-Z0-9._-]','',code)[:75]
+   print('QWEN_PROBE',label,'http',err.code,'error_code',code)
+  except Exception as err:
+   print('QWEN_PROBE',label,'exception_type',type(err).__name__)
+QWEN_PROBE
 echo "LLM_PREFLIGHT_COMPLETE=true"
 '''
 def main():

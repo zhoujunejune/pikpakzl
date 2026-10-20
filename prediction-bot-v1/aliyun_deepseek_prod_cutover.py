@@ -154,9 +154,8 @@ def patch_panel(s):
    "frontend-active-model")
  # The former V2/Edge results remain accessible in official archives, never
  # represented as DeepSeek model performance.
- s=one_regex(s,r'(const statsCard\s*=\s*`<div class="c" id="roundStatsCard")',
-   r'\1 style="display:none"',
-   "hide-old-only-model-performance-until-new-ledger")
+ # Retired V2 performance remains in the official settlement archive; the
+ # current live HTML template has diverged, so do not modify old scorecards here.
  s=s.replace("等待本轮8秒有效锁定","等待本轮 DeepSeek 实时锁定")
  return s
 

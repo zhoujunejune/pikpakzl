@@ -154,16 +154,9 @@ def patch_panel(s):
    "frontend-active-model")
  # The former V2/Edge results remain accessible in official archives, never
  # represented as DeepSeek model performance.
- s=once(s," async function loadLegacy(){",
-   """ async function loadLegacy(){
- if(chosenOrderModel==='DEEPSEEK_5M_V1'||globalThis.__orderModelStatsSelection==='DEEPSEEK_5M_V1'){
-   var title=e('rsAccuracy'),meta=e('rsMeta'),rows=e('rsRows');
-   if(title)title.textContent='DeepSeek 统计待积累';
-   if(meta)meta.textContent='旧版 Selective/Edge 胜率已退役，不混入 DeepSeek 新样本；新模型需按币安官方结算单独统计。';
-   if(rows)rows.innerHTML='<tr><td colspan="8" style="padding:10px 6px">当前仅使用 DeepSeek 生产信号；旧模型记录已归档，不能当作 DeepSeek 命中记录。</td></tr>';
-   return;
- }
-""","exclude-retired-performance")
+ s=one_regex(s,r'(const statsCard\s*=\s*`<div class="c" id="roundStatsCard")',
+   r'\1 style="display:none"',
+   "hide-old-only-model-performance-until-new-ledger")
  s=s.replace("等待本轮8秒有效锁定","等待本轮 DeepSeek 实时锁定")
  return s
 

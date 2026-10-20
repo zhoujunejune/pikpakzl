@@ -19,8 +19,8 @@ backups=sorted(archive.glob('deepseek-panel-*.mjs'),key=lambda p:p.stat().st_mti
 legacy=None
 for p in backups:
  src=p.read_text(errors='replace')
- if "const statsScript = " in src and "id=\\"roundStatsCard\\"" in src and
-    "async function renderDeepSeekRoundStats" not in src:
+ if ('const statsScript = ' in src and 'id="roundStatsCard"' in src and
+     'async function renderDeepSeekRoundStats' not in src):
   legacy=p
   break
 if legacy is None:

@@ -1,0 +1,51 @@
+name: Audit legacy panel stats versus actual DeepSeek production (read-only)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/zl-deepseek-panel-stats-audit.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Compare actual production selector, DeepSeek signal, and legacy stats
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import json,os,base64,urllib.request,datetime
+          root='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+              req=urllib.request.Request(root+path,headers={'Authorization':auth,'Cache-Control':'no-store'})
+              with urllib.request.urlopen(req,timeout=20) as r:return json.load(r)
+          prod=get('/api/order-signal-model')
+          control=get('/api/status')
+          stats=get('/api/round-stats')
+          ai=get('/deepseek/api/status')
+          try:signal=get('/deepseek/signal')
+          except Exception:signal={}
+          print('AUDIT_PRODUCTION_SELECTED',prod.get('model'))
+          print('AUDIT_PRODUCTION_MODELS',[x.get('id') for x in prod.get('models',[])])
+          print('AUDIT_FOLLOW_ENABLED',control.get('enabled'))
+          print('AUDIT_LLM_MODEL',ai.get('model'))
+          print('AUDIT_LLM_LAST_SIGNAL',ai.get('lastSignal'))
+          print('AUDIT_LLM_WAIT_REASON',str(ai.get('waitReason'))[:110])
+          print('AUDIT_LLM_OFFICIAL_LEARNING',json.dumps(ai.get('learning',{}),ensure_ascii=False)[:520])
+          print('AUDIT_LLM_CURRENT_SIGNAL',str((signal.get('latest') or {}).get('direction')))
+          print('AUDIT_STATS_MODE',stats.get('productionSignalSourceMode'))
+          print('AUDIT_STATS_SETTLEMENT_SOURCE',str(stats.get('settlementSource'))[:250])
+          print('AUDIT_STATS_ACTIVE_MODELS',[{k:x.get(k) for k in ('id','name','source','version')} for x in stats.get('activeSignalModels',[])][:8])
+          print('AUDIT_STATS_RECORD_COUNT',len(stats.get('records',[])))
+          rows=sorted(stats.get('records',[]),key=lambda x:x.get('roundStartMs') or 0,reverse=True)
+          for x in rows[:12]:
+              info={k:x.get(k) for k in (
+                  'roundStartMs','productionModel','productionModelVersion','productionSource',
+                  'productionPrediction','productionActual','productionResult',
+                  'productionLockedAt','productionGeneratedAt','productionSettledAt',
+                  'predictionModel','predictionSource','officialDirection','settledAt','actualSource')}
+              print('AUDIT_STATS_ROW',json.dumps(info,ensure_ascii=False,separators=(',',':')))
+          PY

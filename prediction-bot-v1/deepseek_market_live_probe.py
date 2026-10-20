@@ -65,12 +65,25 @@ def main():
             result=r.output or ''
             break
     if result is None:print('LIVE_MARKET_PROBE_TIMEOUT');return 5
-    try:
-        raw=base64.b64decode(result,validate=True).decode('utf-8','replace')
-        # SWAS cloud-command result can include an extra newline.
-        market=json.loads(raw.strip())
-    except Exception:
-        print('LIVE_MARKET_DECODE_FAILED');return 6
+    market=None
+    candidates=[result]
+    try:candidates.insert(0,base64.b64decode(result,validate=True).decode('utf-8','replace'))
+    except Exception:pass
+    for raw in candidates:
+        for line in reversed(raw.splitlines()):
+            try:
+                item=json.loads(line.strip())
+                if isinstance(item,dict) and 'round' in item and 'marketAt' in item:
+                    market=item
+                    break
+            except Exception:pass
+        if market is not None:break
+    if market is None:
+        print('LIVE_MARKET_DECODE_FAILED')
+        print('LIVE_MARKET_RAW_LENGTH',len(result))
+        print('LIVE_MARKET_OUTPUT_LINES',len(result.splitlines()))
+        print('LIVE_MARKET_BASE64_DECODABLE',len(candidates)>1)
+        return 6
     print('LIVE_MARKET_SAMPLE_VALID=true')
     print('LIVE_MARKET_5M_ROUND',market['round'])
     body=json.dumps({

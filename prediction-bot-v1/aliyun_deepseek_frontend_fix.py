@@ -8,6 +8,20 @@ SCRIPT=r"""#!/bin/bash
 set -Eeuo pipefail
 python3 - <<'PY'
 import json,urllib.request,urllib.error,subprocess,pathlib
+for unit in ('zl-prediction-trade','zl-prediction-v2','zl-prediction-panel','zl-prediction-deepseek5'):
+ try:
+  pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value',unit],text=True).strip()
+  if pid!='0':
+   name=pathlib.Path('/proc/'+pid+'/cmdline').read_bytes().replace(b'\0',b' ').decode(errors='replace')
+   print('FRONTEND_EXECUTABLE',unit,name[:240])
+ except Exception:pass
+for port in (13001,13002,13003,13029,3000,3002):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:'+str(port)+'/',timeout=3) as rr:
+   html=rr.read(130000).decode('utf-8','replace')
+   print('FRONTEND_PORT',port,'HTTP',rr.status,'HAS_DEEPSEEK', 'DeepSeek 每轮预测与官方结算' in html,'HAS_STATS_CARD', 'id="roundStatsCard"' in html)
+ except urllib.error.HTTPError as e:print('FRONTEND_PORT',port,'HTTP',e.code)
+ except Exception as e:print('FRONTEND_PORT',port,'ERROR',type(e).__name__)
 for unit in ('zl-prediction-trade','zl-prediction-v2','zl-prediction-panel','zl-prediction-native-models','zl-prediction-deepseek5'):
  p=subprocess.run(['systemctl','show',unit,'--property=LoadState,ActiveState,ExecStart','--no-pager'],capture_output=True,text=True)
  for line in p.stdout.splitlines():

@@ -1,0 +1,99 @@
+name: Deploy Alibaba Selective30 live order deadline fix
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-selective30-trade-deadline.yml'
+      - 'prediction-bot-v1/aliyun_selective30_trade_deadline_patch.py'
+      - 'prediction-bot-v1/aliyun_selective30_trade_deadline_deploy.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy-real-deadline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Code syntax only (NO simulated orders)
+        run: python -m py_compile prediction-bot-v1/aliyun_selective30_trade_deadline_patch.py prediction-bot-v1/aliyun_selective30_trade_deadline_deploy.py
+      - name: Capture current switch and amount privately before service restart
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,pathlib,urllib.request
+          host='https://prediction.47-237-188-69.sslip.io'
+          token=base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          req=urllib.request.Request(host+'/api/status',headers={'Authorization':'Basic '+token,'Cache-Control':'no-cache'})
+          with urllib.request.urlopen(req,timeout=30) as r: status=json.load(r)
+          assert status.get('ok') is True
+          assert status.get('orderSignalModel')=='SELECTIVE_V2_30S_CURRENT_ROUND_V2'
+          assert status.get('orderSignalModelReady') is True
+          assert status.get('pendingAction') is None or (
+            status['pendingAction'].get('state') not in
+            ('SUBMITTING','QUOTING','SUBMISSION_UNKNOWN','SUBMITTED_PENDING_CONFIRMATION'))
+          payload={'enabled':status.get('enabled') is True,'amount':status.get('amount')}
+          assert not payload['enabled'] or (payload['amount'] is not None and float(payload['amount'])>=1)
+          location=pathlib.Path(os.environ['RUNNER_TEMP'])/'prediction_trade_previous_state.json'
+          location.write_text(json.dumps(payload))
+          location.chmod(0o600)
+          print('BEFORE_DEPLOY_FOLLOWING_ENABLED',payload['enabled'])
+          print('BEFORE_DEPLOY_AMOUNT_IS_CONFIGURED',bool(payload['amount']))
+          print('BEFORE_DEPLOY_SELECTED_30S_MODEL_VERIFIED=true')
+          PY
+      - name: Install Alibaba Cloud SWAS SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Repair 30s cutoff on real trade server; atomic backup/restart
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_selective30_trade_deadline_deploy.py
+      - name: Restore the owner's previous follow switch (never replay old orders)
+        if: always()
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,pathlib,urllib.request
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'prediction_trade_previous_state.json'
+          if not path.exists():
+            print('FOLLOW_RESTORE_SKIPPED_NO_CAPTURE=true')
+            raise SystemExit(0)
+          previous=json.loads(path.read_text())
+          host='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get():
+            req=urllib.request.Request(host+'/api/status',headers={'Authorization':auth,'Cache-Control':'no-cache'})
+            with urllib.request.urlopen(req,timeout=30) as r:return json.load(r)
+          status=get()
+          assert status.get('ok') is True
+          assert status.get('orderSignalModel')=='SELECTIVE_V2_30S_CURRENT_ROUND_V2'
+          if not previous['enabled']:
+            print('FOLLOW_RESTORE_NOT_NEEDED_PREVIOUSLY_OFF=true')
+          elif status.get('enabled') is True:
+            print('FOLLOW_ALREADY_ACTIVE_NO_CONTROL_CHANGE=true')
+          else:
+            body=json.dumps({'enabled':True,'amount':previous['amount']}).encode()
+            headers={'Authorization':auth,'Origin':host,'Sec-Fetch-Site':'same-origin',
+                     'Sec-Fetch-Mode':'cors','Content-Type':'application/json'}
+            req=urllib.request.Request(host+'/api/control',data=body,headers=headers,method='POST')
+            with urllib.request.urlopen(req,timeout=30) as resp: data=json.load(resp)
+            assert data.get('ok') is True and data.get('enabled') is True
+            print('PRIOR_OWNER_FOLLOW_SETTING_RESTORED=true')
+            print('PRIOR_AMOUNT_RESTORED=true')
+            print('FOLLOW_RESTART_STARTS_FROM_NEW_ROUND=true')
+          final=get()
+          assert final.get('enabled') is previous['enabled']
+          assert final.get('orderSignalModel')=='SELECTIVE_V2_30S_CURRENT_ROUND_V2'
+          assert final.get('autoConfirmEnabled') is True
+          assert final.get('directionModeReady') is True
+          print('FINAL_FOLLOW_CONFIG_HEALTH_CONFIRMED=true')
+          print('FINAL_FOLLOW_ENABLED',final.get('enabled'))
+          print('NO_EXCHANGE_ORDER_SUBMITTED_BY_DEPLOY_WORKFLOW=true')
+          PY

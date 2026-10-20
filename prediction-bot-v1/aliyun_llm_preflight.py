@@ -88,13 +88,19 @@ if key:
     print('QWEN_PROBE',label,'http',response.status,'result','ok')
   except error.HTTPError as err:
    code='UNKNOWN'
+   request_id=''
    try:
     x=json.loads(err.read(4096).decode('utf-8','replace'))
-    code=str(x.get('code') or x.get('error',{}).get('code') or x.get('error',{}).get('type') or 'UNKNOWN')
+    detail=x.get('error') if isinstance(x.get('error'),dict) else {}
+    code=str(x.get('code') or detail.get('code') or detail.get('type') or 'UNKNOWN')
+    request_id=str(x.get('request_id') or x.get('requestId') or x.get('RequestId') or detail.get('request_id') or detail.get('requestId') or '')
    except Exception:pass
-   import re
+   import re, datetime
+   if not request_id:
+    request_id=str(err.headers.get('x-acs-request-id') or err.headers.get('x-request-id') or '')
    code=re.sub('[^a-zA-Z0-9._-]','',code)[:75]
-   print('QWEN_PROBE',label,'http',err.code,'error_code',code)
+   request_id=re.sub('[^a-zA-Z0-9._-]','',request_id)[:130]
+   print('QWEN_PROBE',label,'http',err.code,'error_code',code,'request_id',request_id or 'NOT_RETURNED','timestamp_utc',datetime.datetime.now(datetime.timezone.utc).isoformat())
   except Exception as err:
    print('QWEN_PROBE',label,'exception_type',type(err).__name__)
 QWEN_PROBE

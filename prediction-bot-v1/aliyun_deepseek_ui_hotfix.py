@@ -43,30 +43,34 @@ def patch(original,donor):
    "async function load(){\n try{\n  var r=await fetch('/api/order-signal-model?",'HELPER')
  donorGate=between(donor,"async function load(){\n try{\n  var r=await fetch('/api/order-signal-model?",
    " // The following historical renderers are retired from the DeepSeek view.",'ROUND_GATE')
- out=exactly(out,
-   "async function load(){\n // Only the two currently selectable 8-second models use the reset ledger.",
-   donorHelper+donorGate+" // Only the two currently selectable 8-second models use the reset ledger.",
-   'ROUND_STATS_GATE')
+ # Locate the stats load() by its enclosing client script instead of relying on
+ # a comment that differs across deployed panel revisions.
+ anchor=out.find('const statsScript =')
+ if anchor<0:raise ValueError('HOTFIX_MISSING_STATS_SCRIPT')
+ pos=out.find('async function load(){',anchor)
+ if pos<0:raise ValueError('HOTFIX_MISSING_STATS_LOADER')
+ out=out[:pos]+donorHelper+donorGate+out[pos+len('async function load(){'):]
+ # The policy client script also has a load() function; only update that one.
  donorPolicy=between(donor,
    "async function load(){\n if(!e('signalPolicyCard'))return;\n try{\n  var r=await fetch('/api/order-signal-model?",
    " // Legacy model registry intentionally not used for production status.",'POLICY_GATE')
- # The donor changed the first existing "try" into a new preflight, leaving
- # original legacy try; replicate that to retain syntax and potential rollback.
- out=exactly(out,
-   "async function load(){\n if(!e('signalPolicyCard'))return;\n try{",
-   donorPolicy+" // Legacy model registry intentionally not used for production status.\n try{",
-   'POLICY')
- # Independent stats in model-selector status: the old route defaults to a
- # retired breakout model; explicitly bypass on DeepSeek.
+ anchor=out.find('const policyScript =')
+ if anchor<0:raise ValueError('HOTFIX_MISSING_POLICY_SCRIPT')
+ pos=out.find('async function load(){',anchor)
+ if pos<0:raise ValueError('HOTFIX_MISSING_POLICY_LOADER')
+ out=out[:pos]+donorPolicy+out[pos+len('async function load(){'):]
+ # Optional legacy model-selection summary, if present in this panel revision.
  statsMarker="async function loadOrderModelStats(){\n if(!e('orderSignalModelStats'))return;\n try{"
- statsTail=between(donor,statsMarker,
+ if statsMarker in out:
+  statsTail=between(donor,statsMarker,
    "  var endpoint=chosenOrderModel==='EDGE_5M_V1'?",'MODEL_STATS')
- out=exactly(out,statsMarker,statsTail,'SELECTED_MODEL_STATS')
+  out=exactly(out,statsMarker,statsTail,'SELECTED_MODEL_STATS')
  nameMarker="function chosenModelName(model){\n return model==="
- out=exactly(out,nameMarker,
+ if nameMarker in out:
+  out=exactly(out,nameMarker,
    "function chosenModelName(model){\n if(model==='DEEPSEEK_5M_V1')return 'DeepSeek 5分钟 AI 深度思考';\n return model===",
    'MODEL_NAME')
- if 'renderDeepSeekRoundStats()' not in out or '旧 Selective V2 不混入' not in out:
+ if 'renderDeepSeekRoundStats()' not in out or 'DeepSeek 每轮预测与官方结算' not in out:
   raise RuntimeError('HOTFIX_RESULT_INVALID')
  return out
 

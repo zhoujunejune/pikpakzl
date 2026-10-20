@@ -1,0 +1,89 @@
+name: Alibaba three-menu navigation isolated UI deploy
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - "futures-research-panel/nav_bridge.py"
+      - "futures-research-panel/install_nav_bridge.sh"
+      - "futures-research-panel/aliyun_nav_deploy.py"
+      - "futures-research-panel/test_nav_bridge.py"
+      - ".github/workflows/zl-aliyun-three-menu-nav-deploy.yml"
+permissions:
+  contents: read
+concurrency:
+  group: zl-three-menu-isolated-ui-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Unit tests and static non-trading audit
+        run: |
+          bash -n futures-research-panel/install_nav_bridge.sh
+          python -m py_compile futures-research-panel/nav_bridge.py futures-research-panel/aliyun_nav_deploy.py
+          python -m unittest -v discover -s futures-research-panel -p test_nav_bridge.py
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('futures-research-panel/install_nav_bridge.sh').read_text()
+          assert 'systemctl restart zl-futures-bot-paper' not in s
+          assert 'systemctl restart zl-prediction-trade' not in s
+          assert 'systemctl restart zl-futures-shadow-research' not in s
+          assert 'systemctl reload caddy' in s
+          assert 'basic_auth {' in s
+          assert 'zl-frontend-nav-bridge' in s
+          PY
+      - name: Install preexisting Alibaba SWAS SDK
+        run: pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Add third-menu navigation only, no trading process restart
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python futures-research-panel/aliyun_nav_deploy.py
+      - name: Check both actual authenticated UIs, three-way navigation and original controls
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,time,urllib.request,urllib.error
+          main='https://47-237-188-69.sslip.io'
+          pred='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def page(url,authorized=True):
+              headers={'Cache-Control':'no-store'}
+              if authorized:headers['Authorization']=auth
+              with urllib.request.urlopen(urllib.request.Request(url,headers=headers),timeout=16) as r:
+                  return r.status,r.read()
+          for url in (main+'/dashboard/',pred+'/'):
+              try:
+                  page(url,False)
+                  raise AssertionError('BASIC_AUTH_MUST_BE_PRESERVED')
+              except urllib.error.HTTPError as err:
+                  assert err.code==401,('invalid anonymous status',url,err.code)
+          a,html=page(main+'/dashboard/?navtest='+str(int(time.time())))
+          assert a==200
+          assert b'href="/futures-lab/"' in html,'FUTURES_LAB_MENU_MISSING_ON_LIVE_FUTURES_DASHBOARD'
+          assert b'href="/prediction/"' in html
+          assert b'href="/api-keys/"' in html
+          print('NAV_FUTURES_REAL_PAGE_HAS_THIRD_MENU=true')
+          a,html=page(pred+'/?navtest='+str(int(time.time())))
+          assert a==200
+          assert (main+'/futures-lab/').encode() in html
+          assert (main+'/dashboard/').encode() in html
+          assert '开始跟随'.encode() in html
+          print('NAV_PREDICTION_REAL_PAGE_HAS_THIRD_MENU=true')
+          a,html=page(main+'/futures-lab/')
+          assert a==200 and b'forwardStatus' in html
+          assert b'href="/dashboard/"' in html and b'href="/prediction/"' in html
+          print('NAV_SHADOW_PAGE_HAS_RETURN_LINKS=true')
+          status=json.loads(page(main+'/status')[1])
+          assert status.get('mode')=='live'
+          print('NAV_FUTURES_ENGINE_MODE_UNCHANGED=true')
+          stats=json.loads(page(main+'/futures-lab/live.json?t='+str(int(time.time()*1000)))[1])
+          assert stats.get('realOrders') is False and len(stats.get('streams',[]))==9
+          print('NAV_SHADOW_9_PAPER_ACCOUNTS_UNCHANGED=true')
+          print('NAV_NO_REAL_ORDERS_SUBMITTED=true')
+          PY

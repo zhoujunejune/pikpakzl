@@ -36,9 +36,17 @@ if not isinstance(a,(int,float)) or int(a)!=(now//300000)*300000:
  raise SystemExit('FEED_WRONG_ROUND')
 if not isinstance(latest.get('lastPrice'),(int,float)) or not isinstance(latest.get('roundOpenPrice'),(int,float)):
  raise SystemExit('FEED_PRICE_MISSING')
+def small(x):
+ if isinstance(x,dict):
+  items=x.get('items') or x.get('candles') or []
+  return items[-6:] if isinstance(items,list) else []
+ return x[-6:] if isinstance(x,list) else []
 result={'round':int(a),'marketAt':int(e),'lastPrice':latest['lastPrice'],'roundOpenPrice':latest['roundOpenPrice'],
- 'candles1m':(raw.get('candles') or {}).get('1m'),'candles5m':(raw.get('candles') or {}).get('5m')}
-print(json.dumps(result,separators=(',',':'),ensure_ascii=False))
+ 'candles1m':small((raw.get('candles') or {}).get('1m')),
+ 'candles5m':small((raw.get('candles') or {}).get('5m'))}
+import zlib,base64
+payload=json.dumps(result,separators=(',',':'),ensure_ascii=False).encode()
+print('ZL_MARKET_Z64='+base64.b64encode(zlib.compress(payload,9)).decode())
 REMOTE
 """
 
@@ -72,7 +80,11 @@ def main():
     for raw in candidates:
         for line in reversed(raw.splitlines()):
             try:
-                item=json.loads(line.strip())
+                if 'ZL_MARKET_Z64=' in line:
+                    import zlib
+                    token=line.split('ZL_MARKET_Z64=',1)[1].split()[0]
+                    item=json.loads(zlib.decompress(base64.b64decode(token)).decode())
+                else:item=json.loads(line.strip())
                 if isinstance(item,dict) and 'round' in item and 'marketAt' in item:
                     market=item
                     break

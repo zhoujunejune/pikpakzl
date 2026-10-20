@@ -31,6 +31,20 @@ show('V2_HEALTH',read(13002,'/healthz'))
 show('V3_HEALTH',read(13003,'/healthz'))
 show('TRADE_HEALTH',read(13001,'/healthz'))
 show('TRADE_MODEL_CHOICE',{k:read(13001,'/api/order-signal-model').get(k) for k in ('ok','ready','model','effectiveAfterRound','storageError')})
+t=read(13001,'/api/status')
+sig=t.get('signal') or {}
+p=t.get('pendingAction') or {}
+o=t.get('lastOrder') or {}
+show('TRADE_STATUS_SUMMARY',{'enabled':t.get('enabled'),'amountConfigured':bool(t.get('amount')),
+ 'signal':{k:sig.get(k) for k in ('round','status','direction','upstreamModel','source','generatedAt','lockedAt','executionEligible','qualityGate')},
+ 'directionModeReady':t.get('directionModeReady'),
+ 'directionModes':t.get('directionModes'),
+ 'orderSignal':t.get('orderSignal'),
+ 'startAfterRound':t.get('startAfterRound'),
+ 'pending':{k:p.get(k) for k in ('state','round','error','code','productionSource','signal','orderSignal','mappingMode')},
+ 'lastOrder':{k:o.get(k) for k in ('status','state','error','code','round','signal','submittedAt')}})
+show('V2_LOCK_TRANSPORT_STATUS',read(13002,'/api/signals/latest').get('transport'))
+
 show('ACTIVE_MODELS',v2.get('activeSignalModels'))
 show('V2_HEALTH_FROM_STATS',{k:v for k,v in (v2.get('health') or {}).items() if not re.search('key|secret|token|url|credential',str(k),re.I)})
 records=v2.get('records') or []

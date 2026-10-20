@@ -30,6 +30,16 @@ if p.is_file():
  print('LIVE_PANEL_SIZE',len(s))
  print('LIVE_PANEL_HAS_DEEPSEEK_HISTORY', 'renderDeepSeekRoundStats' in s)
  print('LIVE_PANEL_HAS_LEGACY_TITLE','每轮判断与真实结果' in s)
+ print('LIVE_PANEL_ANCHORS_START')
+ lines=s.splitlines()
+ tokens=('async function load(){','Only the two currently selectable','if(!e(\\'signalPolicyCard\\'))','function chosenModelName(','async function loadOrderModelStats(){','const statsCard =','const statsScript =','const policyScript =','function render','getStats()')
+ inds=[i for i,t in enumerate(lines) if any(k in t for k in tokens)]
+ for i in inds[:45]:
+  print('LIVE_PANEL_ANCHOR',i+1,repr(lines[i][:190]))
+  for n in range(i+1,min(i+5,len(lines))):
+   if any(x in lines[n] for x in ('API_KEY','API_SECRET','PASSWORD','SECRET','AUTHORIZATION')):continue
+   print('LIVE_PANEL_CONTEXT',n+1,repr(lines[n][:180]))
+ print('LIVE_PANEL_ANCHORS_END')
 else:print('LIVE_PANEL_EXISTS=false')
 PY
 """

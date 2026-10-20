@@ -32,7 +32,7 @@ jobs:
           assert 'systemctl restart zl-futures-bot-paper' not in s
           assert 'systemctl restart zl-prediction-trade' not in s
           assert 'systemctl restart zl-futures-shadow-research' not in s
-          assert 'systemctl reload caddy' in s
+          assert "['systemctl','reload','caddy']" in s
           assert 'basic_auth {' in s
           assert 'zl-frontend-nav-bridge' in s
           PY

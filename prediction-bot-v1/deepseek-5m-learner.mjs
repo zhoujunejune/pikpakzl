@@ -99,5 +99,17 @@ export function newLearner(file,clock=()=>Date.now()){
       Number((stats.upDown.DOWN.hits/stats.upDown.DOWN.samples).toFixed(4)):null,
     interpretation:'Descriptive rolling accuracy from older resolved rounds only; no guarantee of predictive lift. Choose on CURRENT data, not by historical label alone.'};
  }
- return {record,settle,summary,feedback};
+ function history(limit=80){
+  const n=Math.max(1,Math.min(100,Math.trunc(Number(limit)||80)));
+  return {ok:true,model:'DEEPSEEK_5M_V1',officialSource:source,
+   generatedAt:clock(),summary:summary(),
+   records:state.predictions.slice(-n).reverse().map(x=>({
+    round:x.round,direction:x.direction,confidence:x.confidence,
+    signalAt:x.signalAt,signalLatencyMs:x.signalLatencyMs,
+    featureRegime:x.featureRegime,provider:x.provider,
+    attemptCount:x.attemptCount,actual:x.actual,
+    settledAt:x.settledAt,hit:x.actual===null?null:x.hit
+   }))};
+ }
+ return {record,settle,summary,feedback,history};
 }

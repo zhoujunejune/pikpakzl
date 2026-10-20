@@ -44,6 +44,61 @@ show('TRADE_STATUS_SUMMARY',{'enabled':t.get('enabled'),'amountConfigured':bool(
  'pending':{k:p.get(k) for k in ('state','round','error','code','productionSource','signal','orderSignal','mappingMode')},
  'lastOrder':{k:o.get(k) for k in ('status','state','error','code','round','signal','submittedAt')}})
 show('V2_LOCK_TRANSPORT_STATUS',read(13002,'/api/signals/latest').get('transport'))
+# Recent post-03:16 live trade pipeline: read-only, error summaries only.
+fix_started=int(datetime.datetime(2026,10,20,3,16,tzinfo=datetime.timezone.utc).timestamp()*1000)
+recent_stats=read(13002,'/api/round-stats')
+recent=[x for x in recent_stats.get('records',[]) if
+ int(x.get('roundStartMs') or 0)>=fix_started-60000]
+for x in sorted(recent,key=lambda r:int(r.get('roundStartMs') or 0)):
+ print('POST_FIX_PREDICTION_ROUND',json.dumps({k:x.get(k) for k in
+ ('roundStartMs','productionPrediction','productionSource','productionModel','productionDelayMs','productionExecutionEligible','productionActual','productionResult')},ensure_ascii=False))
+path=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic/wrapper.mjs')
+if path.exists():
+ src=path.read_text()
+ print('CURRENT_ORDER_DEADLINE_CODE',json.dumps({
+  'has_30s_model_branch':'model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS' in src,
+  'has_30s_deadline':'SELECTIVE30_ORDER_DEADLINE_MS = 30000' in src,
+  'has_30s_in_submit_path':'if (rejectExpiredOrderWindow(p' in src,
+  'has_30s_early_guard':'if (!orderSubmitWindowOpen(signal.round,Date.now(),choice.model)) return;' in src,
+  'auto_submit_ready_hook':"await submitPendingOrder(pendingAction, { source: 'auto' })" in src,
+  'src_last_modified_utc':datetime.datetime.fromtimestamp(path.stat().st_mtime,datetime.timezone.utc).isoformat()}))
+for svc in ('zl-prediction-trade','zl-prediction-v2'):
+ try:
+  proc=subprocess.run(['journalctl','-u',svc,'--since','2026-10-20 03:15:00 UTC',
+   '--utc','--no-pager','-o','json'],capture_output=True,text=True,timeout=40)
+  ct=collections.Counter(); events=[]
+  for line in proc.stdout.splitlines():
+   try:
+    sysj=json.loads(line)
+    msg=sysj.get('MESSAGE','')
+    obj=json.loads(msg) if isinstance(msg,str) and msg.startswith('{') else None
+    if not isinstance(obj,dict):continue
+    ev=str(obj.get('event') or '')
+    if not ev:continue
+    ct[ev]+=1
+    if svc=='zl-prediction-trade':
+     wanted=any(z in ev for z in ('intent','order','quote','submit','control',
+     'follow','direction','model','failed','error','started','signal','ready'))
+    else:
+     wanted=any(z in ev for z in ('production_signal_locked','locked_signal_redis_published'))
+    if not wanted:continue
+    ru=obj.get('round') or obj.get('roundStartMs')
+    if isinstance(ru,(int,float,str)) and str(ru).isdigit() and int(ru)<fix_started-300000:continue
+    us=int(sysj.get('__REALTIME_TIMESTAMP') or 0)
+    stamp=datetime.datetime.fromtimestamp(us/1e6,datetime.timezone.utc).isoformat() if us else None
+    safe={k:obj.get(k) for k in ('event','round','source','stage','status','state','enabled',
+      'elapsedMs','deadlineMs','code','httpStatus','error','reason','direction','productionSignal',
+      'orderSignal','orderDirectionPolicy','mappingMode','signalModelChoice','startAfterRound',
+      'quoteRemainingAtSubmitMs','quoteLatencyMs','at') if k in obj}
+    if safe.get('error') is not None:safe['error']=str(safe['error'])[:100]
+    events.append({'timeUTC':stamp,**safe})
+   except Exception:pass
+  print('POST_FIX_EVENT_COUNTS',svc,json.dumps(ct.most_common(30),ensure_ascii=False))
+  print('POST_FIX_RELEVANT_EVENT_TOTAL',svc,len(events))
+  for e in events[-90:]:
+   print('POST_FIX_LOG',svc,json.dumps(e,ensure_ascii=False)[:650])
+ except Exception as ex:print('POST_FIX_LOG_ERROR',svc,type(ex).__name__)
+
 
 show('ACTIVE_MODELS',v2.get('activeSignalModels'))
 show('V2_HEALTH_FROM_STATS',{k:v for k,v in (v2.get('health') or {}).items() if not re.search('key|secret|token|url|credential',str(k),re.I)})

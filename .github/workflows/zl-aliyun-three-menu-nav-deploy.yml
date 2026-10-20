@@ -25,7 +25,7 @@ jobs:
         run: |
           bash -n futures-research-panel/install_nav_bridge.sh
           python -m py_compile futures-research-panel/nav_bridge.py futures-research-panel/aliyun_nav_deploy.py
-          python -m unittest -v discover -s futures-research-panel -p test_nav_bridge.py
+          python -m unittest discover -v -s futures-research-panel -p test_nav_bridge.py
           python - <<'PY'
           from pathlib import Path
           s=Path('futures-research-panel/install_nav_bridge.sh').read_text()

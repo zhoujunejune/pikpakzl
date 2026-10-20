@@ -68,6 +68,20 @@ def sample_bars(c):
  return {'total':len(rows),'closed':len(closed),
          'ready35':len(closed)>=35,
          'lastClosedStartAgeMs':safe_age(last.get('startMs') or last.get('openTime'))}
+def report_timing():
+ h=fetch(13029,'/api/history?limit=100')
+ rows=h.get('records') or []
+ elapsed=sorted([r.get('signalLatencyMs') for r in rows if isinstance(r.get('signalLatencyMs'),(int,float)) and r.get('signalLatencyMs')>=0])
+ tries=[r.get('attemptCount') for r in rows if isinstance(r.get('attemptCount'),int)]
+ out['signalTiming']={
+  'sampleCount':len(elapsed),
+  'lockedBy30Sec':sum(x<=30000 for x in elapsed),
+  'lockedBy90Sec':sum(x<=90000 for x in elapsed),
+  'lockedBy270Sec':sum(x<=270000 for x in elapsed),
+  'medianLatencySec':round(elapsed[len(elapsed)//2]/1000,1) if elapsed else None,
+  'minLatencySec':round(elapsed[0]/1000,1) if elapsed else None,
+  'maxLatencySec':round(elapsed[-1]/1000,1) if elapsed else None,
+  'meanAttempts':round(sum(tries)/len(tries),2) if tries else None}
 def report_market():
  m=fetch(13003,'/api/shadow-market-data')
  latest=m.get('latest') or {}
@@ -95,7 +109,22 @@ def report_official():
                   'eligibleSettlementRecords':len(valid),
                   'lastRecordRound':rows[-1].get('roundStartMs') if rows and isinstance(rows[-1],dict) else None,
                   'fetchError':r.get('fetchError')}
+def report_route():
+ c=fetch(13001,'/api/order-signal-model')
+ s=fetch(13001,'/api/status')
+ d=fetch(13001,'/api/direction-mode')
+ out['productionRoute']={
+  'selectedModel':c.get('model'),
+  'choices':[x.get('id') for x in c.get('models',[]) if isinstance(x,dict)],
+  'followEnabled':s.get('enabled'),
+  'orderSignalModel':s.get('orderSignalModel'),
+  'statusOk':s.get('ok'),
+  'signalSourceMode':s.get('productionSignalSourceMode'),
+  'directionModeNames':list((d.get('modes') or {}).keys())[:8],
+  'selectError':c.get('fetchError'),'statusError':s.get('fetchError'),
+  'directionError':d.get('fetchError')}
 def report_units():
+
  units={}
  for unit in ['zl-prediction-v3','zl-prediction-v2','zl-prediction-deepseek5','zl-prediction-trade']:
   v=subprocess.run(['systemctl','is-active',unit],text=True,capture_output=True,timeout=3)
@@ -111,8 +140,10 @@ def report_units():
  out['localFiles']=files
 report_status()
 report_history()
+report_timing()
 report_market()
 report_official()
+report_route()
 report_units()
 print('ZL_DEEPSEEK_READONLY_AUDIT='+json.dumps(out,separators=(',',':'),ensure_ascii=False))
 PY

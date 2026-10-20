@@ -35,6 +35,13 @@ if s==200 and isinstance(v,dict):
  signal=v.get('signal') or {}
  print('DEEPSEEK_LOCKED_DIRECTION',(signal.get('latest') or {}).get('direction'))
  print('DEEPSEEK_LOCKED_AT',(signal.get('latest') or {}).get('lockedAt'))
+ print('DEEPSEEK_REASONING',v.get('reasoning'))
+ print('DEEPSEEK_FEATURE_READY',v.get('featureReady'))
+ print('DEEPSEEK_FEATURE_VERSION',v.get('featuresVersion'))
+ print('DEEPSEEK_LAST_API_LATENCY_MS',v.get('lastApiLatencyMs'))
+ print('DEEPSEEK_LAST_API_TOKENS',v.get('lastApiTokens'))
+ print('DEEPSEEK_WAIT_REASON',v.get('waitReason'))
+ print('DEEPSEEK_LEARNING',v.get('learning'))
  print('DEEPSEEK_REAL_ORDER_ENABLED',v.get('realOrderEnabled'))
  print('DEEPSEEK_TRADE_INTEGRATION',v.get('tradeIntegration'))
 a,c=get('/signal')

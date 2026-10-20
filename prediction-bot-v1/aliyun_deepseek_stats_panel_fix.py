@@ -54,15 +54,21 @@ rows=new.splitlines(keepends=True)
 outlines=[]
 assembly=0
 client_scripts=0
+already_assembly=0
+already_script=0
 for row in rows:
  if row.lstrip().startswith('let out = html.includes(marker) ? html.replace(marker,'):
-  row="  let out = html.includes(marker) ? html.replace(marker, statsCard + marker) : html.replace('</body>', statsCard + '</body>');\n"
-  assembly+=1
- elif row.lstrip().startswith("return out.replace('</body>',") and 'primaryScript' in row:
-  row="  return out.replace('</body>', statsScript + '</body>');\n"
-  client_scripts+=1
+  if 'primaryCard' in row:
+   row="  let out = html.includes(marker) ? html.replace(marker, statsCard + marker) : html.replace('</body>', statsCard + '</body>');\n"
+   assembly+=1
+  elif 'statsCard + marker' in row:already_assembly+=1
+ elif row.lstrip().startswith("return out.replace('</body>',"):
+  if 'primaryScript' in row:
+   row="  return out.replace('</body>', statsScript + '</body>');\n"
+   client_scripts+=1
+  elif "statsScript + '</body>'" in row:already_script+=1
  outlines.append(row)
-assert assembly==1 and client_scripts==1, 'DEEPSEEK_UI_COMPOSITION_CONTEXT_MISMATCH'
+assert assembly+already_assembly==1 and client_scripts+already_script==1, 'DEEPSEEK_UI_COMPOSITION_CONTEXT_MISMATCH'
 new=''.join(outlines)
 assert 'primaryCard}${statsCard}' not in new
 assert 'renderDeepSeekRoundStats' in new

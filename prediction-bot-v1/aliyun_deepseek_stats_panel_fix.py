@@ -83,6 +83,21 @@ if retired_begin in new:
  new=new[:begin]+new[end:]
 assert retired_begin not in new
 print('DEEPSEEK_LEGACY_SHADOW_JOBS_STOPPED=true')
+# Permanently eliminate unused legacy HTML and client-script source definitions.
+# The active page composition has already stopped referencing these names.
+if 'const primaryCard =' in new:
+ assert 'primaryCard + marker' not in new and 'primaryScript + ' not in new
+ start=new.index('const primaryCard =')
+ finish=new.index('// Keep live statistics updates',start)
+ assert 'const primaryScript =' in new[start:finish]
+ new=new[:start]+new[finish:]
+if 'const previewCard =' in new:
+ start=new.index('const previewCard =')
+ finish=new.index('const statsScript =',start)
+ assert 'const policyScript =' in new[start:finish]
+ new=new[:start]+new[finish:]
+assert 'const primaryCard =' not in new and 'const previewCard =' not in new
+print('DEEPSEEK_UNUSED_LEGACY_RENDERER_SOURCE_REMOVED=true')
 assert 'renderDeepSeekRoundStats' in new
 assert '/deepseek/api/history?limit=80' in new
 assert 'async function load(){' in new

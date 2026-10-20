@@ -36,8 +36,21 @@ def extract(s):
  return i,j,s[i:j]
 a,b,_=extract(latest)
 i=before.index(start)
-j=before.index(end,i)+len(end)
 assert before.count(start)==1
+endpos=before.find(end,i)
+if endpos>=0:
+ j=endpos+len(end)
+else:
+ # Distinguish historic embedded stat scripts (template literals) from the new
+ # one. Do not patch if no unique safe script terminator can be found.
+ print('LEGACY_STATS_DELIMITERS',{
+  'literal_close':before.find('</script>',i)-i,
+  'escaped_close':before.find('<\\/script>',i)-i,
+  'next_policy':before.find('const primaryScript',i)-i,
+  'next_script':before.find('const primaryCard',i)-i,
+  'start_excerpt':repr(before[i:i+95])
+ })
+ raise RuntimeError('OLD_STATS_TEMPLATE_TERMINATOR_UNRECOGNIZED')
 assert before[i:j].startswith(start)
 new=before[:i]+latest[a:b]+before[j:]
 assert 'renderDeepSeekRoundStats' in new

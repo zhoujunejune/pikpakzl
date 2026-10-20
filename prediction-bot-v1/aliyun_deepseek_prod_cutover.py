@@ -149,9 +149,8 @@ def patch_panel(s):
    "panel-one-source")
  s=once(s,"Object.keys(modes).length!==3","Object.keys(modes).length!==1",
         "panel-single-direction-source")
- marker="  var raw=Array.isArray(j.activeSignalModels)?j.activeSignalModels:[];"
- s=once(s,marker,
-   "  var raw=[{id:'DEEPSEEK_5M_V1',source:'DEEPSEEK_5M_V1',name:'DeepSeek 5分钟生产信号',active:true}];",
+ s=once(s,"function syncActiveCatalog(j){",
+   "function syncActiveCatalog(j){\n j={...j,activeSignalModels:[{id:'DEEPSEEK_5M_V1',source:'DEEPSEEK_5M_V1',name:'DeepSeek 5分钟生产信号',active:true}]};",
    "frontend-active-model")
  # The former V2/Edge results remain accessible in official archives, never
  # represented as DeepSeek model performance.

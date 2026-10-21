@@ -1,0 +1,42 @@
+name: Deploy DeepSeek TRADE-NO_TRADE decision directly to Alibaba production
+on:
+  push:
+    branches: [feat/deepseek-live-trade-value-20261021]
+    paths:
+      - .github/workflows/zl-deepseek-live-trade-value-release.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify trade EV gate requires real quote and official data
+        run: |
+          bash -n prediction-bot-v1/apply_live_trade_value.sh
+          python3 -m py_compile prediction-bot-v1/patch_live_trade_value.py
+          python3 -m py_compile prediction-bot-v1/launch_live_trade_value.py
+          node --test prediction-bot-v1/live-trade-value-policy.test.mjs
+          python3 prediction-bot-v1/patch_live_trade_value.py railway-diagnostic/wrapper.mjs /tmp/live-value-wrapper.mjs
+          node --check /tmp/live-value-wrapper.mjs
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Existing Alibaba Cloud SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Guarded real production release, never restart if auto-follow is on
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/launch_live_trade_value.py

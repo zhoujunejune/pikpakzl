@@ -1,8 +1,8 @@
-// Autonomous DeepSeek decisions within +25 seconds of opening.
+// Autonomous DeepSeek decisions within +9 seconds of opening.
 // Never submit orders or invent future market data.
 export const ROUND_MS=300000;
 export const COLLECT_MS=120000;
-export const DEADLINE_MS=25000;
+export const DEADLINE_MS=9000;
 export const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
 const number=x=>typeof x==='number'&&Number.isFinite(x);
 const side=x=>x==='UP'||x==='DOWN';
@@ -71,7 +71,7 @@ export function analysisRequest(w,pass,now,features,feedback={}){
  const feedbackSafe=feedback&&typeof feedback==='object'?feedback:{};
  return {
   model:'deepseek-flash',thinking:{type:'enabled'},reasoning_effort:'high',
-  max_tokens:4096,response_format:{type:'json_object'},
+  max_tokens:3072,response_format:{type:'json_object'},
   messages:[
    {role:'system',content:[
     'You are a professional evidence-based BTCUSDT 5m prediction analyst.',
@@ -79,18 +79,18 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     'Before the round starts the opening price is UNKNOWN; in the current phase use only observed round open and fresh ticks. Never invent future prices or official settlement.',
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
     'Choose indicators, historical examples and analytic methods independently based on their relevance; none is mandatory.',
-    'You may revise earlier opinions when new credible evidence supports doing so; do not reverse without evidence.',
+    'Make exactly one deep analysis of current market evidence and the prior officially settled cases; there will be no follow-up model request.',
     'You independently select all indicators and reasoning. With authenticated fresh BTC data, the task is to choose the marginally more likely UP or DOWN, even when uncertainty is high; describe uncertainty honestly.',
     'No fixed indicator weights, statistical vetoes or forced reversals override your direction. WAIT is reserved for genuinely unusable/contradictory market data or technical failures, not weak confidence or noisy markets.',
-    'If earlier passes returned WAIT despite reliable current data, reconsider the genuine current round open and latest ticks instead of repeating WAIT. State uncertainty and risk candidly; do not exaggerate your edge.',
+    'Use the real current round opening price and fresh ticks. Prefer an evidence-supported UP or DOWN with candid uncertainty; return WAIT if data cannot support a valid analysis.',
     'Never invent market data or future prices. If the supplied market data cannot be interpreted, do not manufacture an analysis.',
-    'Return compact JSON {"direction":"UP","confidence":0.51,"continueAnalysis":false,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}. Choose continueAnalysis=true only if more fresh market observations could improve the decision before the deadline.',
+    'Return compact JSON {"direction":"UP","confidence":0.51,"continueAnalysis":false,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}. Finish your single analysis in this call; no second call is permitted.',
     'Confidence is SUBJECTIVE, not a calibrated win probability; a directional prediction is NOT an instruction to trade or proof of positive expected value.'
    ].join(' ')},
    {role:'user',content:JSON.stringify({
     targetRound:w.round,phase:pass,observedThrough:pass==='current'?(w.early.at(-1)?.at??last.at):last.at,
     firstSampleAt:w.prior[0].at,
-    priorTwoMinuteTicks:w.prior.slice(-120),
+    priorTwoMinuteTicks:w.prior.filter((_,i)=>i%3===0||i===w.prior.length-1).slice(-45),
     currentRoundTicks:pass==='current'?w.early.slice(-25):[],
     decisionDeadlineMs:w.round+DEADLINE_MS,
     indicators:features,
@@ -112,13 +112,13 @@ export function closeExpiredWindow(w,now){
  if(w.final||w.terminal||now<w.round+DEADLINE_MS)return false;
  const reason=w.provisionalWait||w.skips.at(-1)||w.lastModelError||'NO_CONFIRMED_SIGNAL';
  w.terminal={round:w.round,status:'WAIT',direction:'WAIT',
-  reason:'DEADLINE_25S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
+  reason:'DEADLINE_9S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
   signalGenerated:false,orders:false};
  return true;
 }
 function recordWait(w,reason,now){
  // A temporary WAIT is not a final decision. Continue observing real ticks
- // until the strict 25-second cutoff, without emitting an order signal.
+ // until the strict 9-second cutoff, without emitting an order signal.
  w.provisionalWait=reason;
  if(w.skips.at(-1)!==reason)w.skips.push(reason);
  return {ok:false,skip:true,provisional:true,round:w.round,
@@ -127,7 +127,7 @@ function recordWait(w,reason,now){
 export function finalize(w,now,feedback={}){
  if(w.final)throw Error('ALREADY_LOCKED'); 
  if(w.terminal)return {ok:false,skip:true,round:w.round,direction:'WAIT',reason:w.terminal.reason};
- if(now<w.round||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_25S_LOCK_WINDOW');
+ if(now<w.round||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_9S_LOCK_WINDOW');
  const prior=w.prior,early=w.early;
  if(prior.length<5||prior.at(-1).at-prior[0].at<20000)
   throw Error('MISSING_LAST_120S');

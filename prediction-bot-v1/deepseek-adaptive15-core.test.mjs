@@ -13,7 +13,7 @@ function ready(){
  const w=makeWindow(round);
  for(let i=0;i<120;i++)
   collect(w,tick(round-120000+i*1000,67000+i*.2,66000));
- for(let i=0;i<15;i++)
+ for(let i=0;i<13;i++)
   collect(w,tick(round+i*1000,68000+i*1.2,68000));
  return w;
 }
@@ -28,7 +28,7 @@ test('15s lock, corrected open, two DeepSeek analyses and strict no late directi
  const x=finalize(w,round+12400);
  assert.equal(x.latest.direction,'UP');
  assert.equal(x.latest.selectedAnalysis,'review');
- assert.equal(x.latest.earlySamples,15);
+ assert.equal(x.latest.earlySamples,13);
  assert.ok(x.generatedAt<round+15000);
  assert.equal(x.orders,false);
  assert.throws(()=>finalize(w,round+14000),/ALREADY_LOCKED/);

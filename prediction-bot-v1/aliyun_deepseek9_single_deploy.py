@@ -27,7 +27,7 @@ def get(p,endpoint):
 a=get(13029,'/api/status');t=get(13001,'/api/status');c=get(13001,'/api/order-signal-model')
 assert a.get('model')=='DEEPSEEK_5M_V1' and a.get('providerModel')=='deepseek-flash','WRONG_AI_PROVIDER_ABORT'
 assert a.get('decisionWindowEndMs',0)-a.get('round',0)==25000,'NOT_25S_BASE_ABORT'
-assert a.get('maxCallsPerRound') is None and a.get('analysisCountLimit')=='NONE_TIME_BUDGET_ONLY','UNKNOWN_SOURCE_VERSION_ABORT'
+assert a.get('maxCallsPerRound')==6 and a.get('analysisCountLimit')=='PRE2_LIVE4_TOTAL6','UNKNOWN_SOURCE_VERSION_ABORT'
 assert a.get('noSignalAfterDeadline') is True
 assert t.get('enabled') is False,'FOLLOW_ON_ABORT'
 assert c.get('model')=='DEEPSEEK_5M_V1','MODEL_SELECTION_CHANGED_ABORT'

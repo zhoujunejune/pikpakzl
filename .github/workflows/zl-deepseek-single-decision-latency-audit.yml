@@ -1,0 +1,95 @@
+name: Read-only measure DeepSeek 1-call latency vs full-round signal time
+on:
+  push:
+    branches: [audit/deepseek-single-call-time-20261021]
+    paths: [.github/workflows/zl-deepseek-single-decision-latency-audit.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install existing Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect past calls and settled signal timings only without invoking DeepSeek
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          remote=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import urllib.request,json,statistics,re,subprocess,datetime,collections,pathlib,time
+          def get(p,url):
+           with urllib.request.urlopen('http://127.0.0.1:%s%s'%(p,url),timeout=6) as r:return json.load(r)
+          st=get(13029,'/api/status')
+          hist=get(13029,'/api/history?limit=100')
+          trader=get(13001,'/api/status')
+          rows=hist.get('records') or []
+          after=1792578600000  # Oct 21 18:30 SGT six-call cap, latest production
+          samples=[x for x in rows if isinstance(x.get('round'),int) and x['round']>=after]
+          locked=[x for x in samples if x.get('direction') in ('UP','DOWN') and isinstance(x.get('signalLatencyMs'),(int,float))]
+          waits=[x for x in samples if x.get('direction')=='WAIT']
+          def dstat(aa):
+           if not aa:return {'n':0}
+           return {'n':len(aa),'minSec':round(min(aa)/1000,3),'medianSec':round(statistics.median(aa)/1000,3),'maxSec':round(max(aa)/1000,3)}
+          groups={}
+          for row in locked:
+           a=row.get('attemptCount')
+           if isinstance(a,int) and a>0:groups.setdefault(str(a),[]).append(row['signalLatencyMs'])
+          body={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           'provider':st.get('providerModel'),
+           'lastApiLatencyMs':st.get('lastApiLatencyMs'),
+           'liveTries':st.get('tries'),'modelBusy':st.get('busy'),
+           'decisionRule':st.get('decisionRule'),'maxCalls':st.get('maxCallsPerRound'),
+           'preMaxCalls':st.get('preRoundMaxCalls'),'liveMaxCalls':st.get('currentRoundMaxCalls'),
+           'decisionDeadlineMs':st.get('decisionWindowEndMs',0)-st.get('round',0),
+           'signalLockedTimeSummary':dstat([x['signalLatencyMs'] for x in locked]),
+           'byTotalAttemptCount':{key:dstat(vals) for key,vals in sorted(groups.items())},
+           'recordsSinceNewCap':len(samples),'waitsSinceNewCap':len(waits),
+           'recentDecisions':[{'round':x.get('round'),'direction':x.get('direction'),
+             'attempts':x.get('attemptCount'),'elapsedSec':round(x['signalLatencyMs']/1000,3) if isinstance(x.get('signalLatencyMs'),(int,float)) else None} for x in samples[:12]],
+           'tradeFollowEnabled':trader.get('enabled')}
+          # Journald is read-only; only summarize timing patterns, never print raw logs/secrets.
+          try:
+           logs=subprocess.run(['journalctl','-u','zl-prediction-deepseek5','--since','3 hours ago','--no-pager','-o','cat'],capture_output=True,text=True,timeout=7).stdout
+           lines=logs.splitlines()
+           matching=[v for v in lines if any(w in v.lower() for w in ('latency','elapsed','analy','deepseek_http','timeout','lock','model'))]
+           duration=[]
+           for v in matching:
+            for m in re.finditer(r'(?:latency|elapsed|duration|took)\W{0,15}(\d+(?:\.\d+)?)\s*ms',v,re.I):duration.append(float(m.group(1)))
+           body['journal']={'lineCount':len(lines),'timingRelatedLineCount':len(matching),
+              'explicitCallDurationSamples':len(duration),
+              'explicitCallMsStats':dstat(duration),
+              'timingErrorLines':sum(1 for v in matching if 'timeout' in v.lower() or 'http_' in v.lower())}
+          except Exception as e:body['journal']={'error':type(e).__name__}
+          print('DEEPSEEK_ONE_CALL_READONLY_TIMINGS='+json.dumps(body,separators=(',',':')))
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+              access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          i=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+            name='zl-deepseek-single-decision-read-only-usage-timing',
+            type='RunShellScript',working_user='root',command_content=remote,timeout=80)).body.invoke_id
+          for _ in range(50):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=i)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            for line in raw.splitlines():
+             if line.startswith('DEEPSEEK_ONE_CALL_READONLY_TIMINGS='):print(line)
+            if int(r.exit_code)!=0:raise RuntimeError('AUDIT_FAILURE: '+raw[-1000:])
+            break
+          else:raise RuntimeError('AUDIT_TIMEOUT')
+          PY

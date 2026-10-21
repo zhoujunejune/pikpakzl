@@ -18,6 +18,17 @@ PY
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 mkdir -p "$back" "$t/new" "$t/merged" "$t/patch"
+curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$LEARN_SHA/prediction-bot-v1/learner_lifetime_compatible_patch.py" > "$t/learner-compat.py"
+python3 -m py_compile "$t/learner-compat.py"
+curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE_SHA/prediction-bot-v1/deepseek-5m-episodic-memory.mjs" > "$t/episodic-memory.mjs"
+"$node" --check "$t/episodic-memory.mjs"
+if test -f "$app/deepseek-5m-episodic-memory.mjs";then
+ "$node" --check "$app/deepseek-5m-episodic-memory.mjs"
+ grep -q 'export function retrieveOfficialCases' "$app/deepseek-5m-episodic-memory.mjs" || { echo "EPISODIC_HELPER_DIVERGED_ABORT";exit 15; }
+ echo EPISODIC_HELPER_PRESENT=true
+else
+ echo EPISODIC_HELPER_WILL_INSTALL=true
+fi
 for n in $names;do
  curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE_SHA/prediction-bot-v1/$n" > "$t/$n"
  
@@ -26,7 +37,10 @@ for n in $names;do
 # Merge only the reviewed difference into the currently running version.
 # This preserves independent production improvements and refuses conflicts.
  cp -p "$app/$n" "$t/merged/$n"
- if ! cmp -s "$app/$n" "$t/$n";then
+ if test "$n" = "deepseek-5m-learner.mjs" && ! cmp -s "$app/$n" "$t/$n";then
+  echo "PRESERVE_LIFETIME_COUNTERS_AND_ADD_CASE_MEMORY=true"
+  python3 "$t/learner-compat.py" "$t/merged/$n"
+ elif ! cmp -s "$app/$n" "$t/$n";then
   echo "SAFE_MERGE_REQUIRED=$n"
   diff -u "$t/$n" "$t/new/$n" > "$t/patch/$n.diff" || test "$?" -eq 1
   patch --batch --forward --fuzz=0 "$t/merged/$n" "$t/patch/$n.diff" ||
@@ -40,9 +54,14 @@ for n in $names;do
 done
 rollback(){
  for n in $names;do cp -p "$back/$n" "$app/$n";done
+ if test -e "$back/installed-new-episodic-helper";then rm -f "$app/deepseek-5m-episodic-memory.mjs";fi
  systemctl restart zl-prediction-deepseek5.service || true
 }
 trap rollback ERR
+if ! test -f "$app/deepseek-5m-episodic-memory.mjs";then
+ cp -p "$t/episodic-memory.mjs" "$app/deepseek-5m-episodic-memory.mjs"
+ touch "$back/installed-new-episodic-helper"
+fi
 for n in $names;do cp -p "$t/merged/$n" "$app/$n";done
 systemctl restart zl-prediction-deepseek5.service
 for i in $(seq 1 20);do

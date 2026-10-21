@@ -28,6 +28,10 @@ print('ZL_TRADE_VALUE_READONLY='+json.dumps({
  'wrapperLines':excerpt(s,['EV_FILTER_ENABLED','orderSubmitDeadlineForModel','const EV_MIN_EDGE','if (EV_FILTER_ENABLED)','p.signalModelChoice','quote.chance','source ===']),
  'indexLines':excerpt(ind,['SELECTIVE8_MODEL','DEEPSEEK_5M_V1','SIGNAL_MODEL_NAME','roundStats','productionSignal','p.signalModelChoice']),
  'helpers':{'trade-value-gate.mjs':(root/'trade-value-gate.mjs').exists()},
+ 'runningPolicyDefinition':excerpt((root/'production-signal-choice.mjs').read_text() if (root/'production-signal-choice.mjs').exists() else '',['SELECTIVE8_MODEL','DEEPSEEK_5M_V1','export const ORDER_SIGNAL_MODELS']),
+ 'runningGeneratedGate':excerpt((root/'trade-control-fixed.mjs').read_text() if (root/'trade-control-fixed.mjs').exists() else '',['if (isAuto && p.signalModelChoice===SELECTIVE8_MODEL)','decideLiveTradeValue','import {decideLiveTradeValue}']),
+ 'runningOrderSelection':select.get('model'),
+
  'changed':False
 },ensure_ascii=False,separators=(',',':')))
 PY

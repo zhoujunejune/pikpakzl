@@ -3,6 +3,7 @@
 // It incrementally builds post-settlement empirical priors and forward-test stats.
 import fs from 'node:fs';
 import path from 'node:path';
+import {caseSnapshot,retrieveOfficialCases} from './deepseek-5m-episodic-memory.mjs';
 const okSide=x=>x==='UP'||x==='DOWN';
 const source='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
 function load(file){
@@ -39,6 +40,9 @@ export function newLearner(file,clock=()=>Date.now()){
    signalLatencyMs:signal.latest.lockedAt-id,
    provider:signal.providerModel,
    attemptCount:attempts,
+   // A compact, causal snapshot of inputs actually known at the signal lock.
+   // Old records without this field stay valid but cannot enter case retrieval.
+   caseFeatures:caseSnapshot(features),reason:String(signal.latest.reason||'').slice(0,100),
    actual:null,settledAt:null
   });
   state.predictions=state.predictions.slice(-2000);
@@ -82,6 +86,7 @@ export function newLearner(file,clock=()=>Date.now()){
    recentAccuracy:recent.length?Number((hits/recent.length).toFixed(4)):null,
    allOfficialSamples:settled.length,upDown:sides,regimes,
    predictions:state.predictions.length,unsettled:state.predictions.length-settled.length,
+   comparableOfficialCases:settled.filter(x=>Array.isArray(x.caseFeatures)).length,
    readyForAnalysis:recent.length>=30,
    note:'Empirical post-settlement feedback only; not probability calibration or model weight training'};
  }
@@ -89,7 +94,8 @@ export function newLearner(file,clock=()=>Date.now()){
   const stats=summary();
   if(stats.officialSamples<30)return {usable:false,samples:stats.officialSamples};
   const key=regime(features),subset=stats.regimes[key];
-  return {usable:true,samples:stats.officialSamples,regime:key,
+  const episodicMemory=retrieveOfficialCases(state.predictions,features);
+  return {usable:true,samples:stats.officialSamples,regime:key,episodicMemory,
     regimeSampleCount:subset?.samples??0,
     regimeHistoricalAccuracy:subset?.samples>=15?Number((subset.hits/subset.samples).toFixed(4)):null,
     upSamples:stats.upDown.UP.samples,downSamples:stats.upDown.DOWN.samples,
@@ -107,7 +113,7 @@ export function newLearner(file,clock=()=>Date.now()){
     round:x.round,direction:x.direction,confidence:x.confidence,
     signalAt:x.signalAt,signalLatencyMs:x.signalLatencyMs,
     featureRegime:x.featureRegime,provider:x.provider,
-    attemptCount:x.attemptCount,actual:x.actual,
+    attemptCount:x.attemptCount,featureSnapshotAvailable:Array.isArray(x.caseFeatures),actual:x.actual,
     settledAt:x.settledAt,hit:x.actual===null?null:x.hit
    }))};
  }

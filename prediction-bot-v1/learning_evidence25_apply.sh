@@ -52,6 +52,31 @@ for n in $names;do
  "$node" --check "$t/merged/$n"
  cp -p "$app/$n" "$back/$n"
 done
+# Test the actual on-host merged learner, including pre-existing lifetime counters.
+cp -p "$t/episodic-memory.mjs" "$t/merged/deepseek-5m-episodic-memory.mjs"
+"$node" --input-type=module - "$t/merged" <<'NODE'
+import {pathToFileURL} from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+const dir=process.argv[2];
+const m=await import(pathToFileURL(path.join(dir,'deepseek-5m-learner.mjs')));
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'zl-learn-proof-test-'));
+try{
+ const l=m.newLearner(path.join(tmp,'learning.json'),()=>1800000600000);
+ const a=l.summary();
+ if(typeof l.qualitySnapshotEvidence!=='function'||!('allOfficialHits' in a)||
+    !('allOfficialAccuracy' in a)||!('comparableOfficialCases' in a))
+  throw Error('LIFETIME_OR_EPISODIC_FUNCTION_LOST');
+ console.log('LEARN25_LIVE_LIFETIME_COUNTERS_AND_CASE_MEMORY_VALID=true');
+}finally{fs.rmSync(tmp,{recursive:true,force:true})}
+NODE
+# Archive the on-disk ledgers without overwriting them on rollback.
+for ledger in learning.json quality-v1.json wait-rounds.json;do
+ if test -f "/var/lib/zl-prediction/deepseek5/$ledger";then
+  cp -p "/var/lib/zl-prediction/deepseek5/$ledger" "$back/journal-before-$ledger"
+ fi
+done
 rollback(){
  for n in $names;do cp -p "$back/$n" "$app/$n";done
  if test -e "$back/installed-new-episodic-helper";then rm -f "$app/deepseek-5m-episodic-memory.mjs";fi
@@ -62,6 +87,11 @@ if ! test -f "$app/deepseek-5m-episodic-memory.mjs";then
  cp -p "$t/episodic-memory.mjs" "$app/deepseek-5m-episodic-memory.mjs"
  touch "$back/installed-new-episodic-helper"
 fi
+python3 - <<'PY'
+import json,urllib.request
+with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=7) as r:v=json.load(r)
+assert v.get('enabled') is False,'FOLLOW_TOGGLED_DURING_PREPARATION_ABORT'
+PY
 for n in $names;do cp -p "$t/merged/$n" "$app/$n";done
 systemctl restart zl-prediction-deepseek5.service
 for i in $(seq 1 20);do

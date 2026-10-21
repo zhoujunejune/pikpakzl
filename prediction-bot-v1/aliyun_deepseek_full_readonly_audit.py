@@ -53,6 +53,13 @@ def report_history():
   'ok':h.get('ok'),'model':h.get('model'),'officialSource':h.get('officialSource'),
   'generatedAgeMs':safe_age(h.get('generatedAt')),'summary':h.get('summary'),
   'fetchedRows':len(rows),'fetchedSettled':len(valid),
+  'cumulativePredictions':(h.get('summary') or {}).get('predictions'),
+  'cumulativeSettled':(h.get('summary') or {}).get('allOfficialSamples'),
+  'historyLimitIsRecent100':True,
+  'pendingAgeMinutes':[
+    round((int(time.time()*1000)-x.get('round'))/60000,1)
+    for x in rows if x.get('actual') is None and isinstance(x.get('round'),int)
+  ][:12],
   'last20Settled':sample(last[:20]),'last50Settled':sample(last[:50]),
   'last100Settled':sample(last[:100]),'up':by_side('UP'),'down':by_side('DOWN'),
   'latestRow':({k:rows[0].get(k) for k in

@@ -25,7 +25,7 @@ test('compatible production envelope uses 15-second deadline, no order API',()=>
  assert.throws(()=>buildAdaptive15CompatibleSignal(candidate,target+15000,'deepseek-flash'),/INVALID/);
  const s=buildAdaptive15CompatibleSignal(candidate,target+11300,'deepseek-flash');
  assert.equal(s.model,'DEEPSEEK_5M_V1');
- assert.equal(s.latest.decisionMethod,'DEEPSEEK_TWO_PASS_ADAPTIVE15_V1');
+ assert.equal(s.latest.decisionMethod,'DEEPSEEK_TWO_PASS_ADAPTIVE15_DIRECTIONAL_V2');
  assert.equal(s.latest.reviewDirection,'UP');
  assert.equal(s.expiryAt,target+270000);
  assert.equal(s.latest.entry.modelVersion,'DEEPSEEK_5M_V1');

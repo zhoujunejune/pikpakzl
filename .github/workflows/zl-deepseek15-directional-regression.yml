@@ -1,0 +1,28 @@
+name: DeepSeek 15s directional strategy regression - no-trade tests
+on:
+  push:
+    branches: [fix/deepseek15-max-directional-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-core.mjs
+      - prediction-bot-v1/deepseek-adaptive15-runner.mjs
+      - prediction-bot-v1/deepseek-adaptive15-*.test.mjs
+      - .github/workflows/zl-deepseek15-directional-regression.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Two analysis passes, directional even when uncertain, technical-only WAIT, hard 15s and no trading
+        run: |
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-core.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-production-adapter.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-hard-deadline.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-improvements.test.mjs

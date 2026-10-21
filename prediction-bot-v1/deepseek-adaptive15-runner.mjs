@@ -64,7 +64,8 @@ export function createAdaptiveRunner({
   current=makeWindow(target);lastError=null;aiLatencyMs=null;aiTokens=null;
  }
  async function analyze(w,pass,raw,now){
-  if(!enabled||!key||inFlight||w.passes.some(x=>x.pass===pass))return;
+  if(!enabled||!key||inFlight||w.passes.some(x=>x.pass===pass)||
+    w.attemptedPasses.includes(pass)||w.modelCalls>=2)return;
   const remaining=w.round-now;
   if((pass==='initial'&&remaining>75000)||
      (pass==='review'&&(remaining>30000||remaining<4000))||
@@ -77,6 +78,7 @@ export function createAdaptiveRunner({
    payload=analysisRequest(w,pass,now,features,feedback);
   }catch(e){w.lastModelError='INPUT_'+desc(e);lastError=w.lastModelError;return}
   inFlight=true;
+  w.attemptedPasses.push(pass);
   w.modelCalls++;
   // First pass must terminate before -30s so fresh review can run.
   // Second pass must terminate before -3s. Never block market polling.

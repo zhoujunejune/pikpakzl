@@ -43,22 +43,23 @@ test('second review can reverse earlier DeepSeek opinion using real new data',()
  assert.equal(x.latest.reviewAnalysis,'UP');
  assert.equal(x.latest.direction,'UP');
 });
-test('second review WAIT skips instead of manufacturing a signal',()=>{
+test('unexpected WAIT review falls back to valid earlier DeepSeek forecast',()=>{
  const w=ready();
  registerAnalysis(w,analysis('initial','UP'));
  registerAnalysis(w,analysis('review','WAIT',.5,round-15000));
  const x=finalize(w,round+12000);
- assert.equal(x.ok,false);assert.equal(x.skip,true);
- assert.equal(x.reason,'DEEPSEEK_CHOSE_WAIT');
- assert.equal(w.final,null);
+ assert.equal(x.ok,true);assert.equal(x.latest.direction,'UP');
+ assert.equal(x.latest.selectedAnalysis,'initial');
+ assert.equal(w.final.latest.direction,'UP');
 });
-test('no preanalysis or low confidence can abstain without mandatory UP/DOWN',()=>{
+test('missing DeepSeek blocks, but low self-confidence retains genuine UP/DOWN',()=>{
  const w=ready();
  assert.throws(()=>finalize(w,round+12000),/MISSING_DEEPSEEK_ANALYSIS/);
  registerAnalysis(w,analysis('initial','UP',.4));
  const result=finalize(w,round+12000);
- assert.equal(result.skip,true);
- assert.equal(result.reason,'LOW_MODEL_CONFIDENCE');
+ assert.equal(result.ok,true);
+ assert.equal(result.latest.direction,'UP');
+ assert.equal(result.latest.uncertainty,'LOW_MODEL_CONFIDENCE');
 });
 test('officially settled poor direction increases selective threshold, never inverses direction',()=>{
  const feedback={samples:70,upSamples:35,upHistoricalAccuracy:.42,
@@ -68,8 +69,9 @@ test('officially settled poor direction increases selective threshold, never inv
  assert.equal(policy.confidencePenalty.DOWN,0);
  const w=ready();registerAnalysis(w,analysis('review','UP',.59,round-20000));
  const x=finalize(w,round+12000,feedback);
- assert.equal(x.skip,true);
- assert.equal(x.reason,'LOW_MODEL_CONFIDENCE');
+ assert.equal(x.ok,true);
+ assert.equal(x.latest.direction,'UP');
+ assert.equal(x.latest.historicalPenaltyAppliedAsBlock,false);
 });
 test('old official data with too few samples cannot change decision threshold',()=>{
  const p=historyPolicy({samples:20,upSamples:8,upHistoricalAccuracy:.1});
@@ -94,7 +96,8 @@ test('analysis sees only causal observations, prior model review and official ex
  assert.equal(data.phase,'review');
  assert.equal(data.priorModelAnalysis.direction,'UP');
  assert.equal(data.verifiedHistoricalExperience.samples,80);
- assert.equal(data.waitAllowed,true);
+ assert.equal(data.requireDirectionalForecast,true);
+ assert.equal(data.technicalFailureMustNotBeGuessed,true);
  assert.equal(data.priorTwoMinuteTicks.every(x=>x.at<round),true);
  assert.throws(()=>analysisRequest(w,'initial',round+1000),/ANALYSIS_OUTSIDE/);
 });

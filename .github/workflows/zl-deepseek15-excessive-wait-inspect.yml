@@ -1,0 +1,102 @@
+name: Read-only diagnose excessive DeepSeek WAIT 15s rounds
+on:
+  push:
+    branches: [fix/deepseek15-max-directional-20261021]
+    paths: [.github/workflows/zl-deepseek15-excessive-wait-inspect.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read production decision diagnostics and last settled WAIT reasons, no writes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import urllib.request,json,os,collections,time,subprocess
+          def read(port,url):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,url),timeout=9) as r:return json.load(r)
+           except Exception as exc:return {'unavailable':type(exc).__name__}
+          p=read(13029,'/api/status')
+          hist=read(13029,'/api/history?limit=100')
+          feed=read(13003,'/api/shadow-market-data')
+          trade=read(13001,'/api/status')
+          q=read(13029,'/api/quality')
+          root='/var/lib/zl-prediction/deepseek5'
+          waits=[]
+          try:
+           js=json.load(open(root+'/wait-rounds.json'))
+           waits=js.get('records') or []
+          except Exception:pass
+          tail=waits[-25:]
+          counts=dict(collections.Counter((x.get('detail') or x.get('reason') or 'UNKNOWN') for x in tail))
+          sample=[{k:v.get(k) for k in ('round','reason','detail','at')} for v in tail[-13:]]
+          lst=hist.get('records') or []
+          recent=[{k:x.get(k) for k in ('round','direction','signalLatencyMs','attemptCount',
+           'actual','settledAt','featureSnapshotAvailable')} for x in lst[:20]]
+          latest=feed.get('latest') or {}
+          print('DEEPSEEK15_WAIT_FORENSICS='+json.dumps({
+           'now':int(time.time()*1000),'decision':p.get('roundDecision'),
+           'model':p.get('providerModel'),
+           'first':p.get('analysisFirstDirection'),'review':p.get('analysisReviewDirection'),
+           'modelCalls':p.get('analysisModelCalls'),
+           'market':{'connected':latest.get('marketFeedConnected'),
+             'ageMs':int(time.time()*1000)-int(latest.get('eventMs') or 0),
+             'round':latest.get('roundStartMs'),'ok':feed.get('ok'),
+             'candles1m':len((feed.get('candles') or {}).get('1m',{}).get('rows',[])),
+             'candles5m':len((feed.get('candles') or {}).get('5m',{}).get('rows',[]))},
+           'prewarmSampleCount':p.get('analysisPreviousRoundSnapshots'),
+           'newSampleCount':p.get('analysisEarlySnapshots'),
+           'lastSkipReason':p.get('waitReason'),
+           'lastProviderError':p.get('error'),
+           'aiLatencyMs':p.get('lastApiLatencyMs'),
+           'recordedWaitRounds':p.get('recordedWaitRounds'),
+           'recentWaitReasonCounts':counts,
+           'recentWaitRecords':sample,
+           'recentDecisions':recent,
+           'newQualityPredictions':(q.get('signal') or {}).get('predictions'),
+           'followEnabled':trade.get('enabled')},ensure_ascii=False,separators=(',',':')))
+          # Print ONLY counts and timing from systemd journal, not lines that may leak details.
+          lines=subprocess.run(['journalctl','-u','zl-prediction-deepseek5.service',
+           '--since','-45 min','--no-pager','-o','cat'],capture_output=True,text=True,timeout=7).stdout.splitlines()
+          terms=('ERROR','Error','DEEPSEEK_HTTP_','STALE_','MISSING_','INSUFFICIENT_',
+           'TRAIN','WAIT','FetchError','Timeout','DEEPSEEK_ADAPTIVE15')
+          summaries=collections.Counter(next((t for t in terms if t in x),'OTHER') for x in lines)
+          print('DEEPSEEK15_SERVICE_LOG_COUNTS='+json.dumps(dict(summaries),separators=(',',':')))
+          INNER
+          """
+          cl=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+           access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+           region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cl.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+           instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+           name='zl-deepseek15-excessive-wait-readonly',type='RunShellScript',
+           working_user='root',command_content=script,timeout=95)).body.invoke_id
+          for _ in range(48):
+           time.sleep(2)
+           r=cl.describe_invocation_result(sw.DescribeInvocationResultRequest(
+            region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+            invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            for line in raw.splitlines():
+             if line.startswith(('DEEPSEEK15_WAIT_FORENSICS=','DEEPSEEK15_SERVICE_LOG_COUNTS=')):
+              print(line,flush=True)
+            if int(r.exit_code)!=0:raise RuntimeError('REMOTE_DIAG_ERROR')
+            break
+          else:raise RuntimeError('REMOTE_DIAG_TIMEOUT')
+          OUTER

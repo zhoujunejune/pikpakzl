@@ -25,7 +25,7 @@ test('compatible production envelope uses 15-second deadline, no order API',()=>
  assert.throws(()=>buildAdaptive15CompatibleSignal(candidate,target+15000,'deepseek-flash'),/INVALID/);
  const s=buildAdaptive15CompatibleSignal(candidate,target+11300,'deepseek-flash');
  assert.equal(s.model,'DEEPSEEK_5M_V1');
- assert.equal(s.latest.decisionMethod,'DEEPSEEK_TWO_PASS_ADAPTIVE15_V1');
+ assert.equal(s.latest.decisionMethod,'DEEPSEEK_TWO_PASS_ADAPTIVE15_DIRECTIONAL_V2');
  assert.equal(s.latest.reviewDirection,'UP');
  assert.equal(s.expiryAt,target+270000);
  assert.equal(s.latest.entry.modelVersion,'DEEPSEEK_5M_V1');
@@ -66,7 +66,7 @@ test('provider gives official learner records after two valid model reviews',asy
   assert.equal(fs.readFileSync(env.LLM_STATE_FILE,'utf8').includes('mock-secret'),false);
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });
-test('WAIT after review never persists forced UP or DOWN as a trade signal',async()=>{
+test('WAIT after review preserves genuine first DeepSeek UP prediction',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'adaptive15-wait-'));
  let t=target-120000,calls=0;
  const env={DEEPSEEK_API_KEY:'mock-secret',DEEPSEEK_MODEL:'deepseek-flash',
@@ -82,8 +82,10 @@ test('WAIT after review never persists forced UP or DOWN as a trade signal',asyn
   const p=createAdaptive15ProductionProvider({env,clock:()=>t,fetcher});
   for(t=target-120000;t<=target+14500;t+=500)await p.tick();
   assert.equal(calls,2);
-  assert.equal(p.status().signal,null);
-  assert.equal(p.history(10).summary.predictions,0);
-  assert.equal(fs.existsSync(env.LLM_STATE_FILE),false);
+  t=target+14000;
+  assert.equal(p.status().signal?.latest?.direction,'UP');
+  assert.equal(p.status().signal?.latest?.selectedModelConfidence,.76);
+  assert.equal(p.history(10).summary.predictions,1);
+  assert.equal(fs.existsSync(env.LLM_STATE_FILE),true);
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });

@@ -1,0 +1,67 @@
+name: Verify actual two DeepSeek reviews and 15s WAIT/LOCK - GET ONLY
+on:
+  push:
+    branches: [feat/deepseek-adaptive15-experience-20261021]
+    paths: [.github/workflows/zl-deepseek-adaptive15-realround.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Audit one complete real market round using only read-only API
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,time,urllib.request
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          host='https://prediction.47-237-188-69.sslip.io'
+          def read(route):
+            req=urllib.request.Request(host+route,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET')
+            with urllib.request.urlopen(req,timeout=18) as r:return json.load(r)
+          now=time.time();target=(int(now//300)+1)*300
+          if target-now<145:target+=300
+          print('ADAPTIVE15_ELIGIBLE_NEXT_ROUND_UNIX='+str(target),flush=True)
+          def at(secs):time.sleep(max(0,target+secs-time.time()))
+          snapshots=[]
+          for secs in (-50,-17,16):
+            at(secs)
+            s=read('/deepseek/api/status')
+            f=read('/api/status')
+            w=s.get('window') or {}
+            sig=s.get('signal') or {};lock=sig.get('latest') or {}
+            data={
+              'atRelativeSec':secs,'targetRoundMs':target*1000,
+              'provider':s.get('providerModel'),'windowMs':s.get('decisionWindowEndMs',0)-s.get('round',0),
+              'firstAnalysis':w.get('firstAnalysis'),'revisedAnalysis':w.get('revisedAnalysis'),
+              'target':w.get('targetRound'),'modelCalls':w.get('modelCalls'),
+              'prewarmSamples':w.get('priorSamples'),
+              'earlySamples':w.get('earlySamples'),
+              'signalDirection':lock.get('direction'),
+              'signalRound':sig.get('round'),
+              'lockedAtOffsetMs':lock.get('lockedAt',0)-target*1000 if lock else None,
+              'decisionMethod':lock.get('decisionMethod'),
+              'reasonToWait':s.get('waitReason'),
+              'error':s.get('error'),
+              'lastDecision':s.get('lastDecision'),
+              'followEnabled':f.get('enabled'),
+              'learningSamples':(s.get('learning') or {}).get('allOfficialSamples')
+            }
+            snapshots.append(data)
+            print('ADAPTIVE15_REALROUND_SNAPSHOT='+json.dumps(data,ensure_ascii=False,separators=(',',':')),flush=True)
+            assert s.get('decisionWindowEndMs')-s.get('round')==15000
+            assert f.get('enabled') is False
+          end=snapshots[-1]
+          if end['signalRound']==target*1000 and end['signalDirection'] in ('UP','DOWN'):
+            assert 0<=end['lockedAtOffsetMs']<15000
+            assert end['decisionMethod']=='DEEPSEEK_TWO_PASS_ADAPTIVE15_V1'
+            print('ADAPTIVE15_REALROUND_OUTCOME=VALID_LT15S_LOCK',flush=True)
+          else:
+            print('ADAPTIVE15_REALROUND_OUTCOME=SKIPPED_OR_NO_SIGNAL',flush=True)
+          assert snapshots[0]['target']==target*1000
+          assert snapshots[1]['target']==target*1000
+          print('ADAPTIVE15_REALROUND_READONLY_VERIFIED=true',flush=True)
+          PY

@@ -1,0 +1,34 @@
+name: DeepSeek FAST10 next-round prewarm - shadow-only regression
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-fast10-shadow-core.mjs
+      - prediction-bot-v1/deepseek-fast10-shadow-core.test.mjs
+      - prediction-bot-v1/deepseek-fast10-shadow-runner.mjs
+      - prediction-bot-v1/deepseek-fast10-shadow-runner.test.mjs
+      - prediction-bot-v1/deepseek-fast10-production-adapter.mjs
+      - prediction-bot-v1/deepseek-fast10-production-adapter.test.mjs
+      - .github/workflows/zl-deepseek-fast10-shadow-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify strict 10-second lock without touching production
+        run: |
+          node --check prediction-bot-v1/deepseek-fast10-shadow-core.mjs
+          node --check prediction-bot-v1/deepseek-fast10-shadow-core.test.mjs
+          node --check prediction-bot-v1/deepseek-fast10-shadow-runner.mjs
+          node --check prediction-bot-v1/deepseek-fast10-shadow-runner.test.mjs
+          node --check prediction-bot-v1/deepseek-fast10-production-adapter.mjs
+          node --check prediction-bot-v1/deepseek-fast10-production-adapter.test.mjs
+          node --test prediction-bot-v1/deepseek-fast10-shadow-core.test.mjs
+          node --test prediction-bot-v1/deepseek-fast10-shadow-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-fast10-production-adapter.test.mjs

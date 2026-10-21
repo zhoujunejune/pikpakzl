@@ -1,0 +1,71 @@
+name: Verify first eligible real FAST10 production lock, GET only
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-first-live-round.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Observe first round with complete prewarm, no orders or controls changed
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import time,os,base64,json,urllib.request
+          password=os.environ.get('ZL_PANEL_PASSWORD')
+          if not password:raise SystemExit('PANEL_SECRET_MISSING')
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          def get(route):
+            req=urllib.request.Request(base+route,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET')
+            with urllib.request.urlopen(req,timeout=14) as r:return json.load(r)
+          now=time.time();r=int(now//300)*300
+          target=r+300
+          if target-now<124:target+=300
+          print('FAST10_NEXT_ELIGIBLE_ROUND_UNIX',target,flush=True)
+          delay=max(0,target+11-time.time())
+          if delay>450:raise SystemExit('FAST10_TEST_DELAY_TOO_LONG')
+          time.sleep(delay)
+          llm=get('/deepseek/api/status')
+          main=get('/api/status')
+          lock=llm.get('signal') or {}
+          latest=lock.get('latest') or {}
+          result={
+            'targetRound':target*1000,
+            'actualCurrentRound':llm.get('round'),
+            'decisionWindowMs':llm.get('decisionWindowEndMs',0)-llm.get('round',0),
+            'model':llm.get('model'),
+            'providerModel':llm.get('providerModel'),
+            'maxCallsPerRound':llm.get('maxCallsPerRound'),
+            'tries':llm.get('tries'),
+            'prewarmStatus':llm.get('prewarmStatus'),
+            'error':llm.get('error'),
+            'waitReason':llm.get('waitReason'),
+            'signalRound':lock.get('round'),
+            'signalDirection':latest.get('direction'),
+            'signalOrigin':latest.get('decisionMethod'),
+            'lockElapsedMs':latest.get('lockedAt',0)-target*1000 if latest else None,
+            'freshMarketAgeMs':latest.get('lockedAt',0)-latest.get('marketAt',0) if latest else None,
+            'autoFollowEnabled':main.get('enabled'),
+            'realOrderEnabledFromProvider':llm.get('realOrderEnabled')
+          }
+          print('FAST10_FIRST_LIVE_ROUND_PROOF='+json.dumps(result,ensure_ascii=False,separators=(',',':')),flush=True)
+          assert llm.get('model')=='DEEPSEEK_5M_V1'
+          assert result['decisionWindowMs']==10000
+          assert result['autoFollowEnabled'] is False
+          assert result['realOrderEnabledFromProvider'] is False
+          if latest:
+            assert result['signalRound']==target*1000
+            assert latest.get('direction') in ('UP','DOWN')
+            assert 0<=result['lockElapsedMs']<10000
+            assert latest.get('decisionMethod')=='HYBRID_PREWARM_FAST10_V1'
+            print('FAST10_ELIGIBLE_ROUND_SIGNAL_VERIFIED=true')
+          else:
+            print('FAST10_ELIGIBLE_ROUND_NO_SIGNAL=true')
+            raise SystemExit('STRICT_10S_LIVE_ROUND_MISSED_NO_FAKE_SIGNAL')
+          PY

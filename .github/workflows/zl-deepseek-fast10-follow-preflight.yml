@@ -1,0 +1,31 @@
+name: FAST10 production follow and order readiness - GET only
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-follow-preflight.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check current follow enabled status, no modifications
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request
+          pwd=os.environ.get('ZL_PANEL_PASSWORD')
+          if not pwd:raise SystemExit('PANEL_AUTH_REQUIRED')
+          auth='Basic '+base64.b64encode(('zl:'+pwd).encode()).decode()
+          host='https://prediction.47-237-188-69.sslip.io'
+          def get(path):
+            with urllib.request.urlopen(urllib.request.Request(host+path,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET'),timeout=15) as r:return json.load(r)
+          p=get('/api/status');d=get('/deepseek/api/status')
+          keys=('enabled','orderSignalModel','autoConfirmEnabled','pendingOrderUncertain','lastOrder','currentRound','orderStatus')
+          print('FAST10_PROD_SWITCH_PREFLIGHT='+json.dumps({'prod':{k:p.get(k) for k in keys},
+            'deepseekModel':d.get('model'),'providerModel':d.get('providerModel'),
+            'deepseekDecisionWindowSec':(d.get('decisionWindowEndMs',0)-d.get('round',0))/1000}))
+          PY

@@ -1,0 +1,44 @@
+name: FAST10 signal history persistence after first real success - read-only
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-learning-postproof.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Validate official-learner prediction record for first FAST10 lock
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          host='https://prediction.47-237-188-69.sslip.io'
+          def get(path):
+            with urllib.request.urlopen(urllib.request.Request(host+path,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET'),timeout=16) as r:return json.load(r)
+          s=get('/deepseek/api/status')
+          h=get('/deepseek/api/history?limit=5')
+          p=get('/api/status')
+          rows=h.get('records') or []
+          target=1792555500000
+          saved=next((x for x in rows if x.get('round')==target),None)
+          result={
+           'model':s.get('model'),
+           'currentWindowMs':s.get('decisionWindowEndMs',0)-s.get('round',0),
+           'historySavedFast10':saved is not None,
+           'savedDirection':saved.get('direction') if saved else None,
+           'savedLatencyMs':saved.get('signalLatencyMs') if saved else None,
+           'predictionCount':(s.get('learning') or {}).get('predictions'),
+           'settledCount':(s.get('learning') or {}).get('allOfficialSamples'),
+           'followEnabled':p.get('enabled')
+          }
+          print('FAST10_PERSISTENCE_PROOF='+json.dumps(result,ensure_ascii=False,separators=(',',':')))
+          assert saved is not None and saved.get('direction')=='UP'
+          assert 0<=saved.get('signalLatencyMs',99999)<10000
+          assert p.get('enabled') is False
+          PY

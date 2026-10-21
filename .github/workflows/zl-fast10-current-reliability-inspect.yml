@@ -1,0 +1,119 @@
+name: FAST10 current feed settlement and signal reliability - read only
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-fast10-current-reliability-inspect.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  current:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Query Alibaba market, official, provider and trader via authenticated existing SWAS read-only API
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect remote loopback feeds with GET only and output aggregate safe metadata
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import urllib.request,json,time,subprocess
+          def read(port,route):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:%s%s'%(port,route),timeout=8) as r:
+             return json.load(r)
+           except Exception as e:return {'errorType':type(e).__name__}
+          now=int(time.time()*1000)
+          m=read(13003,'/api/shadow-market-data')
+          v=read(13029,'/api/status')
+          h=read(13029,'/api/history?limit=100')
+          off=read(13002,'/api/round-stats')
+          ctl=read(13001,'/api/status')
+          sel=read(13001,'/api/order-signal-model')
+          latest=m.get('latest') or {}
+          rd=(now//300000)*300000
+          def candle_info(c):
+           a=c if isinstance(c,list) else (c.get('rows') or c.get('items') or c.get('candles') or [] if isinstance(c,dict) else [])
+           closed=[x for x in a if isinstance(x,dict) and x.get('closed') is True]
+           return {'total':len(a),'closed':len(closed),
+            'mostRecentClosedAgeMs':now-int(closed[-1].get('startMs',0)) if closed else None}
+          records=h.get('records') or []
+          current=[x for x in records if isinstance(x,dict) and x.get('direction') in ('UP','DOWN') and x.get('signalLatencyMs') is not None]
+          current.sort(key=lambda x:x.get('round',0),reverse=True)
+          recent=current[:12]
+          windows=[int(x['signalLatencyMs']) for x in recent if isinstance(x.get('signalLatencyMs'),(int,float))]
+          lockedUnder10=sum(0<=t<10000 for t in windows)
+          first=min((int(x.get('round')) for x in recent if isinstance(x.get('round'),int)),default=None)
+          stop=max((int(x.get('round')) for x in recent if isinstance(x.get('round'),int)),default=None)
+          output={
+           'checkedAtMs':now,
+           'market':{
+             'sourceEndpoint':'LOCAL_V3_SHADOW_MARKET_DATA',
+             'ok':m.get('ok'),'readOnly':m.get('readOnly'),'symbol':m.get('symbol'),
+             'eventAgeMs':now-int(latest.get('eventMs',0)) if latest.get('eventMs') else None,
+             'roundAligned':latest.get('roundStartMs')==rd,
+             'marketFeedConnected':latest.get('marketFeedConnected'),
+             'lastPricePresent':bool(latest.get('lastPrice')),'roundOpenPricePresent':bool(latest.get('roundOpenPrice')),
+             'candles1m':candle_info((m.get('candles') or {}).get('1m')),
+             'candles5m':candle_info((m.get('candles') or {}).get('5m')),
+             'errorType':m.get('errorType')},
+           'signalProvider':{
+             'model':v.get('model'),'providerModel':v.get('providerModel'),
+             'windowMs':v.get('decisionWindowEndMs',0)-v.get('round',0),
+             'prewarmStatus':v.get('prewarmStatus'),'maxCalls':v.get('maxCallsPerRound'),
+             'lastSignal':v.get('lastSignal'),'error':v.get('error'),'waitReason':v.get('waitReason'),
+             'learning':{
+               'predictions':(v.get('learning') or {}).get('predictions'),
+               'officialSamples':(v.get('learning') or {}).get('allOfficialSamples'),
+               'settlementError':(v.get('learning') or {}).get('lastError')}},
+           'history':{'records':len(records),'timedSignals':len(current),
+             'recent12TimedSignals':len(windows),'recent12Under10Sec':lockedUnder10,
+             'mostRecentLatencyMs':windows[0] if windows else None,
+             'recentFirstRoundMs':first,'recentLastRoundMs':stop,
+             'officialSource':h.get('officialSource'),
+             'unsettled':sum(1 for x in records if isinstance(x,dict) and x.get('actual') not in ('UP','DOWN'))},
+           'officialResolution':{
+             'ok':off.get('ok'),'settlementSource':off.get('settlementSource'),
+             'recordCount':len(off.get('records') or []),
+             'errorType':off.get('errorType')},
+           'trade':{
+             'statusOk':ctl.get('ok'),'followEnabled':ctl.get('enabled'),
+             'orderSignalModel':ctl.get('orderSignalModel'),
+             'selectedModel':sel.get('model')},
+           'services':{name:subprocess.run(['systemctl','is-active',name],capture_output=True,text=True).stdout.strip()
+             for name in ('zl-prediction-v2','zl-prediction-v3','zl-prediction-deepseek5','zl-prediction-trade','zl-futures-bot-paper')}
+          }
+          print('FAST10_CURRENT_RELIABILITY='+json.dumps(output,ensure_ascii=False,separators=(',',':')))
+          INNER
+          """
+          cl=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+           access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+           region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cl.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+           instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+           name='zl-fast10-current-reliability-readonly',type='RunShellScript',
+           working_user='root',command_content=script,timeout=80)).body.invoke_id
+          for _ in range(38):
+           time.sleep(2)
+           result=cl.describe_invocation_result(sw.DescribeInvocationResultRequest(
+            region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+            invoke_id=inv)).body.invocation_result
+           if result and str(result.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(result.output or '',validate=True).decode('utf8','replace')
+            for l in raw.splitlines():
+             if l.startswith('FAST10_CURRENT_RELIABILITY='):print(l)
+            if int(result.exit_code)!=0:raise RuntimeError('REMOTE_READONLY_FAILED')
+            break
+          else:raise RuntimeError('REMOTE_READONLY_TIMEOUT')
+          OUTER

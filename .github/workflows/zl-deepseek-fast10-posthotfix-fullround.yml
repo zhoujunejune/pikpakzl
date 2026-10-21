@@ -1,0 +1,54 @@
+name: FAST10 verify first full prewarm after opening-price hotfix - GET only
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-posthotfix-fullround.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Observe a fully prewarmed next round, never change production
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,time,base64,json,urllib.request
+          password=os.environ['ZL_PANEL_PASSWORD']
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          root='https://prediction.47-237-188-69.sslip.io'
+          def get(path):
+            req=urllib.request.Request(root+path,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET')
+            with urllib.request.urlopen(req,timeout=20) as r:return json.load(r)
+          now=time.time();r=int(now//300)*300;target=r+300
+          if target-now<125:target+=300
+          print('FAST10_HOTFIX_TEST_TARGET='+str(target),flush=True)
+          delay=target+12-time.time()
+          if delay>460 or delay<0:raise SystemExit('TEST_WINDOW_UNSUPPORTED')
+          time.sleep(delay)
+          m=get('/deepseek/api/status')
+          p=get('/api/status')
+          sig=m.get('signal') or {};lock=sig.get('latest') or {}
+          report={
+           'expectedRound':target*1000,'actualRound':m.get('round'),
+           'decisionWindowMs':m.get('decisionWindowEndMs',0)-m.get('round',0),
+           'providerModel':m.get('providerModel'),'prewarmAvailable':m.get('prewarmStatus'),
+           'tries':m.get('tries'),'lastApiLatencyMs':m.get('lastApiLatencyMs'),
+           'signalRound':sig.get('round'),'direction':lock.get('direction'),
+           'method':lock.get('decisionMethod'),
+           'elapsedLockMs':lock.get('lockedAt',0)-target*1000 if lock else None,
+           'marketAgeAtLockMs':lock.get('lockedAt',0)-lock.get('marketAt',0) if lock else None,
+           'error':m.get('error'),'followEnabled':p.get('enabled'),
+           'learningSamples':(m.get('learning') or {}).get('allOfficialSamples')
+          }
+          print('FAST10_POSTHOTFIX_REAL_ROUND='+json.dumps(report,ensure_ascii=False,separators=(',',':')),flush=True)
+          assert report['decisionWindowMs']==10000
+          assert report['followEnabled'] is False
+          if lock and sig.get('round')==target*1000 and lock.get('direction') in ('UP','DOWN') and
+             0<=report['elapsedLockMs']<10000 and lock.get('decisionMethod')=='HYBRID_PREWARM_FAST10_V1':
+             print('FAST10_REAL_FULLROUND_LOCK_LT10S=true',flush=True)
+          else:raise SystemExit('FAST10_REAL_FULLROUND_NO_VERIFIED_SIGNAL')
+          PY

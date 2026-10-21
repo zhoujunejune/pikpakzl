@@ -1,0 +1,141 @@
+name: Alibaba Cloud GPU and training hardware inventory (READ ONLY)
+on:
+  push:
+    branches: [feat/adaptive15-deferred-wait-learning-pnl-20261021]
+    paths: [.github/workflows/zl-alibaba-gpu-inventory-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install Alibaba APIs on ephemeral GitHub runner
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0 alibabacloud_ecs20140526
+      - name: Check purchased Singapore SWAS instance and optional ECS GPU inventory
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os, json, time, base64, re
+          from alibabacloud_swas_open20200601.client import Client as SwasClient
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          cfg=api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+             access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+             region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com')
+          client=SwasClient(cfg)
+          command="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,os,subprocess,shutil,platform,glob,re
+          def cmd(args,timeout=7):
+              try:
+                x=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+                  text=True,timeout=timeout,check=False)
+                return x.stdout.strip()[:1800] if x.returncode==0 else None
+              except (OSError,subprocess.TimeoutExpired):return None
+          def filevalue(p):
+              try:return open(p).read().strip()
+              except (OSError,UnicodeError):return None
+          count=os.cpu_count()
+          memkb=None
+          for line in (filevalue('/proc/meminfo') or '').splitlines():
+             if line.startswith('MemTotal:'):
+               memkb=int(line.split()[1])
+          gpu_pci=[]
+          for path in glob.glob('/sys/bus/pci/devices/*'):
+              vendor=filevalue(path+'/vendor')
+              cls=filevalue(path+'/class')
+              if vendor in ('0x10de','0x1002') or (cls or '').startswith(('0x03','0x12')):
+                  gpu_pci.append({'vendor':vendor,'class':cls,
+                      'device':filevalue(path+'/device')})
+          gpu_pci=gpu_pci[:15]
+          nvdevs=glob.glob('/dev/nvidia[0-9]*')
+          amddevs=glob.glob('/dev/kfd')
+          smi=cmd(['nvidia-smi','--query-gpu=name,memory.total,driver_version,compute_cap',
+               '--format=csv,noheader,nounits'],timeout=7) if shutil.which('nvidia-smi') else None
+          display=cmd(['lspci','-nn'],timeout=5) if shutil.which('lspci') else None
+          gpu_lines=[x.strip()[:180] for x in (display or '').splitlines()
+             if re.search(r'vga|3d controller|nvidia|amd/ati|processing accelerators',x,re.I)][:10]
+          torch_found=False;torch_cuda=None;torch_version=None
+          check=cmd(['python3','-c',
+             "import importlib.util;print(bool(importlib.util.find_spec('torch')))"])
+          torch_found=(check=='True')
+          if torch_found:
+             tj=cmd(['python3','-c',
+              "import torch,json;print(json.dumps({'cuda':torch.cuda.is_available(),'version':torch.__version__,'device_count':torch.cuda.device_count()}))"],timeout=8)
+             try:
+               d=json.loads(tj) if tj else {}
+               torch_cuda=d.get('cuda')
+               torch_version=d.get('version')
+             except Exception:pass
+          units=['zl-prediction-deepseek5.service','zl-prediction-trade.service',
+             'zl-futures-bot-paper.service']
+          res={'inspection':'READ_ONLY_NO_DEPLOY',
+            'instanceRegion':'ap-southeast-1','platform':platform.machine(),
+            'cpuLogical':count,
+            'cpuModel':next((x.split(':',1)[-1].strip() for x in (filevalue('/proc/cpuinfo') or '').splitlines() if x.lower().startswith('model name')),None),
+            'memTotalGiB':round(memkb/1024/1024,2) if memkb else None,
+            'gpuPciDevices':gpu_pci,'nvidiaDeviceFiles':len(nvdevs),
+            'amdKfdExists':len(amddevs)>0,'nvidiaSmiAvailable':shutil.which('nvidia-smi') is not None,
+            'nvidiaSmiQuery':smi,'lspciGpuEntries':gpu_lines,
+            'torchInstalledInSystemPython':torch_found,
+            'torchCudaAvailable':torch_cuda,
+            'torchVersion':torch_version,
+            'units':{u:cmd(['systemctl','is-active',u],timeout=4) for u in units}}
+          print('ALIBABA_GPU_HOST_AUDIT='+json.dumps(res,ensure_ascii=False,separators=(',',':')))
+          INNER
+          """
+          inv=client.run_command(sw.RunCommandRequest(
+             region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+             name='zl-alibaba-gpu-readonly-hardware-inventory',type='RunShellScript',
+             working_user='root',command_content=command,timeout=75)).body.invoke_id
+          found=False
+          for _ in range(35):
+             time.sleep(2)
+             resp=client.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                 region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+                 invoke_id=inv)).body.invocation_result
+             if resp and str(resp.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+                payload=base64.b64decode(resp.output or '',validate=True).decode('utf8','replace')
+                for line in payload.splitlines():
+                   if line.startswith('ALIBABA_GPU_HOST_AUDIT='):
+                     print(line,flush=True);found=True
+                if int(resp.exit_code)!=0:raise RuntimeError('REMOTE_HARDWARE_QUERY_FAILED')
+                break
+          else:raise RuntimeError('REMOTE_HARDWARE_QUERY_TIMEOUT')
+          if not found:raise RuntimeError('NO_MACHINE_HARDWARE_DATA_RETURNED')
+          # Region-scoped ECS account inventory is optional; permission errors
+          # must never be described as "no GPU instances".
+          try:
+            from alibabacloud_ecs20140526.client import Client as EcsClient
+            from alibabacloud_ecs20140526 import models as ec
+            ecs=EcsClient(api.Config(
+              access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+              access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+              region_id='ap-southeast-1',endpoint='ecs.ap-southeast-1.aliyuncs.com'))
+            out=ecs.describe_instances(ec.DescribeInstancesRequest(
+              region_id='ap-southeast-1',page_size=100,page_number=1)).body
+            rows=(out.instances.instance or []) if out.instances else []
+            possible_gpu=[{
+              'instanceType':getattr(x,'instance_type',None),
+              'gpuAmount':getattr(x,'gpu_amount',None),
+              'gpuSpec':getattr(x,'gpu_spec',None)}
+              for x in rows
+              if re.search(r'(^|[.])(gn\\d|ebmgn|vgn|gpu)',str(getattr(x,'instance_type','')),re.I)
+                 or (getattr(x,'gpu_amount',0) or 0)>0]
+            print('ALIBABA_SINGAPORE_ECS_INVENTORY='+json.dumps({
+              'checked':True,'resultCountFirstPage':len(rows),
+              'totalCount':getattr(out,'total_count',None),
+              'gpuCandidateInstances':possible_gpu[:20],
+              'regionalScopeOnly':'ap-southeast-1',
+              'exhaustive':(getattr(out,'total_count',0) or 0)<=100},separators=(',',':')))
+          except Exception as e:
+            print('ALIBABA_SINGAPORE_ECS_INVENTORY='+json.dumps({
+              'checked':False,'errorType':type(e).__name__,
+              'permissionOrDiscoveryUnknown':True,'noGpuClaim':False},separators=(',',':')))
+          OUTER

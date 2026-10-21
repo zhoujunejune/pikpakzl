@@ -42,6 +42,9 @@ jobs:
           text=get('/').decode('utf-8','replace')
           assert 'renderDeepSeekRoundStats' in text
           assert '/deepseek/api/history?limit=80' in text
+          assert 'DeepSeek 累计统计不可用' in text
+          assert 'allOfficialHits' in text
+          assert 'allPredictions' in text
           assert 'id="activeFast8ModelCard"' not in text
           assert 'id="directionModeChoices"' not in text
           assert 'id="orderSignalModelSave"' not in text
@@ -49,11 +52,22 @@ jobs:
           ledger=json.loads(get('/deepseek/api/history?limit=10'))
           assert ledger.get('ok') and ledger.get('model')=='DEEPSEEK_5M_V1'
           assert isinstance(ledger.get('records'),list)
-          assert all(x.get('provider')=='deepseek-flash' for x in ledger['records'])
+          summary=ledger.get('summary') or {}
+          assert isinstance(summary.get('allPredictions'),int)
+          assert isinstance(summary.get('allOfficialSamples'),int)
+          assert isinstance(summary.get('allOfficialHits'),int)
+          assert isinstance(summary.get('allOfficialMisses'),int)
+          assert summary['allOfficialHits']+summary['allOfficialMisses']==summary['allOfficialSamples']
+          assert summary['allPredictions']>=summary['allOfficialSamples']
+          # Historical DeepSeek V4 Pro rounds remain valid after switching back to Flash.
+          assert all(x.get('provider','').startswith('deepseek-') for x in ledger['records'])
           selector=json.loads(get('/api/order-signal-model'))
           assert selector.get('model')=='DEEPSEEK_5M_V1'
           print('DEEPSEEK_PANEL_PUBLIC_HTML_LIVE=true')
           print('DEEPSEEK_PANEL_ONLY_MODEL=true')
           print('DEEPSEEK_PANEL_INDEPENDENT_STATS_COUNT',len(ledger['records']))
+          print('DEEPSEEK_PANEL_CUMULATIVE_PREDICTIONS',summary['allPredictions'])
+          print('DEEPSEEK_PANEL_CUMULATIVE_SETTLED',summary['allOfficialSamples'])
+          print('DEEPSEEK_PANEL_CUMULATIVE_ACCURACY',round(summary['allOfficialHits']/summary['allOfficialSamples'],4) if summary['allOfficialSamples'] else None)
           print('DEEPSEEK_PANEL_LEGACY_TABLE_NOT_USED=true')
           PY

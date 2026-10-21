@@ -1,11 +1,10 @@
-// Adaptive 15s DeepSeek decision core: two causal analyses, abstention and
-// official-outcome contextual gating. Independent of exchange order submission.
+// Autonomous DeepSeek decisions within +25 seconds of opening.
+// Never submit orders or invent future market data.
 export const ROUND_MS=300000;
 export const COLLECT_MS=120000;
 export const DEADLINE_MS=25000;
 export const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
 const number=x=>typeof x==='number'&&Number.isFinite(x);
-const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 const side=x=>x==='UP'||x==='DOWN';
 export function makeWindow(round){
  if(!Number.isSafeInteger(round)||round%ROUND_MS!==0)throw Error('INVALID_ROUND');
@@ -42,6 +41,7 @@ export function decodeAnalysis(raw,round,asOf,pass){
  const confidence=Number(j.confidence);
  if(!Number.isFinite(confidence)||confidence<0||confidence>1)throw Error('INVALID_CONFIDENCE');
  return {pass,round,at:asOf,direction:j.direction,confidence,
+   continueAnalysis:j.continueAnalysis===true,
    reason:String(j.reason||'').slice(0,250),
    risk:String(j.risk||'').slice(0,120),
    reasonToWait:String(j.reasonToWait||'').slice(0,150)};
@@ -78,17 +78,17 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     'Analyse the BTC Prediction 5m target round using real observed causal evidence; current phase includes actual round open and early ticks.',
     'Before the round starts the opening price is UNKNOWN; in the current phase use only observed round open and fresh ticks. Never invent future prices or official settlement.',
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
-    'Use RSI MACD EMA ATR 1m/5m and current causal BTC data as fallible indicators, not deterministic signals.',
-    'A second review may revise the first: change stance when new observed evidence supports it, otherwise explain why.',
+    'Choose indicators, historical examples and analytic methods independently based on their relevance; none is mandatory.',
+    'You may revise earlier opinions when new credible evidence supports doing so; do not reverse without evidence.',
     'Independently select indicators, reasoning, confidence and direction. Prefer evidence-supported UP or DOWN; WAIT is permitted when reliable evidence does not justify a direction.',
     'No algorithmic indicator weights, historical vetoes or mandatory directional flips will override your decision.',
     'Express uncertainty honestly in confidence, risk and reason; never claim that an uncertain guess is a high-probability opportunity.',
     'Never invent market data or future prices. If the supplied market data cannot be interpreted, do not manufacture an analysis.',
-    'Return strict compact JSON with UP, DOWN or WAIT: {"direction":"UP","confidence":0.51,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}.',
+    'Return compact JSON {"direction":"UP","confidence":0.51,"continueAnalysis":false,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}. Choose continueAnalysis=true only if more fresh market observations could improve the decision before the deadline.',
     'Confidence is SUBJECTIVE, not a calibrated likelihood of winning. Prioritize avoiding unjustified trades.'
    ].join(' ')},
    {role:'user',content:JSON.stringify({
-    targetRound:w.round,phase:pass,observedThrough:last.at,
+    targetRound:w.round,phase:pass,observedThrough:pass==='current'?(w.early.at(-1)?.at??last.at):last.at,
     firstSampleAt:w.prior[0].at,
     priorTwoMinuteTicks:w.prior.slice(-120),
     currentRoundTicks:pass==='current'?w.early.slice(-25):[],
@@ -105,7 +105,7 @@ export function analysisRequest(w,pass,now,features,feedback={}){
 export function registerAnalysis(w,decision){
  if(decision.round!==w.round||!['initial','review','current'].includes(decision.pass)||
    (decision.pass==='current'?(decision.at<w.round||decision.at>=w.round+DEADLINE_MS):decision.at>=w.round))throw Error('ANALYSIS_ROUND_INCORRECT');
- if(w.passes.some(x=>x.pass===decision.pass))throw Error('DUPLICATE_PASS');
+ if(decision.pass!=='current'&&w.passes.some(x=>x.pass===decision.pass))throw Error('DUPLICATE_PASS');
  w.passes.push(decision);return decision;
 }
 export function closeExpiredWindow(w,now){
@@ -127,11 +127,11 @@ function recordWait(w,reason,now){
 export function finalize(w,now,feedback={}){
  if(w.final)throw Error('ALREADY_LOCKED'); 
  if(w.terminal)return {ok:false,skip:true,round:w.round,direction:'WAIT',reason:w.terminal.reason};
- if(now<w.round+8000||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_15S_LOCK_WINDOW');
+ if(now<w.round+1800||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_25S_LOCK_WINDOW');
  const prior=w.prior,early=w.early;
  if(prior.length<5||prior.at(-1).at-prior[0].at<20000)
   throw Error('MISSING_LAST_120S');
- if(early.length<3||early.at(-1).at-early[0].at<4000)
+ if(early.length<2||early.at(-1).at-early[0].at<1000)
   throw Error('EARLY_TICK_COVERAGE_MISSING');
  const latest=early.at(-1);
  if(now-latest.at>2500||latest.at>now)throw Error('NEW_ROUND_PRICE_STALE');
@@ -140,7 +140,7 @@ export function finalize(w,now,feedback={}){
   throw Error('INCOHERENT_OPEN_PRICE');
  const first=w.passes.find(x=>x.pass==='initial');
  const review=w.passes.find(x=>x.pass==='review');
- const current=w.passes.find(x=>x.pass==='current');
+ const current=w.passes.filter(x=>x.pass==='current').at(-1);
  // Prefer the fresher valid DeepSeek analysis; if a legacy/errant review
  // chooses WAIT, retain the earlier genuine directional forecast instead.
  // Never fabricate a direction when BOTH model passes are unusable.
@@ -153,19 +153,15 @@ export function finalize(w,now,feedback={}){
  // DeepSeek alone decides the direction. No program-side market vote or reversal.
  const tentative=chosen.direction;
  const composite=chosen.confidence; // subjective, not a calibrated probability
- const policy=historyPolicy(feedback);
- // User-selected DIRECTIONAL policy: soft confidence, historical miss rates and
- // 60/30/10 score all remain diagnostics, not blockers. Only verified technical
- // invalidity can block a round. This can INCREASE mistakes and trade exposure.
- const requiredModelConfidence=.55+policy.confidencePenalty[tentative];
- const uncertainty=chosen.confidence<requiredModelConfidence?'LOW_MODEL_CONFIDENCE':
-   (review?.direction==='WAIT'?'REVIEW_DECLINED_FALLBACK_INITIAL':'DEEPSEEK_AUTONOMOUS_JUDGMENT');
+ // Past verified outcomes inform the model, but software cannot override its opinion.
+ const policy={basis:'INFORMATION_ONLY_NO_PROGRAM_DECISION_RULE'};
+ const uncertainty='DEEPSEEK_AUTONOMOUS_UNCALIBRATED';
  // Real price and historical data inform DeepSeek but never override its decision.
  const result={ok:true,model:'DEEPSEEK_ADAPTIVE15_EXPERIENCE_V1',
   mode:'SHADOW_SIGNAL_ONLY',round:w.round,generatedAt:now,
   expiryAt:w.round+DEADLINE_MS,orders:false,productionIntegration:false,
   latest:{round:w.round,status:'LOCKED',direction:tentative,lockedAt:now,
-   directionalPolicy:'UP_DOWN_REQUIRED_WHEN_VALID',uncertainty,
+   directionalPolicy:'DEEPSEEK_ONLY_WITH_VOLUNTARY_WAIT',uncertainty,
    marketAt:latest.at,openPrice:open,price:latest.price,
    fromOpenBps:Number(fromOpenBps.toFixed(3)),
    lastTwoMinuteBps:Number(priorBps.toFixed(3)),
@@ -181,7 +177,7 @@ export function windowStatus(w,now){
  return {targetRound:w.round,prewarmBegin:w.round-COLLECT_MS,
   firstAnalysis:w.passes.find(x=>x.pass==='initial')?.direction||null,
   revisedAnalysis:w.passes.find(x=>x.pass==='review')?.direction||null,
-  currentAnalysis:w.passes.find(x=>x.pass==='current')?.direction||null,
+  currentAnalysis:w.passes.filter(x=>x.pass==='current').at(-1)?.direction||null,
   priorSamples:w.prior.length,earlySamples:w.early.length,modelCalls:w.modelCalls,
   skipCount:w.skips.length,lastSkip:w.skips.at(-1)||null,
   provisionalWait:w.provisionalWait,

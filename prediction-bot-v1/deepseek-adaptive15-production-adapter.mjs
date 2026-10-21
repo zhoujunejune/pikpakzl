@@ -67,7 +67,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    if(features.round!==candidate.round||!features.dataQuality.indicatorsReady)
      throw Error('PRODUCTION_FEATURES_NOT_READY');
    persist(signal);saved=signal;
-   try{learner.record(signal,features,1)}
+   try{learner.record(signal,features,window?.modelCalls||1)}
    catch(e){settlementError='RECORD_'+String(e?.message||e).slice(0,70)}
   }});
  function stats(){try{return learner.summary()}catch{return {officialSamples:0,error:'LEARNING_FILE_ERROR'}}}

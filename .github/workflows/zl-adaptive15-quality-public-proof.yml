@@ -1,0 +1,49 @@
+name: Verify current public adaptive15 quality and strict no-order follow - read-only
+on:
+  push:
+    branches: [feat/adaptive15-deferred-wait-learning-pnl-20261021]
+    paths: [.github/workflows/zl-adaptive15-quality-public-proof.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read authenticated production DeepSeek quality without writes
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,json,time,urllib.request
+          root='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def read(p):
+           with urllib.request.urlopen(urllib.request.Request(root+p,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET'),timeout=18) as r:return json.load(r)
+          m=read('/deepseek/api/status')
+          l=read('/deepseek/api/history?limit=8')
+          trader=read('/api/status')
+          q=m.get('strategyQuality') or {}
+          net=q.get('economics') or {}
+          signal=q.get('signal') or {}
+          out={'model':m.get('model'),'provider':m.get('providerModel'),
+           'decisionDeadlineMs':m.get('decisionWindowEndMs',0)-m.get('round',0),
+           'noLateSignal':m.get('noSignalAfterDeadline'),
+           'learningOfficialSamples':(m.get('learning') or {}).get('allOfficialSamples'),
+           'qualityVersion':q.get('strategyVersion'),
+           'qualityNewPredictions':signal.get('predictions'),
+           'qualityNewOfficialSettled':signal.get('officiallySettled'),
+           'missedPatternCount':len((q.get('errors') or {}).get('patterns') or []),
+           'realizedNetPnl':net.get('realizedNetPnl'),
+           'realizedPnlAvailable':net.get('available'),
+           'realizedPnlReason':net.get('reason'),
+           'historyRecent':len(l.get('records') or []),
+           'productionFollowEnabled':trader.get('enabled')}
+          print('ADAPTIVE15_PUBLIC_QUALITY_PROOF='+json.dumps(out,ensure_ascii=False,separators=(',',':')))
+          assert out['decisionDeadlineMs']==15000
+          assert out['noLateSignal'] is True
+          assert out['qualityVersion']=='ADAPTIVE15_QUALITY_V1'
+          assert out['productionFollowEnabled'] is False
+          assert out['realizedNetPnl'] is None and out['realizedPnlAvailable'] is False
+          print('ADAPTIVE15_QUALITY_PUBLIC_VALIDATED=true')
+          PY

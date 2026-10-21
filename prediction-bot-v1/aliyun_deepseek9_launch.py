@@ -12,7 +12,7 @@ base='7d982bb65a0aba0c977db90167ffcdada16e7184'
 uri='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+target+'/prediction-bot-v1/deepseek9_guarded_apply.sh'
 with urllib.request.urlopen(uri,timeout=20) as response:script=response.read().decode('utf8')
 assert 'SINGLE9_CONFIG_ACTIVE=true' in script and 'trap rollback ERR' in script
-remote='export BASE_SHA='+base+' TARGET_SHA='+target+'\n'+script
+remote="bash -s <<'SINGLE9_DEPLOY_SCRIPT'\nexport BASE_SHA="+base+' TARGET_SHA='+target+'\n'+script+"\nSINGLE9_DEPLOY_SCRIPT\n"
 client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
  access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
  region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))

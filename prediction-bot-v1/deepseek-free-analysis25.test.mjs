@@ -33,7 +33,7 @@ test('single trusted current-round tick and genuine DeepSeek result may lock imm
  registerAnalysis(w2,decodeAnalysis(JSON.stringify({direction:'UP',confidence:.6}),R,R+21000,'current'));
  assert.throws(()=>finalize(w2,R+25000),/NOT_IN_25S_LOCK_WINDOW/);
 });
-test('DeepSeek chooses more than three calls, revises itself, and locks without forced waiting',async()=>{
+test('DeepSeek uses at most six total calls, revises itself, and locks without forced waiting',async()=>{
  let at=R-120000;
  const calls=[];const locks=[];let currentCount=0;
  const fetcher=async(url,opts)=>{
@@ -42,7 +42,7 @@ test('DeepSeek chooses more than three calls, revises itself, and locks without 
   calls.push({at,phase:input.phase});
   if(input.phase!=='current')return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify({direction:'UP',confidence:.65,continueAnalysis:false})}}]})};
   currentCount++;
-  const keep=currentCount<=4;
+  const keep=currentCount<=3;
   return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify({direction:keep?'UP':'DOWN',confidence:.52,continueAnalysis:keep,reason:'new observed data'})}}]})};
  };
  const runner=createAdaptiveRunner({clock:()=>at,fetcher,
@@ -54,11 +54,13 @@ test('DeepSeek chooses more than three calls, revises itself, and locks without 
  assert.ok(locks[0].generatedAt>=R);
  assert.ok(locks[0].generatedAt<R+25000);
  assert.equal(locks[0].latest.selectedAnalysis,'current');
- assert.ok(currentCount>=5);
+ assert.equal(currentCount,4);
+ assert.equal(calls.length,6);
+ assert.ok(calls.filter(x=>x.phase==='current').every((x,i,a)=>i===0||x.at-a[i-1].at>=6000));
  assert.ok(calls.length>3);
  assert.equal(runner.status().orders,false);
 });
-test('production may publish with unavailable optional indicators and unlimited analysis counter',async()=>{
+test('production may publish with unavailable optional indicators under six-call cap',async()=>{
  let at=R-120000,modelCalls=0;
  const provider=createAdaptive15ProductionProvider({
   env:{DEEPSEEK_API_KEY:'mock',DEEPSEEK_MODEL:'deepseek-flash',
@@ -76,10 +78,13 @@ test('production may publish with unavailable optional indicators and unlimited 
    return {ok:true,json:async()=>({choices:[{finish_reason:'stop',
     message:{content:JSON.stringify({direction:'UP',confidence:.75,continueAnalysis:isCurrent&&modelCalls<6,reason:'real but few indicators'})}}]})};
   }});
- for(at=R-120000;at<=R+16000;at+=500)await provider.tick();
+ for(at=R-120000;at<=R+22000;at+=500)await provider.tick();
  const s=provider.status();
- assert.equal(s.maxCallsPerRound,null);
- assert.equal(s.analysisCountLimit,'NONE_TIME_BUDGET_ONLY');
+ assert.equal(s.maxCallsPerRound,6);
+ assert.equal(s.preRoundMaxCalls,2);
+ assert.equal(s.currentRoundMaxCalls,4);
+ assert.equal(s.liveReviewMinIntervalMs,6000);
+ assert.equal(s.analysisCountLimit,'PRE2_LIVE4_TOTAL6');
  assert.equal(s.featureReady,true);
  assert.equal(s.signal?.latest.direction,'UP');
  assert.equal(s.signal?.round,R);

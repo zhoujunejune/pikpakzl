@@ -1,0 +1,32 @@
+name: DeepSeek shadow quality report (read-only, no live changes)
+on:
+  push:
+    branches: [feat/deepseek-decision-audit-20261021]
+    paths:
+      - prediction-bot-v1/deepseek_shadow_readonly_audit.py
+      - prediction-bot-v1/test_deepseek_shadow_readonly_audit.py
+      - .github/workflows/zl-deepseek-shadow-readonly-report.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-deepseek-independent-readonly-report
+  cancel-in-progress: true
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline validation (no network or credentials)
+        run: |
+          python -m py_compile prediction-bot-v1/deepseek_shadow_readonly_audit.py
+          python -m unittest discover -s prediction-bot-v1 -p test_deepseek_shadow_readonly_audit.py -v
+      - name: Read-only authenticated DeepSeek live performance aggregation
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python prediction-bot-v1/deepseek_shadow_readonly_audit.py

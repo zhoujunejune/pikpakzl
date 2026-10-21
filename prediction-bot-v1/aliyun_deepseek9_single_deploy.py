@@ -89,7 +89,8 @@ from pathlib import Path
 import os,sys,tempfile
 app,src=map(Path,sys.argv[1:])
 for name in ('deepseek-adaptive15-core.mjs','deepseek-adaptive15-runner.mjs',
-             'deepseek-adaptive15-production-adapter.mjs'):
+             'deepseek-adaptive15-production-adapter.mjs','deepseek-adaptive15-quality-store.mjs',
+             'deepseek-adaptive15-error-attribution.mjs'):
  target=app/name;original=target.stat()
  fd,tmp=tempfile.mkstemp(prefix='.free25-',dir=app)
  try:
@@ -111,18 +112,17 @@ import json,sys,urllib.request
 a=json.load(open(sys.argv[1]))
 assert a.get('ok') is True and a.get('model')=='DEEPSEEK_5M_V1'
 assert a.get('providerModel')=='deepseek-flash'
-assert a.get('decisionWindowEndMs',0)-a.get('round',0)==25000
+assert a.get('decisionWindowEndMs',0)-a.get('round',0)==9000
 assert a.get('noSignalAfterDeadline') is True
-assert a.get('maxCallsPerRound')==6
-assert a.get('preRoundMaxCalls')==2 and a.get('currentRoundMaxCalls')==4
-assert a.get('liveReviewMinIntervalMs')==6000
-assert a.get('analysisCountLimit')=='PRE2_LIVE4_TOTAL6'
+assert a.get('maxCallsPerRound')==1
+assert a.get('preRoundMaxCalls')==0 and a.get('currentRoundMaxCalls')==1
+assert a.get('analysisCountLimit')=='ONE_LIVE_HIGH_EFFORT_ANALYSIS_9S'
 assert a.get('featureReady') in (True,False)
 assert a.get('realOrderEnabled') is False
 with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=7) as r:t=json.load(r)
 assert t.get('enabled') is False
-print('FREE25_LIVE_DEADLINE_MS=25000')
-print('FREE25_LIVE_CALL_CAP=6_PRE2_CURRENT4_SPACING6000MS')
+print('SINGLE9_LIVE_DEADLINE_MS=9000')
+print('SINGLE9_LIVE_AI_CALLS_MAX=1')
 print('FREE25_FOLLOW_STILL_OFF=true')
 print('FREE25_OFFICIAL_SAMPLES_AFTER',(a.get('learning') or {}).get('allOfficialSamples',0))
 print('FREE25_WAITS_AFTER',a.get('recordedWaitRounds',0))

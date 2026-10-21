@@ -1,5 +1,5 @@
 // Isolated adaptive DeepSeek runner, no Binance order API or order submission.
-// Two budgeted analyses before round start; strictly causal next-open reconciliation.
+// DeepSeek chooses its own amount of analysis; strict hard +25-second boundary.
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -33,7 +33,7 @@ export function createAdaptiveRunner({
    }
    lastCountedRound=current.round;
    skipped++;
-   if(current.terminal.reason==='DEADLINE_15S_EXPIRED')missed++;
+   if(current.terminal.reason==='DEADLINE_25S_EXPIRED')missed++;
    lastCompleted={round:current.round,result:'WAIT',direction:'WAIT',
     reason:current.terminal.reason,detail:current.terminal.detail,
     completedAt:current.terminal.at,signalGenerated:false,orders:false};
@@ -64,12 +64,12 @@ export function createAdaptiveRunner({
   current=makeWindow(target);lastError=null;aiLatencyMs=null;aiTokens=null;
  }
  async function analyze(w,pass,raw,now){
-  if(!enabled||!key||inFlight||w.passes.some(x=>x.pass===pass)||
-    w.attemptedPasses.includes(pass)||w.modelCalls>=3)return;
+  if(!enabled||!key||inFlight||
+    (pass!=='current'&&(w.passes.some(x=>x.pass===pass)||w.attemptedPasses.includes(pass))))return;
   const remaining=w.round-now;
   if((pass==='initial'&&(remaining>75000||remaining<34000))||
     (pass==='review'&&(remaining>30000||remaining<4000))||
-    (pass==='current'&&(remaining> -6500||remaining< -(DEADLINE_MS-1800))))return;
+    (pass==='current'&&(remaining>0||remaining< -(DEADLINE_MS-650))))return;
   let payload;
   try{
    const features=extractFeatures(raw,now);
@@ -78,12 +78,12 @@ export function createAdaptiveRunner({
    payload=analysisRequest(w,pass,now,features,feedback);
   }catch(e){w.lastModelError='INPUT_'+desc(e);lastError=w.lastModelError;return}
   inFlight=true;
-  w.attemptedPasses.push(pass);
+  if(pass!=='current')w.attemptedPasses.push(pass);
   w.modelCalls++;
-  // First pass must terminate before -30s so fresh review can run.
-  // Second pass must terminate before -3s. Never block market polling.
+  // Pre-round prompts are optional preparations. Live analysis calls use the remaining
+  // round budget and may repeat when DeepSeek requests new evidence.
   const budget=pass==='current'?
-    Math.min(15000,Math.max(1000,w.round+DEADLINE_MS-clock()-1500)):
+    Math.max(250,w.round+DEADLINE_MS-clock()-350):
     Math.min(pass==='initial'?38000:26000,
       Math.max(1000,w.round-clock()-(pass==='initial'?33000:3000)));
   const started=clock();
@@ -124,11 +124,16 @@ export function createAdaptiveRunner({
       void analyze(w,'initial',raw,now);
      else if(remaining<=30000&&remaining>=4000&&!w.passes.some(x=>x.pass==='review'))
       void analyze(w,'review',raw,now);
-    } else if(now>=w.round+6500&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
-     // The final live review is DeepSeek's own judgement using this round's open/ticks.
-     if(now<w.round+17000&&!w.attemptedPasses.includes('current')&&!w.passes.some(x=>x.pass==='current'))
+    } else if(now>=w.round&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
+     // Only DeepSeek decides whether another review improves the evidence.
+     // Never hold a finished judgment until an arbitrary 8s/15s milestone.
+     const latestCurrent=w.passes.filter(x=>x.pass==='current').at(-1);
+     const wantsMore=!latestCurrent||latestCurrent.continueAnalysis;
+     if(wantsMore&&!inFlight&&now<w.round+DEADLINE_MS-1200)
       void analyze(w,'current',raw,now);
-     if(now>=w.round+8000&&(w.passes.some(x=>x.pass==='current')||now>=w.round+23500))try{
+     const readyToLock=latestCurrent&&!latestCurrent.continueAnalysis;
+     const finalChance=now>=w.round+DEADLINE_MS-1100;
+     if(now>=w.round+1800&&(readyToLock||finalChance))try{
       let feedback={};
       if(typeof getHistoricalFeedback==='function'){
        const f=extractFeatures(raw,now);

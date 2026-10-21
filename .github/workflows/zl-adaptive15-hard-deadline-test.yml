@@ -6,6 +6,7 @@ on:
       - prediction-bot-v1/deepseek-adaptive15-core.mjs
       - prediction-bot-v1/deepseek-adaptive15-runner.mjs
       - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.test.mjs
       - prediction-bot-v1/deepseek-adaptive15-hard-deadline.test.mjs
       - .github/workflows/zl-adaptive15-hard-deadline-test.yml
   workflow_dispatch:

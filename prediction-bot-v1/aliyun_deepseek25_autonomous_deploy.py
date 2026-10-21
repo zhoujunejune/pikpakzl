@@ -40,13 +40,13 @@ from pathlib import Path
 import sys
 root=Path(sys.argv[1])
 w=(root/'wrapper.mjs').read_text()
-assert 'const SELECTIVE30_ORDER_DEADLINE_MS = 30000;' in w, 'ORDER_BUFFER_NOT_EXPECTED'
+assert 'const SELECTIVE30_ORDER_DEADLINE_MS = 270000;' in w, 'ORDER_BUFFER_NOT_EXPECTED'
 assert 'model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS' in w, 'ORDER_BUFFER_ROUTING_UNEXPECTED'
 v=(root/'production-signal-choice.mjs').read_text()
 assert v.count('ts<round||ts>=round+15000||now>=round+15000||marketAt<round||marketAt>ts||')==1, 'VALIDATOR_SOURCE_UNEXPECTED'
 p=(root/'panel-stats-shell.mjs').read_text()
 assert p.count('var expired=Date.now()>=currentRound+15000;')==1, 'UI_EXPIRY_SOURCE_UNEXPECTED'
-print('AUTONOMOUS25_DOWNSTREAM_30S_ORDER_BUFFER_UNCHANGED=true')
+print('AUTONOMOUS25_DOWNSTREAM_270S_BUFFER_WILL_BE_REDUCED_TO_30S=true')
 PY
 tmp=$(mktemp -d /tmp/zl-deepseek25-XXXXXXXX)
 trap 'rm -rf "$tmp"' EXIT
@@ -74,18 +74,25 @@ old="x.reason==='DEADLINE_15S_EXPIRED'||x.timedOut?'（15秒超时WAIT）':'（�
 if p.count(old)!=1:raise SystemExit('UI_WAIT_REASON_UNEXPECTED')
 p=p.replace(old,"x.reason==='DEADLINE_25S_EXPIRED'||x.timedOut?'（25秒超时WAIT）':x.reason==='DEADLINE_15S_EXPIRED'?'（旧版15秒超时WAIT）':'（主动WAIT）'")
 (new/'panel-stats-shell.mjs').write_text(p)
-print('AUTONOMOUS25_VALIDATOR_AND_UI_PREPARED=true')
+w=(root/'wrapper.mjs').read_text()
+old='const SELECTIVE30_ORDER_DEADLINE_MS = 270000;'
+if w.count(old)!=1:raise SystemExit('DEEPSEEK_ORDER_BUFFER_SOURCE_UNEXPECTED')
+w=w.replace(old,'const SELECTIVE30_ORDER_DEADLINE_MS = 30000;')
+w=w.replace('DeepSeek本轮第270秒订单提交窗口已截止','DeepSeek本轮第30秒订单提交窗口已截止')
+(new/'wrapper.mjs').write_text(w)
+print('AUTONOMOUS25_VALIDATOR_UI_AND_ORDER30_BUFFER_PREPARED=true')
 PY
 "$node" --check "$tmp/new/production-signal-choice.mjs"
 "$node" --check "$tmp/new/panel-stats-shell.mjs"
+"$node" --check "$tmp/new/wrapper.mjs"
 backup=/var/lib/zl-prediction/archive/source-backups/deepseek-autonomous25-COMMIT_SHA
 mkdir -p "$backup"
 for file in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs deepseek-adaptive15-quality-store.mjs deepseek-adaptive15-error-attribution.mjs;do cp -p "$app/$file" "$backup/$file";done
-for file in production-signal-choice.mjs panel-stats-shell.mjs;do cp -p "$trade/$file" "$backup/$file";done
+for file in production-signal-choice.mjs panel-stats-shell.mjs wrapper.mjs;do cp -p "$trade/$file" "$backup/$file";done
 restore(){
  echo 'AUTONOMOUS25_ROLLBACK_STARTED=true'
  for file in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs deepseek-adaptive15-quality-store.mjs deepseek-adaptive15-error-attribution.mjs;do cp -p "$backup/$file" "$app/$file";done
- for file in production-signal-choice.mjs panel-stats-shell.mjs;do cp -p "$backup/$file" "$trade/$file";done
+ for file in production-signal-choice.mjs panel-stats-shell.mjs wrapper.mjs;do cp -p "$backup/$file" "$trade/$file";done
  systemctl restart zl-prediction-deepseek5.service || true
  systemctl restart zl-prediction-trade.service || true
 }
@@ -103,7 +110,7 @@ app,trade,src=map(Path,sys.argv[1:])
 for root,names in [(app,('deepseek-adaptive15-core.mjs','deepseek-adaptive15-runner.mjs',
      'deepseek-adaptive15-production-adapter.mjs','deepseek-adaptive15-quality-store.mjs',
      'deepseek-adaptive15-error-attribution.mjs')),
-   (trade,('production-signal-choice.mjs','panel-stats-shell.mjs'))]:
+   (trade,('production-signal-choice.mjs','panel-stats-shell.mjs','wrapper.mjs'))]:
  for name in names:
   target=root/name;st=target.stat()
   fd,tmp=tempfile.mkstemp(prefix='.deepseek25-',dir=root)
@@ -155,6 +162,7 @@ NODE
 for svc in zl-prediction-v2 zl-prediction-v3 zl-prediction-deepseek5 zl-prediction-trade zl-futures-bot-paper zl-deepseek-shadow-online zl-deepseek-shadow15-online;do
  test "$(systemctl is-active "$svc")" = active || exit 39
 done
+test "$(grep -c 'const SELECTIVE30_ORDER_DEADLINE_MS = 30000;' "$trade/wrapper.mjs")" = 1
 echo 'AUTONOMOUS25_ALL_EXISTING_SERVICES_ACTIVE=true'
 echo "AUTONOMOUS25_ROLLBACK_BACKUP=$backup"
 trap - ERR

@@ -101,9 +101,14 @@ export function finalize(window,now){
    throw Error('NEW_ROUND_TICK_STALE');
  if(prior.length<5||prior.at(-1).at-prior[0].at<20000)
    throw Error('INSUFFICIENT_PREVIOUS_ROUND_DATA');
- const opening=early[0].open;
- if(!early.every(x=>Math.abs(x.open/opening-1)<.00001))
-   throw Error('ROUND_OPEN_PRICE_CHANGED');
+ // Some feed publishers revise the provisional round-open snapshot after the
+ // first tick. The latest observed, same-round opening reference is causal.
+ // Reject large/incoherent revisions rather than inventing a fixed open.
+ const opening=latest.open;
+ const maxOpenRevision=Math.max(...early.map(x=>Math.abs(x.open/opening-1)));
+ if(maxOpenRevision>.003)
+   throw Error('ROUND_OPEN_REVISION_TOO_LARGE');
+ const firstOpenRevisionBps=(opening/early[0].open-1)*10000;
  // Experiment-only heuristic. These weights MUST be forward-tested before
  // becoming a production order signal. No fabricated statistical calibration.
  const earlyBps=(latest.price/opening-1)*10000;
@@ -119,6 +124,7 @@ export function finalize(window,now){
    rawPrewarmDirection:pre.direction,
    priorSnapshots:prior.length,earlySnapshots:early.length,observedEarlySeconds:(latest.at-target)/1000,
    openPrice:opening,price:latest.price,fromOpenBps:Number(earlyBps.toFixed(3)),
+   roundOpenRevisionBps:Number(firstOpenRevisionBps.toFixed(3)),
    previousTwoMinuteBps:Number(prevBps.toFixed(3)),
    rawHybridScore:Number(score.toFixed(4)),
    scoreIsCalibratedProbability:false},

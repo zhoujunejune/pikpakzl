@@ -5,7 +5,7 @@ const num=v=>typeof v==='number'&&Number.isFinite(v);
 export function classifyOfficialMistake(p){
  if(!p||!isSide(p.direction)||!isSide(p.actual)||p.settledAt==null||
     !Number.isSafeInteger(p.round)||!Number.isSafeInteger(p.signalAt)||
-    p.signalAt<p.round||p.signalAt>=p.round+25000||
+    p.signalAt<p.round||p.signalAt>=p.round+9000||
     p.settledAt<p.round+300000)return {eligible:false,tags:[]};
  if(p.direction===p.actual)return {eligible:true,correct:true,tags:[]};
  const tags=[];

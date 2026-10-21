@@ -37,7 +37,7 @@ p=Path(sys.argv[1]);out=Path(sys.argv[2]);s=p.read_text()
 anchor='   var currentRound=Math.floor(Date.now()/300000)*300000;'
 if s.count(anchor)!=1 or 'DEEPSEEK_QUALITY_VISIBLE_V1' in s:
  raise SystemExit('UNEXPECTED_UI_CONTEXT_ABORT')
-insert="""   // DEEPSEEK_QUALITY_VISIBLE_V1: do not conflate settled direction hit rate with net return.
+insert='''   // DEEPSEEK_QUALITY_VISIBLE_V1: do not conflate settled direction hit rate with net return.
    var q=status.strategyQuality||{},qs=q.signal||{},qe=q.economics||{},qa=q.errors||{};
    var newN=Number.isSafeInteger(qs.officiallySettled)?qs.officiallySettled:0;
    var notes=' · 新策略质量样本 '+newN+' 条（自本次升级起）；';
@@ -47,7 +47,7 @@ insert="""   // DEEPSEEK_QUALITY_VISIBLE_V1: do not conflate settled direction h
    if(misses.length&&newN>=10)
      notes+='；失误线索（非确定原因） '+misses.map(function(x){return String(x.tag)+' '+x.count}).join('、');
    var metaNode=e('rsMeta');if(metaNode)metaNode.textContent+=notes;
-"""
+'''
 out.write_text(s.replace(anchor,insert+anchor,1))
 print('PANEL_QUALITY_STATISTICS_SEPARATED=true')
 PY

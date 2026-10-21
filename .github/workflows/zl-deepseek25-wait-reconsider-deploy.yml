@@ -1,0 +1,46 @@
+name: Deploy DeepSeek genuine-direction WAIT reconsideration within strict 25s
+on:
+  push:
+    branches: [fix/deepseek25-wait-reconsider-20261021]
+    paths:
+      - .github/workflows/zl-deepseek25-wait-reconsider-deploy.yml
+      - prediction-bot-v1/aliyun_deepseek25_wait_reconsider_deploy.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate provisional WAIT retries, no invented signal, hard +25s, historical decisions
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_deepseek25_wait_reconsider_deploy.py
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-wait-reconsider25.test.mjs
+          node --test prediction-bot-v1/deepseek-free-analysis25.test.mjs
+          node --test prediction-bot-v1/deepseek-autonomous25.test.mjs
+  deploy:
+    needs: [regression]
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Upgrade DeepSeek only after strict source/follow checks, back up and verify
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek25_wait_reconsider_deploy.py

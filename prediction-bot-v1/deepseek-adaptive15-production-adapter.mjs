@@ -9,6 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {createAdaptiveRunner} from './deepseek-adaptive15-runner.mjs';
 import {extractFeatures} from './deepseek-5m-features.mjs';
 import {newLearner} from './deepseek-5m-learner.mjs';
+import {makeQualityStore} from './deepseek-adaptive15-quality-store.mjs';
 import {roundOf} from './deepseek-adaptive15-core.mjs';
 
 const ID='DEEPSEEK_5M_V1';
@@ -48,6 +49,10 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
  const key=String(env.DEEPSEEK_API_KEY||'');
  const stateFile=String(env.LLM_STATE_FILE||'/var/lib/zl-prediction/deepseek5/signal.json');
  const learner=newLearner(String(env.DEEPSEEK_LEARNING_FILE||'/var/lib/zl-prediction/deepseek5/learning.json'),clock);
+ const quality=makeQualityStore(
+  String(env.DEEPSEEK_QUALITY_JOURNAL_FILE||path.join(path.dirname(stateFile),'quality-v1.json')),
+  clock,String(env.DEEPSEEK_VERIFIED_ORDER_AUDIT_FILE||''));
+ let qualityError=null;
  const waitFile=String(env.DEEPSEEK_WAIT_JOURNAL_FILE||path.join(path.dirname(stateFile),'wait-rounds.json'));
  let waits=[];
  try{
@@ -90,7 +95,12 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
  };
  const runner=createAdaptiveRunner({
   env:{...env,ADAPTIVE15_ENABLE_AI:key?'1':'0'},clock,fetcher,
-  getHistoricalFeedback:features=>learner.feedback(features),
+  getHistoricalFeedback:features=>{
+   const original=learner.feedback(features);
+   const currentRound=Number(features?.round);
+   // All feedback MUST originate from older officially settled rounds.
+   return {...original,officialErrorPatterns:quality.feedback(currentRound)};
+  },
   onWait:term=>storeWait(term),
   onLocked:(candidate,raw,at,window)=>{
    if(saved?.round===candidate.round)return; // never duplicate a prior lock
@@ -104,6 +114,8 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    persist(signal);saved=signal;
    try{learner.record(signal,features,window?.modelCalls||1)}
    catch(e){settlementError='RECORD_'+String(e?.message||e).slice(0,70)}
+   try{quality.record(signal,features,{llmPasses:window?.modelCalls||1})}
+   catch(e){qualityError='QUALITY_RECORD_'+String(e?.message||e).slice(0,70)}
   }});
  function stats(){try{return learner.summary()}catch{return {officialSamples:0,error:'LEARNING_FILE_ERROR'}}}
  function status(){
@@ -127,6 +139,8 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    lastSignal:saved?{round:saved.round,direction:saved.latest.direction}:null,
    noSignalAfterDeadline:true,
    recordedWaitRounds:waits.length,
+   strategyQuality:quality.summary(),
+   qualityError,
    lastDecision:shadow.lastCompleted,
    skippedRounds:shadow.skippedRounds,
    missedRounds:shadow.missedRounds,
@@ -163,10 +177,12 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    const raw=await resp.json();
    if(raw?.settlementSource!==SOURCE)throw Error('UNTRUSTED_OFFICIAL_SOURCE');
    lastSettlementCount=learner.settle(raw);settlementError=null;
+   try{quality.settle(raw);qualityError=null}
+   catch(e){qualityError='QUALITY_SETTLE_'+String(e?.message||e).slice(0,70)}
   }catch(e){settlementError=String(e?.message||e).slice(0,100)}
  }
  function tick(){void pollOfficial();return runner.tick()}
- return {tick,status,history:withWaits};
+ return {tick,status,history:withWaits,quality:()=>quality.summary()};
 }
 export function serveAdaptiveProduction(provider,port=Number(process.env.LLM_SERVICE_PORT||13029)){
  const server=http.createServer((req,res)=>{
@@ -174,6 +190,7 @@ export function serveAdaptiveProduction(provider,port=Number(process.env.LLM_SER
   if(req.method!=='GET'){res.writeHead(405);return res.end()}
   let data,code=200;
   if(['/healthz','/status','/api/status'].includes(u.pathname))data=provider.status();
+  else if(u.pathname==='/api/quality')data=provider.quality();
   else if(u.pathname==='/api/history'){
    data=provider.history(u.searchParams.get('limit'));code=data?.ok?200:503;
   }else if(u.pathname==='/signal'){

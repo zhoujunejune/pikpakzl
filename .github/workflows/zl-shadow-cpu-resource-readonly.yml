@@ -1,0 +1,79 @@
+name: CPU online shadow and host resource health - read only
+on:
+  push:
+    branches: [feat/adaptive15-deferred-wait-learning-pnl-20261021]
+    paths: [.github/workflows/zl-shadow-cpu-resource-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect current shadow service, training progress and headroom without changes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,subprocess,urllib.request,os
+          def read(port,path):
+            try:
+              with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}',timeout=6) as r:return json.load(r)
+            except Exception as e:return {'errorType':type(e).__name__}
+          units=['zl-deepseek-shadow-online.service','zl-prediction-deepseek5.service',
+            'zl-prediction-trade.service','zl-futures-bot-paper.service']
+          status={}
+          for u in units:
+            p=subprocess.run(['systemctl','is-active',u],capture_output=True,text=True,timeout=4)
+            status[u]=p.stdout.strip()
+          memory={}
+          for l in open('/proc/meminfo'):
+            if l.startswith(('MemTotal:','MemAvailable:','SwapTotal:','SwapFree:')):
+              key,tail=l.split(':',1);memory[key]=int(tail.strip().split()[0])
+          s=read(13041,'/api/status')
+          prod=read(13029,'/api/status')
+          feed=read(13003,'/api/shadow-market-data')
+          print('ONLINE_CPU_SHADOW_HEALTH='+json.dumps({
+            'units':status,'memoryKb':memory,
+            'shadow':{k:s.get(k) for k in ('model','mode','orders','productionModelUnchanged',
+             'trainableWeights','settledTrained','observations','unsettled','updatedAt',
+             'lastMarketAt','lastOfficialAt','lastError','readyForEvaluation','all','recent50')},
+            'feedConnected':(feed.get('latest') or {}).get('marketFeedConnected'),
+            'feedStatus':feed.get('ok'),
+            'prod':{'model':prod.get('model'),
+             'windowMs':prod.get('decisionWindowEndMs',0)-prod.get('round',0),
+             'noSignalAfterDeadline':prod.get('noSignalAfterDeadline')}
+          },separators=(',',':')))
+          INNER
+          """
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+           access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+           region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+           instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+           name='zl-online-shadow-cpu-resource-health-readonly',type='RunShellScript',
+           working_user='root',command_content=script,timeout=70)).body.invoke_id
+          for _ in range(35):
+            time.sleep(2)
+            r=client.describe_invocation_result(sw.DescribeInvocationResultRequest(
+             region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+             invoke_id=inv)).body.invocation_result
+            if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+              raw=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+              for line in raw.splitlines():
+                if line.startswith('ONLINE_CPU_SHADOW_HEALTH='):print(line)
+              if int(r.exit_code)!=0:raise RuntimeError('REMOTE_HEALTH_FAILED')
+              break
+          else:raise RuntimeError('REMOTE_HEALTH_TIMEOUT')
+          OUTER

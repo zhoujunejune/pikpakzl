@@ -9,7 +9,7 @@ const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 const side=x=>x==='UP'||x==='DOWN';
 export function makeWindow(round){
  if(!Number.isSafeInteger(round)||round%ROUND_MS!==0)throw Error('INVALID_ROUND');
- return {round,prior:[],early:[],passes:[],final:null,
+ return {round,prior:[],early:[],passes:[],final:null,terminal:null,
   skips:[],modelCalls:0,lastModelError:null};
 }
 export function marketTick(data,now){
@@ -23,7 +23,7 @@ export function marketTick(data,now){
  return {at,round,price,open};
 }
 export function collect(w,tick){
- if(w.final)return false;
+ if(w.final||w.terminal)return false;
  if(tick.round===w.round-ROUND_MS&&tick.at>=w.round-COLLECT_MS&&tick.at<w.round){
    if(w.prior.at(-1)?.at>=tick.at)return false;
    w.prior.push(tick);if(w.prior.length>150)w.prior.shift();return true;
@@ -101,8 +101,25 @@ export function registerAnalysis(w,decision){
  if(w.passes.some(x=>x.pass===decision.pass))throw Error('DUPLICATE_PASS');
  w.passes.push(decision);return decision;
 }
+export function closeExpiredWindow(w,now){
+ if(w.final||w.terminal||now<w.round+DEADLINE_MS)return false;
+ const reason=w.skips.at(-1)||w.lastModelError||'DEADLINE_15S_EXPIRED';
+ w.terminal={round:w.round,status:'WAIT',direction:'WAIT',
+  reason:'DEADLINE_15S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
+  signalGenerated:false,orders:false};
+ return true;
+}
+function recordWait(w,reason,now){
+ if(!w.terminal){
+  w.terminal={round:w.round,status:'WAIT',direction:'WAIT',
+   reason,detail:reason,at:now,signalGenerated:false,orders:false};
+  w.skips.push(reason);
+ }
+ return {ok:false,skip:true,round:w.round,direction:'WAIT',reason:w.terminal.reason};
+}
 export function finalize(w,now,feedback={}){
- if(w.final)throw Error('ALREADY_LOCKED');
+ if(w.final)throw Error('ALREADY_LOCKED'); 
+ if(w.terminal)return {ok:false,skip:true,round:w.round,direction:'WAIT',reason:w.terminal.reason};
  if(now<w.round+8000||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_15S_LOCK_WINDOW');
  const prior=w.prior,early=w.early;
  if(prior.length<5||prior.at(-1).at-prior[0].at<20000)
@@ -119,7 +136,7 @@ export function finalize(w,now,feedback={}){
  const chosen=review||first;
  if(!chosen)throw Error('MISSING_DEEPSEEK_ANALYSIS');
  if(chosen.direction==='WAIT'){
-  w.skips.push('DEEPSEEK_CHOSE_WAIT');return {ok:false,skip:true,reason:'DEEPSEEK_CHOSE_WAIT'};
+  return recordWait(w,'DEEPSEEK_CHOSE_WAIT',now);
  }
  const fromOpenBps=(latest.price/open-1)*10000;
  const priorBps=(prior.at(-1).price/prior[0].price-1)*10000;
@@ -139,7 +156,7 @@ export function finalize(w,now,feedback={}){
  if(weakModel||disputed||unresolved||lowEvidence){
   const why=weakModel?'LOW_MODEL_CONFIDENCE':disputed?'MODEL_MARKET_CONFLICT':
    unresolved?'NO_REVIEW_AND_CONFLICT':'LOW_DIRECTIONAL_EVIDENCE';
-  w.skips.push(why);return {ok:false,skip:true,reason:why};
+  return recordWait(w,why,now);
  }
  const result={ok:true,model:'DEEPSEEK_ADAPTIVE15_EXPERIENCE_V1',
   mode:'SHADOW_SIGNAL_ONLY',round:w.round,generatedAt:now,
@@ -161,5 +178,7 @@ export function windowStatus(w,now){
   priorSamples:w.prior.length,earlySamples:w.early.length,modelCalls:w.modelCalls,
   skipCount:w.skips.length,lastSkip:w.skips.at(-1)||null,
   deadline:w.round+DEADLINE_MS,signal:w.final,
+  status:w.final?'LOCKED':w.terminal?'WAIT':now>=w.round+DEADLINE_MS?'WAIT':'ANALYZING',
+  terminal:w.terminal,
   missed:now>=w.round+DEADLINE_MS&&!w.final};
 }

@@ -1,0 +1,63 @@
+name: Verify real post-fix +15s WAIT and order-source refusal - GET only
+on:
+  push:
+    branches: [fix/adaptive15-hard-deadline-wait-20261021]
+    paths: [.github/workflows/zl-adaptive15-hardwait-real-verification.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Observe current/next round after +16s and refuse stale signals
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,time,urllib.request,urllib.error
+          host='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(route):
+           req=urllib.request.Request(host+route,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET')
+           try:
+            with urllib.request.urlopen(req,timeout=15) as r:return r.status,json.load(r)
+           except urllib.error.HTTPError as e:
+            try:body=json.loads(e.read())
+            except Exception:body={}
+            return e.code,body
+          t=time.time()
+          current=int(t//300)*300
+          target=current if t-current<14 else current+300
+          wait=max(0,target+18-time.time())
+          if wait>320:raise SystemExit('UNEXPECTED_TIME_WINDOW')
+          print('VERIFY_TARGET_UNIX='+str(target),flush=True)
+          time.sleep(wait)
+          _,s=get('/deepseek/api/status')
+          status,signal=get('/deepseek/signal')
+          _,tstatus=get('/api/status')
+          _,history=get('/deepseek/api/history?limit=15')
+          decision=s.get('roundDecision') or {}
+          recent=[{'round':row.get('round'),'direction':row.get('direction'),'reason':row.get('reason'),
+                   'signalLatencyMs':row.get('signalLatencyMs')} for row in history.get('records',[])[:5]]
+          output={'targetRound':target*1000,'reportedRound':s.get('round'),
+             'roundDecision':decision,'signalEndpointHttp':status,
+             'signalEndpointError':signal.get('error'),
+             'waitRoundsRecorded':s.get('recordedWaitRounds'),
+             'historicalRecent':recent,'followEnabled':tstatus.get('enabled'),
+             'model':s.get('model'),
+             'windowMs':s.get('decisionWindowEndMs',0)-s.get('round',0)}
+          print('HARDWAIT_REAL_BOUNDARY_VERIFIED='+json.dumps(output,ensure_ascii=False,separators=(',',':')),flush=True)
+          assert s.get('round')==target*1000
+          assert output['windowMs']==15000
+          assert decision.get('status') in ('WAIT','LOCKED')
+          assert status==503
+          assert tstatus.get('enabled') is False
+          assert decision.get('decisionDeadlineMs')==target*1000+15000
+          if decision.get('status')=='WAIT':
+            assert decision.get('direction')=='WAIT'
+            print('HARDWAIT_DEADLINE_EXPLICIT_WAIT=true',flush=True)
+          else:
+            assert decision.get('lockedAt')<target*1000+15000
+            print('HARDWAIT_EARLY_LOCK_HISTORY_PRESERVED=true',flush=True)
+          PY

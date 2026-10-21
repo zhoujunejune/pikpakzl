@@ -1,0 +1,59 @@
+name: Inspect exact current dashboard WAIT renderer and trader expiry guard - read only
+on:
+  push:
+    branches: [fix/adaptive15-hard-deadline-wait-20261021]
+    paths: [.github/workflows/zl-adaptive15-dashboard-trader-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read source slices only; never restart or change settings
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          from pathlib import Path
+          root=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          for name,lo,hi in [('production-signal-choice.mjs',280,312),
+            ('index.mjs',342,384),('panel-stats-shell.mjs',225,302)]:
+           p=root/name
+           if not p.exists():continue
+           lines=p.read_text(errors='replace').splitlines()
+           print('BEGIN_LIVE_CODE',name,'lines',lo,hi)
+           for i in range(lo-1,min(hi,len(lines))):
+            print(f'{i+1}: {lines[i][:430]}')
+           print('END_LIVE_CODE',name)
+          INNER
+          """
+          cl=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+            access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+            region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cl.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-panel-validator-exact-readonly',
+            type='RunShellScript',working_user='root',command_content=script,timeout=75)).body.invoke_id
+          for _ in range(36):
+           time.sleep(2)
+           r=cl.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            i=raw.find('BEGIN_LIVE_CODE')
+            if i>=0:print(raw[i:i+17000])
+            if int(r.exit_code)!=0:raise RuntimeError('READONLY_FAILED')
+            break
+          else:raise RuntimeError('READONLY_TIMED_OUT')
+          OUTER

@@ -5,7 +5,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {extractFeatures} from './deepseek-5m-features.mjs';
 import {COLLECT_MS,DEADLINE_MS,roundOf,makeWindow,marketTick,collect,
- analysisRequest,decodeAnalysis,registerAnalysis,finalize,windowStatus}
+ analysisRequest,decodeAnalysis,registerAnalysis,finalize,closeExpiredWindow,windowStatus}
  from './deepseek-adaptive15-core.mjs';
 
 const FEED='http://127.0.0.1:13003/api/shadow-market-data';
@@ -13,7 +13,7 @@ const API='https://api.deepseek.com/chat/completions';
 const desc=e=>String(e?.message||e||'UNKNOWN').slice(0,120);
 export function createAdaptiveRunner({
  env=process.env,clock=()=>Date.now(),fetcher=fetch,
- onLocked=null,getHistoricalFeedback=null
+ onLocked=null,onWait=null,getHistoricalFeedback=null
 }={}){
  const enabled=env.ADAPTIVE15_ENABLE_AI==='1';
  const key=String(env.DEEPSEEK_API_KEY||'');
@@ -22,31 +22,45 @@ export function createAdaptiveRunner({
  const api=String(env.DEEPSEEK_API_URL||API);
  let current=null,lastSignal=null,lastError=null,lastFeedAt=null;
  let inFlight=false,feedBusy=false,feedNext=0,aiLatencyMs=null,aiTokens=null;
- let missed=0,skipped=0,lastCompleted=null;
+ let missed=0,skipped=0,lastCompleted=null,lastCountedRound=null;
+ function completeCurrent(now){
+  if(!current)return;
+  closeExpiredWindow(current,now);
+  if(current.terminal&&lastCountedRound!==current.round){
+   if(typeof onWait==='function'){
+    try{onWait({...current.terminal})}
+    catch(e){lastError='WAIT_JOURNAL_WRITE_FAILED_'+desc(e)}
+   }
+   lastCountedRound=current.round;
+   skipped++;
+   if(current.terminal.reason==='DEADLINE_15S_EXPIRED')missed++;
+   lastCompleted={round:current.round,result:'WAIT',direction:'WAIT',
+    reason:current.terminal.reason,detail:current.terminal.detail,
+    completedAt:current.terminal.at,signalGenerated:false,orders:false};
+  }
+ }
  function targetFor(now){
   const r=roundOf(now),elapsed=now-r;
   if(elapsed<DEADLINE_MS&&current?.round===r)return r;
   return elapsed>=300000-COLLECT_MS?r+300000:null;
  }
  function status(){
-  const now=clock(),target=targetFor(now);
+  const now=clock();completeCurrent(now);
+  const target=targetFor(now);
   return {ok:true,mode:'SHADOW_ONLY_NO_ORDERS',
    model:'DEEPSEEK_ADAPTIVE15_EXPERIENCE_V1',providerModel:model,
    aiEnabled:enabled,configured:enabled&&Boolean(key),inFlight,aiLatencyMs,aiTokens,
    lastMarketAt:lastFeedAt,lastError,missedRounds:missed,skippedRounds:skipped,
    lastCompleted,window:current?windowStatus(current,now):null,
+   currentDecisionStatus:current?.final?'LOCKED':current?.terminal?'WAIT':'ANALYZING',
    targetRound:target,lastSignal:lastSignal?{round:lastSignal.round,
     direction:lastSignal.latest.direction,lockedAt:lastSignal.latest.lockedAt}:null,
    orders:false,realOrderEnabled:false,productionIntegration:false};
  }
  function rotate(now){
+  completeCurrent(now);
   const target=targetFor(now);
   if(target==null||current?.round===target)return;
-  if(current&&!current.final&&now>=current.round+DEADLINE_MS){
-   const reason=current.skips.at(-1)||current.lastModelError||'NO_VALID_LOCK_BY_15S';
-   lastCompleted={round:current.round,result:'SKIPPED',reason};
-   missed++;skipped++;
-  }
   current=makeWindow(target);lastError=null;aiLatencyMs=null;aiTokens=null;
  }
  async function analyze(w,pass,raw,now){
@@ -98,6 +112,7 @@ export function createAdaptiveRunner({
    const raw=await res.json();
    const obs=marketTick(raw,clock());lastFeedAt=obs.at;
    if(w&&w===current){
+    completeCurrent(clock());
     collect(w,obs);
     const now=clock(),remaining=w.round-now;
     if(now<w.round){
@@ -105,21 +120,26 @@ export function createAdaptiveRunner({
       void analyze(w,'initial',raw,now);
      else if(remaining<=30000&&remaining>=4000&&!w.passes.some(x=>x.pass==='review'))
       void analyze(w,'review',raw,now);
-    } else if(now>=w.round+8000&&now<w.round+DEADLINE_MS&&!w.final){
+    } else if(now>=w.round+8000&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
      try{
       let feedback={};
       if(typeof getHistoricalFeedback==='function'){
        const f=extractFeatures(raw,now);
        feedback=getHistoricalFeedback(f);
       }
-      const decision=finalize(w,now,feedback);
-      if(decision.ok){
-       try{if(typeof onLocked==='function')onLocked(decision,raw,now,w)}
-       catch(e){w.final=null;throw e}
-       lastSignal=decision;lastCompleted={round:w.round,result:'LOCKED',
-         elapsedMs:now-w.round,direction:decision.latest.direction};
-       lastError=null;
-      }else if(decision.skip){lastError=decision.reason}
+      const actualDecisionAt=clock();
+      if(actualDecisionAt>=w.round+DEADLINE_MS){
+       completeCurrent(actualDecisionAt);
+      }else{
+       const decision=finalize(w,actualDecisionAt,feedback);
+       if(decision.ok){
+        try{if(typeof onLocked==='function')onLocked(decision,raw,clock(),w)}
+        catch(e){w.final=null;throw e}
+        lastSignal=decision;lastCompleted={round:w.round,result:'LOCKED',
+          elapsedMs:clock()-w.round,direction:decision.latest.direction};
+        lastError=null;
+       }else if(decision.skip){lastError=decision.reason}
+      }
      }catch(e){lastError=desc(e);w.skips.push(lastError)}
     }
    }

@@ -1,0 +1,82 @@
+name: Read-only audit DeepSeek actual trade source validation and dashboard timeout
+on:
+  push:
+    branches: [fix/adaptive15-hard-deadline-wait-20261021]
+    paths: [.github/workflows/zl-adaptive15-deadline-readonly-inspect.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read only localhost status and relevant trade code anchors
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,urllib.request,pathlib,re,time
+          def get(p,url):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:%d%s'%(p,url),timeout=6) as r:return json.load(r)
+           except Exception as e:return {'error':type(e).__name__}
+          p=get(13029,'/api/status');t=get(13001,'/api/status')
+          s=get(13029,'/signal')
+          r=int(time.time()*1000)//300000*300000
+          print('DEADLINE_LIVE_STATUS='+json.dumps({
+            'nowOffsetSec':round((time.time()*1000-r)/1000,2),
+            'model':p.get('model'),'decisionWindowMs':p.get('decisionWindowEndMs',0)-p.get('round',0),
+            'signalRound':(p.get('signal') or {}).get('round'),
+            'signalLockedAt':((p.get('signal') or {}).get('latest') or {}).get('lockedAt'),
+            'analysisTargetRound':p.get('analysisTargetRound'),
+            'first':p.get('analysisFirstDirection'),'review':p.get('analysisReviewDirection'),
+            'calls':p.get('analysisModelCalls'),'waitReason':p.get('waitReason'),
+            'followEnabled':t.get('enabled'),
+            'directSignalEndpointError':s.get('error'),
+            'directSignalEndpointRound':s.get('round'),
+            'lastSignal':p.get('lastSignal')},separators=(',',':')),flush=True)
+          root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          count=0
+          for fname in ['index.mjs','production-signal-choice.mjs','panel-stats-shell.mjs','wrapper.mjs']:
+           f=root/fname
+           if not f.exists():continue
+           lines=f.read_text(errors='replace').splitlines()
+           inds=[i for i,l in enumerate(lines) if
+             ('DEEPSEEK' in l or 'DeepSeek' in l or '/signal' in l or 'decisionWindow' in l or 'WAIT' in l)
+             and any(q in l for q in ('SIGNAL_','validate','/signal','signalLatency','DeepSeek','DEEPSEEK','deadline','WAIT'))]
+           print('TRADE_SOURCE_FILE',fname,'anchors',len(inds))
+           for i in inds[:18]:
+            line=lines[i]
+            if re.search('secret|password|token|key\\s*=|authorization',line,re.I):continue
+            print('TRADE_SOURCE_ANCHOR',fname,str(i+1),line[:220])
+          INNER
+          """
+          cl=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+            access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+            region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cl.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-deadline-trade-readonly-audit',
+            type='RunShellScript',working_user='root',command_content=script,timeout=75)).body.invoke_id
+          for _ in range(36):
+           time.sleep(2)
+           r=cl.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            for l in raw.splitlines():
+             if any(tag in l for tag in ('DEADLINE_LIVE_STATUS=','TRADE_SOURCE_FILE','TRADE_SOURCE_ANCHOR')):print(l)
+            if int(r.exit_code)!=0:raise RuntimeError('READONLY_REMOTE_FAILED')
+            break
+          else:raise RuntimeError('READONLY_REMOTE_TIMEOUT')
+          OUTER

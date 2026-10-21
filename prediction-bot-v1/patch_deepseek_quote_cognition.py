@@ -55,7 +55,7 @@ s=one(s,' onLocked=null,onWait=null,getHistoricalFeedback=null',
  'RUNNER_QUOTE_CALLBACK')
 s=one(s,
  '''   payload=analysisRequest(w,pass,now,features,feedback);
-    // Prompt evidence offered, not demonstrated comprehension or predictive lift.''',
+   // Prompt evidence offered, not demonstrated comprehension or predictive lift.''',
  '''    // Quotes for the new round are never fabricated from a previous round.
     // Local endpoint responds while preview acquisition continues in background.
     let verifiedQuotes=null;

@@ -48,6 +48,35 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
  const key=String(env.DEEPSEEK_API_KEY||'');
  const stateFile=String(env.LLM_STATE_FILE||'/var/lib/zl-prediction/deepseek5/signal.json');
  const learner=newLearner(String(env.DEEPSEEK_LEARNING_FILE||'/var/lib/zl-prediction/deepseek5/learning.json'),clock);
+ const waitFile=String(env.DEEPSEEK_WAIT_JOURNAL_FILE||path.join(path.dirname(stateFile),'wait-rounds.json'));
+ let waits=[];
+ try{
+  const stored=JSON.parse(fs.readFileSync(waitFile,'utf8'));
+  if(stored?.schema===1&&Array.isArray(stored.records))
+   waits=stored.records.filter(x=>Number.isSafeInteger(x?.round)&&x.direction==='WAIT'
+    &&Number.isSafeInteger(x?.at)).slice(-2000);
+ }catch{}
+ function storeWait(term){
+  if(!Number.isSafeInteger(term?.round)||term.direction!=='WAIT'
+   ||!Number.isSafeInteger(term?.at)||waits.some(x=>x.round===term.round))return;
+  waits.push({round:term.round,direction:'WAIT',at:term.at,
+   status:'WAIT',reason:String(term.reason||'WAIT').slice(0,90),
+   detail:String(term.detail||'').slice(0,120),signalAt:null,
+   signalLatencyMs:null,provider:model,actual:null,settledAt:null,hit:null});
+  waits=waits.slice(-2000);
+  fs.mkdirSync(path.dirname(waitFile),{recursive:true,mode:0o750});
+  const tmp=waitFile+'.tmp.'+process.pid;
+  fs.writeFileSync(tmp,JSON.stringify({schema:1,records:waits}),{mode:0o640});
+  fs.renameSync(tmp,waitFile);
+ }
+ function withWaits(limit){
+  const n=Math.max(1,Math.min(100,Math.trunc(Number(limit)||80)));
+  const base=learner.history(100);
+  const rows=[...(base.records||[]),...waits].sort((a,b)=>b.round-a.round).slice(0,n);
+  return {...base,records:rows,
+    summary:{...base.summary,recordedWaitRounds:waits.length,
+      waitJournalOnlySinceUpgrade:true}};
+ }
  let saved=null,pollAt=0,settlementError=null,lastSettlementCount=0,lastError=null;
  try{
   const old=JSON.parse(fs.readFileSync(stateFile,'utf8'));
@@ -62,6 +91,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
  const runner=createAdaptiveRunner({
   env:{...env,ADAPTIVE15_ENABLE_AI:key?'1':'0'},clock,fetcher,
   getHistoricalFeedback:features=>learner.feedback(features),
+  onWait:term=>storeWait(term),
   onLocked:(candidate,raw,at,window)=>{
    if(saved?.round===candidate.round)return; // never duplicate a prior lock
    // Use the ACTUAL clock; an earlier tick timestamp never permits late publishing.
@@ -96,6 +126,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
     lockedAt:lockedThisRound?saved.latest.lockedAt:null},
    lastSignal:saved?{round:saved.round,direction:saved.latest.direction}:null,
    noSignalAfterDeadline:true,
+   recordedWaitRounds:waits.length,
    lastDecision:shadow.lastCompleted,
    skippedRounds:shadow.skippedRounds,
    missedRounds:shadow.missedRounds,
@@ -135,7 +166,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
   }catch(e){settlementError=String(e?.message||e).slice(0,100)}
  }
  function tick(){void pollOfficial();return runner.tick()}
- return {tick,status,history:(limit)=>learner.history(limit)};
+ return {tick,status,history:withWaits};
 }
 export function serveAdaptiveProduction(provider,port=Number(process.env.LLM_SERVICE_PORT||13029)){
  const server=http.createServer((req,res)=>{

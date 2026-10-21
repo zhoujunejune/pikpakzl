@@ -1,0 +1,23 @@
+name: Audit actual live TRADE and NO_TRADE event outcomes read-only
+on:
+  push:
+    branches: [feat/deepseek-live-trade-value-20261021]
+    paths:
+      - .github/workflows/zl-live-trade-value-events-audit.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install approved existing Alibaba SWAS SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read actual DeepSeek quote decisions and trading outcomes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/live_trade_value_recent_readonly.py

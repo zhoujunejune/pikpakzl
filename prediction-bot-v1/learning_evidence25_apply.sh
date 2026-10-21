@@ -20,7 +20,7 @@ trap 'rm -rf "$t"' EXIT
 mkdir -p "$back" "$t/new"
 for n in $names;do
  curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE_SHA/prediction-bot-v1/$n" > "$t/$n"
- cmp -s "$app/$n" "$t/$n" || { echo "BASE_MISMATCH=$n";exit 15; }
+ cmp -s "$app/$n" "$t/$n" || { echo "BASE_MISMATCH=$n"; diff -u "$t/$n" "$app/$n" | head -120 || true; exit 15; }
  curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$LEARN_SHA/prediction-bot-v1/$n" > "$t/new/$n"
  "$node" --check "$t/new/$n"
  cp -p "$app/$n" "$back/$n"

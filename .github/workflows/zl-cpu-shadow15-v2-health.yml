@@ -1,0 +1,79 @@
+name: CPU 15s online learner V2 health and weight versions - read only
+on:
+  push:
+    branches: [feat/cpu-online-shadow15-v2-20261021]
+    paths: [.github/workflows/zl-cpu-shadow15-v2-health.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Observe current V2 shadow training and verify old models unchanged
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import urllib.request,json,subprocess,time
+          def get(port):
+           with urllib.request.urlopen('http://127.0.0.1:%s/api/status'%port,timeout=6) as r:return json.load(r)
+          m=get(13044);old=get(13041);prod=get(13029)
+          now=int(time.time()*1000)
+          d={'model':m.get('model'),'mode':m.get('mode'),
+           'captureWindowMs':m.get('captureWindowMs'),
+           'trainedWeightVersion':m.get('currentWeightVersion'),
+           'settledTrained':m.get('settledTrained'),
+           'observations':m.get('observations'),
+           'unsettled':m.get('unsettled'),
+           'recent50':m.get('recent50'),
+           'all':m.get('all'),
+           'lastWeightVersion':m.get('lastWeightVersion'),
+           'lastError':m.get('lastError'),
+           'lastMarketCaptureAgeSec':round((now-m['lastMarketAt'])/1000,1) if m.get('lastMarketAt') else None,
+           'readyForEvaluation':m.get('readyForEvaluation'),
+           'orders':m.get('orders'),
+           'oldShadowModel':old.get('model'),
+           'oldShadowOfficialTrained':old.get('settledTrained'),
+           'productionModel':prod.get('model'),
+           'productionHardDeadlineMs':prod.get('decisionWindowEndMs',0)-prod.get('round',0),
+           'productionNoLateSignals':prod.get('noSignalAfterDeadline')}
+          print('CPU_SHADOW15_V2_LIVE_HEALTH='+json.dumps(d,ensure_ascii=False,separators=(',',':')))
+          assert m.get('model')=='ZL_ONLINE_LOGISTIC_SHADOW15_V2'
+          assert m.get('orders') is False and m.get('captureWindowMs')==[8000,15000]
+          assert old.get('model')=='ZL_ONLINE_LOGISTIC_SHADOW_V1'
+          assert prod.get('model')=='DEEPSEEK_5M_V1'
+          assert prod.get('decisionWindowEndMs')-prod.get('round')==15000
+          INNER
+          """
+          cl=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+           access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+           region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cl.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+           instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+           name='zl-cpu-shadow15-v2-health-readonly',type='RunShellScript',
+           working_user='root',command_content=script,timeout=75)).body.invoke_id
+          for _ in range(36):
+           time.sleep(2)
+           r=cl.describe_invocation_result(sw.DescribeInvocationResultRequest(
+            region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+            invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            output=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            for line in output.splitlines():
+             if line.startswith('CPU_SHADOW15_V2_LIVE_HEALTH='):print(line)
+            if int(r.exit_code)!=0:raise RuntimeError('SHADOW15_V2_HEALTH_FAILED')
+            break
+          else:raise RuntimeError('SHADOW15_V2_HEALTH_TIMEOUT')
+          OUTER

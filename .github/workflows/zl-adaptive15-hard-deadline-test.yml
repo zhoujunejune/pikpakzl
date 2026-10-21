@@ -1,0 +1,29 @@
+name: Adaptive15 deadline WAIT and stale /signal unit regression
+on:
+  push:
+    branches: [fix/adaptive15-hard-deadline-wait-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-core.mjs
+      - prediction-bot-v1/deepseek-adaptive15-runner.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+      - prediction-bot-v1/deepseek-adaptive15-hard-deadline.test.mjs
+      - .github/workflows/zl-adaptive15-hard-deadline-test.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Confirm strict deadline, forced WAIT, persistence and all previous tests
+        run: |
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-core.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-production-adapter.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-hard-deadline.test.mjs

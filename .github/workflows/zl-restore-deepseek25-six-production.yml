@@ -1,0 +1,44 @@
+name: Restore DeepSeek production 25 seconds and up to six analyses
+on:
+  push:
+    branches: [rollback/deepseek25-six-calls-20261021]
+    paths:
+      - .github/workflows/zl-restore-deepseek25-six-production.yml
+      - prediction-bot-v1/restore_deepseek25_six.sh
+      - prediction-bot-v1/launch_restore_25s.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Check rollback syntax and original 25s six-call model
+        run: |
+          python -m py_compile prediction-bot-v1/launch_restore_25s.py
+          bash -n prediction-bot-v1/restore_deepseek25_six.sh
+          test "$(grep -c 'assert a.get.*decisionWindowEndMs.*25000' prediction-bot-v1/restore_deepseek25_six.sh)" -ge 1
+          test "$(grep -c 'maxCallsPerRound.*==6' prediction-bot-v1/restore_deepseek25_six.sh)" -ge 1
+  rollback:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Existing Alibaba Cloud SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Restore source-backed 25s 6-pass production backup and verify without orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/launch_restore_25s.py

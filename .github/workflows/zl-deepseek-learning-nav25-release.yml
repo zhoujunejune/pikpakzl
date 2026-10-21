@@ -3,7 +3,7 @@ on:
   push:
     branches: [feat/deepseek-learning-evidence25-20261021]
     paths:
-      - .github/workflows/zl-deepseek-learning-ui25-guarded-release.yml
+      - .github/workflows/zl-deepseek-learning-nav25-release.yml
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

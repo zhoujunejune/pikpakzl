@@ -2,7 +2,7 @@
 // official-outcome contextual gating. Independent of exchange order submission.
 export const ROUND_MS=300000;
 export const COLLECT_MS=120000;
-export const DEADLINE_MS=15000;
+export const DEADLINE_MS=25000;
 export const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
 const number=x=>typeof x==='number'&&Number.isFinite(x);
 const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
@@ -35,8 +35,8 @@ export function collect(w,tick){
  return false;
 }
 export function decodeAnalysis(raw,round,asOf,pass){
- if(!['initial','review'].includes(pass)||!Number.isSafeInteger(asOf)||
-    asOf>=round||asOf<round-COLLECT_MS)throw Error('NONCAUSAL_ANALYSIS');
+ if(!['initial','review','current'].includes(pass)||!Number.isSafeInteger(asOf)||
+    (pass==='current'?(asOf<round||asOf>=round+DEADLINE_MS):(asOf>=round||asOf<round-COLLECT_MS)))throw Error('NONCAUSAL_ANALYSIS');
  let j;try{j=JSON.parse(String(raw))}catch{throw Error('NON_JSON_LLM_OUTPUT')}
  if(!['UP','DOWN','WAIT'].includes(j?.direction))throw Error('INVALID_DIRECTION');
  const confidence=Number(j.confidence);
@@ -62,7 +62,8 @@ export function historyPolicy(feedback={}){
    basis:'Official-settled historical performance only; no LLM weight fine-tuning'};
 }
 export function analysisRequest(w,pass,now,features,feedback={}){
- if(now<w.round-COLLECT_MS||now>=w.round)throw Error('ANALYSIS_OUTSIDE_PRIOR_ROUND');
+ if(now<w.round-COLLECT_MS||now>=w.round+DEADLINE_MS||
+    (pass!=='current'&&now>=w.round)||(pass==='current'&&now<w.round))throw Error('ANALYSIS_OUTSIDE_PRIOR_ROUND');
  if(w.prior.length<5||w.prior.at(-1).at-w.prior[0].at<20000)
   throw Error('INSUFFICIENT_PRE_ROUND_SAMPLES');
  const last=w.prior.at(-1);
@@ -74,34 +75,36 @@ export function analysisRequest(w,pass,now,features,feedback={}){
   messages:[
    {role:'system',content:[
     'You are a professional evidence-based BTCUSDT 5m prediction analyst.',
-    'Decide a provisional direction for the NEXT Binance Prediction 5m round using ONLY observed past prices.',
-    'The next round open is UNKNOWN; never invent it, future ticks, official settlement, orders or probabilities.',
+    'Analyse the BTC Prediction 5m target round using real observed causal evidence; current phase includes actual round open and early ticks.',
+    'Before the round starts the opening price is UNKNOWN; in the current phase use only observed round open and fresh ticks. Never invent future prices or official settlement.',
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
     'Use RSI MACD EMA ATR 1m/5m and current causal BTC data as fallible indicators, not deterministic signals.',
     'A second review may revise the first: change stance when new observed evidence supports it, otherwise explain why.',
-    'For each target round you MUST select the most likely UP or DOWN from the available credible evidence, even when evidence is weak or conflicting.',
-    'Do NOT choose WAIT only because uncertainty is high, recent predictions missed, markets are noisy, or your confidence is low.',
+    'Independently select indicators, reasoning, confidence and direction. Prefer evidence-supported UP or DOWN; WAIT is permitted when reliable evidence does not justify a direction.',
+    'No algorithmic indicator weights, historical vetoes or mandatory directional flips will override your decision.',
     'Express uncertainty honestly in confidence, risk and reason; never claim that an uncertain guess is a high-probability opportunity.',
     'Never invent market data or future prices. If the supplied market data cannot be interpreted, do not manufacture an analysis.',
-    'Return strict compact JSON with direction restricted to UP or DOWN: {"direction":"UP","confidence":0.51,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}.',
+    'Return strict compact JSON with UP, DOWN or WAIT: {"direction":"UP","confidence":0.51,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}.',
     'Confidence is SUBJECTIVE, not a calibrated likelihood of winning. Prioritize avoiding unjustified trades.'
    ].join(' ')},
    {role:'user',content:JSON.stringify({
     targetRound:w.round,phase:pass,observedThrough:last.at,
     firstSampleAt:w.prior[0].at,
     priorTwoMinuteTicks:w.prior.slice(-120),
+    currentRoundTicks:pass==='current'?w.early.slice(-25):[],
+    decisionDeadlineMs:w.round+DEADLINE_MS,
     indicators:features,
     priorModelAnalysis:latest,
     verifiedHistoricalExperience:feedbackSafe,
-    requireDirectionalForecast:true,
+    requireDirectionalForecast:false,
     technicalFailureMustNotBeGuessed:true
    })}
   ]
  };
 }
 export function registerAnalysis(w,decision){
- if(decision.round!==w.round||!['initial','review'].includes(decision.pass)||
-   decision.at>=w.round)throw Error('ANALYSIS_ROUND_INCORRECT');
+ if(decision.round!==w.round||!['initial','review','current'].includes(decision.pass)||
+   (decision.pass==='current'?(decision.at<w.round||decision.at>=w.round+DEADLINE_MS):decision.at>=w.round))throw Error('ANALYSIS_ROUND_INCORRECT');
  if(w.passes.some(x=>x.pass===decision.pass))throw Error('DUPLICATE_PASS');
  w.passes.push(decision);return decision;
 }
@@ -109,13 +112,13 @@ export function closeExpiredWindow(w,now){
  if(w.final||w.terminal||now<w.round+DEADLINE_MS)return false;
  const reason=w.provisionalWait||w.skips.at(-1)||w.lastModelError||'NO_CONFIRMED_SIGNAL';
  w.terminal={round:w.round,status:'WAIT',direction:'WAIT',
-  reason:'DEADLINE_15S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
+  reason:'DEADLINE_25S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
   signalGenerated:false,orders:false};
  return true;
 }
 function recordWait(w,reason,now){
  // A temporary WAIT is not a final decision. Continue observing real ticks
- // until the strict 15-second cutoff, without emitting an order signal.
+ // until the strict 25-second cutoff, without emitting an order signal.
  w.provisionalWait=reason;
  if(w.skips.at(-1)!==reason)w.skips.push(reason);
  return {ok:false,skip:true,provisional:true,round:w.round,
@@ -137,36 +140,27 @@ export function finalize(w,now,feedback={}){
   throw Error('INCOHERENT_OPEN_PRICE');
  const first=w.passes.find(x=>x.pass==='initial');
  const review=w.passes.find(x=>x.pass==='review');
+ const current=w.passes.find(x=>x.pass==='current');
  // Prefer the fresher valid DeepSeek analysis; if a legacy/errant review
  // chooses WAIT, retain the earlier genuine directional forecast instead.
  // Never fabricate a direction when BOTH model passes are unusable.
- const chosen=[review,first].find(x=>x&&(x.direction==='UP'||x.direction==='DOWN'));
- if(!chosen){
-  if(review?.direction==='WAIT'||first?.direction==='WAIT')
-   return recordWait(w,'NO_VALID_DIRECTION_FROM_DEEPSEEK',now);
-  throw Error('MISSING_DEEPSEEK_ANALYSIS');
- }
+ const newest=current||review||first;
+ if(newest?.direction==='WAIT')return recordWait(w,'DEEPSEEK_CHOSE_WAIT',now);
+ const chosen=[current,review,first].find(x=>x&&(x.direction==='UP'||x.direction==='DOWN'));
+ if(!chosen)throw Error('MISSING_DEEPSEEK_ANALYSIS');
  const fromOpenBps=(latest.price/open-1)*10000;
  const priorBps=(prior.at(-1).price/prior[0].price-1)*10000;
- const marketScore=clamp(fromOpenBps/8,-1,1);
- const oldScore=clamp(priorBps/20,-1,1);
- const modelScore=(chosen.direction==='UP'?1:-1);
- // DeepSeek is the single largest influence, as explicitly requested.
- // Uncalibrated research coefficients; NOT a promise of profitability.
- const composite=.60*modelScore+.30*marketScore+.10*oldScore;
- const tentative=composite>0?'UP':'DOWN';
+ // DeepSeek alone decides the direction. No program-side market vote or reversal.
+ const tentative=chosen.direction;
+ const composite=chosen.confidence; // subjective, not a calibrated probability
  const policy=historyPolicy(feedback);
  // User-selected DIRECTIONAL policy: soft confidence, historical miss rates and
  // 60/30/10 score all remain diagnostics, not blockers. Only verified technical
  // invalidity can block a round. This can INCREASE mistakes and trade exposure.
  const requiredModelConfidence=.55+policy.confidencePenalty[tentative];
  const uncertainty=chosen.confidence<requiredModelConfidence?'LOW_MODEL_CONFIDENCE':
-   Math.abs(composite)<.25?'LOW_DIRECTIONAL_EVIDENCE':
-   (review?.direction==='WAIT'?'REVIEW_DECLINED_FALLBACK_INITIAL':
-    'DIRECTIONAL_JUDGMENT');
- // Preserve the actual LLM direction even when the spot proxy temporarily
- // disagrees: market and prior trends cannot invert a .60-weighted ±1 vote.
- if(tentative!==chosen.direction)throw Error('INVALID_DIRECTIONAL_SCORE');
+   (review?.direction==='WAIT'?'REVIEW_DECLINED_FALLBACK_INITIAL':'DEEPSEEK_AUTONOMOUS_JUDGMENT');
+ // Real price and historical data inform DeepSeek but never override its decision.
  const result={ok:true,model:'DEEPSEEK_ADAPTIVE15_EXPERIENCE_V1',
   mode:'SHADOW_SIGNAL_ONLY',round:w.round,generatedAt:now,
   expiryAt:w.round+DEADLINE_MS,orders:false,productionIntegration:false,
@@ -176,7 +170,7 @@ export function finalize(w,now,feedback={}){
    fromOpenBps:Number(fromOpenBps.toFixed(3)),
    lastTwoMinuteBps:Number(priorBps.toFixed(3)),
    firstAnalysis:first?.direction||null,reviewAnalysis:review?.direction||null,
-   selectedAnalysis:chosen.pass,modelConfidence:chosen.confidence,
+   currentAnalysis:current?.direction||null,selectedAnalysis:chosen.pass,modelConfidence:chosen.confidence,
    confidenceIsCalibrated:false,policy,hybridScore:Number(composite.toFixed(4)),
    historicalPenaltyAppliedAsBlock:false,
    reason:chosen.reason,earlySamples:early.length,priorSamples:prior.length}};
@@ -187,6 +181,7 @@ export function windowStatus(w,now){
  return {targetRound:w.round,prewarmBegin:w.round-COLLECT_MS,
   firstAnalysis:w.passes.find(x=>x.pass==='initial')?.direction||null,
   revisedAnalysis:w.passes.find(x=>x.pass==='review')?.direction||null,
+  currentAnalysis:w.passes.find(x=>x.pass==='current')?.direction||null,
   priorSamples:w.prior.length,earlySamples:w.early.length,modelCalls:w.modelCalls,
   skipCount:w.skips.length,lastSkip:w.skips.at(-1)||null,
   provisionalWait:w.provisionalWait,

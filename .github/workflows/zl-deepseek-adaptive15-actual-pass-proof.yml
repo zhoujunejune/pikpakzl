@@ -1,0 +1,70 @@
+name: Verify live adaptive15 two DeepSeek reviews and optional WAIT - corrected read-only audit
+on:
+  push:
+    branches: [feat/deepseek-adaptive15-experience-20261021]
+    paths: [.github/workflows/zl-deepseek-adaptive15-actual-pass-proof.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Observe the actual provider's exposed two-pass status over next full round
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,time,urllib.request
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          host='https://prediction.47-237-188-69.sslip.io'
+          def read(route):
+            req=urllib.request.Request(host+route,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET')
+            with urllib.request.urlopen(req,timeout=20) as r:return json.load(r)
+          now=time.time()
+          target=(int(now//300)+1)*300
+          if target-now<140:target+=300
+          print('ADAPTIVE15_AUDIT_TARGET_UNIX='+str(target),flush=True)
+          snapshots=[]
+          for sec in (-34,-12,16):
+            time.sleep(max(0,target+sec-time.time()))
+            s=read('/deepseek/api/status')
+            t=read('/api/status')
+            signal=s.get('signal') or {}
+            lock=signal.get('latest') or {}
+            result={
+             'elapsedSec':sec,
+             'targetRound':target*1000,
+             'providerRound':s.get('round'),
+             'analysisTargetRound':s.get('analysisTargetRound'),
+             'first':s.get('analysisFirstDirection'),
+             'review':s.get('analysisReviewDirection'),
+             'modelCalls':s.get('analysisModelCalls'),
+             'priorSamples':s.get('analysisPreviousRoundSnapshots'),
+             'earlySamples':s.get('analysisEarlySnapshots'),
+             'reasonToWait':s.get('analysisLastSkip') or s.get('waitReason'),
+             'error':s.get('error'),
+             'lockDirection':lock.get('direction'),
+             'lockRound':signal.get('round'),
+             'lockElapsedMs':lock.get('lockedAt',0)-target*1000 if lock else None,
+             'decisionMethod':lock.get('decisionMethod'),
+             'cutoffMs':s.get('decisionWindowEndMs',0)-s.get('round',0),
+             'autoFollow':t.get('enabled')
+            }
+            print('ADAPTIVE15_CORRECTED_LIVE_SNAPSHOT='+json.dumps(result,ensure_ascii=False,separators=(',',':')),flush=True)
+            snapshots.append(result)
+            assert result['cutoffMs']==15000
+            assert result['autoFollow'] is False
+            assert result['analysisTargetRound']==target*1000
+          end=snapshots[-1]
+          assert end['modelCalls'] in (1,2)
+          if end['lockRound']==target*1000 and end['lockDirection'] in ('UP','DOWN'):
+           assert 0<=end['lockElapsedMs']<15000
+           assert end['decisionMethod']=='DEEPSEEK_TWO_PASS_ADAPTIVE15_V1'
+           print('ADAPTIVE15_LIVE_OUTCOME=LOCKED_BEFORE_15_SECONDS',flush=True)
+          else:
+           print('ADAPTIVE15_LIVE_OUTCOME=WAIT_OR_INSUFFICIENT_EVIDENCE_NO_SIGNAL',flush=True)
+          print('ADAPTIVE15_FIRST_AND_REVIEW_DIRECTIONS='+json.dumps({
+           'first':end['first'],'review':end['review'],'calls':end['modelCalls']},separators=(',',':')),flush=True)
+          PY

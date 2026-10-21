@@ -1,0 +1,26 @@
+name: DeepSeek adaptive15 dual-review selective learning - offline regression
+on:
+  push:
+    branches: [feat/deepseek-adaptive15-experience-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-*.mjs
+      - .github/workflows/zl-deepseek-adaptive15-regression.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify strict no-forced-signals, two model passes and state/history integrity
+        run: |
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-core.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-production-adapter.test.mjs

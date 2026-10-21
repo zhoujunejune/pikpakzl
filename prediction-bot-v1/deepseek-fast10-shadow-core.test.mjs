@@ -68,7 +68,13 @@ test('must get fresh actual early ticks and stable round open; never reuse last 
  assert.throws(()=>finalize(w,target+8500),/NEW_ROUND_TICK_STALE/);
  w.early=Array.from({length:9},(_,i)=>({at:target+i*1000,price:68000+i,open:68000}));
  w.early.at(-1).open=68008;
- assert.throws(()=>finalize(w,target+8500),/ROUND_OPEN_PRICE_CHANGED/);
+ const d=finalize(w,target+8500);
+ assert.equal(d.latest.openPrice,68008);
+ assert.ok(d.latest.roundOpenRevisionBps>0);
+ const badlyRevised=prepare();
+ for(let i=0;i<9;i++)observe(badlyRevised,normalizeMarket(fake(target+i*1000,68000+i,68000,target),target+i*1000));
+ badlyRevised.early.at(-1).open=68800;
+ assert.throws(()=>finalize(badlyRevised,target+8500),/ROUND_OPEN_REVISION_TOO_LARGE/);
 });
 test('shadow-only status explains coverage and deadline',()=>{
  const w=prepare();const s=stateInfo(w,target+6000);

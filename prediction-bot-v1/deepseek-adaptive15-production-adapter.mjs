@@ -55,6 +55,10 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
   String(env.DEEPSEEK_QUALITY_JOURNAL_FILE||path.join(path.dirname(stateFile),'quality-v1.json')),
   clock,String(env.DEEPSEEK_VERIFIED_ORDER_AUDIT_FILE||''));
  let qualityError=null;
+ // Recover only authentic original lock-time snapshots: no imputation or hindsight data.
+ let originalSnapshotsRecovered=0;
+ try{originalSnapshotsRecovered=quality.backfillOriginalSnapshots(learner.qualitySnapshotEvidence())}
+ catch(e){qualityError='QUALITY_ORIGINAL_SNAPSHOT_RECOVERY_'+String(e?.message||e).slice(0,65)}
  const waitFile=String(env.DEEPSEEK_WAIT_JOURNAL_FILE||path.join(path.dirname(stateFile),'wait-rounds.json'));
  let waits=[];
  try{
@@ -118,7 +122,8 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    persist(signal);saved=signal;
    try{learner.record(signal,features,window?.modelCalls||1)}
    catch(e){settlementError='RECORD_'+String(e?.message||e).slice(0,70)}
-   try{quality.record(signal,features,{llmPasses:window?.modelCalls||1})}
+   try{quality.record(signal,features,{llmPasses:window?.modelCalls||1,
+    experienceEvidence:window?.experienceEvidence??[]})}
    catch(e){qualityError='QUALITY_RECORD_'+String(e?.message||e).slice(0,70)}
   }});
  function stats(){try{return learner.summary()}catch{return {officialSamples:0,error:'LEARNING_FILE_ERROR'}}}
@@ -144,6 +149,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    noSignalAfterDeadline:true,
    recordedWaitRounds:waits.length,
    strategyQuality:quality.summary(),
+   originalSnapshotsRecovered,
    qualityError,
    lastDecision:shadow.lastCompleted,
    skippedRounds:shadow.skippedRounds,
@@ -192,7 +198,22 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
   }catch(e){settlementError=String(e?.message||e).slice(0,100)}
  }
  function tick(){void pollOfficial();return runner.tick()}
- return {tick,status,history:withWaits,quality:()=>quality.summary()};
+ function learningEffect(){
+  const q=quality.summary(),l=learner.summary();
+  return {ok:true,model:ID,providerModel:model,
+   evidence:q.learningEvidence,
+   errors:q.errors,
+   experiment:q.controlledExperiment,
+   comparableOfficialCases:l.comparableOfficialCases??0,
+   similarCaseMinimum:l.similarCaseMinimum??50,
+   officialSamples:l.allOfficialSamples??0,
+   originalSnapshotsRecovered,
+   historyRole:'Historical examples are prompt context, not weight updates',
+   controlledComparisonVerdict:'NOT_PROVEN',
+   additionalApiCalls:0,productionDirectionUnaffected:true,
+   maxCallsPerRound:6,hardDecisionDeadlineMs:25000};
+ }
+ return {tick,status,history:withWaits,quality:()=>quality.summary(),learningEffect};
 }
 export function serveAdaptiveProduction(provider,port=Number(process.env.LLM_SERVICE_PORT||13029)){
  const server=http.createServer((req,res)=>{
@@ -201,6 +222,7 @@ export function serveAdaptiveProduction(provider,port=Number(process.env.LLM_SER
   let data,code=200;
   if(['/healthz','/status','/api/status'].includes(u.pathname))data=provider.status();
   else if(u.pathname==='/api/quality')data=provider.quality();
+  else if(u.pathname==='/api/learning-effect')data=provider.learningEffect();
   else if(u.pathname==='/api/history'){
    data=provider.history(u.searchParams.get('limit'));code=data?.ok?200:503;
   }else if(u.pathname==='/signal'){

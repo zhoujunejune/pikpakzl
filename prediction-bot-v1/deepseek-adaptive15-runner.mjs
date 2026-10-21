@@ -91,6 +91,14 @@ export function createAdaptiveRunner({
    const feedback=typeof getHistoricalFeedback==='function'?
      getHistoricalFeedback(features):{};
    payload=analysisRequest(w,pass,now,features,feedback);
+   // Prompt evidence offered, not demonstrated comprehension or predictive lift.
+   w.experienceEvidence??=[];
+   w.experienceEvidence.push({pass,at:now,
+    historyOffered:feedback?.usable===true,
+    similarCaseCount:feedback?.episodicMemory?.usable===true?
+      (feedback.episodicMemory.cases?.length||0):0,
+    errorPatternsOffered:feedback?.officialErrorPatterns?.usable===true?
+      (feedback.officialErrorPatterns.patterns?.length||0):0});
   }catch(e){w.lastModelError='INPUT_'+desc(e);lastError=w.lastModelError;return}
   inFlight=true;
   if(pass!=='current')w.attemptedPasses.push(pass);

@@ -81,6 +81,29 @@ for line in p.stdout.splitlines():
   if event=='auto_order_attempt_result':
    event=event+(':OK' if z.get('ok') else ':FAIL')
   types[event]+=1
+# Compare lock-time buckets using the same officially settled predictions.
+def latency_table(rows):
+ out={}
+ for lo,hi,tag in [(0,12000,'under12s'),(12000,20000,'12-20s'),(20000,24000,'20-24s'),(24000,25001,'24-25s')]:
+  a=[r for r in rows if isinstance(r.get('signalLatencyMs'),(int,float)) and lo<=r['signalLatencyMs']<hi]
+  out[tag]={'n':len(a),'correct':sum(x['direction']==x['actual'] for x in a),
+            'rate':round(sum(x['direction']==x['actual'] for x in a)/len(a),4) if a else None}
+ return out
+lateImpact={'recent100':latency_table(settled[-100:]),
+            'previous100':latency_table(settled[-200:-100]),
+            'recent150':latency_table(settled[-150:])}
+# Measure categorical interactions: UP/DOWN accuracy by observed market regime.
+def cross_table(rows):
+ out={}
+ for rg in ('TREND_UP','TREND_DOWN','MIXED','UNKNOWN'):
+  out[rg]={}
+  for direction in ('UP','DOWN'):
+   a=[r for r in rows if r.get('featureRegime')==rg and r['direction']==direction]
+   out[rg][direction]={'n':len(a),'hits':sum(x['direction']==x['actual'] for x in a),
+     'rate':round(sum(x['direction']==x['actual'] for x in a)/len(a),4) if a else None}
+ return out
+cross={'recent50':cross_table(settled[-50:]),'recent150':cross_table(settled[-150:]),
+       'previous100':cross_table(settled[-200:-100])}
 out={'checkedAtUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),
  'serviceActive':{x:subprocess.run(['systemctl','is-active',x],capture_output=True,text=True).stdout.strip() for x in ['zl-prediction-deepseek5.service','zl-prediction-trade.service']},
  'followEnabled':t.get('enabled'),'tradeMode':t.get('mode'),'model':feed,
@@ -88,7 +111,7 @@ out={'checkedAtUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),
  'summaryByHorizon':sums,'daily':daily,'consecutiveRecentMisses':streak,
  'latestTenSettled':[{'round':r['round'],'direction':r['direction'],'actual':r['actual'],
    'hit':r['direction']==r['actual'],'regime':r.get('featureRegime'),'latencyMs':r.get('signalLatencyMs')} for r in settled[-10:]],
- 'quality':quality,'learningEffectEvidence':e.get('evidence'),'journalEvents24h':dict(types),
+ 'quality':quality,'timingCorrelations':lateImpact,'trendDirectionCross':cross,'learningEffectEvidence':e.get('evidence'),'journalEvents24h':dict(types),
  'historyEndpointOk':h.get('ok') is True,'sourceType':'OFFICIAL_SETTLEMENT_ONLY_FORECAST_NOT_TRADES'}
 print('ZL_DEEPSEEK_ACCURACY_READONLY='+json.dumps(out,ensure_ascii=False,separators=(',',':')))
 PY

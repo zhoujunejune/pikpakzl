@@ -47,8 +47,9 @@ jobs:
           print('FAST10_POSTHOTFIX_REAL_ROUND='+json.dumps(report,ensure_ascii=False,separators=(',',':')),flush=True)
           assert report['decisionWindowMs']==10000
           assert report['followEnabled'] is False
-          if lock and sig.get('round')==target*1000 and lock.get('direction') in ('UP','DOWN') and
-             0<=report['elapsedLockMs']<10000 and lock.get('decisionMethod')=='HYBRID_PREWARM_FAST10_V1':
+          if (lock and sig.get('round')==target*1000 and lock.get('direction') in ('UP','DOWN')
+              and 0<=report['elapsedLockMs']<10000
+              and lock.get('decisionMethod')=='HYBRID_PREWARM_FAST10_V1'):
              print('FAST10_REAL_FULLROUND_LOCK_LT10S=true',flush=True)
           else:raise SystemExit('FAST10_REAL_FULLROUND_NO_VERIFIED_SIGNAL')
           PY

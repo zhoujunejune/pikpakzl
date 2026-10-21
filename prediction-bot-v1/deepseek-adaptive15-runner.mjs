@@ -13,7 +13,7 @@ const API='https://api.deepseek.com/chat/completions';
 const desc=e=>String(e?.message||e||'UNKNOWN').slice(0,120);
 export function createAdaptiveRunner({
  env=process.env,clock=()=>Date.now(),fetcher=fetch,
- onLocked=null,getHistoricalFeedback=null
+ onLocked=null,onWait=null,getHistoricalFeedback=null
 }={}){
  const enabled=env.ADAPTIVE15_ENABLE_AI==='1';
  const key=String(env.DEEPSEEK_API_KEY||'');
@@ -27,6 +27,10 @@ export function createAdaptiveRunner({
   if(!current)return;
   closeExpiredWindow(current,now);
   if(current.terminal&&lastCountedRound!==current.round){
+   if(typeof onWait==='function'){
+    try{onWait({...current.terminal})}
+    catch(e){lastError='WAIT_JOURNAL_WRITE_FAILED_'+desc(e)}
+   }
    lastCountedRound=current.round;
    skipped++;
    if(current.terminal.reason==='DEADLINE_15S_EXPIRED')missed++;

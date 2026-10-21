@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {classifyOfficialMistake,summarizeMistakes,pastErrorHints} from './deepseek-adaptive15-error-attribution.mjs';
+import {caseSnapshot} from './deepseek-5m-episodic-memory.mjs';
 const good=s=>s==='UP'||s==='DOWN';
 const finite=v=>typeof v==='number'&&Number.isFinite(v);
 const OFFICIAL='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
@@ -30,7 +31,7 @@ export function makeQualityStore(file,clock=()=>Date.now(),orderAuditFile=''){
     (features.oneMinute.ema9>features.oneMinute.ema21&&features.fiveMinute.ema9>features.fiveMinute.ema21?
      'TREND_UP':features.oneMinute.ema9<features.oneMinute.ema21&&features.fiveMinute.ema9<features.fiveMinute.ema21?
       'TREND_DOWN':'MIXED'):'UNKNOWN',
-   caseFeatures:null, // Actual richer snapshots remain in original official learner.
+   caseFeatures:caseSnapshot(features), // Causal immutable lock-time feature snapshot.
    decisionContext:{
     prewarmDirection:d.prewarmDirection||null,
     reviewDirection:d.reviewDirection||null,
@@ -41,6 +42,11 @@ export function makeQualityStore(file,clock=()=>Date.now(),orderAuditFile=''){
     observedMarketAt:Number(d.marketAt)||null,
     llmPasses:Number(extra.llmPasses)||null,
    },
+   experienceEvidence:Array.isArray(extra.experienceEvidence)?extra.experienceEvidence.slice(0,6).map(x=>({
+    pass:String(x.pass||'').slice(0,16),at:Number(x.at)||null,
+    historyOffered:x.historyOffered===true,
+    similarCaseCount:Math.max(0,Math.min(4,Number(x.similarCaseCount)||0)),
+    errorPatternsOffered:Math.max(0,Math.min(3,Number(x.errorPatternsOffered)||0))})):[],
    officialSource:null,actual:null,settledAt:null,hit:null,errorTags:[]});
   records=records.slice(-2000);persist();return true;
  }
@@ -64,6 +70,22 @@ export function makeQualityStore(file,clock=()=>Date.now(),orderAuditFile=''){
    r.errorTags=classifyOfficialMistake(r).tags;n++;
   }
   if(n)persist();return n;
+ }
+ function backfillOriginalSnapshots(original=[]){
+  if(!Array.isArray(original))return 0;
+  const byRound=new Map(original.filter(x=>Number.isSafeInteger(x.round)).map(x=>[x.round,x]));
+  let updated=0;
+  for(const p of records){
+   if(Array.isArray(p.caseFeatures)&&p.caseFeatures.length===12)continue;
+   const old=byRound.get(p.round);
+   if(!old||old.direction!==p.direction||old.signalAt!==p.signalAt||
+     !Array.isArray(old.caseFeatures)||old.caseFeatures.length!==12)continue;
+   p.caseFeatures=old.caseFeatures.slice();
+   if(good(p.actual))p.errorTags=classifyOfficialMistake(p).tags;
+   updated++;
+  }
+  if(updated)persist();
+  return updated;
  }
  function mistakeReport(){
   const official=records.filter(x=>x.officialSource===OFFICIAL&&good(x.actual));
@@ -92,6 +114,12 @@ export function makeQualityStore(file,clock=()=>Date.now(),orderAuditFile=''){
  }
  function summary(){
   const mistakes=mistakeReport(),profit=actualProfitAudit();
+  const withSnapshots=records.filter(x=>Array.isArray(x.caseFeatures)&&x.caseFeatures.length===12);
+  const settledCases=withSnapshots.filter(x=>x.officialSource===OFFICIAL&&good(x.actual));
+  const tracked=records.filter(x=>Array.isArray(x.experienceEvidence)&&x.experienceEvidence.length>0);
+  const offeredHistory=tracked.filter(x=>x.experienceEvidence.some(t=>t.historyOffered));
+  const offeredSimilar=tracked.filter(x=>x.experienceEvidence.some(t=>t.similarCaseCount>0));
+  const offeredError=tracked.filter(x=>x.experienceEvidence.some(t=>t.errorPatternsOffered>0));
   return {strategyVersion:'ADAPTIVE15_QUALITY_V1',
    signal:{predictions:mistakes.verifiedPredictions,
     officiallySettled:mistakes.officiallySettled,
@@ -101,7 +129,15 @@ export function makeQualityStore(file,clock=()=>Date.now(),orderAuditFile=''){
    errors:mistakes,
    economics:profit,
    lastOfficialUpdateAt:Math.max(0,...records.filter(x=>x.officialSource===OFFICIAL).map(x=>x.settledAt)),
-   learningType:'CASE_MEMORY_AND_RULE_FEEDBACK_NOT_LLM_WEIGHT_TRAINING'};
+   learningType:'CASE_MEMORY_AND_RULE_FEEDBACK_NOT_LLM_WEIGHT_TRAINING',
+   learningEvidence:{allRecordedPredictions:records.length,featureSnapshotCount:withSnapshots.length,
+    settledFeatureSnapshots:settledCases.length,modelRequestsAuditedRounds:tracked.length,
+    roundsWithHistoricalFeedbackOffered:offeredHistory.length,
+    roundsWithSimilarCasesOffered:offeredSimilar.length,
+    roundsWithErrorPatternsOffered:offeredError.length,
+    claim:'Proves prompts were prepared with historical evidence, not that DeepSeek used it or improved accuracy'},
+   controlledExperiment:{state:'NOT_STARTED_NO_EXTRA_API_CALLS',pairedRounds:0,
+    effectVerified:false,reason:'Requires paired memory-on versus memory-off DeepSeek predictions on same-time snapshots and prospective settlement'} };
  }
- return {record,settle,feedback,summary,readOnlyRecords:()=>records.map(x=>({...x}))};
+ return {record,settle,feedback,summary,backfillOriginalSnapshots,readOnlyRecords:()=>records.map(x=>({...x}))};
 }

@@ -80,12 +80,12 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
     'Choose indicators, historical examples and analytic methods independently based on their relevance; none is mandatory.',
     'You may revise earlier opinions when new credible evidence supports doing so; do not reverse without evidence.',
-    'Independently select indicators, reasoning, confidence and direction. Prefer evidence-supported UP or DOWN; WAIT is permitted when reliable evidence does not justify a direction.',
-    'No algorithmic indicator weights, historical vetoes or mandatory directional flips will override your decision.',
-    'Express uncertainty honestly in confidence, risk and reason; never claim that an uncertain guess is a high-probability opportunity.',
+    'You independently select all indicators and reasoning. With authenticated fresh BTC data, the task is to choose the marginally more likely UP or DOWN, even when uncertainty is high; describe uncertainty honestly.',
+    'No fixed indicator weights, statistical vetoes or forced reversals override your direction. WAIT is reserved for genuinely unusable/contradictory market data or technical failures, not weak confidence or noisy markets.',
+    'If earlier passes returned WAIT despite reliable current data, reconsider the genuine current round open and latest ticks instead of repeating WAIT. State uncertainty and risk candidly; do not exaggerate your edge.',
     'Never invent market data or future prices. If the supplied market data cannot be interpreted, do not manufacture an analysis.',
     'Return compact JSON {"direction":"UP","confidence":0.51,"continueAnalysis":false,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}. Choose continueAnalysis=true only if more fresh market observations could improve the decision before the deadline.',
-    'Confidence is SUBJECTIVE, not a calibrated likelihood of winning. Prioritize avoiding unjustified trades.'
+    'Confidence is SUBJECTIVE, not a calibrated win probability; a directional prediction is NOT an instruction to trade or proof of positive expected value.'
    ].join(' ')},
    {role:'user',content:JSON.stringify({
     targetRound:w.round,phase:pass,observedThrough:pass==='current'?(w.early.at(-1)?.at??last.at):last.at,

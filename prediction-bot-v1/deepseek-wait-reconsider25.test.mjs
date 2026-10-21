@@ -38,9 +38,10 @@ async function scenario(directionForCurrent){
  return {calls,locked,terminal,status:runner.status()};
 }
 test('repeated WAIT triggers additional real DeepSeek reviews and a genuine UP lock before 25 seconds',async()=>{
- const x=await scenario(i=>i<4?'WAIT':'UP');
+ const x=await scenario(i=>i<3?'WAIT':'UP');
  const cur=x.calls.filter(c=>c.phase==='current');
- assert.ok(cur.length>=5,JSON.stringify(cur));
+ assert.equal(cur.length,4,JSON.stringify(cur));
+ assert.equal(x.calls.length,6);
  assert.equal(x.locked.length,1);
  assert.equal(x.locked[0].latest.direction,'UP');
  assert.equal(x.locked[0].latest.selectedAnalysis,'current');
@@ -50,7 +51,8 @@ test('repeated WAIT triggers additional real DeepSeek reviews and a genuine UP l
 });
 test('persistent DeepSeek WAIT never manufactures a direction, and stops by +25 seconds',async()=>{
  const x=await scenario(()=>'WAIT');
- assert.ok(x.calls.filter(c=>c.phase==='current').length>=4);
+ assert.equal(x.calls.filter(c=>c.phase==='current').length,4);
+ assert.equal(x.calls.length,6);
  assert.equal(x.locked.length,0);
  assert.equal(x.terminal.length,1);
  assert.equal(x.terminal[0].reason,'DEADLINE_25S_EXPIRED');

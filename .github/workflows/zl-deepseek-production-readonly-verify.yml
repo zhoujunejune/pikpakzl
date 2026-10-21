@@ -1,0 +1,50 @@
+name: DeepSeek production current-state read-only verification
+on:
+  push:
+    branches: [feat/deepseek-decision-audit-20261021]
+    paths: [.github/workflows/zl-deepseek-production-readonly-verify.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Verify active Alibaba DeepSeek model via existing authenticated HTTPS GET
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,urllib.request,base64,json
+          password=os.environ.get('ZL_PANEL_PASSWORD')
+          if not password:raise SystemExit('PANEL_SECRET_NOT_CONFIGURED')
+          root='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          def read(uri):
+            req=urllib.request.Request(root+uri,headers={'Authorization':auth,'Cache-Control':'no-store'})
+            with urllib.request.urlopen(req,timeout=22) as r:
+              if r.status!=200:raise RuntimeError('READ_HTTP_'+str(r.status))
+              return json.load(r)
+          s=read('/deepseek/api/status')
+          choice=read('/api/order-signal-model')
+          h=read('/deepseek/api/history?limit=10')
+          safe={
+           'model':s.get('model'),'providerModel':s.get('providerModel'),
+           'configured':s.get('configured'),'maxCallsPerRound':s.get('maxCallsPerRound'),
+           'windowMs':s.get('decisionWindowEndMs',0)-s.get('round',0),
+           'reasoning':s.get('reasoning'),
+           'featureReady':s.get('featureReady'),
+           'learningOfficialSamples':(s.get('learning') or {}).get('allOfficialSamples'),
+           'learningPredictions':(s.get('learning') or {}).get('predictions'),
+           'modelWeightsFineTuned':(s.get('learning') or {}).get('modelWeightsFineTuned'),
+           'decisionJournalEnabled':(s.get('decisionJournal') or {}).get('enabled'),
+           'historicalRecordsFetched':len(h.get('records') or []),
+           'productionSelectedModel':choice.get('model'),
+           'historyOk':h.get('ok'),'statusOk':s.get('ok')
+          }
+          print('PROD_READONLY_DEEPSEEK_AUDIT='+json.dumps(safe,ensure_ascii=False,separators=(',',':')))
+          assert safe['model']=='DEEPSEEK_5M_V1','UNEXPECTED_PROD_LLM'
+          assert safe['productionSelectedModel']=='DEEPSEEK_5M_V1','UNEXPECTED_PROD_ROUTER'
+          assert safe['windowMs']==270000,'UNEXPECTED_DECISION_WINDOW'
+          PY

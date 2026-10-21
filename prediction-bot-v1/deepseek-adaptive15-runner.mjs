@@ -128,10 +128,13 @@ export function createAdaptiveRunner({
      // Only DeepSeek decides whether another review improves the evidence.
      // Never hold a finished judgment until an arbitrary 8s/15s milestone.
      const latestCurrent=w.passes.filter(x=>x.pass==='current').at(-1);
-     const wantsMore=!latestCurrent||latestCurrent.continueAnalysis;
+     // WAIT is not a final answer while reliable market data and time remain.
+     // Re-ask the real DeepSeek model; never fabricate a direction or override
+     // its most recent real directional decision.
+     const wantsMore=!latestCurrent||latestCurrent.continueAnalysis||latestCurrent.direction==='WAIT';
      if(wantsMore&&!inFlight&&now<w.round+DEADLINE_MS-1200)
       void analyze(w,'current',raw,now);
-     const readyToLock=latestCurrent&&!latestCurrent.continueAnalysis;
+     const readyToLock=latestCurrent&&!latestCurrent.continueAnalysis&&latestCurrent.direction!=='WAIT';
      const finalChance=now>=w.round+DEADLINE_MS-1100;
      if(now>=w.round&&(readyToLock||finalChance))try{
       let feedback={};

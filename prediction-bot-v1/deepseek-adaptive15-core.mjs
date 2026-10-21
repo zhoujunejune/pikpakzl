@@ -127,11 +127,11 @@ function recordWait(w,reason,now){
 export function finalize(w,now,feedback={}){
  if(w.final)throw Error('ALREADY_LOCKED'); 
  if(w.terminal)return {ok:false,skip:true,round:w.round,direction:'WAIT',reason:w.terminal.reason};
- if(now<w.round+1800||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_25S_LOCK_WINDOW');
+ if(now<w.round||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_25S_LOCK_WINDOW');
  const prior=w.prior,early=w.early;
  if(prior.length<5||prior.at(-1).at-prior[0].at<20000)
   throw Error('MISSING_LAST_120S');
- if(early.length<2||early.at(-1).at-early[0].at<1000)
+ if(early.length<1)
   throw Error('EARLY_TICK_COVERAGE_MISSING');
  const latest=early.at(-1);
  if(now-latest.at>2500||latest.at>now)throw Error('NEW_ROUND_PRICE_STALE');

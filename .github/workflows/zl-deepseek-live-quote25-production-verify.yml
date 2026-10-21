@@ -1,4 +1,4 @@
-name: Verify current-round real Binance quote reasoning in DeepSeek 25s production
+name: Validate DeepSeek quote reasoning with real Binance snapshot interfaces
 on:
   push:
     branches: [feat/deepseek-live-quote-reasoning25-20261022]

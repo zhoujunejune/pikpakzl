@@ -1,0 +1,27 @@
+name: Verify DeepSeek unlimited analysis with 25s cutoff (no trading)
+on:
+  push:
+    branches: [fix/deepseek25-free-analysis-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-core.mjs
+      - prediction-bot-v1/deepseek-adaptive15-runner.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+      - prediction-bot-v1/deepseek-free-analysis25.test.mjs
+      - .github/workflows/zl-deepseek25-free-analysis-tests.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Syntax and autonomous live decision regression only (no exchange order API)
+        run: |
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-free-analysis25.test.mjs
+          node --test prediction-bot-v1/deepseek-autonomous25.test.mjs

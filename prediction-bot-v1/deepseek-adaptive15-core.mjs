@@ -158,7 +158,7 @@ export function windowStatus(w,now){
  return {targetRound:w.round,prewarmBegin:w.round-COLLECT_MS,
   firstAnalysis:w.passes.find(x=>x.pass==='initial')?.direction||null,
   revisedAnalysis:w.passes.find(x=>x.pass==='review')?.direction||null,
-  priorSamples:w.prior.length,earlySamples:w.early.length,
+  priorSamples:w.prior.length,earlySamples:w.early.length,modelCalls:w.modelCalls,
   skipCount:w.skips.length,lastSkip:w.skips.at(-1)||null,
   deadline:w.round+DEADLINE_MS,signal:w.final,
   missed:now>=w.round+DEADLINE_MS&&!w.final};

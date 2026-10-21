@@ -10,7 +10,7 @@ const r=1800000300000;
 function q(at,price,open=68000){return {round:at>=r?r:r-300000,at,price,open};}
 function base(){
  const w=makeWindow(r);
- for(let i=0;i<120;i++)collect(w,q(r-120000+i*1000,67000+i*.1,67000));
+ for(let i=0;i<120;i++)collect(w,q(r-120000+i*1000,67000-i*1.1,67000));
  w.passes.push({round:r,at:r-25000,pass:'review',direction:'UP',
   confidence:.81,reason:'prior official evidence'});
  for(let i=0;i<=8;i++)collect(w,q(r+i*1000,68000-i*7,68000));

@@ -65,13 +65,13 @@ p=once(p,
  "put('rsWait',Number.isSafeInteger(status.recordedWaitRounds)?status.recordedWaitRounds+'（升级后）':'尚未全量记录');put('rsCoverage','未核定');",
  'WAIT_COUNTER')
 pat=r"if\(status\.round===currentRound&&!rows\.some\(function\(x\)\{return x\.round===currentRound\}\)\)\s+rows\.unshift\(\{round:currentRound,direction:null,provider:status\.providerModel,waiting:true\}\);"
-new="""if(status.round===currentRound&&!rows.some(function(x){return x.round===currentRound})){
+new='''if(status.round===currentRound&&!rows.some(function(x){return x.round===currentRound})){
     var expired=Date.now()>=currentRound+15000;
     var decision=status.roundDecision||{};
     var waitNow=expired||decision.status==='WAIT';
     rows.unshift({round:currentRound,direction:waitNow?'WAIT':null,provider:status.providerModel,
       waiting:!waitNow,timedOut:expired&&decision.status!=='WAIT',skipReason:decision.reason||null});
-   }"""
+   }'''
 p,n=re.subn(pat,new,p)
 if n!=1:raise SystemExit('PATCH_CONTEXT_MISMATCH_CURRENT_ROUND_WAIT')
 p=once(p,

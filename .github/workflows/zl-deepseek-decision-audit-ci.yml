@@ -1,0 +1,32 @@
+name: DeepSeek decision value and dynamic inference audit - offline
+on:
+  push:
+    branches: [feat/deepseek-decision-audit-20261021]
+    paths:
+      - 'prediction-bot-v1/deepseek-5m-engine.mjs'
+      - 'prediction-bot-v1/deepseek-5m-engine.test.mjs'
+      - 'prediction-bot-v1/deepseek-5m-value-audit.mjs'
+      - 'prediction-bot-v1/deepseek-5m-value-audit.test.mjs'
+      - 'prediction-bot-v1/deepseek-5m-decision-journal.mjs'
+      - '.github/workflows/zl-deepseek-decision-audit-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Syntax checks
+        run: |
+          node --check prediction-bot-v1/deepseek-5m-engine.mjs
+          node --check prediction-bot-v1/deepseek-5m-value-audit.mjs
+          node --check prediction-bot-v1/deepseek-5m-decision-journal.mjs
+      - name: Dynamic reasoning, value and timing safeguards
+        run: |
+          node --test prediction-bot-v1/deepseek-5m-engine.test.mjs
+          node --test prediction-bot-v1/deepseek-5m-value-audit.test.mjs
+          node --test prediction-bot-v1/deepseek-5m-episodic-memory.test.mjs

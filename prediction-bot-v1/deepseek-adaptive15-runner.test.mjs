@@ -44,11 +44,12 @@ test('calls DeepSeek at -75 and -30, allows review to reverse, locks within 15s'
  assert.ok(x.locks[0].generatedAt<round+15000);
  assert.equal(x.status.orders,false);
 });
-test('second review WAIT suppresses signal instead of acting on first UP',async()=>{
+test('unexpected WAIT review does not discard valid initial UP',async()=>{
  const x=await run({first:'UP',second:'WAIT'});
  assert.equal(x.calls.length,2);
- assert.equal(x.locks.length,0);
- assert.ok(x.status.window.lastSkip==='DEEPSEEK_CHOSE_WAIT');
+ assert.equal(x.locks.length,1);
+ assert.equal(x.locks[0].latest.direction,'UP');
+ assert.equal(x.locks[0].latest.selectedAnalysis,'initial');
 });
 test('model without configured key does not forge a decision',async()=>{
  let t=round-120000,ai=0;

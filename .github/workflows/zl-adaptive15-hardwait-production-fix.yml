@@ -2,7 +2,9 @@ name: Apply strict 15-second WAIT to DeepSeek production, trader and dashboard
 on:
   push:
     branches: [fix/adaptive15-hard-deadline-wait-20261021]
-    paths: [.github/workflows/zl-adaptive15-hardwait-production-fix.yml]
+    paths:
+      - .github/workflows/zl-adaptive15-hardwait-production-fix.yml
+      - prediction-bot-v1/aliyun_adaptive15_hardwait_cutover.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

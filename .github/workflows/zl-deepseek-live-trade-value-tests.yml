@@ -1,0 +1,29 @@
+name: Live DeepSeek TRADE-NO_TRADE production policy regressions
+on:
+  push:
+    branches: [feat/deepseek-live-trade-value-20261021]
+    paths:
+      - .github/workflows/zl-deepseek-live-trade-value-tests.yml
+      - prediction-bot-v1/live-trade-value-policy.mjs
+      - prediction-bot-v1/live-trade-value-policy.test.mjs
+      - prediction-bot-v1/patch_live_trade_value.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Check source syntax and empirical EV decision behavior
+        run: |
+          node --check prediction-bot-v1/live-trade-value-policy.mjs
+          python3 -m py_compile prediction-bot-v1/patch_live_trade_value.py
+          node --test prediction-bot-v1/live-trade-value-policy.test.mjs
+          python3 prediction-bot-v1/patch_live_trade_value.py railway-diagnostic/wrapper.mjs /tmp/wrapper-live.mjs
+          node --check /tmp/wrapper-live.mjs
+          grep -q 'AI决策 NO_TRADE' /tmp/wrapper-live.mjs
+          grep -q 'isAuto && p.signalModelChoice===SELECTIVE8_MODEL' /tmp/wrapper-live.mjs
+          ! grep -q 'EV_FILTER_ENABLED = true' /tmp/wrapper-live.mjs

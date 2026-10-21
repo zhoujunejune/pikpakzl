@@ -73,7 +73,7 @@ export function createFast10ProductionProvider({env=process.env,clock=()=>Date.n
   return {ok:true,model:ID,providerModel:model,configured:Boolean(key),
    round:r,signal:saved?.round===r?saved:null,
    lastSignal:saved?{round:saved.round,direction:saved.latest.direction}:null,
-   tries:shadow.currentTarget===r?shadow.aiAttempts:0,maxCallsPerRound:1,
+   tries:shadow.currentTarget===r?shadow.aiAttempts:0,maxCallsPerRound:2,
    decisionWindowEndMs:r+10000,decisionRule:'PREWARM_120S_NEWROUND_FAST10',
    prewarmStartMs:r-120000,prewarmStatus:shadow.window?.prewarmAvailable||false,
    strictLockDeadlineMs:r+10000,busy:shadow.aiBusy,

@@ -1,0 +1,58 @@
+name: DeepSeek 25s read-only inspect exact live order buffer
+on:
+  push:
+    branches: [fix/deepseek25-autonomous-20261021]
+    paths: [.github/workflows/zl-deepseek25-live-trader-inspect.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read only exact live order wrapper cutoff, no credentials or mutations
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          from pathlib import Path
+          import re
+          root=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          for f in ('wrapper.mjs','production-signal-choice.mjs','index.mjs'):
+           p=root/f
+           txt=p.read_text()
+           lines=txt.splitlines()
+           print('LIVE_SOURCE',f,'length',len(lines))
+           for idx,line in enumerate(lines):
+            if f=='wrapper.mjs' and idx<46 and ('DEADLINE' in line or 'orderSubmitDeadline' in line or 'model ===' in line or 'SELECTIVE' in line or 'DeepSeek' in line):
+             print('LIVE_BUFFER',idx+1,repr(line[:200]))
+            if f=='production-signal-choice.mjs' and 'ts<round||ts>=round+' in line:
+             print('LIVE_VALIDATOR',idx+1,repr(line[:230]))
+            if f=='index.mjs' and ('SELECTIVE8_MODEL' in line or 'SELECTIVE8_LOCAL_URL' in line) and idx<70:
+             print('LIVE_MODEL',idx+1,repr(line[:200]))
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          i=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-deepseek25-exact-order-buffer-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=70)).body.invoke_id
+          for _ in range(35):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=i)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            for line in raw.splitlines():
+             if line.startswith(('LIVE_SOURCE','LIVE_BUFFER','LIVE_VALIDATOR','LIVE_MODEL')):print(line)
+            if int(r.exit_code)!=0:raise RuntimeError('INSPECT_FAILED')
+            break
+          else:raise RuntimeError('INSPECT_TIMEOUT')
+          PY

@@ -9,7 +9,8 @@ import {roundOf,newWindow,observe,normalizeMarket,parsePrewarm,prewarmRequest,fi
 const FEED='http://127.0.0.1:13003/api/shadow-market-data';
 const LLM='https://api.deepseek.com/chat/completions';
 const errorCode=e=>String(e?.code||e?.message||'UNKNOWN').slice(0,100);
-export function createRunner({env=process.env,clock=()=>Date.now(),fetcher=fetch}={}){
+export function createRunner({env=process.env,clock=()=>Date.now(),fetcher=fetch,
+  onLocked=null,getHistoricalFeedback=null}={}){
  const enabled=env.FAST10_SHADOW_ENABLE_AI==='1';
  const key=env.DEEPSEEK_API_KEY||'';
  const feed=env.FAST10_MARKET_URL||FEED;
@@ -53,6 +54,11 @@ export function createRunner({env=process.env,clock=()=>Date.now(),fetcher=fetch
   try{
    const prev=extractFeatures(raw,now);
    payload=prewarmRequest(active,now,prev);
+   if(typeof getHistoricalFeedback==='function'){
+    const history=getHistoricalFeedback(prev);
+    const original=JSON.parse(payload.messages[1].content);
+    payload.messages[1].content=JSON.stringify({...original,officialSettledFeedback:history});
+   }
   }catch(e){
    // A bad feature feed must not cause any synthetic AI decision.
    lastError='PREWARM_INPUT_'+errorCode(e);
@@ -96,7 +102,9 @@ export function createRunner({env=process.env,clock=()=>Date.now(),fetcher=fetch
       void callPrewarm(active,raw,t);
     if(t>=active.forRound+6500&&t<active.forRound+10000&&!active.signal){
      try{
-      const result=finalize(active,t);lastSignal=result;lastError=null;
+      const result=finalize(active,t);
+      if(typeof onLocked==='function')onLocked(result,raw,t);
+      lastSignal=result;lastError=null;
      }catch(e){lastError=errorCode(e);active.errors.push(lastError)}
     }
    }

@@ -11,7 +11,7 @@ const R=1800000300000;
 function ready() {
  const w=makeWindow(R);
  for(let i=0;i<120;i++)collect(w,{round:R-300000,at:R-120000+i*1000,price:67000+i*.25,open:67000});
- for(let i=0;i<24;i++)collect(w,{round:R,at:R+i*1000,price:68000+i*.5,open:68000});
+ for(let i=0;i<8;i++)collect(w,{round:R,at:R+i*1000,price:68000+i*.5,open:68000});
  return w;
 }
 function add(w,pass,direction,at) {
@@ -24,6 +24,7 @@ test('25 seconds is a hard boundary for non-fabricated DeepSeek judgments',()=>{
  add(w,'initial','UP',R-50000);
  add(w,'review','UP',R-25000);
  add(w,'current','DOWN',R+16000);
+ collect(w,{round:R,at:R+20000,price:68018,open:68000});
  const d=finalize(w,R+21000);
  assert.equal(d.latest.direction,'DOWN');
  assert.equal(d.latest.selectedAnalysis,'current');
@@ -44,6 +45,7 @@ test('DeepSeek can choose WAIT, and no market-rule vote overrides model',()=>{
  const w=ready();
  add(w,'initial','DOWN',R-50000);
  add(w,'current','WAIT',R+11000);
+ collect(w,{round:R,at:R+15000,price:68008,open:68000});
  const d=finalize(w,R+16000);
  assert.equal(d.ok,false);
  assert.equal(d.provisional,true);
@@ -51,6 +53,7 @@ test('DeepSeek can choose WAIT, and no market-rule vote overrides model',()=>{
  assert.equal(closeExpiredWindow(w,R+25000),true);
  const alt=ready();add(alt,'initial','UP',R-50000);
  for(const x of alt.early)x.price=x.open-40;
+ collect(alt,{round:R,at:R+22000,price:67950,open:68000});
  const signal=finalize(alt,R+23000);
  assert.equal(signal.latest.direction,'UP');
  assert.equal(signal.latest.selectedAnalysis,'initial');
@@ -62,8 +65,8 @@ test('current-round prompt includes actual observed early ticks; no future label
  assert.equal(v.phase,'current');
  assert.equal(v.requireDirectionalForecast,false);
  assert.equal(v.decisionDeadlineMs,R+25000);
- assert.equal(v.currentRoundTicks.length,24);
- assert.equal(v.currentRoundTicks.every(x=>x.at>=R),true);
+ assert.equal(v.currentRoundTicks.length,8);
+ assert.equal(v.currentRoundTicks.every(x=>x.at>=R&&x.at<=R+10000),true);
 });
 test('new official quality cases may be recorded at +20s, not at +25s',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'zl-autonomous25-'));

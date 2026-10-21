@@ -1,0 +1,35 @@
+name: Verify DeepSeek alone decides TRADE or NO_TRADE before Binance order
+on:
+  push:
+    branches: [fix/deepseek-only-trade-choice-live25-20261022]
+    paths:
+      - .github/workflows/zl-deepseek-only-direct-trade-ci.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Assert legacy program veto is gone and DeepSeek is economic decision-maker
+        run: |
+          python3 -m py_compile prediction-bot-v1/patch_deepseek_quote_cognition.py prediction-bot-v1/patch_trade_quote_preview.py prediction-bot-v1/patch_deepseek_direct_trade.py
+          python3 prediction-bot-v1/patch_deepseek_quote_cognition.py prediction-bot-v1 /tmp/ai-direct-model
+          python3 prediction-bot-v1/patch_live_trade_value.py railway-diagnostic/wrapper.mjs /tmp/ai-baseline-wrapper.mjs
+          python3 prediction-bot-v1/patch_trade_quote_preview.py /tmp/ai-baseline-wrapper.mjs /tmp/ai-quote-wrapper.mjs
+          python3 prediction-bot-v1/patch_deepseek_direct_trade.py /tmp/ai-direct-model /tmp/ai-quote-wrapper.mjs /tmp/ai-direct-wrapper.mjs
+          for f in /tmp/ai-direct-model/*.mjs /tmp/ai-direct-wrapper.mjs; do node --check "$f"; done
+          PATCHED_CORE_PATH=/tmp/ai-direct-model/deepseek-adaptive15-core.mjs node --test prediction-bot-v1/live_quote_reasoning.test.mjs
+          grep -q 'AI_NO_TRADE' /tmp/ai-direct-wrapper.mjs
+          grep -q 'AI_UNAVAILABLE' /tmp/ai-direct-wrapper.mjs
+          grep -q 'deepseek_direct_trade_choice' /tmp/ai-direct-wrapper.mjs
+          ! grep -q 'decideLiveTradeValue' /tmp/ai-direct-wrapper.mjs
+          ! grep -q 'EV_FILTER_ENABLED' /tmp/ai-direct-wrapper.mjs
+          ! grep -q 'conservativeNetEdge' /tmp/ai-direct-wrapper.mjs
+          grep -q 'MAX_AI_CALLS_PER_ROUND=6' /tmp/ai-direct-model/deepseek-adaptive15-runner.mjs
+          grep -q 'DEADLINE_MS=25000' /tmp/ai-direct-model/deepseek-adaptive15-core.mjs

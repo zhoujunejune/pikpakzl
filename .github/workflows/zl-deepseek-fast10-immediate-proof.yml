@@ -1,0 +1,40 @@
+name: FAST10 immediate current-round read-only proof
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-immediate-proof.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read current signal and lock elapsed, never submit orders
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,json
+          password=os.environ['ZL_PANEL_PASSWORD'];host='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          def get(route):
+            with urllib.request.urlopen(urllib.request.Request(host+route,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET'),timeout=16) as r:return json.load(r)
+          d=get('/deepseek/api/status');p=get('/api/status');h=get('/deepseek/api/history?limit=4')
+          l=(d.get('signal') or {}).get('latest') or {}
+          o={
+            'model':d.get('model'),'providerModel':d.get('providerModel'),
+            'windowMs':d.get('decisionWindowEndMs',0)-d.get('round',0),
+            'round':d.get('round'),'currentLockDirection':l.get('direction'),
+            'lockElapsedMs':l.get('lockedAt',0)-d.get('round',0) if l else None,
+            'source':l.get('decisionMethod'),'prewarm':d.get('prewarmStatus'),
+            'tries':d.get('tries'),'error':d.get('error'),
+            'lastSignal':d.get('lastSignal'),
+            'lastHistory':[{k:v.get(k) for k in ('round','direction','signalLatencyMs')} for v in (h.get('records') or [])[:3]],
+            'followEnabled':p.get('enabled')
+          }
+          print('FAST10_IMMEDIATE_PROOF='+json.dumps(o,ensure_ascii=False,separators=(',',':')))
+          assert d.get('decisionWindowEndMs')-d.get('round')==10000
+          assert p.get('enabled') is False
+          PY

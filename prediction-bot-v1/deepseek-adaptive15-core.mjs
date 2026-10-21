@@ -10,7 +10,7 @@ const side=x=>x==='UP'||x==='DOWN';
 export function makeWindow(round){
  if(!Number.isSafeInteger(round)||round%ROUND_MS!==0)throw Error('INVALID_ROUND');
  return {round,prior:[],early:[],passes:[],final:null,terminal:null,
-  skips:[],provisionalWait:null,modelCalls:0,lastModelError:null};
+  skips:[],provisionalWait:null,modelCalls:0,attemptedPasses:[],lastModelError:null};
 }
 export function marketTick(data,now){
  if(data?.ok!==true||data?.readOnly!==true||data?.symbol!=='BTCUSDT')throw Error('UNTRUSTED_MARKET');

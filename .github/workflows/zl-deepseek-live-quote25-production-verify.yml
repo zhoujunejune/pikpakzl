@@ -1,0 +1,31 @@
+name: Verify real current-round Binance quote reasoning in existing DeepSeek production
+on:
+  push:
+    branches: [feat/deepseek-live-quote-reasoning25-20261022]
+    paths:
+      - .github/workflows/zl-deepseek-live-quote25-production-verify.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate unchanged production flow with quote-aware DeepSeek
+        run: |
+          python3 -m py_compile prediction-bot-v1/patch_deepseek_quote_cognition.py prediction-bot-v1/patch_trade_quote_preview.py
+          python3 prediction-bot-v1/patch_deepseek_quote_cognition.py prediction-bot-v1 /tmp/deepseek-quote-patched
+          python3 prediction-bot-v1/patch_trade_quote_preview.py railway-diagnostic/wrapper.mjs /tmp/wrapper-quote-patched.mjs
+          for f in /tmp/deepseek-quote-patched/*.mjs /tmp/wrapper-quote-patched.mjs; do node --check "$f"; done
+          PATCHED_CORE_PATH=/tmp/deepseek-quote-patched/deepseek-adaptive15-core.mjs node --test prediction-bot-v1/live_quote_reasoning.test.mjs
+          node --test prediction-bot-v1/live-trade-value-policy.test.mjs
+          grep -q 'getLiveAiQuotePreview' /tmp/wrapper-quote-patched.mjs
+          grep -q 'deepseek_live_trade_value' /tmp/wrapper-quote-patched.mjs
+          grep -q 'const EV_FILTER_ENABLED = false;' /tmp/wrapper-quote-patched.mjs
+          grep -q 'MAX_AI_CALLS_PER_ROUND=6' /tmp/deepseek-quote-patched/deepseek-adaptive15-runner.mjs
+          grep -q 'DEADLINE_MS=25000' /tmp/deepseek-quote-patched/deepseek-adaptive15-core.mjs

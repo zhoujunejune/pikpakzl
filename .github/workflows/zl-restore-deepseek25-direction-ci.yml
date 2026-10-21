@@ -1,0 +1,36 @@
+name: Test restoring DeepSeek 25s direction-only normal order flow
+on:
+  push:
+    branches: [fix/deepseek25-direction-only-normal-orders-20261022]
+    paths:
+      - .github/workflows/zl-restore-deepseek25-direction-ci.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Reconstruct and remove production-only AI gate safely
+        run: |
+          python3 -m py_compile prediction-bot-v1/patch_restore_25s_direction_orders.py
+          python3 prediction-bot-v1/patch_deepseek_quote_cognition.py prediction-bot-v1 /tmp/ai-model
+          python3 prediction-bot-v1/patch_live_trade_value.py railway-diagnostic/wrapper.mjs /tmp/ev-wrapper.mjs
+          python3 prediction-bot-v1/patch_trade_quote_preview.py /tmp/ev-wrapper.mjs /tmp/ai-quotes-wrapper.mjs
+          python3 prediction-bot-v1/patch_deepseek_direct_trade.py /tmp/ai-model /tmp/ai-quotes-wrapper.mjs /tmp/ai-wrapper.mjs
+          python3 prediction-bot-v1/patch_restore_25s_direction_orders.py /tmp/ai-wrapper.mjs /tmp/reverted-wrapper.mjs
+          node --check /tmp/reverted-wrapper.mjs
+          for f in prediction-bot-v1/deepseek-adaptive15-core.mjs prediction-bot-v1/deepseek-adaptive15-runner.mjs prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs; do node --check "$f"; done
+          grep -q 'MAX_AI_CALLS_PER_ROUND=6' prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          grep -q 'DEADLINE_MS=25000' prediction-bot-v1/deepseek-adaptive15-core.mjs
+          ! grep -q 'verifiedBinanceExecutableQuotes' prediction-bot-v1/deepseek-adaptive15-core.mjs
+          ! grep -q 'tradeOpinion' prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          grep -q 'submitPendingOrder(pendingAction' /tmp/reverted-wrapper.mjs
+          grep -q 'getFreshQuote(p._internal)' /tmp/reverted-wrapper.mjs
+          ! grep -q 'deepseek_direct_trade_choice' /tmp/reverted-wrapper.mjs
+          ! grep -q 'deepseek_live_trade_value' /tmp/reverted-wrapper.mjs

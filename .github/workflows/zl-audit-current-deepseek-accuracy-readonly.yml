@@ -1,4 +1,4 @@
-name: Read current official DeepSeek 5-minute model accuracy and recent causes
+name: Verify DeepSeek 5m error drivers by lock delay and market regime
 on:
   push:
     branches: [fix/deepseek25-direction-only-normal-orders-20261022]

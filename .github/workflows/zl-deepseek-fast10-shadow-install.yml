@@ -1,0 +1,33 @@
+name: Install isolated no-order FAST10 feed monitor on existing Alibaba
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-shadow-install.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-fast10-shadow-only
+  cancel-in-progress: false
+jobs:
+  stage-isolated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate shadow code and deployment syntax without modifying production
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_fast10_shadow_install.py
+          node --test prediction-bot-v1/deepseek-fast10-shadow-core.test.mjs
+          node --test prediction-bot-v1/deepseek-fast10-shadow-runner.test.mjs
+      - name: Install Alibaba client on ephemeral GitHub runner
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Install isolated local-only monitor with strict read-only and no paid AI
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_fast10_shadow_install.py

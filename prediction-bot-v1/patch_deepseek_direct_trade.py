@@ -40,12 +40,8 @@ s=once(s,
  "AI_LOCK_TRADE_OPINION")
 runner.write_text(s)
 
-s=adapter.read_text()
-s=once(s,
- "  function learningEffect(){",
- """  function learningEffect(){""",
- "KEEP_LEARNING_EFFECT")
-adapter.write_text(s)
+# Preserve existing production learning and settlement modules unchanged.
+assert 'export function createAdaptive15ProductionProvider' in adapter.read_text()
 
 s=wrapper_path.read_text()
 start=s.find("  // DeepSeek-only real AUTO_CONFIRM order-value decision.")

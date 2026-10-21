@@ -9,7 +9,7 @@ sha=os.environ.get('GITHUB_SHA','')
 assert os.environ.get('GITHUB_REF_NAME')==branch and re.fullmatch('[a-f0-9]{40}',sha)
 url='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/prediction-bot-v1/learning_effect_nav_apply.sh'
 with urllib.request.urlopen(url,timeout=20) as f:script=f.read().decode('utf8')
-assert 'LEARNING_NAV_PUBLISHED=true' in script and 'trap rollback ERR' in script
+assert 'LEARNING_NAV_PUBLISHED=true' in script and 'trap restore ERR' in script
 cmd="bash -s <<'ZL_LEARNING_UI_25'\nexport LEARNING_NAV_SHA="+sha+"\n"+script+"\nZL_LEARNING_UI_25\n"
 client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
  access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],

@@ -1,0 +1,52 @@
+name: Immediate public GET verify hard WAIT after 15s no order source
+on:
+  push:
+    branches: [fix/adaptive15-hard-deadline-wait-20261021]
+    paths: [.github/workflows/zl-adaptive15-hardwait-immediate-proof.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Query live status and signal endpoint once, without writes
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,urllib.error,json,time
+          root='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(p):
+           try:
+            with urllib.request.urlopen(urllib.request.Request(root+p,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET'),timeout=15) as r:return r.status,json.load(r)
+           except urllib.error.HTTPError as e:
+            try:return e.code,json.loads(e.read())
+            except Exception:return e.code,{}
+          _,s=get('/deepseek/api/status')
+          http,data=get('/deepseek/signal')
+          _,trader=get('/api/status')
+          _,ledger=get('/deepseek/api/history?limit=6')
+          now=int(time.time()*1000)
+          elapsed=now-s.get('round',0)
+          out={
+           'round':s.get('round'),'elapsedMs':elapsed,
+           'decision':s.get('roundDecision'),
+           'signalApiHttp':http,'apiNoLateSignal':s.get('noSignalAfterDeadline'),
+           'waitJournalCount':s.get('recordedWaitRounds'),
+           'historyRecent':[{k:r.get(k) for k in ('round','direction','reason','signalLatencyMs')}
+             for r in ledger.get('records',[])[:4]],
+           'followEnabled':trader.get('enabled'),
+           'decisionWindowMs':s.get('decisionWindowEndMs',0)-s.get('round',0)}
+          print('HARDWAIT_IMMEDIATE_PUBLIC_PROOF='+json.dumps(out,ensure_ascii=False,separators=(',',':')))
+          assert out['decisionWindowMs']==15000
+          assert out['apiNoLateSignal'] is True
+          assert out['followEnabled'] is False
+          if elapsed>=15000:
+           assert http==503
+           assert out['decision']['status'] in ('WAIT','LOCKED')
+           if out['decision']['status']=='WAIT':assert out['decision']['direction']=='WAIT'
+           print('HARDWAIT_15S_REJECTION_REALTIME_CONFIRMED=true')
+          else:print('CURRENT_ROUND_NOT_YET_PAST_15S=true')
+          PY

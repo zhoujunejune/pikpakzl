@@ -1,0 +1,34 @@
+name: FAST10 current production LLM latency status - read-only
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-latency-audit.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Print safe latency and current selected model only
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request
+          pwd=os.environ.get('ZL_PANEL_PASSWORD')
+          if not pwd:raise SystemExit('PANEL_AUTH_MISSING')
+          auth='Basic '+base64.b64encode(('zl:'+pwd).encode()).decode()
+          root='https://prediction.47-237-188-69.sslip.io'
+          def read(route):
+             req=urllib.request.Request(root+route,headers={'Authorization':auth,'Cache-Control':'no-store'},method='GET')
+             with urllib.request.urlopen(req,timeout=16) as r:return json.load(r)
+          s=read('/deepseek/api/status')
+          p=read('/api/order-signal-model')
+          result={key:s.get(key) for key in ('model','providerModel','lastApiLatencyMs','lastApiTokens','tries','maxCallsPerRound','featureReady','waitReason','error','decisionWindowEndMs','round')}
+          result['selectedProductionModel']=p.get('model')
+          result['relativeWindowMs']=s.get('decisionWindowEndMs',0)-s.get('round',0)
+          result['lastSignalRound']=(s.get('lastSignal') or {}).get('round')
+          print('PROD_LLM_LATENCY_READONLY='+json.dumps(result,ensure_ascii=False,separators=(',',':')))
+          PY

@@ -1,0 +1,30 @@
+name: Deploy dedicated CPU-only 15s online learning shadow V2 on Alibaba
+on:
+  push:
+    branches: [feat/cpu-online-shadow15-v2-20261021]
+    paths:
+      - .github/workflows/zl-cpu-shadow15-v2-deploy.yml
+      - prediction-bot-v1/aliyun_cpu_shadow15_v2_deploy.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy-shadow-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Test isolated official-only model before deployment
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_cpu_shadow15_v2_deploy.py
+          PYTHONPATH=prediction-bot-v1 python -m unittest test_deepseek_online_shadow15_v2 -v
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy separate V2 shadow on local 13044 with CPU and RAM caps
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_cpu_shadow15_v2_deploy.py

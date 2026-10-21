@@ -66,13 +66,13 @@ export function prewarmRequest(window,now,features){
  const priorWindow=window.prior.filter(x=>x.at>=target-PREWARM_LOOKBACK_MS);
  return {
   model:'deepseek-flash',thinking:{type:'enabled'},reasoning_effort:'high',
-  max_tokens:600,response_format:{type:'json_object'},
+  max_tokens:4096,response_format:{type:'json_object'},
   messages:[
    {role:'system',content:[
     'Estimate a PROVISIONAL BTCUSDT direction for the NEXT Binance five-minute prediction round.',
     'This is pre-round evidence only; the NEXT round opening price is not yet known.',
     'Use the trailing market snapshots and causal features. Never invent the next open price or future observations.',
-    'Choose UP or DOWN as a provisional directional lean. Return JSON only:',
+    'Choose UP or DOWN as a provisional directional lean. Keep analysis efficient and output the JSON object promptly. Return JSON only:',
     '{"direction":"UP or DOWN","confidence":0.5,"reason":"brief explanation"}.',
     'Confidence is subjective, not a calibrated win probability.'
    ].join(' ')},

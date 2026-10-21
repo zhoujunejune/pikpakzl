@@ -17,12 +17,25 @@ print('BEFORE_OFFICIAL',a.get('learning',{}).get('allOfficialSamples'))
 PY
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
-mkdir -p "$back" "$t/new"
+mkdir -p "$back" "$t/new" "$t/merged" "$t/patch"
 for n in $names;do
  curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE_SHA/prediction-bot-v1/$n" > "$t/$n"
- cmp -s "$app/$n" "$t/$n" || { echo "BASE_MISMATCH=$n"; diff -u "$t/$n" "$app/$n" | head -120 || true; exit 15; }
+ 
  curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$LEARN_SHA/prediction-bot-v1/$n" > "$t/new/$n"
  "$node" --check "$t/new/$n"
+# Merge only the reviewed difference into the currently running version.
+# This preserves independent production improvements and refuses conflicts.
+ cp -p "$app/$n" "$t/merged/$n"
+ if ! cmp -s "$app/$n" "$t/$n";then
+  echo "SAFE_MERGE_REQUIRED=$n"
+  diff -u "$t/$n" "$t/new/$n" > "$t/patch/$n.diff" || test "$?" -eq 1
+  patch --batch --forward --fuzz=0 "$t/merged/$n" "$t/patch/$n.diff" ||
+    { echo "MERGE_CONFLICT_ABORT=$n";exit 15; }
+  echo "SAFE_PATCH_MERGED=$n"
+ else
+  cp -p "$t/new/$n" "$t/merged/$n"
+ fi
+ "$node" --check "$t/merged/$n"
  cp -p "$app/$n" "$back/$n"
 done
 rollback(){
@@ -30,7 +43,7 @@ rollback(){
  systemctl restart zl-prediction-deepseek5.service || true
 }
 trap rollback ERR
-for n in $names;do cp -p "$t/new/$n" "$app/$n";done
+for n in $names;do cp -p "$t/merged/$n" "$app/$n";done
 systemctl restart zl-prediction-deepseek5.service
 for i in $(seq 1 20);do
  if curl -fsS --max-time 3 http://127.0.0.1:13029/api/learning-effect > "$t/result" 2>/dev/null;then break;fi

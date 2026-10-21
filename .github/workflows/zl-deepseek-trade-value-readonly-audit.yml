@@ -8,6 +8,7 @@ on:
 permissions: {contents: read}
 jobs:
   audit:
+    # Verify effective production model-to-gate mapping after live release.
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:

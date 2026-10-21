@@ -10,7 +10,7 @@ const side=x=>x==='UP'||x==='DOWN';
 export function makeWindow(round){
  if(!Number.isSafeInteger(round)||round%ROUND_MS!==0)throw Error('INVALID_ROUND');
  return {round,prior:[],early:[],passes:[],final:null,terminal:null,
-  skips:[],modelCalls:0,lastModelError:null};
+  skips:[],provisionalWait:null,modelCalls:0,lastModelError:null};
 }
 export function marketTick(data,now){
  if(data?.ok!==true||data?.readOnly!==true||data?.symbol!=='BTCUSDT')throw Error('UNTRUSTED_MARKET');
@@ -103,19 +103,19 @@ export function registerAnalysis(w,decision){
 }
 export function closeExpiredWindow(w,now){
  if(w.final||w.terminal||now<w.round+DEADLINE_MS)return false;
- const reason=w.skips.at(-1)||w.lastModelError||'DEADLINE_15S_EXPIRED';
+ const reason=w.provisionalWait||w.skips.at(-1)||w.lastModelError||'NO_CONFIRMED_SIGNAL';
  w.terminal={round:w.round,status:'WAIT',direction:'WAIT',
   reason:'DEADLINE_15S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
   signalGenerated:false,orders:false};
  return true;
 }
 function recordWait(w,reason,now){
- if(!w.terminal){
-  w.terminal={round:w.round,status:'WAIT',direction:'WAIT',
-   reason,detail:reason,at:now,signalGenerated:false,orders:false};
-  w.skips.push(reason);
- }
- return {ok:false,skip:true,round:w.round,direction:'WAIT',reason:w.terminal.reason};
+ // A temporary WAIT is not a final decision. Continue observing real ticks
+ // until the strict 15-second cutoff, without emitting an order signal.
+ w.provisionalWait=reason;
+ if(w.skips.at(-1)!==reason)w.skips.push(reason);
+ return {ok:false,skip:true,provisional:true,round:w.round,
+  direction:'WAIT',reason,deadline:w.round+DEADLINE_MS};
 }
 export function finalize(w,now,feedback={}){
  if(w.final)throw Error('ALREADY_LOCKED'); 
@@ -169,6 +169,7 @@ export function finalize(w,now,feedback={}){
    selectedAnalysis:chosen.pass,modelConfidence:chosen.confidence,
    confidenceIsCalibrated:false,policy,hybridScore:Number(composite.toFixed(4)),
    reason:chosen.reason,earlySamples:early.length,priorSamples:prior.length}};
+ w.provisionalWait=null;
  w.final=result;return result;
 }
 export function windowStatus(w,now){
@@ -177,6 +178,7 @@ export function windowStatus(w,now){
   revisedAnalysis:w.passes.find(x=>x.pass==='review')?.direction||null,
   priorSamples:w.prior.length,earlySamples:w.early.length,modelCalls:w.modelCalls,
   skipCount:w.skips.length,lastSkip:w.skips.at(-1)||null,
+  provisionalWait:w.provisionalWait,
   deadline:w.round+DEADLINE_MS,signal:w.final,
   status:w.final?'LOCKED':w.terminal?'WAIT':now>=w.round+DEADLINE_MS?'WAIT':'ANALYZING',
   terminal:w.terminal,

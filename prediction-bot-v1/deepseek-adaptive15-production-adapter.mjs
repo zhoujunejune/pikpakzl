@@ -43,7 +43,7 @@ export function buildAdaptive15CompatibleSignal(candidate,at,providerModel){
     entry:{direction:d,at,marketAt:quoteAt,score:Number(score.toFixed(4)),
       strength:Number(score.toFixed(4)),modelVersion:ID}},
    // Existing producer's validation expects this compatibility expiry.
-   // It is not the decision creation deadline: that remains strict +10s.
+   // The decision creation deadline is strictly 25 seconds, never 270 seconds.
    expiryAt:r+270000};
 }
 export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Date.now(),fetcher=fetch}={}){
@@ -110,8 +110,10 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    if(clock()>=candidate.round+25000)throw Error('LATE_LOCK_EXPIRED_WAIT');
    const signal=buildAdaptive15CompatibleSignal(candidate,at,model);
    const features=extractFeatures(raw,at);
-   if(features.round!==candidate.round||!features.dataQuality.indicatorsReady)
-     throw Error('PRODUCTION_FEATURES_NOT_READY');
+   // Technical integrity only: DeepSeek selects its own indicators; 35-candle readiness
+   // is descriptive, not a veto when real BTC ticks are fresh.
+   if(features.round!==candidate.round||features.dataQuality.marketAgeMs>4000)
+     throw Error('PRODUCTION_MARKET_UNVERIFIED');
    if(clock()>=candidate.round+25000)throw Error('LATE_PERSIST_EXPIRED_WAIT');
    persist(signal);saved=signal;
    try{learner.record(signal,features,window?.modelCalls||1)}
@@ -131,7 +133,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    (now>=r+25000||activeWindow?.status==='WAIT');
   const decisionState=lockedThisRound?'LOCKED':terminalWait?'WAIT':'ANALYZING';
   const decisionReason=terminalWait?(activeWindow?.terminal?.reason||
-    shadow.lastCompleted?.reason||'DEADLINE_15S_EXPIRED'):null;
+    shadow.lastCompleted?.reason||'DEADLINE_25S_EXPIRED'):null;
   return {ok:true,model:ID,providerModel:model,configured:Boolean(key),
    round:r,signal:available?saved:null,
    roundDecision:{round:r,status:decisionState,direction:lockedThisRound?saved.latest.direction:
@@ -147,7 +149,8 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    skippedRounds:shadow.skippedRounds,
    missedRounds:shadow.missedRounds,
    experiencePolicy:'OFFICIAL_SETTLEMENT_FEEDBACK_ONLY_MODEL_DECIDES',
-   tries:shadow.window?.targetRound===r?shadow.window.modelCalls??0:0,maxCallsPerRound:3,
+   tries:shadow.window?.targetRound===r?shadow.window.modelCalls??0:0,
+   maxCallsPerRound:null,analysisCountLimit:'NONE_TIME_BUDGET_ONLY',
    decisionWindowEndMs:r+25000,decisionRule:'PREWARM_AND_LIVE_DEEPSEEK_AUTONOMOUS_25S',
    aiDirectionalRequired:false,
    skipOnLowConfidence:false,
@@ -166,7 +169,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    error:lastError||shadow.lastError,
    waitReason:shadow.window?.lastSkip||shadow.lastCompleted?.reason||null,
    lastApiLatencyMs:shadow.aiLatencyMs,featuresVersion:'BTC_OHLCV_RSI_MACD_ATR_V2',
-   featureReady:shadow.consecutiveFeedErrors===0,
+   featureReady:Number.isSafeInteger(shadow.lastMarketAt)&&now-shadow.lastMarketAt<=4000,
    reasoning:{enabled:true,effort:'high'},
    learning:{...learning,lastOfficialUpdates:lastSettlementCount,lastError:settlementError,
     autoFeedback:true,modelWeightsFineTuned:false},
@@ -207,7 +210,7 @@ export function serveAdaptiveProduction(provider,port=Number(process.env.LLM_SER
     data={ok:false,model:ID,round:current.round,
       direction:current.roundDecision?.status==='WAIT'?'WAIT':null,
       status:current.roundDecision?.status||'WAIT',
-      error:current.roundDecision?.reason||'NO_VALID_LOCK_BEFORE_15S',
+      error:current.roundDecision?.reason||'NO_VALID_LOCK_BEFORE_25S',
       signalAvailable:false,lateOrdersForbidden:true};
    }
   }else{res.writeHead(404);return res.end('Not Found')}

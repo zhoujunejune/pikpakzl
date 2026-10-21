@@ -1,0 +1,22 @@
+name: Diagnose why DeepSeek real trade opinion cannot be verified
+on:
+  push:
+    branches: [fix/deepseek-only-trade-choice-live25-20261022]
+    paths:
+      - .github/workflows/zl-deepseek-unverified-readonly-diagnose.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect actual DeepSeek quote/decision mismatch without changing orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/diagnose_direct_ai_quote_unverified_readonly.py

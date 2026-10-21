@@ -27,7 +27,8 @@ assert a['realOrderEnabled'] is False and a['tradeIntegration'] is False
 assert b['model']=='DEEPSEEK_5M_V1'
 h=get(13029,'/api/history?limit=2')
 assert h['model']=='DEEPSEEK_5M_V1' and h['ok'] is True
-assert a['providerModel'] in ('deepseek-v4-pro','deepseek-flash'), 'UNEXPECTED_PROVIDER_MODEL'\nprint('FLASH_PREFLIGHT_EXISTING_MODEL='+str(a['providerModel']))
+assert a['providerModel'] in ('deepseek-v4-pro','deepseek-flash'), 'UNEXPECTED_PROVIDER_MODEL'
+print('FLASH_PREFLIGHT_EXISTING_MODEL='+str(a['providerModel']))
 print('FLASH_PREFLIGHT_OFFICIAL_SAMPLES='+str(h['summary'].get('allOfficialSamples')))
 PY
 archive=/var/lib/zl-prediction/archive/provider-backups
@@ -87,7 +88,8 @@ x=json.load(open(sys.argv[1]))
 assert x['providerModel']=='deepseek-flash'
 print('FLASH_PRODUCTION_PROVIDER='+x['providerModel'])
 print('FLASH_REASONING='+x['reasoning']['effort'])
-assert x['learning']['allOfficialSamples']>=0\nprint('FLASH_LEARNING_SAMPLES='+str(x['learning']['allOfficialSamples']))
+assert x['learning']['allOfficialSamples']>=0
+print('FLASH_LEARNING_SAMPLES='+str(x['learning']['allOfficialSamples']))
 print('FLASH_HISTORY_PRESERVED=true')
 print('FLASH_ORDER_ENGINE_UNCHANGED=true')
 PY

@@ -106,3 +106,38 @@ test('official settlement learner delays feedback until published official label
   assert.equal(learner.settle(stats),0);
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });
+
+test('lifetime DeepSeek counters migrate legacy records and grow beyond rolling history',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'deepseek-lifetime-'));
+ let t=round+900000;
+ try{
+  const file=path.join(dir,'learning.json');
+  const old={schema:1,predictions:[
+   {round:round-600000,direction:'UP',actual:'UP',settledAt:round-299000,hit:true},
+   {round:round-300000,direction:'DOWN',actual:'UP',settledAt:round+1000,hit:false}
+  ],updatedAt:null};
+  fs.writeFileSync(file,JSON.stringify(old));
+  const learner=newLearner(file,()=>t);
+  assert.equal(learner.summary().allOfficialSamples,2);
+  assert.equal(learner.summary().allOfficialHits,1);
+  assert.equal(learner.summary().allOfficialMisses,1);
+  assert.equal(learner.summary().allPredictions,2);
+  const sig={round,providerModel:'deepseek-flash',
+   latest:{direction:'DOWN',lockedAt:round+85000,confidence:0.56}};
+  learner.record(sig,{oneMinute:{ready:true,ema9:100,ema21:99},fiveMinute:{ready:true,ema9:100,ema21:99}},2);
+  assert.equal(learner.summary().allPredictions,3);
+  const stats={ok:true,settlementSource:'BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY',
+   records:[{roundStartMs:round,productionActual:'DOWN',productionSettledAt:round+310000,
+    officialSettlementAudit:{source:'Binance'}}]};
+  assert.equal(learner.settle(stats),1);
+  assert.equal(learner.settle(stats),0);
+  assert.equal(learner.summary().allOfficialSamples,3);
+  assert.equal(learner.summary().allOfficialHits,2);
+  assert.equal(learner.summary().allOfficialMisses,1);
+  assert.equal(learner.summary().allOfficialAccuracy,0.6667);
+  const reboot=newLearner(file,()=>t);
+  assert.equal(reboot.summary().allOfficialSamples,3);
+  assert.equal(reboot.summary().allPredictions,3);
+  assert.equal(reboot.summary().allOfficialHits,2);
+ }finally{fs.rmSync(dir,{recursive:true,force:true})}
+});

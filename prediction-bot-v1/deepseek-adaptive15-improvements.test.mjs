@@ -16,16 +16,12 @@ function base(){
  for(let i=0;i<=8;i++)collect(w,q(r+i*1000,68000-i*7,68000));
  return w;
 }
-test('evidence is provisional WAIT around 8s; more causal ticks can produce a lock by 12s',()=>{
+test('directional confidence no longer forces WAIT at 8s with valid DeepSeek',()=>{
  const w=base(),first=finalize(w,r+8500);
- assert.equal(first.reason,'LOW_DIRECTIONAL_EVIDENCE');
- assert.equal(first.provisional,true);
+ assert.equal(first.ok,true);
+ assert.equal(first.latest.direction,'UP');
+ assert.equal(first.generatedAt,r+8500);
  assert.equal(w.terminal,null);
- for(let i=9;i<=12;i++)collect(w,q(r+i*1000,68000+i*7,68000));
- const second=finalize(w,r+12500);
- assert.equal(second.ok,true);assert.equal(second.latest.direction,'UP');
- assert.ok(second.generatedAt<r+15000);
- assert.equal(w.provisionalWait,null);
  assert.equal(closeExpiredWindow(w,r+15000),false);
 });
 test('a model WAIT remains non-trade, can be reconsidered only before hard deadline',()=>{
@@ -35,7 +31,7 @@ test('a model WAIT remains non-trade, can be reconsidered only before hard deadl
  assert.equal(w.terminal,null);
  assert.equal(closeExpiredWindow(w,r+15000),true);
  assert.equal(w.terminal.direction,'WAIT');
- assert.equal(w.terminal.detail,'DEEPSEEK_CHOSE_WAIT');
+ assert.equal(w.terminal.detail,'NO_VALID_DIRECTION_FROM_DEEPSEEK');
  assert.equal(finalize(w,r+16000).direction,'WAIT');
 });
 test('source-of-truth quality record uses only causal predictions and strict official settlement',()=>{

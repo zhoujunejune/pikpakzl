@@ -1,0 +1,88 @@
+name: Audit real post-deployment DeepSeek 25s locking and no stale signals
+on:
+  push:
+    branches: [fix/deepseek25-autonomous-20261021]
+    paths: [.github/workflows/zl-deepseek25-locking-proof.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only audit timestamps, source hard-stop and downstream window
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,base64,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          remote=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,time,urllib.request,re,pathlib
+          def get(port,route):
+           with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,route),timeout=7) as r:return json.load(r)
+          now=int(time.time()*1000)
+          status=get(13029,'/api/status')
+          history=get(13029,'/api/history?limit=100')
+          trade=get(13001,'/api/status')
+          since=1792574100000
+          rec=[r for r in history.get('records',[]) if isinstance(r.get('round'),int) and r['round']>=since]
+          locks=[r for r in rec if r.get('direction') in ('UP','DOWN')]
+          waits=[r for r in rec if r.get('direction')=='WAIT']
+          times=[r.get('signalLatencyMs') for r in locks if isinstance(r.get('signalLatencyMs'),(int,float))]
+          out={'timeMs':now,'roundAgeSec':(now%300000)/1000,
+           'decisionWindowMs':status.get('decisionWindowEndMs',0)-status.get('round',0),
+           'status':status.get('roundDecision'),'providerModel':status.get('providerModel'),
+           'maxCalls':status.get('maxCallsPerRound'),'marketError':status.get('error'),
+           'historyLatestCount':len(rec),'directionCount':len(locks),'waitCount':len(waits),
+           'lockLatenciesMs':sorted(times),'minLockSec':round(min(times)/1000,3) if times else None,
+           'maxLockSec':round(max(times)/1000,3) if times else None,
+           'lateLocks':len([x for x in times if x>=25000 or x<0]),
+           'missingLatency':len(locks)-len(times),'detail':[{'round':r.get('round'),'side':r.get('direction'),'elapsedMs':r.get('signalLatencyMs'),'reason':r.get('reason')} for r in rec[:15]],
+           'followEnabled':trade.get('enabled')}
+          root=pathlib.Path('/opt/zl-prediction-live')
+          core=(root/'deepseek5/deepseek-adaptive15-core.mjs').read_text()
+          adapter=(root/'deepseek5/deepseek-adaptive15-production-adapter.mjs').read_text()
+          validator=(root/'src/railway-diagnostic/production-signal-choice.mjs').read_text()
+          panel=(root/'src/railway-diagnostic/panel-stats-shell.mjs').read_text()
+          wrapper=(root/'src/railway-diagnostic/wrapper.mjs').read_text()
+          out['guards']={'core25': 'DEADLINE_MS=25000' in core,
+           'adapter25': 'at>=r+25000' in adapter and 'now<r+25000' in adapter,
+           'validator25':'ts>=round+25000||now>=round+25000' in validator,
+           'frontend25':'var expired=Date.now()>=currentRound+25000' in panel,
+           'tradeBuffer30':'SELECTIVE30_ORDER_DEADLINE_MS = 30000' in wrapper,
+           'noFixedDirectionalWeights':'.60*modelScore' not in core}
+          if out['roundAgeSec']>=25:
+           import urllib.error
+           try:
+            get(13029,'/signal')
+            out['lateSignalEndpoint']='RETURNED_VALID_UNEXPECTED'
+           except urllib.error.HTTPError as e:
+            out['lateSignalEndpoint']='HTTP_'+str(e.code)
+          print('ZL_25S_LIVE_LOCK_PROOF='+json.dumps(out,ensure_ascii=False,separators=(',',':')))
+          assert all(out['guards'].values()) and out['lateLocks']==0
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+              access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          invoke=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-deepseek-autonomous25-locking-proof-readonly',type='RunShellScript',working_user='root',command_content=remote,timeout=80)).body.invoke_id
+          for _ in range(40):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            for line in raw.splitlines():
+             if line.startswith('ZL_25S_LIVE_LOCK_PROOF='):print(line)
+            if int(r.exit_code)!=0:raise RuntimeError('LOCK_AUDIT_FAILED: '+raw[-1000:])
+            break
+          else:raise RuntimeError('LOCK_AUDIT_TIMEOUT')
+          PY

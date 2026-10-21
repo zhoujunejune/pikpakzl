@@ -79,8 +79,11 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
     'Use RSI MACD EMA ATR 1m/5m and current causal BTC data as fallible indicators, not deterministic signals.',
     'A second review may revise the first: change stance when new observed evidence supports it, otherwise explain why.',
-    'ALWAYS allow WAIT on insufficient or contradictory evidence. Do not manufacture confidence to satisfy a signal quota.',
-    'Return strict compact JSON: {"direction":"UP|DOWN|WAIT","confidence":0.60,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":"optional"}.',
+    'For each target round you MUST select the most likely UP or DOWN from the available credible evidence, even when evidence is weak or conflicting.',
+    'Do NOT choose WAIT only because uncertainty is high, recent predictions missed, markets are noisy, or your confidence is low.',
+    'Express uncertainty honestly in confidence, risk and reason; never claim that an uncertain guess is a high-probability opportunity.',
+    'Never invent market data or future prices. If the supplied market data cannot be interpreted, do not manufacture an analysis.',
+    'Return strict compact JSON with direction restricted to UP or DOWN: {"direction":"UP","confidence":0.51,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}.',
     'Confidence is SUBJECTIVE, not a calibrated likelihood of winning. Prioritize avoiding unjustified trades.'
    ].join(' ')},
    {role:'user',content:JSON.stringify({
@@ -90,7 +93,8 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     indicators:features,
     priorModelAnalysis:latest,
     verifiedHistoricalExperience:feedbackSafe,
-    waitAllowed:true
+    requireDirectionalForecast:true,
+    technicalFailureMustNotBeGuessed:true
    })}
   ]
  };
@@ -133,10 +137,14 @@ export function finalize(w,now,feedback={}){
   throw Error('INCOHERENT_OPEN_PRICE');
  const first=w.passes.find(x=>x.pass==='initial');
  const review=w.passes.find(x=>x.pass==='review');
- const chosen=review||first;
- if(!chosen)throw Error('MISSING_DEEPSEEK_ANALYSIS');
- if(chosen.direction==='WAIT'){
-  return recordWait(w,'DEEPSEEK_CHOSE_WAIT',now);
+ // Prefer the fresher valid DeepSeek analysis; if a legacy/errant review
+ // chooses WAIT, retain the earlier genuine directional forecast instead.
+ // Never fabricate a direction when BOTH model passes are unusable.
+ const chosen=[review,first].find(x=>x&&(x.direction==='UP'||x.direction==='DOWN'));
+ if(!chosen){
+  if(review?.direction==='WAIT'||first?.direction==='WAIT')
+   return recordWait(w,'NO_VALID_DIRECTION_FROM_DEEPSEEK',now);
+  throw Error('MISSING_DEEPSEEK_ANALYSIS');
  }
  const fromOpenBps=(latest.price/open-1)*10000;
  const priorBps=(prior.at(-1).price/prior[0].price-1)*10000;
@@ -148,26 +156,29 @@ export function finalize(w,now,feedback={}){
  const composite=.60*modelScore+.30*marketScore+.10*oldScore;
  const tentative=composite>0?'UP':'DOWN';
  const policy=historyPolicy(feedback);
+ // User-selected DIRECTIONAL policy: soft confidence, historical miss rates and
+ // 60/30/10 score all remain diagnostics, not blockers. Only verified technical
+ // invalidity can block a round. This can INCREASE mistakes and trade exposure.
  const requiredModelConfidence=.55+policy.confidencePenalty[tentative];
- const weakModel=chosen.confidence<requiredModelConfidence;
- const disputed=chosen.direction!==tentative;
- const unresolved=review?false:((first?.confidence??0)<.72&&Math.sign(fromOpenBps)!==(first.direction==='UP'?1:-1));
- const lowEvidence=Math.abs(composite)<.25;
- if(weakModel||disputed||unresolved||lowEvidence){
-  const why=weakModel?'LOW_MODEL_CONFIDENCE':disputed?'MODEL_MARKET_CONFLICT':
-   unresolved?'NO_REVIEW_AND_CONFLICT':'LOW_DIRECTIONAL_EVIDENCE';
-  return recordWait(w,why,now);
- }
+ const uncertainty=chosen.confidence<requiredModelConfidence?'LOW_MODEL_CONFIDENCE':
+   Math.abs(composite)<.25?'LOW_DIRECTIONAL_EVIDENCE':
+   (review?.direction==='WAIT'?'REVIEW_DECLINED_FALLBACK_INITIAL':
+    'DIRECTIONAL_JUDGMENT');
+ // Preserve the actual LLM direction even when the spot proxy temporarily
+ // disagrees: market and prior trends cannot invert a .60-weighted ±1 vote.
+ if(tentative!==chosen.direction)throw Error('INVALID_DIRECTIONAL_SCORE');
  const result={ok:true,model:'DEEPSEEK_ADAPTIVE15_EXPERIENCE_V1',
   mode:'SHADOW_SIGNAL_ONLY',round:w.round,generatedAt:now,
   expiryAt:w.round+DEADLINE_MS,orders:false,productionIntegration:false,
   latest:{round:w.round,status:'LOCKED',direction:tentative,lockedAt:now,
+   directionalPolicy:'UP_DOWN_REQUIRED_WHEN_VALID',uncertainty,
    marketAt:latest.at,openPrice:open,price:latest.price,
    fromOpenBps:Number(fromOpenBps.toFixed(3)),
    lastTwoMinuteBps:Number(priorBps.toFixed(3)),
    firstAnalysis:first?.direction||null,reviewAnalysis:review?.direction||null,
    selectedAnalysis:chosen.pass,modelConfidence:chosen.confidence,
    confidenceIsCalibrated:false,policy,hybridScore:Number(composite.toFixed(4)),
+   historicalPenaltyAppliedAsBlock:false,
    reason:chosen.reason,earlySamples:early.length,priorSamples:prior.length}};
  w.provisionalWait=null;
  w.final=result;return result;

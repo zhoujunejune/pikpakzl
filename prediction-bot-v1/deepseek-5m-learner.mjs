@@ -5,11 +5,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 const okSide=x=>x==='UP'||x==='DOWN';
 const source='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
+function ensureLifetimeCounters(data){
+ // Migrate old on-disk ledgers without modifying individual official settlements.
+ const rows=data.predictions;
+ if(!Number.isSafeInteger(data.totalPredictions)||data.totalPredictions<rows.length)
+  data.totalPredictions=rows.length;
+ if(!Number.isSafeInteger(data.totalSettled)||data.totalSettled<0)
+  data.totalSettled=rows.filter(x=>okSide(x.actual)).length;
+ if(!Number.isSafeInteger(data.totalHits)||data.totalHits<0)
+  data.totalHits=rows.filter(x=>okSide(x.actual)&&x.direction===x.actual).length;
+ if(data.totalHits>data.totalSettled)throw Error('LEARNER_LIFETIME_COUNTER_CORRUPT');
+ return data;
+}
 function load(file){
  try{
   const data=JSON.parse(fs.readFileSync(file,'utf8'));
-  return data?.schema===1&&Array.isArray(data.predictions)?data:{schema:1,predictions:[],updatedAt:null};
- }catch{return {schema:1,predictions:[],updatedAt:null}}
+  return data?.schema===1&&Array.isArray(data.predictions)?ensureLifetimeCounters(data):ensureLifetimeCounters({schema:1,predictions:[],updatedAt:null});
+ }catch{return ensureLifetimeCounters({schema:1,predictions:[],updatedAt:null})}
 }
 function save(file,state){
  fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o750});
@@ -41,6 +53,7 @@ export function newLearner(file,clock=()=>Date.now()){
    attemptCount:attempts,
    actual:null,settledAt:null
   });
+  state.totalPredictions++;
   state.predictions=state.predictions.slice(-2000);
   state.updatedAt=clock();save(file,state);
  }
@@ -62,6 +75,8 @@ export function newLearner(file,clock=()=>Date.now()){
    if(clock()<pred.round+300000)continue;
    pred.actual=r.actual;pred.settledAt=r.settledAt;
    pred.hit=pred.direction===r.actual;
+   state.totalSettled++;
+   if(pred.hit)state.totalHits++;
    count++;
   }
   if(count){state.updatedAt=clock();save(file,state)}
@@ -80,7 +95,12 @@ export function newLearner(file,clock=()=>Date.now()){
   }));
   return {officialSamples:recent.length,officialHits:hits,
    recentAccuracy:recent.length?Number((hits/recent.length).toFixed(4)):null,
-   allOfficialSamples:settled.length,upDown:sides,regimes,
+   allOfficialSamples:state.totalSettled,
+   allOfficialHits:state.totalHits,
+   allOfficialMisses:state.totalSettled-state.totalHits,
+   allOfficialAccuracy:state.totalSettled?Number((state.totalHits/state.totalSettled).toFixed(4)):null,
+   allPredictions:state.totalPredictions,
+   upDown:sides,regimes,
    predictions:state.predictions.length,unsettled:state.predictions.length-settled.length,
    readyForAnalysis:recent.length>=30,
    note:'Empirical post-settlement feedback only; not probability calibration or model weight training'};

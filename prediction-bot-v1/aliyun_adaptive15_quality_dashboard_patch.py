@@ -34,7 +34,7 @@ python3 - "$panel" "$tmp" <<'PY'
 from pathlib import Path
 import sys
 p=Path(sys.argv[1]);out=Path(sys.argv[2]);s=p.read_text()
-anchor='   var currentRound=Math.floor(Date.now()/300000)*300000;'
+anchor='  var currentRound=Math.floor(Date.now()/300000)*300000;'
 if s.count(anchor)!=1 or 'DEEPSEEK_QUALITY_VISIBLE_V1' in s:
  raise SystemExit('UNEXPECTED_UI_CONTEXT_ABORT')
 insert='''   // DEEPSEEK_QUALITY_VISIBLE_V1: do not conflate settled direction hit rate with net return.

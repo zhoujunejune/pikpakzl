@@ -28,3 +28,4 @@ jobs:
           node --test prediction-bot-v1/deepseek-learning-evidence25.test.mjs
           node --test prediction-bot-v1/deepseek-wait-reconsider25.test.mjs
           node --test prediction-bot-v1/deepseek-free-analysis25.test.mjs
+          node --test prediction-bot-v1/deepseek-5m-episodic-memory.test.mjs

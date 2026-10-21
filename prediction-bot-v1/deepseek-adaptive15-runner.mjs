@@ -133,7 +133,7 @@ export function createAdaptiveRunner({
       void analyze(w,'current',raw,now);
      const readyToLock=latestCurrent&&!latestCurrent.continueAnalysis;
      const finalChance=now>=w.round+DEADLINE_MS-1100;
-     if(now>=w.round+1800&&(readyToLock||finalChance))try{
+     if(now>=w.round&&(readyToLock||finalChance))try{
       let feedback={};
       if(typeof getHistoricalFeedback==='function'){
        const f=extractFeatures(raw,now);

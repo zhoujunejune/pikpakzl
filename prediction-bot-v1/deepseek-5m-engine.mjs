@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {extractFeatures} from './deepseek-5m-features.mjs';
 import {newLearner} from './deepseek-5m-learner.mjs';
+import {newDecisionJournal} from './deepseek-5m-decision-journal.mjs';
 
 export const modelId='DEEPSEEK_5M_V1';
 export const roundOf=t=>Math.floor(t/300000)*300000;
@@ -81,6 +82,7 @@ export function createEngine({env=process.env,clock=()=>Date.now(),fetcher=fetch
  const official=String(env.DEEPSEEK_OFFICIAL_STATS_URL||OFFICIAL_STATS_URL);
  const stateFile=String(env.LLM_STATE_FILE||'/var/lib/zl-prediction/deepseek5/signal.json');
  const learner=newLearner(String(env.DEEPSEEK_LEARNING_FILE||'/var/lib/zl-prediction/deepseek5/learning.json'),clock);
+ const journal=newDecisionJournal(String(env.DEEPSEEK_DECISION_AUDIT_DIR||'/var/lib/zl-prediction/deepseek5/decision-audit'));
  let signal=null,round=null,tries=0,retryAt=0,busy=false,error=null,learningLastPoll=0,waitReason=null;
  let lastFeatures=null,lastApiTokens=null,lastApiLatencyMs=null,lastSettlementCount=0,settlementError=null;
  try{const old=JSON.parse(fs.readFileSync(stateFile,'utf8'));if(old.model===modelId)signal=old}catch{}
@@ -96,7 +98,7 @@ export function createEngine({env=process.env,clock=()=>Date.now(),fetcher=fetch
    reasoning:{enabled:true,effort:'high'},
    featuresVersion:'BTC_OHLCV_RSI_MACD_ATR_V2',
    featureReady:lastFeatures?.dataQuality?.indicatorsReady??false,
-   lastApiLatencyMs,lastApiTokens,
+   lastApiLatencyMs,lastApiTokens,decisionJournal:journal.status(),
    learning:{...stats,lastOfficialUpdates:lastSettlementCount,lastError:settlementError,
     autoFeedback:true,modelWeightsFineTuned:false,
     modelReviewSuggested:stats.officialSamples>=100&&stats.recentAccuracy<0.50},
@@ -121,13 +123,16 @@ export function createEngine({env=process.env,clock=()=>Date.now(),fetcher=fetch
   if(round!==r){round=r;tries=0;retryAt=0;error=null;waitReason=null;lastFeatures=null}
   if(signal?.round===r||tries>=MAX_CALLS_PER_ROUND||now<retryAt)return status();
   busy=true;tries++;
+  let auditOutcome='ERROR',auditInput=null,auditDecision=null;
+  lastApiLatencyMs=null;lastApiTokens=null;
   try{
    const market=await fetcher(feed,{signal:AbortSignal.timeout(5000),headers:{Accept:'application/json'}});
    if(!market.ok)throw Error('MARKET_HTTP_'+market.status);
    const input=marketInput(await market.json(),clock());
    if(input.round!==r)throw Error('ROUND_CHANGED');
-   lastFeatures=input.features;
+   lastFeatures=input.features;auditInput=input;
    if(!input.features.dataQuality.indicatorsReady){
+    auditOutcome='WAIT_FEATURES';
     waitReason='WAIT_FOR_SUFFICIENT_CLOSED_OHLCV';
     retryAt=clock()+15000;return status();
    }
@@ -147,6 +152,7 @@ export function createEngine({env=process.env,clock=()=>Date.now(),fetcher=fetch
    if(body?.choices?.[0]?.finish_reason==='length')throw Error('MODEL_RESPONSE_TRUNCATED');
    const result=parseDecision(body?.choices?.[0]?.message?.content);
    if(result.direction==='WAIT'){
+    auditOutcome='WAIT_LLM';auditDecision=result;
     waitReason=result.reason||'MODEL_REVIEWING';
     retryAt=clock()+result.nextReviewSec*1000;
     return status();
@@ -159,20 +165,30 @@ export function createEngine({env=process.env,clock=()=>Date.now(),fetcher=fetch
    if(current.round!==input.round)throw Error('ROUND_CHANGED_AFTER_THINKING');
    const drift=Math.abs(current.lastPrice/input.lastPrice-1);
    if(drift>0.0015){
+    auditOutcome='WAIT_DRIFT';auditDecision=result;
     waitReason='MARKET_MOVED_DURING_REASONING';
     retryAt=clock()+12000;return status();
    }
    const locked=createSignal(input,result,clock(),model);
+   auditOutcome='LOCKED';auditDecision=result;
    fs.mkdirSync(path.dirname(stateFile),{recursive:true,mode:0o750});
    const tmp=stateFile+'.tmp.'+process.pid;
    fs.writeFileSync(tmp,JSON.stringify(locked),{mode:0o640});fs.renameSync(tmp,stateFile);
    signal=locked;error=null;waitReason=null;
    try{learner.record(locked,input.features,tries)}catch(e){settlementError='LEARNER_RECORD_'+String(e?.message||e).slice(0,65)}
   }catch(e){error=String(e?.message||e).slice(0,100);retryAt=clock()+20000}
-  finally{busy=false}
+  finally{
+   journal.append({at:clock(),round:r,attempt:tries,outcome:auditOutcome,
+    direction:auditDecision?.direction,confidence:auditDecision?.confidence,
+    reason:auditDecision?.reason,marketAt:auditInput?.marketAt,
+    lastPrice:auditInput?.lastPrice,roundOpenPrice:auditInput?.roundOpenPrice,
+    elapsedMs:clock()-r,latencyMs:lastApiLatencyMs,tokens:lastApiTokens,
+    error:auditOutcome==='ERROR'?error:null});
+   busy=false;
+  }
   return status();
  }
- return {status,tick,history:(limit)=>learner.history(limit)};
+ return {status,tick,history:(limit)=>learner.history(limit),decisionAudit:(limit)=>journal.history(limit,clock())};
 }
 export function serve(engine,port=Number(process.env.LLM_SERVICE_PORT||13029)){
  const server=http.createServer((req,res)=>{
@@ -187,6 +203,11 @@ export function serve(engine,port=Number(process.env.LLM_SERVICE_PORT||13029)){
    const history=engine.history?.(url.searchParams.get('limit'));
    res.writeHead(history?.ok?200:503,{'content-type':'application/json','cache-control':'no-store'});
    return res.end(JSON.stringify(history||{ok:false,error:'HISTORY_UNAVAILABLE'}));
+  }
+  if(url.pathname==='/api/decision-audit'){
+   const audit=engine.decisionAudit?.(url.searchParams.get('limit'))||{ok:false,error:'JOURNAL_UNAVAILABLE'};
+   res.writeHead(audit.ok?200:503,{'content-type':'application/json','cache-control':'no-store'});
+   return res.end(JSON.stringify(audit));
   }
   if(url.pathname==='/signal'){
    res.writeHead(data.signal?200:503,{'content-type':'application/json','cache-control':'no-store'});

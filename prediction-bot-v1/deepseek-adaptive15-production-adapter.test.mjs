@@ -49,6 +49,8 @@ test('provider gives official learner records after two valid model reviews',asy
  try{
   const p=createAdaptive15ProductionProvider({env,clock:()=>t,fetcher});
   for(t=target-120000;t<=target+14500;t+=500)await p.tick();
+  // Loop increment reaches exactly +15s; order-facing /signal must have closed.
+  t=target+14500;
   const s=p.status();
   assert.equal(apiCalls,2);
   assert.ok(officialPolls>=1);

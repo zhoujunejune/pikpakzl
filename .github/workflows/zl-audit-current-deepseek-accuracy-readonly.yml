@@ -1,0 +1,21 @@
+name: Read current official DeepSeek 5-minute model accuracy and recent causes
+on:
+  push:
+    branches: [fix/deepseek25-direction-only-normal-orders-20261022]
+    paths: [.github/workflows/zl-audit-current-deepseek-accuracy-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read official settled rounds and production health; no trade or restart
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/audit_live_deepseek_accuracy_20261022.py

@@ -50,7 +50,7 @@ test('fast10 provider preserves /signal contract, persists one prediction and fe
   assert.equal(providerCalls,1);
   assert.ok(officialPolls>=1);
   assert.equal(s.model,'DEEPSEEK_5M_V1');
-  assert.equal(s.maxCallsPerRound,1);
+  assert.equal(s.maxCallsPerRound,2);
   assert.equal(s.decisionWindowEndMs,target+10000);
   assert.equal(s.signal.latest.status,'LOCKED');
   assert.equal(s.signal.latest.entry.direction,s.signal.latest.direction);

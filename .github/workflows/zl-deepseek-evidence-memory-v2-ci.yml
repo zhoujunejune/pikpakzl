@@ -1,0 +1,28 @@
+name: DeepSeek evidence memory v2 - offline tests only
+on:
+  push:
+    branches: [feature/deepseek-evidence-memory-v2]
+    paths:
+      - 'prediction-bot-v1/deepseek-5m-episodic-memory.mjs'
+      - 'prediction-bot-v1/deepseek-5m-learner.mjs'
+      - 'prediction-bot-v1/deepseek-5m-episodic-memory.test.mjs'
+      - '.github/workflows/zl-deepseek-evidence-memory-v2-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Syntax check
+        run: |
+          node --check prediction-bot-v1/deepseek-5m-episodic-memory.mjs
+          node --check prediction-bot-v1/deepseek-5m-learner.mjs
+          node --check prediction-bot-v1/deepseek-5m-episodic-memory.test.mjs
+      - name: Verify memory is official and future-blind
+        run: node --test prediction-bot-v1/deepseek-5m-episodic-memory.test.mjs
+      - name: Regression test existing production engine without deploying
+        run: node --test prediction-bot-v1/deepseek-5m-engine.test.mjs

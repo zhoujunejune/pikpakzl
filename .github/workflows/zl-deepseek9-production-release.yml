@@ -1,0 +1,46 @@
+name: Deploy one DeepSeek deep analysis per 5m round, strict 9s deadline
+on:
+  push:
+    branches: [fix/deepseek9-one-reasoning-20261021]
+    paths:
+      - .github/workflows/zl-deepseek9-production-release.yml
+      - prediction-bot-v1/aliyun_deepseek9_launch.py
+      - prediction-bot-v1/deepseek9_guarded_apply.sh
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Confirm single deep reasoning call and actual market data plus strict WAIT boundary
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_deepseek9_launch.py
+          bash -n prediction-bot-v1/deepseek9_guarded_apply.sh
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-single9.test.mjs
+  deploy:
+    needs: regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Existing Alibaba Cloud SWAS API SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Atomic guarded cutover, backed up and validated on host, follow remains off
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek9_launch.py

@@ -60,7 +60,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
  const runner=createAdaptiveRunner({
   env:{...env,ADAPTIVE15_ENABLE_AI:key?'1':'0'},clock,fetcher,
   getHistoricalFeedback:features=>learner.feedback(features),
-  onLocked:(candidate,raw,at)=>{
+  onLocked:(candidate,raw,at,window)=>{
    if(saved?.round===candidate.round)return; // never duplicate a prior lock
    const signal=buildAdaptive15CompatibleSignal(candidate,at,model);
    const features=extractFeatures(raw,at);

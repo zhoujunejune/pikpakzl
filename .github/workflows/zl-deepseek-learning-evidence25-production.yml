@@ -1,4 +1,5 @@
 name: Verify and deploy DeepSeek experience proof on existing Alibaba 25s service
+# Exact-source guard diagnoses version drift before any executable change.
 on:
   push:
     branches: [feat/deepseek-learning-evidence25-20261021]

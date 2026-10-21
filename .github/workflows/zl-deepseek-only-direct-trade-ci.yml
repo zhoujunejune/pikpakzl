@@ -1,4 +1,4 @@
-name: Verify DeepSeek alone decides TRADE or NO_TRADE before Binance order
+name: Verify original DeepSeek trade decision exclusively controls order
 on:
   push:
     branches: [fix/deepseek-only-trade-choice-live25-20261022]

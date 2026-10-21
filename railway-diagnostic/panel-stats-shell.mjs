@@ -447,12 +447,32 @@ async function renderDeepSeekRoundStats(){
      !Array.isArray(ledger.records))throw Error('DeepSeek 账本版本或响应结构无效');
   var rows=ledger.records.filter(function(x){return Number.isSafeInteger(x.round)&&['UP','DOWN'].includes(x.direction)});
   var settled=rows.filter(function(x){return ['UP','DOWN'].includes(x.actual)&&Number.isSafeInteger(x.settledAt)&&typeof x.hit==='boolean'});
-  var hits=settled.filter(function(x){return x.hit}).length,misses=settled.length-hits;
-  put('rsAccuracy',settled.length?(100*hits/settled.length).toFixed(2)+'%（'+settled.length+'轮，样本不足）':'DeepSeek 已结算样本不足');
-  put('rsSettled',settled.length);put('rsDecided',rows.length);put('rsCorrect',hits);put('rsWrong',misses);
+  // The history endpoint intentionally returns the last 80 rows ONLY.
+  // Authoritative lifetime counts come from the DeepSeek learner summary,
+  // never from rows.length (which would stick at 80/79 forever).
+  var totals=ledger.summary||{};
+  var totalPredictions=totals.allPredictions;
+  var totalSettled=totals.allOfficialSamples;
+  var totalHits=totals.allOfficialHits;
+  var totalMisses=totals.allOfficialMisses;
+  var validTotals=Number.isSafeInteger(totalPredictions)&&totalPredictions>=0&&
+    Number.isSafeInteger(totalSettled)&&totalSettled>=0&&
+    Number.isSafeInteger(totalHits)&&totalHits>=0&&
+    Number.isSafeInteger(totalMisses)&&totalMisses>=0&&
+    totalHits+totalMisses===totalSettled&&totalPredictions>=totalSettled;
+  if(!validTotals)throw Error('DeepSeek 累计统计不可用，请检查服务器学习账本版本');
+  var recentHits=settled.filter(function(x){return x.hit}).length;
+  put('rsAccuracy',totalSettled?(100*totalHits/totalSettled).toFixed(2)+'%（累计'+totalSettled+'轮）':'暂无已结算预测');
+  put('rsSettled',totalSettled);
+  put('rsDecided',totalPredictions);
+  put('rsCorrect',totalHits);
+  put('rsWrong',totalMisses);
   put('rsWait','尚未全量记录');put('rsCoverage','未核定');
-  put('rsMeta','唯一生产模型：DEEPSEEK_5M_V1 · DeepSeek自身锁定 '+rows.length+
-   ' 轮，官方已结算 '+settled.length+' 轮；这是最近最多80条 DeepSeek 信号的独立统计。不混入旧 Selective V2、Edge。尚无完整未锁定轮次账本，所以覆盖率不作假。');
+  put('rsMeta','唯一生产模型：DEEPSEEK_5M_V1 · 累计已锁定 '+totalPredictions+
+   ' 轮、官方已结算 '+totalSettled+' 轮、待结算 '+(totalPredictions-totalSettled)+
+   ' 轮；下方仅显示最近最多80条信号（其中已结算 '+settled.length+
+   ' 条'+(settled.length?'，最近80条命中率 '+(100*recentHits/settled.length).toFixed(2)+'%':'')+
+   '）。累计统计不受80条显示窗口限制，不混入旧 Selective V2、Edge。尚未完整记录未锁定轮次，因此覆盖率未核定。');
   var currentRound=Math.floor(Date.now()/300000)*300000;
   if(status.round===currentRound&&!rows.some(function(x){return x.round===currentRound}))
    rows.unshift({round:currentRound,direction:null,provider:status.providerModel,waiting:true});

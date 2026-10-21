@@ -1,0 +1,39 @@
+name: Deploy DeepSeek preferred-UP-DOWN with hard +15s deadline, follow OFF
+on:
+  push:
+    branches: [fix/deepseek15-max-directional-20261021]
+    paths:
+      - .github/workflows/zl-deepseek15-directional-production.yml
+      - prediction-bot-v1/aliyun_deepseek15_directional_deploy.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  guarded-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Test genuine directional forecast, no invented signals, old histories, technical WAIT and hard 15s
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_deepseek15_directional_deploy.py
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-core.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-production-adapter.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-hard-deadline.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-improvements.test.mjs
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Upgrade ONLY DeepSeek live source after source-check and auto-follow off
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek15_directional_deploy.py

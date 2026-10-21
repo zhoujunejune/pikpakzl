@@ -1,0 +1,30 @@
+name: DeepSeek autonomous 25s no-order safety checks
+on:
+  push:
+    branches: [fix/deepseek25-autonomous-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-core.mjs
+      - prediction-bot-v1/deepseek-adaptive15-runner.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+      - prediction-bot-v1/deepseek-adaptive15-quality-store.mjs
+      - prediction-bot-v1/deepseek-adaptive15-error-attribution.mjs
+      - prediction-bot-v1/deepseek-autonomous25.test.mjs
+      - .github/workflows/zl-deepseek25-autonomous-checks.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Check JS parse and actual 25-second no-order regression
+        run: |
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-quality-store.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-error-attribution.mjs
+          node --test prediction-bot-v1/deepseek-autonomous25.test.mjs

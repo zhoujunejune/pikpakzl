@@ -78,11 +78,17 @@ test('thinking enabled; no signal on WAIT, then locks on UP and never calls mode
  try{
   const e=createEngine({
    env:{DEEPSEEK_API_KEY:'test-secret',DEEPSEEK_LEARNING_FILE:path.join(dir,'learning.json'),
-    LLM_STATE_FILE:path.join(dir,'signal.json')},
+    LLM_STATE_FILE:path.join(dir,'signal.json'),
+    DEEPSEEK_DECISION_AUDIT_DIR:path.join(dir,'audit')},
    clock:()=>t,fetcher
   });
   await e.tick();assert.equal(e.status().signal,null);assert.equal(modelRequests,1);
   t+=26000;await e.tick();assert.equal(modelRequests,2);
+  const audit=e.decisionAudit(5);
+  assert.equal(audit.ok,true);
+  assert.deepEqual(audit.records.map(x=>x.outcome),['LOCKED','WAIT_LLM']);
+  assert.equal(audit.records[0].attempt,2);
+  assert.equal(e.status().decisionJournal.recordedSinceProcessStart,2);
   assert.equal(e.status().signal.latest.direction,'UP');
   assert.equal(e.status().signal.readOnly,true);
   assert.equal(e.status().learning.predictions,1);

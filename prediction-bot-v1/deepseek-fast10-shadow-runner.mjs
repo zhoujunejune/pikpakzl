@@ -47,9 +47,9 @@ export function createRunner({env=process.env,clock=()=>Date.now(),fetcher=fetch
   }
  }
  async function callPrewarm(active,raw,now){
-  if(!enabled||!key||aiBusy||active.prewarm||aiAttempts>=1)return;
+  if(!enabled||!key||aiBusy||active.prewarm||aiAttempts>=2)return;
   const remaining=active.forRound-now;
-  if(remaining>75000||remaining<4000)return;
+  if(remaining>(aiAttempts===0?75000:27000)||remaining<4000)return;
   let payload;
   try{
    const prev=extractFeatures(raw,now);

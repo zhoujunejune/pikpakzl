@@ -1,0 +1,22 @@
+name: Independently verify DeepSeek-only economic trade decision is live
+on:
+  push:
+    branches: [fix/deepseek-only-trade-choice-live25-20261022]
+    paths:
+      - .github/workflows/zl-deepseek-direct-production-audit.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only verify live AI authority, removed numerical rule and healthy services
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/verify_direct_trade_production_readonly.py

@@ -43,3 +43,10 @@
 - [One-shot real DeepSeek High latency probe](https://github.com/zhoujunejune/pikpakzl/actions/runs/39540446893): 1187ms, valid UP/DOWN JSON. One response is not a guarantee of future uptime/latency or prediction accuracy.
 - [First fully prewarmed real round verification](https://github.com/zhoujunejune/pikpakzl/actions/runs/39540992274): the read-only check independently validates a new-round lock under 10 seconds or reports a missed round. The live check must be interpreted independently of deployment success; do not claim guaranteed round-by-round output until sustained data supports it.
 - Real order submission deadline still uses the existing trader, which this change deliberately does not modify. An under-10s signal does not ensure an order is filled under 10s.
+
+## Real post-hotfix outcome — 2026-10-21 04:05 UTC
+
+- [Independent GET-only live round proof](https://github.com/zhoujunejune/pikpakzl/actions/runs/39541807462): Binance BTCUSDT real market round 1792555500000 was prewarmed, direction UP locked **6,910ms after round open**. Fresh market quote age at lock 1,888ms. No production auto-follow enabled; no real order submitted by this verification.
+- [Durable learner record proof](https://github.com/zhoujunejune/pikpakzl/actions/runs/39542184894): new UP result persisted with signalLatencyMs 6910; learner predictions increased to 111, official settled samples remain 110 until next verified settlement. Existing feedback was not lost.
+- The immediately earlier live round 1792554900000 was not locked due to provisional opening-price correction mismatch. This was fixed in [bounded-open-price hotfix](https://github.com/zhoujunejune/pikpakzl/actions/runs/39541564544). A different earlier test at 1792555200000 missed because a guarded service restart interrupted that round's 120-second prewarm. These failures must not be hidden when calculating later coverage.
+- A single successful round proves end-to-end signal TIMING, not prediction accuracy, profitability, continuous 100% signal availability, or an exchange-filled order within ten seconds.

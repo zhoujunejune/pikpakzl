@@ -1,0 +1,34 @@
+name: Show actual two DeepSeek reviews and preserve reasoning - no follow change
+on:
+  push:
+    branches: [feat/deepseek-adaptive15-experience-20261021]
+    paths: [.github/workflows/zl-deepseek-adaptive15-reporting-hotfix.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Unit tests before single-file production visibility patch
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_adaptive15_reporting_hotfix.py
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-core.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-production-adapter.test.mjs
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Patch only source file with rollback, require follow disabled
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_adaptive15_reporting_hotfix.py

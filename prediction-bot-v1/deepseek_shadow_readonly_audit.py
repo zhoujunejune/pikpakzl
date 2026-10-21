@@ -73,12 +73,12 @@ def assess(history, model_status, choice):
             rejected["invalidOrNonCausalRecord"] += 1
             continue
         elapsed = (at - r) / 1000
-        valid.append((elapsed, direction, actual))
-        if isinstance(row.get("provider"), str):
-            providers.add(row["provider"][:40])
+        provider = row.get("provider")[:40] if isinstance(row.get("provider"), str) else "UNKNOWN"
+        valid.append((elapsed, direction, actual, provider))
+        providers.add(provider)
     def group(items):
         n = len(items)
-        hits = sum(d == a for _, d, a in items)
+        hits = sum(row[1] == row[2] for row in items)
         return {"n": n, "hits": hits, "hitRate": round(hits / n, 4) if n else None,
                 "wilson95": wilson95(hits, n), "insufficientSample": n < 30}
     timing = [{"windowSec": [lo, hi], **group([item for item in valid if lo <= item[0] < hi])}
@@ -98,6 +98,7 @@ def assess(history, model_status, choice):
         "timingByLockSecond": timing,
         "up": group([x for x in valid if x[1] == "UP"]),
         "down": group([x for x in valid if x[1] == "DOWN"]),
+        "byProvider": {name: group([x for x in valid if x[3] == name]) for name in sorted(providers)},
         "rejectedOrUnavailable": rejected,
         "providerVersionsPresent": sorted(providers),
         "learning": {

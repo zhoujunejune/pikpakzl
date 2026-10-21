@@ -1,0 +1,29 @@
+name: Adaptive15 provisional WAIT, postsettlement mistakes and PnL truth tests
+on:
+  push:
+    branches: [feat/adaptive15-deferred-wait-learning-pnl-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-core.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+      - prediction-bot-v1/deepseek-adaptive15-error-attribution.mjs
+      - prediction-bot-v1/deepseek-adaptive15-quality-store.mjs
+      - prediction-bot-v1/deepseek-adaptive15-improvements.test.mjs
+      - .github/workflows/zl-adaptive15-experience-quality-ci.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Test full adaptive15 suite, no real orders or modifications
+        run: |
+          for f in prediction-bot-v1/deepseek-adaptive15-{core,runner,production-adapter,error-attribution,quality-store}.mjs; do node --check "$f"; done
+          node --test prediction-bot-v1/deepseek-adaptive15-core.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-production-adapter.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-hard-deadline.test.mjs
+          node --test prediction-bot-v1/deepseek-adaptive15-improvements.test.mjs

@@ -1,0 +1,26 @@
+name: DeepSeek single real-data reasoning 9s safety tests (no trading)
+on:
+  push:
+    branches: [fix/deepseek9-one-reasoning-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-core.mjs
+      - prediction-bot-v1/deepseek-adaptive15-runner.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+      - prediction-bot-v1/deepseek-single9.test.mjs
+      - .github/workflows/zl-deepseek9-single-tests.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Test single DeepSeek thinking call with authentic market data and hard nine-second cutoff
+        run: |
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-single9.test.mjs

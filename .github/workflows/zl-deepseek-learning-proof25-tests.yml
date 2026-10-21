@@ -1,0 +1,30 @@
+name: DeepSeek 25s learning evidence tests (no API calls)
+on:
+  push:
+    branches: [feat/deepseek-learning-evidence25-20261021]
+    paths:
+      - prediction-bot-v1/deepseek-adaptive15-quality-store.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+      - prediction-bot-v1/deepseek-5m-learner.mjs
+      - prediction-bot-v1/deepseek-adaptive15-runner.mjs
+      - prediction-bot-v1/deepseek-learning-evidence25.test.mjs
+      - .github/workflows/zl-deepseek-learning-proof25-tests.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify unchanged six-call model and authentic learning provenance
+        run: |
+          node --check prediction-bot-v1/deepseek-5m-learner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-quality-store.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --test prediction-bot-v1/deepseek-learning-evidence25.test.mjs
+          node --test prediction-bot-v1/deepseek-wait-reconsider25.test.mjs
+          node --test prediction-bot-v1/deepseek-free-analysis25.test.mjs

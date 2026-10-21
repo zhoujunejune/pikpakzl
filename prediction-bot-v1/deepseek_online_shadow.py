@@ -93,7 +93,7 @@ def feature_vector(m,now):
     if price<=0 or opening<=0:raise ValueError("INVALID_PRICE")
     a=bars(m,"1m",now,60000);b=bars(m,"5m",now,300000)
     i,j=interval(a,price),interval(b,price)
-    return r,[1.,clip((price/opening-1)*1000),*i[:3],*j[:3],*i[3:],*j[3:]]
+    return r,[1.,clip((price/opening-1)*1000),i[0],j[0],i[1],j[1],i[2],j[2],i[3],j[3],i[4],j[4],i[5],j[5]]
 def http_json(url,timeout=6):
     with urllib.request.urlopen(urllib.request.Request(url,headers={"Accept":"application/json"}),timeout=timeout) as r:
         return json.load(r)

@@ -117,34 +117,16 @@ s=once(s,
  """source = "import {decideLiveTradeValue} from './live-trade-value-policy.mjs';\\n" + source;""",
  "",
  "REMOVE_STATISTICAL_GATE_IMPORT")
-s=once(s,
- "       }else if(currentPending.state==='EV_FILTERED'){",
- """       }else if(currentPending.state==='AI_NO_TRADE'||currentPending.state==='AI_UNAVAILABLE'){""",
- "FRONTEND_SHOW_AI_DECISION")
-s=once(s,
- "         if(currentPending.blockReason==='INSUFFICIENT_EDGE'){",
- "         if(currentPending.state==='AI_NO_TRADE'){",
- "FRONTEND_NO_TRADE_LABEL")
-s=once(s,
- "           text('pendingTitle','已跳过本轮：当前赔率优势不足');",
- "           text('pendingTitle','DeepSeek 决定不下单');",
- "FRONTEND_TITLE")
-s=once(s,
- """           var mp=Number(currentPending.modelProbability),qc=Number(currentPending.quoteChance),ed=Number(currentPending.edge),me=Number(currentPending.minEdge);
-           text('pendingMeta','模型概率 '+(isFinite(mp)?(mp*100).toFixed(2)+'%':'-')+' · 市场报价 '+(isFinite(qc)?(qc*100).toFixed(2)+'%':'-')+' · Edge '+(isFinite(ed)?(ed*100).toFixed(2)+'%':'-')+' · 最低要求 '+(isFinite(me)?'+'+(me*100).toFixed(2)+'%':'-')+'。未向 Binance 提交订单。');""",
- """           text('pendingMeta',(currentPending.tradeValueReason||'AI未发现值得交易的机会')+'。未向 Binance 提交订单。');""",
- "FRONTEND_REASON")
-s=once(s,
- """         }else if(currentPending.blockReason==='MODEL_NOT_CALIBRATED'){
-           text('pendingTitle','已跳过本轮：模型尚未完成概率校准');
-           text('pendingMeta','当前校准样本 '+(currentPending.calibrationSamples==null?'-':currentPending.calibrationSamples)+'，本轮未向 Binance 提交订单。');
-         }else{""",
- """         }else{""",
- "REMOVE_UNUSED_FRONTEND_STATISTICAL_LABEL")
-s=once(s,
- "           text('pendingTitle','已跳过本轮：风控未通过');",
- "           text('pendingTitle','DeepSeek 交易决策暂不可核验');",
- "FRONTEND_UNVERIFIED")
+# Replace entire legacy statistical-edge UI branch with the AI's own rationale.
+a=s.find("}else if(currentPending.state==='EV_FILTERED'){")
+b=s.find("}else if(currentPending.state==='PREPARE_ERROR'",a)
+if a<0 or b<0 or s.count("}else if(currentPending.state==='EV_FILTERED'){")!=1:
+ raise ValueError('UNKNOWN_OLD_FRONTEND_EV_MARKUP')
+s=s[:a]+""" }else if(currentPending.state==='AI_NO_TRADE'||currentPending.state==='AI_UNAVAILABLE'){
+        text('pendingTitle',currentPending.state==='AI_NO_TRADE'?'DeepSeek决定不下单':'DeepSeek交易决策暂不可核验');
+        text('pendingMeta',(currentPending.tradeValueReason||currentPending.error||'无法确认模型判断')+'。未向 Binance 提交订单。');
+        if(btn)btn.classList.add('hidden');
+      """+s[b:]
 assert 'decideLiveTradeValue' not in s and "if (EV_FILTER_ENABLED)" not in s
 assert "deepseek_live_trade_value" not in s
 assert s.count("deepseek_direct_trade_choice")==1

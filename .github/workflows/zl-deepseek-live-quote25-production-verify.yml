@@ -1,4 +1,4 @@
-name: Validate DeepSeek quote reasoning with real Binance snapshot interfaces
+name: Test live DeepSeek quote cognition on current real order gate
 on:
   push:
     branches: [feat/deepseek-live-quote-reasoning25-20261022]
@@ -20,7 +20,8 @@ jobs:
         run: |
           python3 -m py_compile prediction-bot-v1/patch_deepseek_quote_cognition.py prediction-bot-v1/patch_trade_quote_preview.py
           python3 prediction-bot-v1/patch_deepseek_quote_cognition.py prediction-bot-v1 /tmp/deepseek-quote-patched
-          python3 prediction-bot-v1/patch_trade_quote_preview.py railway-diagnostic/wrapper.mjs /tmp/wrapper-quote-patched.mjs
+          python3 prediction-bot-v1/patch_live_trade_value.py railway-diagnostic/wrapper.mjs /tmp/wrapper-value-patched.mjs
+          python3 prediction-bot-v1/patch_trade_quote_preview.py /tmp/wrapper-value-patched.mjs /tmp/wrapper-quote-patched.mjs
           for f in /tmp/deepseek-quote-patched/*.mjs /tmp/wrapper-quote-patched.mjs; do node --check "$f"; done
           PATCHED_CORE_PATH=/tmp/deepseek-quote-patched/deepseek-adaptive15-core.mjs node --test prediction-bot-v1/live_quote_reasoning.test.mjs
           node --test prediction-bot-v1/live-trade-value-policy.test.mjs

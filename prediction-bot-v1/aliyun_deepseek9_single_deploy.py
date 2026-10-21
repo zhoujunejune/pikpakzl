@@ -51,7 +51,7 @@ PY
 temp=$(mktemp -d /tmp/zl-deepseek-free25-XXXXXXXX)
 trap 'rm -rf "$temp"' EXIT
 mkdir -p "$temp/base" "$temp/new"
-for name in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs;do
+for name in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs deepseek-adaptive15-quality-store.mjs deepseek-adaptive15-error-attribution.mjs;do
  curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/BASE_SHA/prediction-bot-v1/$name" -o "$temp/base/$name"
  cmp -s "$app/$name" "$temp/base/$name" || { echo "FREE25_UNEXPECTED_SOURCE_ABORT=$name";exit 15; }
  curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/$name" -o "$temp/new/$name"
@@ -61,20 +61,20 @@ done
 import {pathToFileURL} from 'node:url';
 const dir=process.argv[2];
 const core=await import(pathToFileURL(dir+'/deepseek-adaptive15-core.mjs'));
-if(core.DEADLINE_MS!==25000)throw Error('CORE_25S_MISSING');
+if(core.DEADLINE_MS!==9000)throw Error('CORE_9S_MISSING');
 if(!core.finalize.toString().includes('now>=w.round+DEADLINE_MS'))throw Error('CORE_NO_EXPIRE');
 if(core.finalize.toString().includes('now<w.round+8000'))throw Error('OLD_EARLIEST_8S_PRESENT');
 if(!core.decodeAnalysis.toString().includes('continueAnalysis'))throw Error('MODEL_REVIEW_FREEDOM_MISSING');
 console.log('FREE25_PARSE_AND_CORE_CHECKS=true');
 NODE
-backup=/var/lib/zl-prediction/archive/source-backups/deepseek-free-analysis25-COMMIT_SHA
+backup=/var/lib/zl-prediction/archive/source-backups/deepseek-single9-COMMIT_SHA
 mkdir -p "$backup"
-for name in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs;do
+for name in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs deepseek-adaptive15-quality-store.mjs deepseek-adaptive15-error-attribution.mjs;do
  cp -p "$app/$name" "$backup/$name"
 done
 restore(){
  echo 'FREE25_ROLLBACK_TRIGGERED=true'
- for name in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs;do cp -p "$backup/$name" "$app/$name";done
+ for name in deepseek-adaptive15-core.mjs deepseek-adaptive15-runner.mjs deepseek-adaptive15-production-adapter.mjs deepseek-adaptive15-quality-store.mjs deepseek-adaptive15-error-attribution.mjs;do cp -p "$backup/$name" "$app/$name";done
  systemctl restart zl-prediction-deepseek5.service || true
 }
 trap restore ERR

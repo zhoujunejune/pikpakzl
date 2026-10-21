@@ -11,6 +11,13 @@ import {COLLECT_MS,DEADLINE_MS,roundOf,makeWindow,marketTick,collect,
 const FEED='http://127.0.0.1:13003/api/shadow-market-data';
 const API='https://api.deepseek.com/chat/completions';
 const desc=e=>String(e?.message||e||'UNKNOWN').slice(0,120);
+// Two pre-round passes, up to four evidence-spaced live passes. These are
+// maximums, not quotas. Successful judgments lock immediately.
+export const MAX_AI_CALLS_PER_ROUND=6;
+export const MAX_PRE_ROUND_CALLS=2;
+export const MAX_LIVE_CALLS=4;
+export const LIVE_REVIEW_MIN_INTERVAL_MS=6000;
+const liveCalls=w=>w.modelCalls-w.attemptedPasses.length;
 export function createAdaptiveRunner({
  env=process.env,clock=()=>Date.now(),fetcher=fetch,
  onLocked=null,onWait=null,getHistoricalFeedback=null
@@ -64,12 +71,20 @@ export function createAdaptiveRunner({
   current=makeWindow(target);lastError=null;aiLatencyMs=null;aiTokens=null;
  }
  async function analyze(w,pass,raw,now){
-  if(!enabled||!key||inFlight||
-    (pass!=='current'&&(w.passes.some(x=>x.pass===pass)||w.attemptedPasses.includes(pass))))return;
+  if(!enabled||!key||inFlight||w.final||w.terminal||
+    w.modelCalls>=MAX_AI_CALLS_PER_ROUND||
+    (pass==='current'&&liveCalls(w)>=MAX_LIVE_CALLS)||
+    (pass!=='current'&&(w.attemptedPasses.length>=MAX_PRE_ROUND_CALLS||
+      w.passes.some(x=>x.pass===pass)||w.attemptedPasses.includes(pass))))return;
   const remaining=w.round-now;
   if((pass==='initial'&&(remaining>75000||remaining<34000))||
     (pass==='review'&&(remaining>30000||remaining<4000))||
     (pass==='current'&&(remaining>0||remaining< -(DEADLINE_MS-650))))return;
+  // A fresh market observation and meaningful elapsed time must separate
+  // live calls; never spend tokens re-analysing the same tick every 400ms.
+  if(pass==='current'&&(w.lastLiveRequestAt!=null&&
+     now-w.lastLiveRequestAt<LIVE_REVIEW_MIN_INTERVAL_MS||
+     w.lastLiveMarketAt!=null&&w.early.at(-1)?.at<=w.lastLiveMarketAt))return;
   let payload;
   try{
    const features=extractFeatures(raw,now);
@@ -79,6 +94,7 @@ export function createAdaptiveRunner({
   }catch(e){w.lastModelError='INPUT_'+desc(e);lastError=w.lastModelError;return}
   inFlight=true;
   if(pass!=='current')w.attemptedPasses.push(pass);
+  else{w.lastLiveRequestAt=now;w.lastLiveMarketAt=w.early.at(-1)?.at??null;}
   w.modelCalls++;
   // Pre-round prompts are optional preparations. Live analysis calls use the remaining
   // round budget and may repeat when DeepSeek requests new evidence.
@@ -132,9 +148,14 @@ export function createAdaptiveRunner({
      // Re-ask the real DeepSeek model; never fabricate a direction or override
      // its most recent real directional decision.
      const wantsMore=!latestCurrent||latestCurrent.continueAnalysis||latestCurrent.direction==='WAIT';
-     if(wantsMore&&!inFlight&&now<w.round+DEADLINE_MS-1200)
+     const exhausted=liveCalls(w)>=MAX_LIVE_CALLS||w.modelCalls>=MAX_AI_CALLS_PER_ROUND;
+     if(wantsMore&&!exhausted&&!inFlight&&now<w.round+DEADLINE_MS-1200)
       void analyze(w,'current',raw,now);
-     const readyToLock=latestCurrent&&!latestCurrent.continueAnalysis&&latestCurrent.direction!=='WAIT';
+     // When the review budget is exhausted, the last genuine UP/DOWN can
+     // lock even if the model asked to continue. Never fabricate from WAIT,
+     // or publish while its final scheduled call is still in flight.
+     const readyToLock=latestCurrent&&latestCurrent.direction!=='WAIT'&&
+       (!latestCurrent.continueAnalysis||(exhausted&&!inFlight));
      const finalChance=now>=w.round+DEADLINE_MS-1100;
      if(now>=w.round&&(readyToLock||finalChance))try{
       let feedback={};

@@ -1,4 +1,4 @@
-name: Verify original DeepSeek trade decision exclusively controls order
+name: Validate direct DeepSeek TRADE-NO_TRADE authority no numeric veto
 on:
   push:
     branches: [fix/deepseek-only-trade-choice-live25-20261022]

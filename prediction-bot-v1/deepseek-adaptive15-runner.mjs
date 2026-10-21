@@ -1,5 +1,5 @@
 // Isolated adaptive DeepSeek runner, no Binance order API or order submission.
-// DeepSeek chooses its own amount of analysis; strict hard +25-second boundary.
+// One DeepSeek call after actual opening; 9-second strict hard deadline.
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -18,6 +18,12 @@ export const MAX_PRE_ROUND_CALLS=2;
 export const MAX_LIVE_CALLS=4;
 export const LIVE_REVIEW_MIN_INTERVAL_MS=6000;
 const liveCalls=w=>w.modelCalls-w.attemptedPasses.length;
+// Exactly one DeepSeek API request during the actual round, no pre-round AI calls.
+// Pre-round time is used only to collect authentic market samples.
+export const MAX_AI_CALLS_PER_ROUND=1;
+export const MAX_PRE_ROUND_CALLS=0;
+export const MAX_LIVE_CALLS=1;
+
 export function createAdaptiveRunner({
  env=process.env,clock=()=>Date.now(),fetcher=fetch,
  onLocked=null,onWait=null,getHistoricalFeedback=null
@@ -40,7 +46,7 @@ export function createAdaptiveRunner({
    }
    lastCountedRound=current.round;
    skipped++;
-   if(current.terminal.reason==='DEADLINE_25S_EXPIRED')missed++;
+   if(current.terminal.reason==='DEADLINE_9S_EXPIRED')missed++;
    lastCompleted={round:current.round,result:'WAIT',direction:'WAIT',
     reason:current.terminal.reason,detail:current.terminal.detail,
     completedAt:current.terminal.at,signalGenerated:false,orders:false};
@@ -53,14 +59,13 @@ export function createAdaptiveRunner({
  }
  function status(){
   const now=clock();completeCurrent(now);
-  const target=targetFor(now);
   return {ok:true,mode:'SHADOW_ONLY_NO_ORDERS',
-   model:'DEEPSEEK_ADAPTIVE15_EXPERIENCE_V1',providerModel:model,
+   model:'DEEPSEEK_SINGLE_9S_REALDATA_V1',providerModel:model,
    aiEnabled:enabled,configured:enabled&&Boolean(key),inFlight,aiLatencyMs,aiTokens,
    lastMarketAt:lastFeedAt,lastError,missedRounds:missed,skippedRounds:skipped,
    lastCompleted,window:current?windowStatus(current,now):null,
    currentDecisionStatus:current?.final?'LOCKED':current?.terminal?'WAIT':'ANALYZING',
-   targetRound:target,lastSignal:lastSignal?{round:lastSignal.round,
+   targetRound:targetFor(now),lastSignal:lastSignal?{round:lastSignal.round,
     direction:lastSignal.latest.direction,lockedAt:lastSignal.latest.lockedAt}:null,
    orders:false,realOrderEnabled:false,productionIntegration:false};
  }
@@ -70,39 +75,21 @@ export function createAdaptiveRunner({
   if(target==null||current?.round===target)return;
   current=makeWindow(target);lastError=null;aiLatencyMs=null;aiTokens=null;
  }
- async function analyze(w,pass,raw,now){
-  if(!enabled||!key||inFlight||w.final||w.terminal||
-    w.modelCalls>=MAX_AI_CALLS_PER_ROUND||
-    (pass==='current'&&liveCalls(w)>=MAX_LIVE_CALLS)||
-    (pass!=='current'&&(w.attemptedPasses.length>=MAX_PRE_ROUND_CALLS||
-      w.passes.some(x=>x.pass===pass)||w.attemptedPasses.includes(pass))))return;
-  const remaining=w.round-now;
-  if((pass==='initial'&&(remaining>75000||remaining<34000))||
-    (pass==='review'&&(remaining>30000||remaining<4000))||
-    (pass==='current'&&(remaining>0||remaining< -(DEADLINE_MS-650))))return;
-  // A fresh market observation and meaningful elapsed time must separate
-  // live calls; never spend tokens re-analysing the same tick every 400ms.
-  if(pass==='current'&&(w.lastLiveRequestAt!=null&&
-     now-w.lastLiveRequestAt<LIVE_REVIEW_MIN_INTERVAL_MS||
-     w.lastLiveMarketAt!=null&&w.early.at(-1)?.at<=w.lastLiveMarketAt))return;
+ async function analyzeOnce(w,raw,now){
+  if(!enabled||!key||inFlight||w.modelCalls>=1||w.final||w.terminal||
+    now<w.round||now>=w.round+DEADLINE_MS-850||w.early.length<1)return;
   let payload;
   try{
    const features=extractFeatures(raw,now);
    const feedback=typeof getHistoricalFeedback==='function'?
-     getHistoricalFeedback(features):{};
-   payload=analysisRequest(w,pass,now,features,feedback);
+    getHistoricalFeedback(features):{};
+   payload=analysisRequest(w,'current',now,features,feedback);
   }catch(e){w.lastModelError='INPUT_'+desc(e);lastError=w.lastModelError;return}
+  // Count attempts, including unsuccessful API calls. No second model invocation.
+  w.modelCalls=1;w.attemptedPasses.push('current');
   inFlight=true;
-  if(pass!=='current')w.attemptedPasses.push(pass);
-  else{w.lastLiveRequestAt=now;w.lastLiveMarketAt=w.early.at(-1)?.at??null;}
-  w.modelCalls++;
-  // Pre-round prompts are optional preparations. Live analysis calls use the remaining
-  // round budget and may repeat when DeepSeek requests new evidence.
-  const budget=pass==='current'?
-    Math.max(250,w.round+DEADLINE_MS-clock()-350):
-    Math.min(pass==='initial'?38000:26000,
-      Math.max(1000,w.round-clock()-(pass==='initial'?33000:3000)));
   const started=clock();
+  const budget=Math.max(250,w.round+DEADLINE_MS-started-450);
   try{
    payload.model=model;
    const res=await fetcher(api,{method:'POST',
@@ -115,8 +102,32 @@ export function createAdaptiveRunner({
    aiTokens=Number(body?.usage?.total_tokens)||null;
    const choice=body?.choices?.[0];
    if(choice?.finish_reason==='length')throw Error('MODEL_TRUNCATED');
-   const result=decodeAnalysis(choice?.message?.content,w.round,clock(),pass);
-   registerAnalysis(w,result);w.lastModelError=null;lastError=null;
+   const at=clock();
+   if(at>=w.round+DEADLINE_MS||w.terminal||w.final)throw Error('MODEL_AFTER_9S');
+   const result=decodeAnalysis(choice?.message?.content,w.round,at,'current');
+   registerAnalysis(w,result);
+   if(result.direction==='WAIT'){
+    w.provisionalWait='DEEPSEEK_CHOSE_WAIT';
+    return;
+   }
+   // Consume the newest observed data, not the stale snapshot from when the
+   // single request began. Market polling continues while DeepSeek reasons.
+   const finalAt=clock();
+   if(finalAt>=w.round+DEADLINE_MS)throw Error('LOCK_AFTER_9S');
+   const source=w.latestRaw||raw;
+   const actual=marketTick(source,finalAt);
+   collect(w,actual);
+   const feedback=typeof getHistoricalFeedback==='function'?
+    getHistoricalFeedback(extractFeatures(source,finalAt)):{};
+   const decision=finalize(w,clock(),feedback);
+   if(decision.ok){
+    try{if(typeof onLocked==='function')onLocked(decision,source,clock(),w)}
+    catch(e){w.final=null;throw e}
+    lastSignal=decision;
+    lastCompleted={round:w.round,result:'LOCKED',
+      elapsedMs:clock()-w.round,direction:decision.latest.direction};
+    lastError=null;
+   }else if(decision.skip)lastError=decision.reason;
   }catch(e){w.lastModelError='DEEPSEEK_'+desc(e);lastError=w.lastModelError}
   finally{inFlight=false}
  }
@@ -133,51 +144,11 @@ export function createAdaptiveRunner({
    const obs=marketTick(raw,clock());lastFeedAt=obs.at;
    if(w&&w===current){
     completeCurrent(clock());
-    collect(w,obs);
-    const now=clock(),remaining=w.round-now;
-    if(now<w.round){
-     if(remaining<=75000&&remaining>=34000&&!w.passes.some(x=>x.pass==='initial'))
-      void analyze(w,'initial',raw,now);
-     else if(remaining<=30000&&remaining>=4000&&!w.passes.some(x=>x.pass==='review'))
-      void analyze(w,'review',raw,now);
-    } else if(now>=w.round&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
-     // Only DeepSeek decides whether another review improves the evidence.
-     // Never hold a finished judgment until an arbitrary 8s/15s milestone.
-     const latestCurrent=w.passes.filter(x=>x.pass==='current').at(-1);
-     // WAIT is not a final answer while reliable market data and time remain.
-     // Re-ask the real DeepSeek model; never fabricate a direction or override
-     // its most recent real directional decision.
-     const wantsMore=!latestCurrent||latestCurrent.continueAnalysis||latestCurrent.direction==='WAIT';
-     const exhausted=liveCalls(w)>=MAX_LIVE_CALLS||w.modelCalls>=MAX_AI_CALLS_PER_ROUND;
-     if(wantsMore&&!exhausted&&!inFlight&&now<w.round+DEADLINE_MS-1200)
-      void analyze(w,'current',raw,now);
-     // When the review budget is exhausted, the last genuine UP/DOWN can
-     // lock even if the model asked to continue. Never fabricate from WAIT,
-     // or publish while its final scheduled call is still in flight.
-     const readyToLock=latestCurrent&&latestCurrent.direction!=='WAIT'&&
-       (!latestCurrent.continueAnalysis||(exhausted&&!inFlight));
-     const finalChance=now>=w.round+DEADLINE_MS-1100;
-     if(now>=w.round&&(readyToLock||finalChance))try{
-      let feedback={};
-      if(typeof getHistoricalFeedback==='function'){
-       const f=extractFeatures(raw,now);
-       feedback=getHistoricalFeedback(f);
-      }
-      const actualDecisionAt=clock();
-      if(actualDecisionAt>=w.round+DEADLINE_MS){
-       completeCurrent(actualDecisionAt);
-      }else{
-       const decision=finalize(w,actualDecisionAt,feedback);
-       if(decision.ok){
-        try{if(typeof onLocked==='function')onLocked(decision,raw,clock(),w)}
-        catch(e){w.final=null;throw e}
-        lastSignal=decision;lastCompleted={round:w.round,result:'LOCKED',
-          elapsedMs:clock()-w.round,direction:decision.latest.direction};
-        lastError=null;
-       }else if(decision.skip){lastError=decision.reason}
-      }
-     }catch(e){lastError=desc(e);w.skips.push(lastError)}
-    }
+    if(collect(w,obs))w.latestRaw=raw;
+    const now=clock();
+    if(now>=w.round&&now<w.round+DEADLINE_MS&&
+      !w.final&&!w.terminal&&w.modelCalls===0)
+      void analyzeOnce(w,raw,now);
    }
   }catch(e){lastError='MARKET_'+desc(e);if(w)w.skips.push(lastError)}
   finally{feedBusy=false}
@@ -185,6 +156,7 @@ export function createAdaptiveRunner({
  }
  return {status,tick};
 }
+
 export function serveAdaptive(runner,port=Number(process.env.ADAPTIVE15_PORT||13043)){
  const server=http.createServer((req,res)=>{
   let path;try{path=new URL(req.url,'http://localhost').pathname}
@@ -199,5 +171,5 @@ export function serveAdaptive(runner,port=Number(process.env.ADAPTIVE15_PORT||13
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const runner=createAdaptiveRunner();serveAdaptive(runner);void runner.tick();
  setInterval(()=>void runner.tick(),400);
- console.log('DEEPSEEK_ADAPTIVE15_RUNNING order_write_access=false');
+ console.log('DEEPSEEK_SINGLE9_RUNNING order_write_access=false');
 }

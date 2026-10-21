@@ -65,11 +65,11 @@ export function createAdaptiveRunner({
  }
  async function analyze(w,pass,raw,now){
   if(!enabled||!key||inFlight||w.passes.some(x=>x.pass===pass)||
-    w.attemptedPasses.includes(pass)||w.modelCalls>=2)return;
+    w.attemptedPasses.includes(pass)||w.modelCalls>=3)return;
   const remaining=w.round-now;
-  if((pass==='initial'&&remaining>75000)||
-     (pass==='review'&&(remaining>30000||remaining<4000))||
-     (pass==='initial'&&remaining<34000))return;
+  if((pass==='initial'&&(remaining>75000||remaining<34000))||
+    (pass==='review'&&(remaining>30000||remaining<4000))||
+    (pass==='current'&&(remaining> -6500||remaining< -(DEADLINE_MS-1800))))return;
   let payload;
   try{
    const features=extractFeatures(raw,now);
@@ -82,8 +82,10 @@ export function createAdaptiveRunner({
   w.modelCalls++;
   // First pass must terminate before -30s so fresh review can run.
   // Second pass must terminate before -3s. Never block market polling.
-  const budget=Math.min(pass==='initial'?38000:26000,
-   Math.max(1000,w.round-clock()-(pass==='initial'?33000:3000)));
+  const budget=pass==='current'?
+    Math.min(15000,Math.max(1000,w.round+DEADLINE_MS-clock()-1500)):
+    Math.min(pass==='initial'?38000:26000,
+      Math.max(1000,w.round-clock()-(pass==='initial'?33000:3000)));
   const started=clock();
   try{
    payload.model=model;
@@ -122,8 +124,11 @@ export function createAdaptiveRunner({
       void analyze(w,'initial',raw,now);
      else if(remaining<=30000&&remaining>=4000&&!w.passes.some(x=>x.pass==='review'))
       void analyze(w,'review',raw,now);
-    } else if(now>=w.round+8000&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
-     try{
+    } else if(now>=w.round+6500&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
+     // The final live review is DeepSeek's own judgement using this round's open/ticks.
+     if(now<w.round+17000&&!w.attemptedPasses.includes('current')&&!w.passes.some(x=>x.pass==='current'))
+      void analyze(w,'current',raw,now);
+     if(now>=w.round+8000&&(w.passes.some(x=>x.pass==='current')||now>=w.round+23500))try{
       let feedback={};
       if(typeof getHistoricalFeedback==='function'){
        const f=extractFeatures(raw,now);

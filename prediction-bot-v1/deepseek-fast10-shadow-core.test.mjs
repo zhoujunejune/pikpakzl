@@ -47,7 +47,9 @@ test('forbid signals without a real pre-round DeepSeek direction',()=>{
 test('stale or wrong-round or invented feeds rejected',()=>{
  assert.throws(()=>normalizeMarket({...fake(target,68000),readOnly:false},target),/UNTRUSTED/);
  assert.throws(()=>normalizeMarket(fake(target-9000,68000),target),/INVALID_OR_STALE/);
- assert.throws(()=>normalizeMarket({...fake(target,68000),latest:{...fake(target,68000).latest,roundStartMs:r}},target+1000),/INVALID_OR_STALE/);
+ const w=newWindow(target);
+ assert.equal(observe(w,normalizeMarket(fake(target-1000,68000,67900,r),target-1000)),true);
+ assert.equal(observe(w,normalizeMarket(fake(target,68000,68000,r),target)),false);
 });
 test('avoid hallucinating opening price and future labels in prewarm prompt',()=>{
  const w=prepare();const p=prewarmRequest(w,target-10000,{rsi14:51});
@@ -62,9 +64,9 @@ test('avoid hallucinating opening price and future labels in prewarm prompt',()=
 test('must get fresh actual early ticks and stable round open; never reuse last round ticker',()=>{
  const w=prepare();
  for(let i=0;i<9;i++)observe(w,normalizeMarket(fake(target+i*1000,68000+i,68000,target),target+i*1000));
- w.early.at(-1).at=target+2000;
+ w.early=w.early.slice(0,6);
  assert.throws(()=>finalize(w,target+8500),/NEW_ROUND_TICK_STALE/);
- w.early.at(-1).at=target+8000;
+ w.early=Array.from({length:9},(_,i)=>({at:target+i*1000,price:68000+i,open:68000}));
  w.early.at(-1).open=68008;
  assert.throws(()=>finalize(w,target+8500),/ROUND_OPEN_PRICE_CHANGED/);
 });

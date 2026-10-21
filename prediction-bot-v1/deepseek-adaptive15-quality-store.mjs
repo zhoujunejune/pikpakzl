@@ -20,7 +20,7 @@ export function makeQualityStore(file,clock=()=>Date.now(),orderAuditFile=''){
  const persist=()=>save(file,{schema:1,records,updatedAt:clock()});
  function record(signal,features,extra={}){
   const r=signal?.round,t=signal?.latest?.lockedAt;
-  if(!Number.isSafeInteger(r)||!Number.isSafeInteger(t)||t<r||t>=r+15000||
+  if(!Number.isSafeInteger(r)||!Number.isSafeInteger(t)||t<r||t>=r+25000||
    !good(signal.latest.direction)||records.some(x=>x.round===r))return false;
   const d=signal.latest;
   records.push({round:r,direction:d.direction,signalAt:t,

@@ -86,7 +86,8 @@ export function newLearner(file,clock=()=>Date.now()){
    recentAccuracy:recent.length?Number((hits/recent.length).toFixed(4)):null,
    allOfficialSamples:settled.length,upDown:sides,regimes,
    predictions:state.predictions.length,unsettled:state.predictions.length-settled.length,
-   comparableOfficialCases:settled.filter(x=>Array.isArray(x.caseFeatures)).length,
+   comparableOfficialCases:settled.filter(x=>Array.isArray(x.caseFeatures)&&x.caseFeatures.length===12).length,
+   similarCaseMinimum:50,
    readyForAnalysis:recent.length>=30,
    note:'Empirical post-settlement feedback only; not probability calibration or model weight training'};
  }
@@ -105,6 +106,10 @@ export function newLearner(file,clock=()=>Date.now()){
       Number((stats.upDown.DOWN.hits/stats.upDown.DOWN.samples).toFixed(4)):null,
     interpretation:'Descriptive rolling accuracy from older resolved rounds only; no guarantee of predictive lift. Choose on CURRENT data, not by historical label alone.'};
  }
+ function qualitySnapshotEvidence(){
+  return state.predictions.filter(p=>Array.isArray(p.caseFeatures)&&p.caseFeatures.length===12).map(p=>({
+   round:p.round,direction:p.direction,signalAt:p.signalAt,caseFeatures:p.caseFeatures.slice()}));
+ }
  function history(limit=80){
   const n=Math.max(1,Math.min(100,Math.trunc(Number(limit)||80)));
   return {ok:true,model:'DEEPSEEK_5M_V1',officialSource:source,
@@ -117,5 +122,5 @@ export function newLearner(file,clock=()=>Date.now()){
     settledAt:x.settledAt,hit:x.actual===null?null:x.hit
    }))};
  }
- return {record,settle,summary,feedback,history};
+ return {record,settle,summary,feedback,history,qualitySnapshotEvidence};
 }

@@ -15,7 +15,7 @@ j=json.loads(p.read_text()) if p.exists() else {}
 allrows=[v for v in j.get('predictions',[]) if v.get('direction') in ('UP','DOWN') and isinstance(v.get('round'),int)]
 settled=sorted([v for v in allrows if v.get('actual') in ('UP','DOWN') and v.get('hit') in (True,False)],key=lambda x:x['round'])
 preds=sorted(allrows,key=lambda x:x['round'])
-boundary=1792629278000 # 2026-10-21T17:34:38Z (direction-only release)
+boundary=1792604078000 # 2026-10-21T17:34:38Z (direction-only release)
 def window(items):
  n=len(items)
  h=sum(1 for x in items if x.get('hit') is True)

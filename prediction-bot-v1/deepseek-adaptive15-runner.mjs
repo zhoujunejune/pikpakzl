@@ -114,7 +114,8 @@ export function createAdaptiveRunner({
       }
       const decision=finalize(w,now,feedback);
       if(decision.ok){
-       if(typeof onLocked==='function')onLocked(decision,raw,now,w);
+       try{if(typeof onLocked==='function')onLocked(decision,raw,now,w)}
+       catch(e){w.final=null;throw e}
        lastSignal=decision;lastCompleted={round:w.round,result:'LOCKED',
          elapsedMs:now-w.round,direction:decision.latest.direction};
        lastError=null;

@@ -7,6 +7,8 @@ on:
       - prediction-bot-v1/deepseek-fast10-shadow-core.test.mjs
       - prediction-bot-v1/deepseek-fast10-shadow-runner.mjs
       - prediction-bot-v1/deepseek-fast10-shadow-runner.test.mjs
+      - prediction-bot-v1/deepseek-fast10-production-adapter.mjs
+      - prediction-bot-v1/deepseek-fast10-production-adapter.test.mjs
       - .github/workflows/zl-deepseek-fast10-shadow-ci.yml
   workflow_dispatch:
 permissions:
@@ -25,5 +27,8 @@ jobs:
           node --check prediction-bot-v1/deepseek-fast10-shadow-core.test.mjs
           node --check prediction-bot-v1/deepseek-fast10-shadow-runner.mjs
           node --check prediction-bot-v1/deepseek-fast10-shadow-runner.test.mjs
+          node --check prediction-bot-v1/deepseek-fast10-production-adapter.mjs
+          node --check prediction-bot-v1/deepseek-fast10-production-adapter.test.mjs
           node --test prediction-bot-v1/deepseek-fast10-shadow-core.test.mjs
           node --test prediction-bot-v1/deepseek-fast10-shadow-runner.test.mjs
+          node --test prediction-bot-v1/deepseek-fast10-production-adapter.test.mjs

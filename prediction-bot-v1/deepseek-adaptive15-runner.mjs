@@ -11,13 +11,6 @@ import {COLLECT_MS,DEADLINE_MS,roundOf,makeWindow,marketTick,collect,
 const FEED='http://127.0.0.1:13003/api/shadow-market-data';
 const API='https://api.deepseek.com/chat/completions';
 const desc=e=>String(e?.message||e||'UNKNOWN').slice(0,120);
-// Two pre-round passes, up to four evidence-spaced live passes. These are
-// maximums, not quotas. Successful judgments lock immediately.
-export const MAX_AI_CALLS_PER_ROUND=6;
-export const MAX_PRE_ROUND_CALLS=2;
-export const MAX_LIVE_CALLS=4;
-export const LIVE_REVIEW_MIN_INTERVAL_MS=6000;
-const liveCalls=w=>w.modelCalls-w.attemptedPasses.length;
 // Exactly one DeepSeek API request during the actual round, no pre-round AI calls.
 // Pre-round time is used only to collect authentic market samples.
 export const MAX_AI_CALLS_PER_ROUND=1;

@@ -2,7 +2,9 @@ name: Patch live DeepSeek quality and realized PnL disclaimer in dashboard, foll
 on:
   push:
     branches: [feat/adaptive15-deferred-wait-learning-pnl-20261021]
-    paths: [.github/workflows/zl-adaptive15-quality-panel-deploy.yml]
+    paths:
+      - .github/workflows/zl-adaptive15-quality-panel-deploy.yml
+      - prediction-bot-v1/aliyun_adaptive15_quality_dashboard_patch.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

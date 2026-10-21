@@ -1,0 +1,87 @@
+name: FAST10 one-shot DeepSeek High latency probe on Alibaba
+on:
+  push:
+    branches: [feat/deepseek-prewarm-fast10-20261021]
+    paths: [.github/workflows/zl-deepseek-fast10-real-llm-latency.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: One existing-model inference only; never change trading or print credentials
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,urllib.request,time,pathlib
+          env={}
+          for line in pathlib.Path('/etc/zl-prediction/deepseek5.env').read_text().splitlines():
+            if '=' in line and not line.lstrip().startswith('#'):
+              a,b=line.split('=',1);env[a.strip()]=b.strip().strip('"')
+          key=env.get('DEEPSEEK_API_KEY')
+          if not key:raise SystemExit('AI_KEY_NOT_CONFIGURED')
+          uri=env.get('DEEPSEEK_API_URL','https://api.deepseek.com/chat/completions')
+          if uri!='https://api.deepseek.com/chat/completions':
+            raise SystemExit('UNEXPECTED_DEEPSEEK_DESTINATION')
+          with urllib.request.urlopen('http://127.0.0.1:13003/api/shadow-market-data',timeout=5) as r: market=json.load(r)
+          latest=market['latest']
+          payload={'model':env.get('DEEPSEEK_MODEL','deepseek-flash'),
+            'thinking':{'type':'enabled'},'reasoning_effort':'high','max_tokens':4096,
+            'response_format':{'type':'json_object'},
+            'messages':[
+              {'role':'system','content':'Analyze observed BTC price and previous movement as a provisional NEXT-round direction. Do not invent the next opening price. Answer brief JSON only: {"direction":"UP or DOWN","confidence":0.5,"reason":"brief rationale"}. Must choose UP or DOWN.'},
+              {'role':'user','content':json.dumps({'prevRoundPrice':latest.get('lastPrice'),'prevOpenPrice':latest.get('roundOpenPrice'),'observedAt':latest.get('eventMs')})}
+            ]}
+          req=urllib.request.Request(uri,data=json.dumps(payload).encode(),
+              headers={'Content-Type':'application/json','Authorization':'Bearer '+key},method='POST')
+          started=time.monotonic()
+          try:
+            with urllib.request.urlopen(req,timeout=67) as resp:d=json.load(resp)
+            latency=int((time.monotonic()-started)*1000)
+            choice=d.get('choices',[{}])[0]
+            body=choice.get('message',{}).get('content') or ''
+            try:
+              response=json.loads(body)
+              valid=response.get('direction') in ('UP','DOWN')
+            except Exception:valid=False
+            print('DEEPSEEK_ONE_SHOT_LATENCY='+json.dumps({'latencyMs':latency,
+                'finishReason':choice.get('finish_reason'),
+                'validDirectionJson':valid,'totalTokens':(d.get('usage') or {}).get('total_tokens'),
+                'model':d.get('model')}))
+          except Exception as e:
+            print('DEEPSEEK_ONE_SHOT_LATENCY='+json.dumps({'errorType':type(e).__name__,
+                'elapsedMs':int((time.monotonic()-started)*1000)}))
+          INNER
+          """
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+             access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+             region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast10-deepseek-single-latency-test',
+            type='RunShellScript',working_user='root',command_content=script,timeout=95)).body.invoke_id
+          for _ in range(55):
+            time.sleep(2)
+            x=client.describe_invocation_result(sw.DescribeInvocationResultRequest(
+              region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+            if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+               raw=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
+               for line in raw.splitlines():
+                 if line.startswith('DEEPSEEK_ONE_SHOT_LATENCY='):print(line)
+               if int(x.exit_code)!=0:raise RuntimeError('REMOTE_TEST_FAILED')
+               break
+          else:raise RuntimeError('REMOTE_TEST_TIMEOUT')
+          OUTER

@@ -1,0 +1,23 @@
+name: CPU 15-second shadow online training V2 regression - no production
+on:
+  push:
+    branches: [feat/cpu-online-shadow15-v2-20261021]
+    paths:
+      - prediction-bot-v1/deepseek_online_shadow15_v2.py
+      - prediction-bot-v1/test_deepseek_online_shadow15_v2.py
+      - .github/workflows/zl-cpu-shadow15-v2-ci.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Offline official-only training, early lock, old model isolation and no-trade tests
+        run: |
+          python -m py_compile prediction-bot-v1/deepseek_online_shadow15_v2.py
+          python -m py_compile prediction-bot-v1/test_deepseek_online_shadow15_v2.py
+          PYTHONPATH=prediction-bot-v1 python -m unittest test_deepseek_online_shadow15_v2 -v

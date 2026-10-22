@@ -237,6 +237,77 @@ if pidMatch:
     'returnRead': '  return {\\n    async read() {' in sh.read_text(),
     'readSpotAlready':'readSpot() {' in sh.read_text()})
  except Exception as e:print('SPEED_AUDIT_SPOT_EXTRA_ERROR',type(e).__name__)
+# Latest successful live order audit: read only, de-identified, no order values.
+def read_timeline(unit,allowed):
+ proc=subprocess.run(['journalctl','-u',unit,'--since','12 hours ago','--no-pager','-o','json','-n','40000'],
+  capture_output=True,text=True,timeout=30)
+ output=[]
+ for line in proc.stdout.splitlines():
+  try:
+   rec=json.loads(line); e=json.loads(rec.get('MESSAGE',''))
+   if not isinstance(e,dict) or e.get('event') not in allowed:continue
+   at=int(rec.get('__REALTIME_TIMESTAMP','0'))//1000
+   if at<now-12*3600000 or at>now+60000:continue
+   output.append((at,e))
+  except (ValueError,TypeError,KeyError):pass
+ return output,proc.returncode
+sig_allowed={'deepseek15_locked','deepseek100ms_locked','deepseek_single5_locked'}
+trade_allowed={'api_order_submitted_pending_confirmation','order_status_updated',
+  'api_order_submit_attempt','auto_order_attempt_result'}
+signal_events,signal_code=read_timeline('zl-prediction-deepseek5.service',sig_allowed)
+trade_events,trade_code=read_timeline('zl-prediction-trade.service',trade_allowed)
+signals={}
+for at,e in signal_events:
+ r=e.get('round')
+ if isinstance(r,int):signals.setdefault(r,[]).append((at,e.get('event')))
+submitted={}
+status_updates={}
+for at,e in trade_events:
+ oid=e.get('orderId')
+ if oid is None:continue
+ oid=str(oid)
+ if e.get('event')=='api_order_submitted_pending_confirmation':
+  r=e.get('round')
+  if isinstance(r,int):
+   if oid not in submitted or at<submitted[oid][0]:submitted[oid]=(at,r)
+ elif e.get('event')=='order_status_updated':
+  status_updates.setdefault(oid,[]).append((at,str(e.get('state') or ''),
+    str(e.get('status') or ''),e.get('fillPercentage'),e.get('filledUsdtAmount')))
+def is_confirmed(x):
+ at,state,status,pct,amt=x
+ good=state=='CONFIRMED_FILLED' or status.upper() in ('FILLED','SUCCESS','COMPLETED','COMPLETE')
+ try:good=good or (pct is not None and float(pct)>=1) or (amt is not None and float(amt)>0)
+ except (ValueError,TypeError):pass
+ return good and state!='RECONCILIATION_REQUIRED'
+def stamp(at):
+ return datetime.fromtimestamp(at/1000,TZ).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+out=[]
+for oid,updates in status_updates.items():
+ valid=sorted(x for x in updates if is_confirmed(x))
+ if not valid:continue
+ success=valid[0]
+ if oid not in submitted:continue
+ submit_ms,round_number=submitted[oid]
+ possible=[(t,name) for t,name in signals.get(round_number,[]) if round_number<=t<=submit_ms]
+ signal_ms,sig_event=(max(possible) if possible else (None,None))
+ out.append((success[0],{'roundLocal':stamp(round_number),'signalLocal':stamp(signal_ms) if signal_ms else None,
+  'signalEvent':sig_event,'submittedLocal':stamp(submit_ms),
+  'confirmedFilledLocal':stamp(success[0]),'signalToSubmitMs':submit_ms-signal_ms if signal_ms else None,
+  'signalToFilledMs':success[0]-signal_ms if signal_ms else None,
+  'submitToFilledMs':success[0]-submit_ms,
+  'confirmedState':success[1],'confirmedStatus':success[2]}))
+out.sort(key=lambda x:x[0],reverse=True)
+print('LATEST_FILLED_AUDIT_READ_STATUS',json.dumps({'aiJournalOk':signal_code==0,
+ 'tradeJournalOk':trade_code==0,'hours':12,'signalEvents':len(signal_events),
+ 'submitEvents':len(submitted),'statusUpdates':sum(map(len,status_updates.values())),
+ 'matchedConfirmedFilledOrders':len(out)},ensure_ascii=False))
+print('LATEST_FILLED_AUDIT_LAST_5',json.dumps([x[1] for x in out[:5]],ensure_ascii=False))
+if not out:
+ recent_submits=sorted([(at,r) for at,r in submitted.values()],reverse=True)[:3]
+ print('LATEST_FILLED_AUDIT_RECENT_SUBMITS',json.dumps([
+  {'submitLocal':stamp(at),'roundLocal':stamp(r),
+   'signalEventCount':len(signals.get(r,[]))} for at,r in recent_submits],ensure_ascii=False))
+
 print('SPEED_AUDIT_COMPLETE=true')
 PY
 """

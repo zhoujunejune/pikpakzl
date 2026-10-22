@@ -1,0 +1,42 @@
+name: Verify fast spot feed and 100ms fallback without unsafe orders
+on:
+  push:
+    branches: [fix/fast-feed-and-trigger-20261022]
+    paths:
+      - .github/workflows/zl-fast-spot-ci.yml
+      - fast-signal-engine/shadow-market-readonly.mjs
+      - fast-signal-engine/shadow-market-readonly.test.mjs
+      - fast-signal-engine/index.mjs
+      - prediction-bot-v1/deepseek-single5-production.mjs
+      - prediction-bot-v1/deepseek100ms-fallback.test.mjs
+      - railway-diagnostic/index.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check fast-signal-engine/index.mjs
+      - run: node --check fast-signal-engine/shadow-market-readonly.mjs
+      - run: node --check prediction-bot-v1/deepseek-single5-production.mjs
+      - run: node --check railway-diagnostic/index.mjs
+      - run: node --test fast-signal-engine/shadow-market-readonly.test.mjs prediction-bot-v1/deepseek100ms-fallback.test.mjs
+      - name: Verify no quote/orders changed
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          index=Path('fast-signal-engine/index.mjs').read_text()
+          model=Path('prediction-bot-v1/deepseek-single5-production.mjs').read_text()
+          trade=Path('railway-diagnostic/index.mjs').read_text()
+          assert "'/api/shadow-market-fast'" in index
+          assert "const FEED='http://127.0.0.1:13003/api/shadow-market-fast';" in model
+          assert 'setInterval(prepareWorker, 1200);' in trade
+          assert '},120);' in trade and "'deepseek_fast_local_poll'" in trade
+          assert 'const AI_LIMIT_MS=100;' in model
+          assert "method:'REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK'" in model
+          print('FASTSPOT_NO_TRADE_RULE_CHANGE=true')
+          PY

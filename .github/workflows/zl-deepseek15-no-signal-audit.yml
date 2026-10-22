@@ -1,0 +1,24 @@
+name: Audit no-signal rounds in live DeepSeek15
+on:
+  push:
+    branches: [audit/deepseek15-no-signal-20261022]
+    paths:
+      - .github/workflows/zl-deepseek15-no-signal-audit.yml
+      - prediction-bot-v1/deepseek15_preflight_readonly.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/deepseek15_preflight_readonly.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read latest DeepSeek failure diagnostics and public round history
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deepseek15_preflight_readonly.py

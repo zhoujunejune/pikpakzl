@@ -171,7 +171,7 @@ export function createFastProductionProvider({
    decisionRule:'LIVE_BTC_ONE_CALL_OR_REAL_PRICE_BACKUP_5S',
    analysisModelCalls:modelCalls,tries:modelCalls,
    busy:pending,featureReady:Number.isSafeInteger(lastMarketAt)&&now-lastMarketAt<=3000,
-   error,waitReason:null,lastApiLatencyMs:latency,aiTokens,
+   error,waitReason:null,lastApiLatencyMs:latency,aiTokens:apiTokens,
    lastDecision:completed,missedRounds:missed,skippedRounds:missed,
    learningDisabled:true,trainingDisabled:true,statisticsDisabled:true,
    aiDirectionalRequired:true,realOrderEnabled:false,tradeIntegration:false};

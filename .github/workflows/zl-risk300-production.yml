@@ -1,0 +1,52 @@
+name: Deploy 300ms TP-SL poll on Alibaba during quiet position window
+on:
+  push:
+    branches: [fix/risk-exit-300ms-20261023]
+    paths:
+      - .github/workflows/zl-risk300-production.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-risk-exits
+  cancel-in-progress: false
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --test railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Audit guarded deploy script
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          path=Path('prediction-bot-v1/apply_risk_worker_300ms.py')
+          obj=ast.parse(path.read_text())
+          cmd=next(n.value.value for n in obj.body if isinstance(n,ast.Assign)
+             and any(isinstance(t,ast.Name) and t.id=='REMOTE' for t in n.targets))
+          p=subprocess.run(['bash','-n'],input=cmd,text=True,capture_output=True)
+          assert p.returncode==0,p.stderr
+          assert cmd.index('trap rollback ERR')<cmd.index('python3 - "$FILE"')
+          assert 'ACTIVE_POSITION_OR_SELL_NO_RESTART' in cmd
+          assert 'TP300_ROLLBACK_STARTED=true' in cmd
+          assert 'systemctl restart zl-prediction-trade' not in cmd
+          assert 'systemctl restart zl-futures' not in cmd
+          print('TP300_DEPLOY_GUARDS_TEST_PASSED=true')
+          PY
+  deploy:
+    needs: safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Set risk polling to 300ms only if no live position or sell is being handled
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/apply_risk_worker_300ms.py

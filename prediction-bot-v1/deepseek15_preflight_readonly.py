@@ -48,12 +48,45 @@ for unit in ('zl-prediction-trade.service','zl-prediction-deepseek5.service'):
       if any(k in line.upper() for k in ('SECRET','PASSWORD','PRIVATE_KEY','AUTHORIZATION','API_KEY','ORDERID','WALLET')):continue
       safe.append(line[:190])
   print('AI15_POSTROLLBACK_JOURNAL_ERRORS',unit,json.dumps(safe[-18:])[:3500])
+
+from collections import Counter
+from datetime import datetime,timezone,timedelta
+from zoneinfo import ZoneInfo
+tz=ZoneInfo('Asia/Singapore')
+ai=get(13029,'/api/status')
+print('NO_SIGNAL_AI_STATE',json.dumps({k:ai.get(k) for k in ('round','roundDecision','error','lastFailure','lastApiLatencyMs','aiTokens','analysisModelCalls','busy','decisionRule','configured')},ensure_ascii=False))
+data=get(13029,'/api/round-results?limit=35')
+rows=data.get('records') if isinstance(data,dict) else []
+rows=rows if isinstance(rows,list) else []
+latest=[]
+for r in rows[-18:]:
+ if not isinstance(r,dict):continue
+ stamp=r.get('round')
+ local=datetime.fromtimestamp(stamp/1000,tz).strftime('%Y-%m-%d %H:%M') if isinstance(stamp,(int,float)) else None
+ latest.append({'time':local,'status':r.get('status'),'direction':r.get('direction'),
+  'decisionMethod':r.get('decisionMethod'),'actual':r.get('actual'),'latencyMs':r.get('latencyMs')})
+print('NO_SIGNAL_RECENT_ROUNDS',json.dumps(latest,ensure_ascii=False))
+events=[]
+log=subprocess.run(['journalctl','-u','zl-prediction-deepseek5.service','--since','4 hours ago',
+ '--no-pager','-o','cat','-n','2400'],capture_output=True,text=True,timeout=12)
+for line in log.stdout.splitlines():
+ try:o=json.loads(line)
+ except:continue
+ if o.get('event') not in ('deepseek15_round_unavailable','deepseek15_analysis_failed','deepseek15_locked'):
+  continue
+ timestamp=o.get('at')
+ events.append({k:o.get(k) for k in ('event','at','reason','elapsedMs','method','apiLatencyMs','modelCalls','pending')})
+print('NO_SIGNAL_EVENT_COUNTS',json.dumps(Counter(e['event'] for e in events),ensure_ascii=False))
+print('NO_SIGNAL_ERRORS',json.dumps([e for e in events if e['event']!='deepseek15_locked'][-30:],ensure_ascii=False))
+print('NO_SIGNAL_LAST_LOCKS',json.dumps([e for e in events if e['event']=='deepseek15_locked'][-8:],ensure_ascii=False))
+print('NO_SIGNAL_AUDIT_OK=true')
+
 print('AI15_PREFLIGHT_DONE=true')
 PY
 """
 def main():
  sha=os.environ.get('GITHUB_SHA','')
- if os.environ.get('GITHUB_REF_NAME')!='fix/deepseek15-ai-only-prod-20261022' or not re.fullmatch('[a-f0-9]{40}',sha):return 2
+ if os.environ.get('GITHUB_REF_NAME')!='audit/deepseek15-no-signal-20261022' or not re.fullmatch('[a-f0-9]{40}',sha):return 2
  cl=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
  i=cl.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=INSTANCE,name='ai15-production-preflight-readonly',type='RunShellScript',command_content=REMOTE,working_user='root',timeout=90)).body.invoke_id
  for n in range(50):

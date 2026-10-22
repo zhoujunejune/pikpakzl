@@ -44,7 +44,7 @@ src=src.replace(end_marker,'  return injectRoundResults(out);\n}\n\nlet inner = 
 route_body=r"""  // Display-only route. Does not change the trading handler.
   if(req.method==='GET'&&url.pathname==='/api/deepseek-round-results'){
     const limit=Math.max(1,Math.min(300,Number.parseInt(url.searchParams.get('limit'),10)||100));
-    const r=http.get({hostname:'127.0.0.1',port:13029,
+    const r=http.get({hostname:'127.0.0.1',port:13045,
       path:'/api/round-results?limit='+limit,headers:{accept:'application/json'}},upstream=>{
        res.writeHead(upstream.statusCode||502,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
        upstream.pipe(res);

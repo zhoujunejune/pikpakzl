@@ -39,6 +39,11 @@ def probe(port,route):
   return o
  except HTTPError as e:return {'http':e.code}
  except Exception as e:return {'error':type(e).__name__}
+# Read-only inspection of deployed model source and journal; never emit secrets.
+import hashlib
+for f in ('/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-production-adapter.mjs','/opt/zl-prediction-live/deepseek5/round-results-only-journal.mjs','/opt/zl-prediction-live/src/railway-diagnostic/control-shell.mjs'):
+ p=Path(f)
+ print('PUBLIC_ACTIVE_FILE',f,{'exists':p.exists(),'sha256':hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None,'hasRoundResults':('roundResults' in p.read_text()) if p.exists() else None,'hasResultsControl':('injectRoundResults' in p.read_text()) if p.exists() else None})
 for port,route in ((13029,'/api/status'),(13029,'/api/round-results?limit=2'),(13001,'/api/status'),(13001,'/api/order-signal-model'),(13001,'/api/deepseek-round-results?limit=2'),(13019,'/api/status'),(13002,'/api/round-stats')):
  try:
   with urlopen('http://127.0.0.1:%d%s'%(port,route),timeout=5) as rr:

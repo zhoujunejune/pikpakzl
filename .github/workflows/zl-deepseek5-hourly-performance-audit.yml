@@ -4,6 +4,7 @@ on:
     branches: [audit/deepseek5-hourly-performance-20261022]
     paths:
       - .github/workflows/zl-deepseek5-hourly-performance-audit.yml
+      - prediction-bot-v1/deepseek5_hourly_performance_readonly_20261022.py
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

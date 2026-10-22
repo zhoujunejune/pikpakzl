@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Read-only production stage-latency audit. Outputs timing metrics, NEVER orders,
+keys, wallet, quote IDs, positions or API credentials. No restart.
+"""
+import os,re,sys,time,base64
+from alibabacloud_swas_open20200601.client import Client
+from alibabacloud_swas_open20200601 import models as sw
+from alibabacloud_tea_openapi import models as api
+BRANCH='audit/aliyun-speed-path-20261022'
+INSTANCE='b67374069bb3457ba6a3a2ede9305d3f'
+REMOTE=r"""#!/bin/bash
+set -Eeuo pipefail
+python3 - <<'PY'
+import json,urllib.request,time,subprocess,collections,statistics,math,os
+from datetime import datetime
+from zoneinfo import ZoneInfo
+TZ=ZoneInfo('Asia/Singapore')
+now=int(time.time()*1000)
+def get(port,uri):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:%s%s'%(port,uri),timeout=7) as x:return json.load(x)
+ except Exception as e:return {'ok':False,'errorClass':type(e).__name__}
+ai=get(13029,'/api/status')
+trade=get(13001,'/api/status')
+select=get(13001,'/api/order-signal-model')
+control=get(13001,'/healthz')
+feed=get(13003,'/api/shadow-market-data')
+f=feed.get('latest') or {}
+print('SPEED_AUDIT_TIME',datetime.now(TZ).isoformat(),flush=True)
+print('SPEED_AUDIT_MODEL',json.dumps({
+ k:ai.get(k) for k in ('model','configured','providerModel','decisionRule','decisionWindowEndMs',
+ 'round','fallbackMarketDeadlineMs','lastApiLatencyMs','analysisModelCalls','maxCallsPerRound',
+ 'busy','featureReady','lastDecision')},ensure_ascii=False))
+print('SPEED_AUDIT_USER_SWITCH',json.dumps({
+ 'selectedModel':select.get('model'),'followEnabled':trade.get('enabled'),
+ 'autoConfirmEnabled':trade.get('autoConfirmEnabled'),'pendingState':(trade.get('pendingAction') or {}).get('state'),
+ 'lastOrderState':trade.get('lastOrderState'),
+ 'transport':{k:v for k,v in (control.get('signalTransport') or {}).items()
+              if k in ('redisConnected','websocketConnected','lastAt','lastReceivedAt','lastError')},
+ 'tradeStatusOk':trade.get('ok')},ensure_ascii=False))
+print('SPEED_AUDIT_MARKET_FEED',json.dumps({
+ 'ok':feed.get('ok'),'connected':f.get('marketFeedConnected'),
+ 'pricePresent':bool(f.get('lastPrice')),'openPresent':bool(f.get('roundOpenPrice')),
+ 'roundMatches':f.get('roundStartMs')==now//300000*300000,
+ 'eventLagMs':now-f['eventMs'] if isinstance(f.get('eventMs'),int) else None},ensure_ascii=False))
+wanted_model={'deepseek100ms_locked','deepseek100ms_price_fallback',
+ 'deepseek100ms_analysis_failed','deepseek100ms_round_unavailable',
+ 'deepseek15_locked','deepseek15_round_unavailable','deepseek_single5_locked'}
+wanted_trade={'api_intent_ready','auto_submit_triggered','fresh_quote_ready',
+ 'api_order_submit_attempt','api_order_submitted_pending_confirmation',
+ 'api_order_failed','auto_order_attempt_result','order_status_updated',
+ 'fresh_quote_failed','intent_prepare_failed',
+ 'order_submit_deadline_expired','submit_blocked_signal_changed',
+ 'order_retry_requote_failed','api_order_retry',
+ 'locked_signal_redis_subscriber_ready','locked_signal_websocket_connected',
+ 'signal_poll_interval_aligned','locked_signal_redis_message_invalid',
+ 'locked_signal_websocket_message_invalid'}
+results=[]
+counts=collections.Counter()
+samples=collections.defaultdict(list)
+for unit,allowed in (('zl-prediction-deepseek5.service',wanted_model),
+ ('zl-prediction-trade.service',wanted_trade)):
+  cmd=['journalctl','-u',unit,'--since','4 hours ago','--no-pager','-o','json','-n','16000']
+  proc=subprocess.run(cmd,capture_output=True,text=True,timeout=20)
+  for line in proc.stdout.splitlines():
+   try:
+    src=json.loads(line)
+    value=json.loads(src.get('MESSAGE',''))
+    if not isinstance(value,dict):continue
+   except:continue
+   event=value.get('event')
+   if event not in allowed:continue
+   when=int(src.get('__REALTIME_TIMESTAMP',0))//1000
+   if when<now-4*3600000 or when>now+60000:continue
+   round=value.get('round')
+   if not isinstance(round,int) or round<1000000000000:round=None
+   counts[(unit,event)]+=1
+   row={'service':'AI' if 'deepseek5' in unit else 'TRADE',
+     'event':event,'atMs':when,'round':round}
+   if round is not None:row['sinceRoundMs']=when-round
+   for field in ('elapsedMs','apiLatencyMs','marketEventLagMs','aiLatencyMs','overTargetMs',
+     'quoteLatencyMs','triggerToQuoteMs','submitLatencyMs','orderAttempts',
+     'attempt','quoteRemainingMs','quoteRemainingAtSubmitMs'):
+    z=value.get(field)
+    if isinstance(z,(float,int)) and math.isfinite(z):
+     if abs(z)<3000000:row[field]=round(z,2) if isinstance(z,float) else z
+   if event.endswith('locked') or event=='deepseek100ms_price_fallback':
+    row['method']=value.get('method')
+    if event.endswith('locked'): row['direction']=value.get('direction')
+   if event.endswith('_failed') or event.endswith('_unavailable'): 
+    if isinstance(value.get('code'),(str,int)):row['code']=str(value['code'])[:35]
+    if isinstance(value.get('reason'),str) and len(value['reason'])<70 and not any(s in value['reason'].upper() for s in ('TOKEN','KEY','SECRET','WALLET')):row['reason']=value['reason']
+   results.append(row)
+   for field in ('elapsedMs','apiLatencyMs','marketEventLagMs','overTargetMs',
+     'quoteLatencyMs','triggerToQuoteMs','submitLatencyMs','quoteRemainingAtSubmitMs'):
+    if isinstance(row.get(field),(float,int)) and row[field]>=0 and row[field]<1000000:
+     samples[(event,field)].append(row[field])
+  print('SPEED_AUDIT_JOURNAL_STATUS',unit,'readOk',proc.returncode==0,
+   'events',sum(v for (u,_),v in counts.items() if u==unit))
+print('SPEED_AUDIT_COUNTS',json.dumps({
+ ('AI:' if 'deepseek5' in u else 'TRADE:')+e:n for (u,e),n in sorted(counts.items())},ensure_ascii=False))
+def stat(v):
+ v=sorted(v);n=len(v)
+ return {'n':n,'min':v[0],'p50':v[int((n-1)*.5)],'p90':v[int((n-1)*.9)],
+  'max':v[-1]}
+print('SPEED_AUDIT_STAGE_LATENCIES_MS',json.dumps({
+ e+'.'+field:stat(v) for (e,field),v in samples.items() if len(v)>0},ensure_ascii=False))
+# An event's journald entry timestamp is when it was logged, not Binance execution time.
+byround=collections.defaultdict(dict)
+for row in sorted(results,key=lambda x:x['atMs']):
+ if row.get('round') is not None and row['event'] not in byround[row['round']]:
+  byround[row['round']][row['event']]=row['atMs']
+intervals=collections.defaultdict(list)
+for r,m in byround.items():
+ for a,b in (('deepseek100ms_locked','api_intent_ready'),
+  ('api_intent_ready','auto_submit_triggered'),
+  ('auto_submit_triggered','fresh_quote_ready'),
+  ('fresh_quote_ready','api_order_submit_attempt'),
+  ('api_order_submit_attempt','api_order_submitted_pending_confirmation'),
+  ('api_order_submit_attempt','api_order_failed'),
+  ('deepseek100ms_locked','api_order_submitted_pending_confirmation')):
+  if a in m and b in m:
+   d=m[b]-m[a]
+   if 0<=d<=60000:intervals[a+' -> '+b].append(d)
+print('SPEED_AUDIT_CROSS_STAGE_MS',json.dumps({k:stat(v) for k,v in intervals.items()},ensure_ascii=False))
+recent=[r for r in sorted(byround) if r>=now-2*3600000][-20:]
+compact=[]
+for r in recent:
+ events=[x for x in results if x.get('round')==r]
+ events.sort(key=lambda x:x['atMs'])
+ compact.append({'timeLocal':datetime.fromtimestamp(r/1000,TZ).strftime('%H:%M'),
+  'events':[{k:v for k,v in e.items() if k in ('event','sinceRoundMs','elapsedMs',
+    'apiLatencyMs','marketEventLagMs','quoteLatencyMs','triggerToQuoteMs',
+    'submitLatencyMs','method','code','reason')} for e in events[:12]]})
+print('SPEED_AUDIT_RECENT_ROUNDS',json.dumps(compact[-15:],ensure_ascii=False))
+print('SPEED_AUDIT_COMPLETE=true')
+PY
+"""
+def main():
+ sha=os.getenv('GITHUB_SHA','')
+ if os.getenv('GITHUB_REF_NAME')!=BRANCH or not re.fullmatch('[a-f0-9]{40}',sha):
+  print('INVALID_SPEED_AUDIT_REF');return 2
+ c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+  access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+  region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+ inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=INSTANCE,
+  name='zl-readonly-signal-quote-order-latency-audit',type='RunShellScript',
+  command_content=REMOTE,working_user='root',timeout=150)).body.invoke_id
+ for _ in range(85):
+  time.sleep(2)
+  r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(
+   region_id='ap-southeast-1',instance_id=INSTANCE,invoke_id=inv)).body.invocation_result
+  if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+   try:o=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+   except Exception:o=str(r.output)
+   print('SPEED_AUDIT_REMOTE_STATUS',r.invocation_status,'EXIT',r.exit_code)
+   print(o[-28000:])
+   return 0 if int(r.exit_code)==0 else 5
+ print('SPEED_AUDIT_RESULT_UNCONFIRMED');return 6
+if __name__=='__main__':sys.exit(main())

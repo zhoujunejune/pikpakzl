@@ -1,13 +1,17 @@
-// Single-call DeepSeek-only 15-second prediction; no market-price fallback or fake AI direction.
-// Records failures; never submits orders; preserves no-learning policy.
+// DeepSeek-first + real current-round price fallback with a T+100ms target.
+// If this round's quote is missing at 100ms, use first valid quote received by T+15s.
+// Never re-use previous round price or incorrectly claim a 100ms success.
+// This service only publishes signals; it never submits orders.
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import {fileURLToPath} from 'node:url';
 const ID='DEEPSEEK_5M_V1';
 const ROUND_MS=300000;
-const LIMIT_MS=15000;
-const EXPOSE_UNTIL_MS=35000; // allows the trading handler's 30s submission window
+const AI_LIMIT_MS=100;
+const FALLBACK_END_MS=15000;
+const LIMIT_MS=FALLBACK_END_MS;
+const EXPOSE_UNTIL_MS=35000; // retain selected trader's 30-second window
 const FEED='http://127.0.0.1:13003/api/shadow-market-data';
 const API='https://api.deepseek.com/chat/completions';
 const side=x=>x==='UP'||x==='DOWN';
@@ -32,7 +36,7 @@ export function buildFastSignal({round,at,tick,decision,providerModel}){
  if(!Number.isSafeInteger(round)||round%ROUND_MS||
   !Number.isSafeInteger(at)||at<round||at>=round+LIMIT_MS||
   tick?.round!==round||tick.at>at||at-tick.at>3500||!side(decision?.direction))
-  throw Error('INVALID_15_SECOND_REAL_SIGNAL');
+  throw Error('INVALID_CURRENT_ROUND_100MS_SIGNAL');
  const dir=decision.direction;
  return {ok:true,model:ID,round,generatedAt:at,readOnly:true,orders:false,
   productionIntegration:false,providerModel,
@@ -41,7 +45,7 @@ export function buildFastSignal({round,at,tick,decision,providerModel}){
    reason:String(decision.reason||'').slice(0,110),
    confidenceIsCalibrated:false,selectedModelConfidence:null,
    decisionMethod:decision.method,
-   directionalPolicy:'DEEPSEEK_ONLY_15S_ONE_CALL_NO_LEARNING',
+   directionalPolicy:'DEEPSEEK_100MS_OR_PRICE_FALLBACK_NO_LEARNING',
    uncertainty:'UNQUANTIFIED',
    prewarmDirection:null,reviewDirection:null,lastSelectedReview:'current',
    waitAllowed:false,fromOpenBps:Number(((tick.price/tick.open-1)*10000).toFixed(3)),
@@ -74,7 +78,7 @@ export function createFastProductionProvider({
  function failed(code,detail={}){
   const r=String(code||'DEEPSEEK_UNKNOWN_FAILURE').slice(0,125);
   error=r;lastFailure={round,at:clock(),reason:r};
-  audit('deepseek15_analysis_failed',{reason:r,...detail});
+  audit('deepseek100ms_analysis_failed',{reason:r,...detail});
  }
 
  // Previous output is for the previous round only; never republish it.
@@ -90,16 +94,38 @@ export function createFastProductionProvider({
   completed={round,result:'LOCKED',elapsedMs:now-round,direction:decision.direction,
    method:decision.method};
   error=null;
-  audit('deepseek15_locked',{direction:decision.direction,elapsedMs:now-round,method:decision.method,
-    modelCalls,apiLatencyMs:latency,aiTokens:apiTokens});
+  audit('deepseek100ms_locked',{direction:decision.direction,elapsedMs:now-round,method:decision.method,
+    modelCalls,apiLatencyMs:latency,aiTokens:apiTokens,marketAtMs:tick.at,
+    overTargetMs:Math.max(0,now-(round+AI_LIMIT_MS))});
   return true;
  };
+ function fallback(reason='DEEPSEEK_NOT_READY_BY_100MS'){
+  const now=clock();
+  if(saved?.round===round||now<round+AI_LIMIT_MS||now>=round+FALLBACK_END_MS)return false;
+  const t=snapshot;
+  if(!t||t.round!==round||t.at<round||t.at>now||now-t.at>3000){
+   error='CURRENT_ROUND_MARKET_NOT_READY_FOR_PRICE_FALLBACK';
+   return false;
+  }
+  const direction=t.price>=t.open?'UP':'DOWN';
+  try{
+   const ok=commit({direction,method:'REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK',
+     reason:'100毫秒内无有效DeepSeek方向，使用本轮真实BTC开盘价和最新价格生成备用方向'},t);
+   if(ok)audit('deepseek100ms_price_fallback',{reason,
+     elapsedMs:clock()-round,marketEventLagMs:Math.max(0,clock()-t.at),
+     aiAttempted:attempted,aiLatencyMs:latency});
+   return ok;
+  }catch(e){
+   failed('PRICE_FALLBACK_PERSIST_FAILED',{name:String(e?.name||'Error')});
+   return false;
+  }
+ }
  async function judge(tick){
   attempted=true;modelCalls=1;pending=true;
   const requestRound=round;
-  const started=clock(),available=round+LIMIT_MS-started-350;
-  if(!key||available<350){
-   failed(!key?'DEEPSEEK_API_KEY_MISSING':'MODEL_TIME_BUDGET_EXHAUSTED',{startedMs:started-round});
+  const started=clock(),available=round+AI_LIMIT_MS-started;
+  if(!key||available<25){
+   failed(!key?'DEEPSEEK_API_KEY_MISSING':'MODEL_100MS_TIME_BUDGET_EXHAUSTED',{startedMs:started-round});
    pending=false;return;
   }
   const input={roundStartMs:round,observedAtMs:tick.at,
@@ -116,7 +142,7 @@ export function createFastProductionProvider({
    const res=await fetcher(api,{method:'POST',headers:{
     Authorization:'Bearer '+key,'Content-Type':'application/json'},
     body:JSON.stringify(payload),
-    signal:AbortSignal.timeout(Math.max(300,Math.min(13600,available)))});
+    signal:AbortSignal.timeout(Math.max(1,Math.floor(available-1)))});
    latency=clock()-started;
    if(!res.ok)throw Error('DEEPSEEK_HTTP_'+res.status);
    const body=await res.json();
@@ -124,11 +150,11 @@ export function createFastProductionProvider({
    const parsed=modelDirection(body?.choices?.[0]?.message?.content);
    if(!parsed)throw Error('INVALID_AI_DIRECTION');
    if(requestRound!==roundOf(clock())||requestRound!==round)return;
-   if(saved?.round!==round&&clock()<round+LIMIT_MS){
+   if(saved?.round!==round&&clock()<round+AI_LIMIT_MS){
     const fresh=snapshot?.round===round && clock()-snapshot.at<=3000 ? snapshot : tick;
     if(clock()-fresh.at>3000)throw Error('AI_MARKET_SNAPSHOT_EXPIRED');
-    if(!commit({...parsed,method:'DEEPSEEK_SINGLE_CALL_15S'},fresh))throw Error('AI_COMMIT_REJECTED');
-   }else if(saved?.round!==round)failed('AI_RESPONSE_AFTER_15S',{apiLatencyMs:latency});
+    if(!commit({...parsed,method:'DEEPSEEK_SINGLE_CALL_5S'},fresh))throw Error('AI_COMMIT_REJECTED');
+   }else if(saved?.round!==round)failed('AI_RESPONSE_AFTER_100MS',{apiLatencyMs:latency});
   }catch(e){
    latency=clock()-started;
    if(requestRound!==round||requestRound!==roundOf(clock()))return;
@@ -145,16 +171,17 @@ export function createFastProductionProvider({
  }
  async function tick(){
   const now=clock();rotate(now);
-  if(now-round>=LIMIT_MS){
-   if(!saved&&!expiredLogged){
+  if(saved?.round===round)return status();
+  if(now-round>=FALLBACK_END_MS){
+   if(!expiredLogged){
     expiredLogged=true;
-    const reason=(lastFailure?.round===round?lastFailure.reason:null)||error||
-      (pending?'AI_NOT_FINISHED_BY_15S':attempted?'AI_NO_VALID_RESULT_BY_15S':'MARKET_NOT_READY_BY_15S');
+    const reason='NO_TRUSTED_CURRENT_ROUND_MARKET_BEFORE_15S';
     lastFailure={round,at:now,reason};
-    audit('deepseek15_round_unavailable',{reason,modelCalls,pending,apiLatencyMs:latency});
+    audit('deepseek100ms_round_unavailable',{reason,modelCalls,aiLatencyMs:latency});
    }
    return status();
   }
+  if(now>=round+AI_LIMIT_MS)fallback('DEEPSEEK_100MS_DEADLINE');
   if(saved?.round===round)return status();
   if(!feedBusy){
    feedBusy=true;
@@ -164,8 +191,11 @@ export function createFastProductionProvider({
     if(!res.ok)throw Error('MARKET_HTTP_'+res.status);
     const raw=await res.json();
     const t=parseTick(raw,clock(),round);
-    if(t){snapshot=t;lastMarketAt=t.at;if(!attempted)void judge(t)}
-    else error='CURRENT_ROUND_MARKET_NOT_READY';
+    if(t){
+     snapshot=t;lastMarketAt=t.at;
+     if(!attempted&&clock()<round+AI_LIMIT_MS)void judge(t);
+     if(clock()>=round+AI_LIMIT_MS)fallback('FIRST_VALID_CURRENT_ROUND_MARKET_AFTER_100MS');
+    }else error='CURRENT_ROUND_MARKET_NOT_READY';
    }catch(e){error='MARKET_'+String(e?.message||e).slice(0,100)}
    finally{feedBusy=false}
   }
@@ -175,21 +205,23 @@ export function createFastProductionProvider({
   const now=clock();rotate(now);
   const locked=saved?.round===round;
   const visible=locked&&now<round+EXPOSE_UNTIL_MS;
-  const ended=now>=round+LIMIT_MS&&!locked;
+  const ended=now>=round+FALLBACK_END_MS&&!locked;
   return {ok:true,model:ID,providerModel:model,configured:Boolean(key),
    round,signal:visible?saved:null,
    roundDecision:{round,status:locked?'LOCKED':ended?'UNAVAILABLE':'ANALYZING',
     direction:locked?saved.latest.direction:null,
-    reason:ended?(lastFailure?.round===round?lastFailure.reason:(error||'NO_AI_DIRECTION_BY_15S')):null,
-    decisionDeadlineMs:round+LIMIT_MS,lockedAt:locked?saved.latest.lockedAt:null},
+    reason:ended?(lastFailure?.round===round?lastFailure.reason:(error||'NO_VALID_REAL_BTC_PRICE_BEFORE_15S')):null,
+    decisionDeadlineMs:round+AI_LIMIT_MS,lockedAt:locked?saved.latest.lockedAt:null,
+    fallbackMarketDeadlineMs:round+FALLBACK_END_MS},
    lastSignal:saved?{round:saved.round,direction:saved.latest.direction}:null,
-   decisionWindowEndMs:round+LIMIT_MS,
+   decisionWindowEndMs:round+AI_LIMIT_MS,fallbackMarketDeadlineMs:round+FALLBACK_END_MS,
    maxCallsPerRound:1,preRoundMaxCalls:0,currentRoundMaxCalls:1,
    analysisCountLimit:'LIVE1_ONLY',
-   decisionRule:'DEEPSEEK_ONLY_ONE_CALL_15S_NO_PRICE_FALLBACK',
+   decisionRule:'DEEPSEEK_100MS_THEN_CURRENT_ROUND_PRICE_FALLBACK',
    analysisModelCalls:modelCalls,tries:modelCalls,
    busy:pending,featureReady:Number.isSafeInteger(lastMarketAt)&&now-lastMarketAt<=3000,
    error,waitReason:null,lastApiLatencyMs:latency,aiTokens:apiTokens,lastFailure,diagnosticError,
+   fallbackPending:!locked&&now>=round+AI_LIMIT_MS&&now<round+FALLBACK_END_MS,
    lastDecision:completed,missedRounds:missed,skippedRounds:missed,
    learningDisabled:true,trainingDisabled:true,statisticsDisabled:true,
    aiDirectionalRequired:true,realOrderEnabled:false,tradeIntegration:false};
@@ -208,7 +240,7 @@ export function serveFastProduction(p,port=Number(process.env.LLM_SERVICE_PORT||
    if(!data){
     code=503;data={ok:false,model:ID,round:st.round,
      direction:null,status:st.roundDecision.status,
-     error:st.roundDecision.reason||'DEEPSEEK_SIGNAL_NOT_LOCKED_BEFORE_15S',
+     error:st.roundDecision.reason||'WAITING_FOR_VALID_CURRENT_ROUND_PRICE',
      signalAvailable:false};
    }
   }else {res.writeHead(404);return res.end('Not Found')}
@@ -219,6 +251,6 @@ export function serveFastProduction(p,port=Number(process.env.LLM_SERVICE_PORT||
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const p=createFastProductionProvider();serveFastProduction(p);
- void p.tick();setInterval(()=>void p.tick(),200);
- console.log('DEEPSEEK_ONLY15_NO_TRAINING_PRODUCTION_RUNNING');
+ void p.tick();setInterval(()=>void p.tick(),20); // local first-quote poll; timing is measured, never asserted
+ console.log('DEEPSEEK_100MS_REAL_PRICE_FALLBACK_NO_TRAINING_PRODUCTION_RUNNING');
 }

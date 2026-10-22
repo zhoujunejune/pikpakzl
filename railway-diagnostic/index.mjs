@@ -694,6 +694,9 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   if (pendingAction?.state === 'QUOTING' || pendingAction?.state === 'SUBMITTING') return;
   if (!signalOverride && Date.now() - lastPrepareAttemptAt < 2500) return;
 
+  // A slow 1200ms poll and a fast 120ms tick can complete HTTP reads together.
+  // Recheck the in-flight fence immediately before preparing an order intent.
+  if(prepareInFlight)return;
   prepareInFlight = true;
   lastPrepareAttemptAt = Date.now();
   try {

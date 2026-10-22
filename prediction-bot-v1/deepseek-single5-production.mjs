@@ -32,7 +32,7 @@ export function buildFastSignal({round,at,tick,decision,providerModel}){
  if(!Number.isSafeInteger(round)||round%ROUND_MS||
   !Number.isSafeInteger(at)||at<round||at>=round+LIMIT_MS||
   tick?.round!==round||tick.at>at||at-tick.at>3500||!side(decision?.direction))
-  throw Error('INVALID_FIVE_SECOND_REAL_SIGNAL');
+  throw Error('INVALID_15_SECOND_REAL_SIGNAL');
  const dir=decision.direction;
  return {ok:true,model:ID,round,generatedAt:at,readOnly:true,orders:false,
   productionIntegration:false,providerModel,
@@ -145,7 +145,8 @@ export function createFastProductionProvider({
   if(now-round>=LIMIT_MS){
    if(!saved&&!expiredLogged){
     expiredLogged=true;
-    const reason=error||(pending?'AI_NOT_FINISHED_BY_15S':attempted?'AI_NO_VALID_RESULT_BY_15S':'MARKET_NOT_READY_BY_15S');
+    const reason=(lastFailure?.round===round?lastFailure.reason:null)||error||
+      (pending?'AI_NOT_FINISHED_BY_15S':attempted?'AI_NO_VALID_RESULT_BY_15S':'MARKET_NOT_READY_BY_15S');
     lastFailure={round,at:now,reason};
     audit('deepseek15_round_unavailable',{reason,modelCalls,pending,apiLatencyMs:latency});
    }

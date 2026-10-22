@@ -124,11 +124,11 @@ export function createFastProductionProvider({
    const parsed=modelDirection(body?.choices?.[0]?.message?.content);
    if(!parsed)throw Error('INVALID_AI_DIRECTION');
    if(requestRound!==roundOf(clock())||requestRound!==round)return;
-   if(!saved&&clock()<round+LIMIT_MS){
+   if(saved?.round!==round&&clock()<round+LIMIT_MS){
     const fresh=snapshot?.round===round && clock()-snapshot.at<=3000 ? snapshot : tick;
     if(clock()-fresh.at>3000)throw Error('AI_MARKET_SNAPSHOT_EXPIRED');
     if(!commit({...parsed,method:'DEEPSEEK_SINGLE_CALL_15S'},fresh))throw Error('AI_COMMIT_REJECTED');
-   }else if(!saved)failed('AI_RESPONSE_AFTER_15S',{apiLatencyMs:latency});
+   }else if(saved?.round!==round)failed('AI_RESPONSE_AFTER_15S',{apiLatencyMs:latency});
   }catch(e){
    latency=clock()-started;
    if(requestRound!==round||requestRound!==roundOf(clock()))return;

@@ -69,6 +69,20 @@ pathlib.Path(sys.argv[2]).write_text(src)
 print('AI15_WRAPPER_SCOPED_ORDER_DEADLINE_PATCH_VALID=true')
 PY
 "$node" --check "$work/wrapper.mjs"
+# The wrapper generates trade-control-fixed.mjs from the LIVE index at runtime.
+# Parsing the wrapper alone missed a broken dynamically-generated production module.
+cp -p /opt/zl-prediction-live/src/railway-diagnostic/index.mjs "$work/index.mjs"
+python3 - "$work/wrapper.mjs" "$work/compile-only.mjs" <<'PY'
+import pathlib,sys
+src=pathlib.Path(sys.argv[1]).read_text()
+marker='await import(generatedModuleUrl.href);'
+assert src.count(marker)==1,'MISSING_DYNAMIC_IMPORT_MARKER'
+pathlib.Path(sys.argv[2]).write_text(src.replace(marker,
+ "console.log('AI15_GENERATED_BACKEND_READY_FOR_PARSE');"))
+PY
+"$node" "$work/compile-only.mjs"
+"$node" --check "$work/trade-control-fixed.mjs"
+echo 'AI15_PRODUCTION_LIVE_INDEX_AND_PATCHED_WRAPPER_COMPILE_OK=true'
 backup="/var/lib/zl-prediction/archive/source-backups/deepseek-ai-only-15s-COMMIT_SHA"
 test ! -e "$backup"
 mkdir -p "$backup"

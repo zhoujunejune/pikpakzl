@@ -34,10 +34,10 @@ export function createRoundResultsJournal({
       recordedAt:event.recordedAt,actual:null,settledAt:null,hit:null});
     }else if(event.kind==='SETTLED'){
      const existing=rows.get(event.round);
-     if(existing?.status==='LOCKED'&&SIDES.has(event.actual)&&safeTime(event.settledAt)&&
+     if(existing&&SIDES.has(event.actual)&&safeTime(event.settledAt)&&
         event.settledAt>=event.round+ROUND_MS){
        existing.actual=event.actual;existing.settledAt=event.settledAt;
-       existing.hit=existing.direction===event.actual;
+       existing.hit=existing.status==='LOCKED'?(existing.direction===event.actual):null;
      }
     }else throw Error('UNKNOWN_EVENT');
    }
@@ -86,12 +86,12 @@ export function createRoundResultsJournal({
   }
   let n=0;
   for(const [round,row] of rows){
-   if(row.status!=='LOCKED'||row.actual!==null||clock()<round+ROUND_MS)continue;
+   if(row.actual!==null||clock()<round+ROUND_MS)continue;
    const resolved=official.get(round);
    if(!resolved)continue;
    append({kind:'SETTLED',round,...resolved,recordedAt:clock()});
    row.actual=resolved.actual;row.settledAt=resolved.settledAt;
-   row.hit=row.direction===resolved.actual;n++;
+   row.hit=row.status==='LOCKED'?(row.direction===resolved.actual):null;n++;
   }
   settlementCount+=n;settlementLastAt=clock();writeError=null;return n;
  }

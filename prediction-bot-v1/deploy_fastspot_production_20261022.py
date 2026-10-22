@@ -57,7 +57,7 @@ idx=w/'index.mjs'
 s=idx.read_text()
 needle="  // Shadow-only public OHLCV read endpoint. This path cannot control prediction or trading."
 assert s.count(needle)==1
-patch="""  // Uncached in-process real BTC price and five-minute open; read-only.
+patch='''  // Uncached in-process real BTC price and five-minute open; read-only.
   // Does not request OHLCV/Klines, create signals, or submit orders.
   if (req.method==='GET' && url.pathname==='/api/shadow-market-fast') {
     const data=breakout20ReadonlyFeed.readSpot();
@@ -65,13 +65,13 @@ patch="""  // Uncached in-process real BTC price and five-minute open; read-only
     return res.end(JSON.stringify(data));
   }
 
-"""
+'''
 idx.write_text(s.replace(needle,patch+needle))
 spot=w/'shadow-market-readonly.mjs'
 s=spot.read_text()
 needle='  return {\n    async read() {'
 assert s.count(needle)==1,'SPOT_READER_ANCHOR_CHANGED'
-patch="""  return {
+patch='''  return {
     // Live in-memory snapshot, no 1800ms cache or Binance Klines request.
     readSpot() {
       try {
@@ -86,7 +86,7 @@ patch="""  return {
           error:errorMessage(e),generatedAtMs:now()};
       }
     },
-    async read() {"""
+    async read() {'''
 spot.write_text(s.replace(needle,patch))
 ai=w/'model.mjs';s=ai.read_text()
 needle="const FEED='http://127.0.0.1:13003/api/shadow-market-data';"

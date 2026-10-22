@@ -1,0 +1,52 @@
+name: Deploy uncached realtime BTC spot endpoint guarded
+on:
+  push:
+    branches: [fix/fast-feed-and-trigger-20261022]
+    paths:
+      - .github/workflows/zl-fastspot-production.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-fastspot-marketfeed
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --test fast-signal-engine/shadow-market-readonly.test.mjs prediction-bot-v1/deepseek100ms-fallback.test.mjs
+      - name: Validate guarded on-host patch shell
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          p=Path('prediction-bot-v1/deploy_fastspot_production_20261022.py')
+          m=ast.parse(p.read_text())
+          r=next(v.value.value for v in m.body if isinstance(v,ast.Assign)
+            for k in v.targets if isinstance(k,ast.Name) and k.id=='REMOTE')
+          check=subprocess.run(['bash','-n'],input=r,text=True,capture_output=True)
+          assert check.returncode==0,check.stderr
+          assert 'FOLLOW_ON_ABORT' in r
+          assert 'FASTSPOT_ROLLBACK_TRIGGERED=true' in r
+          assert 'systemctl restart zl-prediction-trade.service' not in r
+          assert 'systemctl restart zl-prediction-risk-exits.service' not in r
+          assert "const FEED='http://127.0.0.1:13003/api/shadow-market-fast';" in Path('prediction-bot-v1/deepseek-single5-production.mjs').read_text()
+          print('FASTSPOT_DEPLOY_GUARDS_VALID=true')
+          PY
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Add read-only live spot endpoint and connect 100ms AI model if owner follow OFF
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_fastspot_production_20261022.py

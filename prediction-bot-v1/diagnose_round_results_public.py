@@ -39,7 +39,7 @@ def probe(port,route):
   return o
  except HTTPError as e:return {'http':e.code}
  except Exception as e:return {'error':type(e).__name__}
-for port in (13001,13029,13018,13019,13020,13030,3000,3002):
+for port in (13000,13001,13029,13018,13019,13020,13030,3000,3002):
  for route in ('/','/trade-control') if port==13001 else ('/',):
   print('PUBLIC_PATH_PROBE',port,route,json.dumps(probe(port,route),ensure_ascii=False)[:3200])
 p=Path('/etc/caddy/Caddyfile')
@@ -54,6 +54,15 @@ if p.exists():
    print('CADDY_BLOCK',i+1,clean[:140])
   elif clean.startswith(('reverse_proxy','handle','handle_path','redir','route','rewrite','root','file_server','respond','import')):
    print('CADDY_ROUTE',i+1,clean[:180])
+for unit in ('zl-prediction-trade.service','zl-prediction-panel.service','zl-prediction-nav.service','zl-prediction-deepseek5.service'):
+ pid=subprocess.run(['systemctl','show',unit,'-p','MainPID','--value'],capture_output=True,text=True).stdout.strip()
+ if pid and pid!='0':
+  try:
+   raw=Path('/proc/'+pid+'/cmdline').read_bytes().replace(b'\\0',b' ').decode('utf8','replace')
+   # Log only path-like executable names, never command arguments or environment.
+   safe=[x for x in raw.split(' ') if x.endswith(('.mjs','.js','.cjs','.py'))]
+   print('PUBLIC_MAIN_EXEC',unit,pid,[Path(x).name for x in safe][:5])
+  except Exception as e:print('PUBLIC_MAIN_EXEC_ERR',unit,type(e).__name__)
 for name in ('zl-prediction-trade.service','zl-prediction-panel.service','zl-prediction-deepseek5.service','caddy.service'):
  out=subprocess.run(['systemctl','show',name,'-p','ActiveState','--no-pager'],capture_output=True,text=True)
  print('PUBLIC_UNIT',name,out.stdout.strip())

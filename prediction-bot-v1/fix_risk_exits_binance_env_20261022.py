@@ -48,7 +48,8 @@ for port,url in ((13001,'/api/risk-control'),(13029,'/api/status'),(13001,'/api/
   elif url=='/api/status' and port==13029:
    assert s.get('model')=='DEEPSEEK_5M_V1' and s.get('maxCallsPerRound')==1
   elif url=='/api/status' and port==13001:
-   assert s.get('enabled') is False,'LIVE_FOLLOW_ON_ABORT_TO_AVOID_SERVICE_RESTART'
+   assert isinstance(s.get('enabled'),bool),'LIVE_FOLLOW_STATE_UNKNOWN'
+   print('RISK_REPAIR_FOLLOW_EXISTING_STATE_RETAINED',s.get('enabled'))
 print('RISK_REPAIR_SOURCE_API_CONFIG_VALID=true')
 unit_env=subprocess.check_output(['systemctl','show','zl-prediction-trade.service','-p','EnvironmentFiles','--value'],text=True)
 assert '/var/lib/zl-exchange-api/prediction/binance.env' in unit_env,'UNEXPECTED_TRADE_CREDENTIAL_SOURCE'

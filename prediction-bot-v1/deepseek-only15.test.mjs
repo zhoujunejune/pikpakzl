@@ -84,7 +84,7 @@ test('After 15 seconds an in-flight DeepSeek response never enters previous or n
   assert.equal(p.status().roundDecision.status,'UNAVAILABLE');
   resolveAI();await tick();
   assert.equal(p.status().signal,null);
-  assert.equal(p.status().lastFailure.reason,'AI_NOT_FINISHED_BY_15S');
+  assert.equal(p.status().lastFailure.reason,'AI_RESPONSE_AFTER_15S');
  }finally{cleanup(f)}
 });
 test('15 second signal build enforces deadline and refuses other rounds',()=>{

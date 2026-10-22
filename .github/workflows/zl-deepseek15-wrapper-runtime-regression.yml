@@ -1,0 +1,45 @@
+name: Verify DeepSeek15 injected trade control syntax before production
+on:
+  push:
+    branches: [fix/deepseek15-ai-only-prod-20261022]
+    paths: [.github/workflows/zl-deepseek15-wrapper-runtime-regression.yml, prediction-bot-v1/deepseek15_ai_only_guarded_release.py]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Test actual in-place wrapper patch and compile generated backend patch
+        run: |
+          python - <<'PY'
+          import ast,pathlib,subprocess,tempfile,os
+          src=pathlib.Path('prediction-bot-v1/deepseek15_ai_only_guarded_release.py').read_text()
+          mod=ast.parse(src)
+          remote=next(n.value.value for n in mod.body if isinstance(n,ast.Assign) and any(
+           isinstance(z,ast.Name) and z.id=='REMOTE' for z in n.targets))
+          bash=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          assert bash.returncode==0,bash.stderr
+          start=remote.index("python3 - \"$wrapper\" \"$work/wrapper.mjs\" <<'PY'")+len("python3 - \"$wrapper\" \"$work/wrapper.mjs\" <<'PY'")
+          end=remote.index("\nPY",start)
+          py=remote[start:end]
+          with tempfile.TemporaryDirectory() as temp:
+           dest=pathlib.Path(temp)/'wrapper.mjs'
+           applied=subprocess.run(['python3','-','railway-diagnostic/wrapper.mjs',str(dest)],input=py,text=True,capture_output=True)
+           assert applied.returncode==0,(applied.stdout,applied.stderr)
+           patched=dest.read_text()
+           assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS = 30000" in patched
+           assert "model === 'DEEPSEEK_5M_V1' ? DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :" in patched
+           assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :\n  return model" not in patched
+           assert "const ORDER_SUBMIT_DEADLINE_MS = 15000;" in patched
+           raw=patched.split('const backendPatch = String.raw\x60',1)[1].split('\x60;',1)[0]
+           code=pathlib.Path(temp)/'generated-backend.mjs';code.write_text(raw)
+           checked=subprocess.run(['node','--check',str(code)],text=True,capture_output=True)
+           assert checked.returncode==0,checked.stderr
+           checked=subprocess.run(['node','--check',str(dest)],text=True,capture_output=True)
+           assert checked.returncode==0,checked.stderr
+          print('AI15_GENERATED_TRADE_BACKEND_COMPILES_AND_ONLY_DEEPSEEK_ORDER_WINDOW_CHANGES=true')
+          PY

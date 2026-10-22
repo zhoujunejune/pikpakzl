@@ -1,0 +1,49 @@
+name: Deploy DeepSeek15 independent results viewer Alibaba
+on:
+  push:
+    branches: [fix/deepseek15-round-display-20261022]
+    paths: [.github/workflows/zl-ai15-display-production.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-display15-only
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --test prediction-bot-v1/round-results-only.test.mjs prediction-bot-v1/round-results-display-watcher.test.mjs prediction-bot-v1/deepseek15-display-fix.test.mjs
+      - name: Check deploy script, and verify no unrelated restart
+        run: |
+          python - <<'PY'
+          import pathlib,ast,subprocess
+          s=pathlib.Path('prediction-bot-v1/deploy_deepseek15_display_only.py').read_text()
+          m=ast.parse(s)
+          sh=next(n.value.value for n in m.body if isinstance(n,ast.Assign) and any(
+            isinstance(x,ast.Name) and x.id=='REMOTE' for x in n.targets))
+          r=subprocess.run(['bash','-n'],input=sh,text=True,capture_output=True)
+          assert r.returncode==0,r.stderr
+          assert 'systemctl restart "$unit"' in sh
+          assert 'systemctl restart zl-prediction-trade.service' not in sh
+          assert 'systemctl restart zl-prediction-deepseek5.service' not in sh
+          assert 'AI15_DISPLAY_RELEASE_SUCCESS' in sh
+          print('AI15_DISPLAY_DEPLOY_SAFETY_TEST_PASSED=true')
+          PY
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Fix independent viewer only and retain owner follow setting
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_deepseek15_display_only.py

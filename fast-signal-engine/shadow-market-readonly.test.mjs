@@ -66,3 +66,40 @@ test('fails closed on stale upstream price instead of inventing data', async () 
   });
   assert.equal((await model.read()).ok, false);
 });
+
+test('uncached fast spot reads live current BTC data without any kline HTTP calls',()=>{
+ let time=at,calls=0,price=60200;
+ const m=createReadOnlyMarketFeed({now:()=>time,
+   live:()=>({...live(),signal:{...live().signal,
+      factsCalculatedAt:time-90,roundStartMs:Math.floor(time/300000)*300000,
+      facts:{lastPrice:price,roundOpenPrice:60100}}}),
+   fetchImpl:async()=>{calls++;throw Error('KLINES_MUST_NOT_BE_CALLED_ON_FAST_TICK')}
+ });
+ const a=m.readSpot();
+ assert.equal(a.ok,true);
+ assert.equal(a.latest.lastPrice,60200);
+ assert.equal(a.latest.ageMs,90);
+ assert.equal(a.latest.roundStartMs,Math.floor(time/300000)*300000);
+ assert.equal(calls,0);
+ price=60350;time+=100;
+ const b=m.readSpot();
+ assert.equal(b.latest.lastPrice,60350,'fast route must not return old 1800ms cached price');
+ assert.equal(b.generatedAtMs,time);
+ assert.equal(calls,0);
+ assert.ok(!JSON.stringify(b).includes('"direction"'));
+ assert.ok(!JSON.stringify(b).includes('"score"'));
+ assert.ok(!JSON.stringify(b).includes('"wallet"'));
+});
+test('fast spot fails closed on missing current round open or disconnected upstream',()=>{
+ const m=createReadOnlyMarketFeed({
+  now:()=>at,
+  live:()=>({...live(),signal:{...live().signal,facts:{lastPrice:61000,roundOpenPrice:0}}}),
+  fetchImpl:async()=>{throw Error('UNEXPECTED_KLINE_REQUEST')}
+ });
+ assert.equal(m.readSpot().ok,false);
+ assert.equal(m.readSpot().latest,null);
+ const disconnected=createReadOnlyMarketFeed({
+  now:()=>at,live:()=>({...live(),dataIntegrity:{wsConnected:false}})
+ });
+ assert.equal(disconnected.readSpot().ok,false);
+});

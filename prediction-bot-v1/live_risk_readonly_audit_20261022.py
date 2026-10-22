@@ -108,7 +108,7 @@ for p in ('/opt/zl-prediction-live/src/railway-diagnostic/risk-runner.mjs',
   'sha256',hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else None)
 for unit in ('zl-prediction-risk-exits.service','zl-prediction-risk.service','zl-prediction-risk-runner.service','zl-prediction-risk-monitor.service','zl-prediction-trade.service'):
  cmd=subprocess.run(['journalctl','-u',unit,'--since','8 hours ago','--no-pager','-o','cat','--output-fields=MESSAGE','-n','4000'],capture_output=True,text=True,timeout=15)
- counts={};recent=[]
+ counts={};recent=[];checks=[]
  allowed={'risk_worker_started','risk_runtime_controller_started','risk_runtime_worker_started','risk_runtime_worker_exited',
  'risk_config_redis_sync_failed','risk_positions_error','risk_wallet_error','risk_invalid_position',
  'risk_sell_quote_failed','risk_sell_failed','risk_sell_unknown','risk_sell_submitted','risk_triggered',
@@ -120,11 +120,14 @@ for unit in ('zl-prediction-risk-exits.service','zl-prediction-risk.service','zl
   event=j.get('event')
   if event in allowed:
    counts[event]=counts.get(event,0)+1
-   if event not in ('risk_check',):
+   if event=='risk_check':
+    checks.append({k:j.get(k) for k in ('at','totalCost','currentSellAmount','tpTarget','slTarget','tpTriggered','slTriggered') if k in j})
+   else:
     recent.append({k:j.get(k) for k in ('event','at','error','httpStatus','code','reason',
       'hasTotalCost','hasShares','hasToWin','hasCredentials','scope','takeProfitEnabled','stopLossEnabled','pollMs') if k in j})
  print('RISK_AUDIT_EVENT_COUNTS',unit,json.dumps(counts,ensure_ascii=False))
  print('RISK_AUDIT_RECENT_EXCEPT_CHECKS',unit,json.dumps(recent[-15:],ensure_ascii=False)[:3700])
+ print('RISK_AUDIT_RECENT_REAL_QUOTES',unit,json.dumps(checks[-7:],ensure_ascii=False)[:2700])
 PY
 """
 def main():

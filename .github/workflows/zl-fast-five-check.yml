@@ -13,3 +13,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - run: node --check prediction-bot-v1/deepseek-single5-production.mjs
+      - run: node --test prediction-bot-v1/fast5-backend-smoke.test.mjs
+      - run: python prediction-bot-v1/patch_fast5_panel.py railway-diagnostic/panel-stats-shell.mjs /tmp/panel-fast5.mjs
+      - run: node --check /tmp/panel-fast5.mjs

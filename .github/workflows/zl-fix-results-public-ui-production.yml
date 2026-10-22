@@ -2,7 +2,9 @@ name: Publish results card on actual public Alibaba prediction frontend
 on:
   push:
     branches: [fix/deepseek5-results-public-visibility-20261022]
-    paths: [.github/workflows/zl-fix-results-public-ui-production.yml]
+    paths:
+      - .github/workflows/zl-fix-results-public-ui-production.yml
+      - prediction-bot-v1/active_round_results_ui_release.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:
@@ -20,6 +22,8 @@ jobs:
       - run: |
           python prediction-bot-v1/patch_active_round_results_control.py prediction-bot-v1/patch_round_results_panel.py railway-diagnostic/control-shell.mjs /tmp/actual-control.mjs
           node --check /tmp/actual-control.mjs
+          node --check prediction-bot-v1/round-results-display-watcher.mjs
+          node --test prediction-bot-v1/round-results-only.test.mjs prediction-bot-v1/round-results-display-watcher.test.mjs
           grep -q 'roundResultsOnlyCard' /tmp/actual-control.mjs
           grep -q 'function injectRiskControls(html)' /tmp/actual-control.mjs
           grep -q "url.pathname==='/api/deepseek-round-results'" /tmp/actual-control.mjs

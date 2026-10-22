@@ -96,6 +96,7 @@ export function createFastProductionProvider({
  };
  async function judge(tick){
   attempted=true;modelCalls=1;pending=true;
+  const requestRound=round;
   const started=clock(),available=round+LIMIT_MS-started-350;
   if(!key||available<350){
    failed(!key?'DEEPSEEK_API_KEY_MISSING':'MODEL_TIME_BUDGET_EXHAUSTED',{startedMs:started-round});
@@ -122,6 +123,7 @@ export function createFastProductionProvider({
    apiTokens=Number(body?.usage?.total_tokens)||null;
    const parsed=modelDirection(body?.choices?.[0]?.message?.content);
    if(!parsed)throw Error('INVALID_AI_DIRECTION');
+   if(requestRound!==roundOf(clock())||requestRound!==round)return;
    if(!saved&&clock()<round+LIMIT_MS){
     const fresh=snapshot?.round===round && clock()-snapshot.at<=3000 ? snapshot : tick;
     if(clock()-fresh.at>3000)throw Error('AI_MARKET_SNAPSHOT_EXPIRED');
@@ -129,6 +131,7 @@ export function createFastProductionProvider({
    }else if(!saved)failed('AI_RESPONSE_AFTER_15S',{apiLatencyMs:latency});
   }catch(e){
    latency=clock()-started;
+   if(requestRound!==round||requestRound!==roundOf(clock()))return;
    failed(e?.name==='AbortError'||e?.name==='TimeoutError'?'DEEPSEEK_API_TIMEOUT':String(e?.message||e),
      {apiLatencyMs:clock()-started});
   }finally{pending=false}

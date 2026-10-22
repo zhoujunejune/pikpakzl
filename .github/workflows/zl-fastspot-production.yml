@@ -4,6 +4,7 @@ on:
     branches: [fix/fast-feed-and-trigger-20261022]
     paths:
       - .github/workflows/zl-fastspot-production.yml
+      - prediction-bot-v1/deploy_fastspot_production_20261022.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

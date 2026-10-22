@@ -100,6 +100,26 @@ export function createReadOnlyMarketFeed({
   }
 
   return {
+    // Dedicated low-latency, strictly read-only spot snapshot for the
+    // current five-minute prediction. No 1m/5m HTTP Klines or 1800ms cache.
+    // Consumers must independently validate roundStartMs, eventMs, and price.
+    readSpot() {
+      try{
+        const latest=spot();
+        const valid=Number.isSafeInteger(latest.roundStartMs)&&
+          latest.roundStartMs>0&&Number.isFinite(latest.roundOpenPrice)&&
+          latest.roundOpenPrice>0&&latest.lastPrice>0;
+        if(!valid)throw Error('CURRENT_ROUND_BTC_OPEN_UNAVAILABLE');
+        return {
+          ok:true,schemaVersion:1,readOnly:true,symbol:SYMBOL,
+          source:'EXISTING_LIVE_BINANCE_SPOT_SNAPSHOT_NO_KLINES',
+          generatedAtMs:now(),latest
+        };
+      }catch(e){
+        return {ok:false,readOnly:true,symbol:SYMBOL,latest:null,
+          error:errorMessage(e),generatedAtMs:now()};
+      }
+    },
     async read() {
       if (cache && now() - cache.at < CACHE_MS) return cache.value;
       if (!inFlight) {

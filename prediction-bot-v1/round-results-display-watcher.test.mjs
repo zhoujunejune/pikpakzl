@@ -48,7 +48,7 @@ test('display failure cannot modify model or fabricate direction',async()=>{
  const journal=createRoundResultsJournal({file:path.join(dir,'results.ndjson'),clock:()=>now});
  const watcher=createDisplayWatcher({clock:()=>now,journal,fetcher:async()=>{throw Error('offline')}});
  try{
-  await watcher.tick();now=R+6000;await watcher.tick();
+  await watcher.tick();now=R+16000;await watcher.tick();
   assert.equal(watcher.history().summary.noSignal,1);
   assert.equal(watcher.history().summary.signals,0);
   assert.equal(watcher.status().lastModelError,'offline');

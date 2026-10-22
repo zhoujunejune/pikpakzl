@@ -915,6 +915,22 @@ void hydrateDirectionSettings().catch(e=>console.error(JSON.stringify({
 setInterval(()=>{if(!directionSettingsSnapshot().ready)void hydrateDirectionSettings().catch(()=>{});},5000);
 void startSignalRedisSubscriber();
 startSignalWebSocket();
+// DeepSeek's 100ms-first/current-round-price signal needs prompt *local* pickup.
+// Keep existing 1200ms polling as a fallback. Extra reads run only while owner
+// has following enabled, only for the selected live DeepSeek alias, and only
+// in the first 12 seconds of each 5m round. This never submits orders itself.
+let fastLivePrepareCheckBusy=false;
+setInterval(()=>{
+  if(!enabled||!tradeAmountText||fastLivePrepareCheckBusy||prepareInFlight||
+     !directionSettingsSnapshot().ready||
+     modelSelectionSnapshot().model!==SELECTIVE8_MODEL||
+     Date.now()%300000>=12000)return;
+  fastLivePrepareCheckBusy=true;
+  Promise.resolve(prepareWorker(null,'deepseek_fast_local_poll'))
+    .catch(e=>console.error(JSON.stringify({event:'deepseek_fast_local_poll_failed',
+      code:String(e?.code||e?.name||'UNKNOWN').slice(0,60)})))
+    .finally(()=>{fastLivePrepareCheckBusy=false;});
+},120);
 setInterval(prepareWorker, 1200);
 setInterval(() => refreshLastOrderStatus(false), 2500);
 

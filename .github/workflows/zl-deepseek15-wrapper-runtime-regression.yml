@@ -15,6 +15,8 @@ jobs:
         with: {node-version: '22'}
       - name: Test actual in-place wrapper patch and compile generated backend patch
         run: |
+          git fetch --depth=1 origin refs/heads/feat/deepseek-single5-no-learning-20261022
+          git show FETCH_HEAD:railway-diagnostic/wrapper.mjs > /tmp/deepseek15-baseline-wrapper.mjs
           python - <<'PY'
           import ast,pathlib,subprocess,tempfile,os
           src=pathlib.Path('prediction-bot-v1/deepseek15_ai_only_guarded_release.py').read_text()
@@ -28,7 +30,7 @@ jobs:
           py=remote[start:end]
           with tempfile.TemporaryDirectory() as temp:
            dest=pathlib.Path(temp)/'wrapper.mjs'
-           applied=subprocess.run(['python3','-','railway-diagnostic/wrapper.mjs',str(dest)],input=py,text=True,capture_output=True)
+           applied=subprocess.run(['python3','-','/tmp/deepseek15-baseline-wrapper.mjs',str(dest)],input=py,text=True,capture_output=True)
            assert applied.returncode==0,(applied.stdout,applied.stderr)
            patched=dest.read_text()
            assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS = 30000" in patched

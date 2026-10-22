@@ -12,7 +12,7 @@ const AI_LIMIT_MS=100;
 const FALLBACK_END_MS=15000;
 const LIMIT_MS=FALLBACK_END_MS;
 const EXPOSE_UNTIL_MS=35000; // retain selected trader's 30-second window
-const FEED='http://127.0.0.1:13003/api/shadow-market-data';
+const FEED='http://127.0.0.1:13003/api/shadow-market-fast';
 const API='https://api.deepseek.com/chat/completions';
 const side=x=>x==='UP'||x==='DOWN';
 const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;

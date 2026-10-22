@@ -125,6 +125,27 @@ print('NO_SIGNAL_WATCHER_SOURCE',p.exists(),hashlib.sha256(p.read_bytes()).hexdi
 j=pathlib.Path('/opt/zl-prediction-live/deepseek5/round-results-only-journal.mjs')
 print('NO_SIGNAL_WATCHER_JOURNAL_SOURCE',j.exists(),hashlib.sha256(j.read_bytes()).hexdigest() if j.exists() else '-')
 
+
+try:
+ listener=subprocess.run(['ss','-ltnp','sport = :13045'],capture_output=True,text=True,timeout=5).stdout
+ print('NO_SIGNAL_LISTENER',listener[:600].replace('\n',' '))
+ import re
+ found=re.search(r'pid=(\d+)',listener)
+ if found:
+  pid=found.group(1)
+  proc=pathlib.Path('/proc/'+pid)
+  raw=proc.joinpath('cmdline').read_bytes().split(b'\0')
+  args=[x.decode(errors='replace') for x in raw if x]
+  args=[x for x in args if not any(t in x.upper() for t in ('TOKEN','KEY','SECRET'))]
+  print('NO_SIGNAL_WATCHER_PROCESS',{'pid':pid,'args':args[:6],'cwd':str(proc.joinpath('cwd').resolve())})
+except Exception as e:print('NO_SIGNAL_LISTENER_ERROR',type(e).__name__)
+for root in ('/opt/zl-prediction-live','/usr/local/lib/zl','/etc/systemd/system'):
+ try:
+  result=subprocess.run(['find',root,'-maxdepth','6','-iname','*round*result*','-print'],
+   capture_output=True,text=True,timeout=7)
+  print('NO_SIGNAL_FIND_RESULT',root,result.stdout[:1200])
+ except Exception as e:print('NO_SIGNAL_FIND_ERROR',root,type(e).__name__)
+
 print('NO_SIGNAL_AUDIT_OK=true')
 
 print('AI15_PREFLIGHT_DONE=true')

@@ -1,0 +1,51 @@
+name: Deploy DeepSeek single-call five-second no-learning to Alibaba SWAS
+on:
+  push:
+    branches: [feat/deepseek-single5-no-learning-20261022]
+    paths: [.github/workflows/zl-fast-five-production.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: node --check prediction-bot-v1/deepseek-single5-production.mjs
+      - run: node --test prediction-bot-v1/fast5-backend-smoke.test.mjs
+      - run: python prediction-bot-v1/patch_fast5_panel.py railway-diagnostic/panel-stats-shell.mjs /tmp/panel-fast5.mjs
+      - run: node --check /tmp/panel-fast5.mjs
+      - run: |
+          python -m py_compile prediction-bot-v1/fast5_aliyun_release.py
+          python - <<'PY'
+          import ast,subprocess,pathlib
+          s=pathlib.Path('prediction-bot-v1/fast5_aliyun_release.py').read_text()
+          p=ast.parse(s)
+          remote=next(x.value.value for x in p.body if isinstance(x,ast.Assign) and
+           len(x.targets)==1 and getattr(x.targets[0],'id',None)=='REMOTE')
+          q=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          assert q.returncode==0,q.stderr
+          assert 'FOLLOW_ACTIVE_DO_NOT_RESTART' in remote
+          assert 'FAST5_ROLLBACK_TRIGGERED' in remote
+          PY
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Guarded model/front-end release with restart rollback and no owner-follow change
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/fast5_aliyun_release.py

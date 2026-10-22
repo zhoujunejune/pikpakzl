@@ -72,12 +72,12 @@ for unit,allowed in (('zl-prediction-deepseek5.service',wanted_model),
    if event not in allowed:continue
    when=int(src.get('__REALTIME_TIMESTAMP',0))//1000
    if when<now-4*3600000 or when>now+60000:continue
-   round=value.get('round')
-   if not isinstance(round,int) or round<1000000000000:round=None
+   round_number=value.get('round')
+   if not isinstance(round_number,int) or round_number<1000000000000:round_number=None
    counts[(unit,event)]+=1
    row={'service':'AI' if 'deepseek5' in unit else 'TRADE',
-     'event':event,'atMs':when,'round':round}
-   if round is not None:row['sinceRoundMs']=when-round
+     'event':event,'atMs':when,'round':round_number}
+   if round_number is not None:row['sinceRoundMs']=when-round_number
    for field in ('elapsedMs','apiLatencyMs','marketEventLagMs','aiLatencyMs','overTargetMs',
      'quoteLatencyMs','triggerToQuoteMs','submitLatencyMs','orderAttempts',
      'attempt','quoteRemainingMs','quoteRemainingAtSubmitMs'):

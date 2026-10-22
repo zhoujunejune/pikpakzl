@@ -1,0 +1,33 @@
+name: Verify faster TP-SL polling preserves SELL safeguards
+on:
+  push:
+    branches: [fix/risk-exit-300ms-20261023]
+    paths:
+      - .github/workflows/zl-risk300-ci.yml
+      - railway-diagnostic/risk-worker.mjs
+      - railway-diagnostic/risk-worker-speed.test.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --test railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Guard risk worker threshold and duplicate-Sell protection
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('railway-diagnostic/risk-worker.mjs').read_text()
+          assert 'AUTO_TAKE_PROFIT_POLL_MS || 300' in src
+          assert 'const QUOTE_MIN_REMAINING_MS = 250;' in src
+          assert "statusUnknown: true" in src
+          assert 'if (stateBlocksSell(previous)) return;' in src
+          assert "if (workerBusy)" in src or '|| workerBusy)' in src
+          assert 'const RETRY_MS = Math.max(1000,' in src
+          print('RISK300_TPSL_GUARDS_UNCHANGED=true')
+          PY

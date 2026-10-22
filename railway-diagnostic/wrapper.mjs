@@ -13,11 +13,13 @@ const AUTO_CONFIRM_MAX_ORDERS_PER_ROUND = Math.max(1, Number(process.env.AUTO_CO
 const AUTO_CONFIRM_COOLDOWN_MS = Math.max(0, Number(process.env.AUTO_CONFIRM_COOLDOWN_MS || 2500));
 const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.env.AUTO_CONFIRM_STOP_ON_ERROR || 'true'));
 const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
+const DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS = 30000; // 15s AI inference plus <=15s execution headroom for this model only.
 const SELECTIVE30_ORDER_DEADLINE_MS = 30000; // New qualified Selective V2 + Edge 30-second policy only.
 const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
 const EDGE_ORDER_DEADLINE_MS = 8000; // Edge model strictly ends at T+8 seconds.
 function orderSubmitDeadlineForModel(model) {
-  return model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :
+  return model === 'DEEPSEEK_5M_V1' ? DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :
+    model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :
     model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS :
     model === EDGE_MODEL ? EDGE_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
 }
@@ -34,6 +36,7 @@ function rejectExpiredOrderWindow(p, stage) {
     ? '30秒策略本轮第30秒订单提交窗口已截止，未发送下单请求'
     : p?.signalModelChoice===DYNAMIC_MODEL ? '动态模型本轮交易窗口已截止，未发送下单请求'
     : p?.signalModelChoice===EDGE_MODEL ? 'EDGE模型前8秒入场窗口已截止，未发送下单请求'
+    : p?.signalModelChoice==='DEEPSEEK_5M_V1' ? 'DeepSeek15秒分析模式，本轮第30秒订单提交窗口已截止，未发送下单请求'
     : '本轮第15秒订单提交窗口已截止，未发送下单请求';
   console.log(JSON.stringify({ event:'order_submit_deadline_expired',
     round:p.round, elapsedMs, deadlineMs:orderSubmitDeadlineForModel(p?.signalModelChoice), stage }));

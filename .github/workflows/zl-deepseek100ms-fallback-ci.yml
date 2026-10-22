@@ -1,0 +1,33 @@
+name: Verify 100ms DeepSeek first then valid live price fallback
+on:
+  push:
+    branches: [fix/deepseek100ms-fallback-20261022]
+    paths:
+      - .github/workflows/zl-deepseek100ms-fallback-ci.yml
+      - prediction-bot-v1/deepseek-single5-production.mjs
+      - prediction-bot-v1/deepseek100ms-fallback.test.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check prediction-bot-v1/deepseek-single5-production.mjs
+      - run: node --test prediction-bot-v1/deepseek100ms-fallback.test.mjs
+      - name: Confirm protected 100ms policy and no AI learning
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('prediction-bot-v1/deepseek-single5-production.mjs').read_text()
+          assert 'const AI_LIMIT_MS=100;' in s
+          assert 'const FALLBACK_END_MS=15000;' in s
+          assert "method:'REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK'" in s
+          assert "decisionRule:'DEEPSEEK_100MS_THEN_CURRENT_ROUND_PRICE_FALLBACK'" in s
+          assert 'currentRoundMaxCalls:1' in s and 'trainingDisabled:true' in s
+          assert 'setInterval(()=>void p.tick(),20)' in s
+          print('FAST100_AI_THEN_PRICE_FALLBACK_POLICY_VALID=true')
+          PY

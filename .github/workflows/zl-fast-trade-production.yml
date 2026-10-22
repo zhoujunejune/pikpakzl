@@ -1,0 +1,57 @@
+name: Deploy 120ms early DeepSeek local trade signal polling (guarded)
+on:
+  push:
+    branches: [fix/fast-feed-and-trigger-20261022]
+    paths:
+      - .github/workflows/zl-fast-trade-production.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-trade-control-singlehost
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/index.mjs
+      - run: node --check railway-diagnostic/wrapper.mjs
+      - name: Validate exact patch and generated backend safety checks
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          p=Path('prediction-bot-v1/deploy_fast_trade_poll_20261022.py')
+          mod=ast.parse(p.read_text())
+          remote=next(n.value.value for n in mod.body if isinstance(n,ast.Assign)
+            and any(isinstance(t,ast.Name) and t.id=='REMOTE' for t in n.targets))
+          c=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          assert c.returncode==0,c.stderr
+          assert 'FASTTRADE_DYNAMIC_GENERATED_BACKEND_SYNTAX_OK' in remote
+          assert 'OWNER_FOLLOW_ON_NO_RESTART' in remote
+          assert 'FASTTRADE_ROLLBACK_TRIGGERED=true' in remote
+          assert 'systemctl restart zl-prediction-deepseek5.service' not in remote
+          assert 'systemctl restart zl-prediction-risk-exits.service' not in remote
+          index=Path('railway-diagnostic/index.mjs').read_text()
+          assert 'deepseek_fast_local_poll' in index
+          assert 'if(prepareInFlight)return;' in index
+          assert 'setInterval(prepareWorker, 1200);' in index
+          print('FASTTRADE_DEPLOY_SAFETY_VALID=true')
+          PY
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Restart trade control only if owner follow OFF and live generated backend compiles
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_fast_trade_poll_20261022.py

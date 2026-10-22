@@ -39,6 +39,12 @@ backup="$dir/risk-poll300-COMMIT_SHA"
 test ! -e "$backup"
 mkdir -p "$backup"
 cp -p "$FILE" "$backup/old-worker.mjs"
+rollback(){
+ echo 'TP300_ROLLBACK_STARTED=true'
+ cp -p "$backup/old-worker.mjs" "$FILE"
+ systemctl restart "$UNIT" || true
+}
+trap rollback ERR
 python3 - "$FILE" <<'PY'
 from pathlib import Path
 import sys
@@ -51,12 +57,6 @@ p.write_text(s.replace(a,b))
 print('TP300_ONLY_ONE_DEFAULT_POLL_VALUE_CHANGED=true')
 PY
 "$NODE" --check "$FILE"
-rollback(){
- echo 'TP300_ROLLBACK_STARTED=true'
- cp -p "$backup/old-worker.mjs" "$FILE"
- systemctl restart "$UNIT" || true
-}
-trap rollback ERR
 systemctl restart "$UNIT"
 python3 - <<'PY'
 import json,urllib.request,subprocess,time

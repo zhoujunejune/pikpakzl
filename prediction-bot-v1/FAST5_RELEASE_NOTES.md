@@ -1,0 +1,1 @@
+Single inference per round, five second signal deadline, no model-learning history context. Preserve order integrity validation.

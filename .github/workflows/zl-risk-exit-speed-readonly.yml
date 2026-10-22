@@ -1,0 +1,39 @@
+name: Read-only production prediction TP-SL latency audit
+on:
+  push:
+    branches: [audit/risk-exit-speed-20261023]
+    paths:
+      - .github/workflows/zl-risk-exit-speed-readonly.yml
+      - prediction-bot-v1/risk_exit_speed_readonly_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate command safety and syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          src=Path('prediction-bot-v1/risk_exit_speed_readonly_20261023.py').read_text()
+          mod=ast.parse(src)
+          sh=next(v.value.value for v in mod.body if isinstance(v,ast.Assign)
+             and any(isinstance(x,ast.Name) and x.id=='REMOTE' for x in v.targets))
+          r=subprocess.run(['bash','-n'],input=sh,text=True,capture_output=True)
+          assert r.returncode==0,r.stderr
+          assert 'systemctl restart' not in sh
+          assert "req.method='POST'" not in sh
+          assert "place-order-bundle" not in sh
+          print('RISK_SPEED_READONLY_GUARDS_PASSED=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Measure TP/SL live worker and quote-to-SELL timings
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/risk_exit_speed_readonly_20261023.py

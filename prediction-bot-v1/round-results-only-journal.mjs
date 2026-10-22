@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 const ROUND_MS=300000;
+const LOCK_DEADLINE_MS=15000; // DeepSeek AI-only production decision window
 const SIDES=new Set(['UP','DOWN']);
 const SOURCE='BINANCE_PREDICTION_OFFICIAL_RESOLUTION_ONLY';
 const validRound=x=>Number.isSafeInteger(x)&&x>0&&x%ROUND_MS===0;
@@ -24,7 +25,7 @@ export function createRoundResultsJournal({
      if(rows.has(event.round))continue;
      if(!['LOCKED','NO_SIGNAL','NOT_OBSERVED'].includes(event.status))throw Error('BAD_ROUND_STATUS');
      if(event.status==='LOCKED'&&(!SIDES.has(event.direction)||
-      !safeTime(event.lockedAt)||event.lockedAt<event.round||event.lockedAt>=event.round+5000))
+      !safeTime(event.lockedAt)||event.lockedAt<event.round||event.lockedAt>=event.round+LOCK_DEADLINE_MS))
       throw Error('BAD_LOCKED_ROW');
      rows.set(event.round,{round:event.round,status:event.status,
       direction:event.status==='LOCKED'?event.direction:null,
@@ -50,11 +51,13 @@ export function createRoundResultsJournal({
  };
  function recordSignal(signal){
   const round=signal?.round,at=signal?.latest?.lockedAt,dir=signal?.latest?.direction;
-  if(!validRound(round)||!safeTime(at)||at<round||at>=round+5000||
+  if(!validRound(round)||!safeTime(at)||at<round||at>=round+LOCK_DEADLINE_MS||
      !SIDES.has(dir)||signal?.model!=='DEEPSEEK_5M_V1')return false;
   if(rows.has(round))return false;
-  const decisionMethod=signal.latest.decisionMethod==='DEEPSEEK_SINGLE_CALL_5S'
-   ?'DEEPSEEK_SINGLE_CALL_5S':'REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK';
+  const allowedMethods=new Set(['DEEPSEEK_SINGLE_CALL_5S','DEEPSEEK_SINGLE_CALL_15S',
+   'REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK']);
+  const decisionMethod=String(signal.latest.decisionMethod||'');
+  if(!allowedMethods.has(decisionMethod))return false;
   const event={kind:'ROUND',round,status:'LOCKED',direction:dir,lockedAt:at,
    decisionMethod,recordedAt:clock()};
   try{append(event);writeError=null}catch(e){writeError=String(e?.message||e).slice(0,120);throw e}
@@ -63,7 +66,7 @@ export function createRoundResultsJournal({
   return true;
  }
  function finishRound(round,{observed=false}={}){
-  if(!validRound(round)||rows.has(round)||clock()<round+5000)return false;
+  if(!validRound(round)||rows.has(round)||clock()<round+LOCK_DEADLINE_MS)return false;
   const event={kind:'ROUND',round,status:observed?'NO_SIGNAL':'NOT_OBSERVED',recordedAt:clock()};
   try{append(event);writeError=null}catch(e){writeError=String(e?.message||e).slice(0,120);throw e}
   rows.set(round,{round,status:event.status,direction:null,lockedAt:null,

@@ -157,7 +157,7 @@ export function createFastProductionProvider({
    }else if(saved?.round!==round)failed('AI_RESPONSE_AFTER_100MS',{apiLatencyMs:latency});
   }catch(e){
    latency=clock()-started;
-   if(requestRound!==round||requestRound!==roundOf(clock()))return;
+   if(requestRound!==round||requestRound!==roundOf(clock())||saved?.round===requestRound)return;
    failed(e?.name==='AbortError'||e?.name==='TimeoutError'?'DEEPSEEK_API_TIMEOUT':String(e?.message||e),
      {apiLatencyMs:clock()-started});
   }finally{pending=false}

@@ -174,6 +174,24 @@ for unit in ('zl-prediction-trade.service','zl-prediction-deepseek5.service'):
  u=subprocess.run(['systemctl','show',unit,'-p','ExecMainStartTimestamp','-p','ActiveState','--no-pager'],
   capture_output=True,text=True,timeout=4).stdout
  print('SPEED_AUDIT_SERVICE_STATE',unit,u.strip().replace('\n',' ')[:210])
+
+import re
+choice=Path('/opt/zl-prediction-live/src/railway-diagnostic/production-signal-choice.mjs')
+if choice.exists():
+ cs=choice.read_text()
+ names={}
+ for name in ('SELECTIVE8_MODEL','BASE_MODEL','EDGE_MODEL','NOVICE_MODEL','DYNAMIC_MODEL'):
+  match=re.search(r'(?:const|let|var)\s+'+name+r"\s*=\s*['\"]([^'\"]+)['\"]",cs)
+  names[name]=match.group(1) if match else ('defined_elsewhere' if name in cs else 'not_found')
+ print('SPEED_AUDIT_LIVE_MODEL_CONSTANTS',json.dumps(names,ensure_ascii=False))
+if index.exists():
+ src=index.read_text()
+ for name in ('SELECTIVE8_LOCAL_URL','SIGNAL_MODEL_NAME','SIGNAL_WS_URL','SIGNAL_REDIS_CHANNEL'):
+  match=re.search(r'const\s+'+name+r'\s*=\s*([^;\n]{1,220})',src)
+  val=match.group(1).strip() if match else 'not_found'
+  if name in ('SIGNAL_WS_URL','SIGNAL_REDIS_CHANNEL'):val='configured_in_environment'
+  print('SPEED_AUDIT_LIVE_SIGNAL_CONSTANT',name,val[:240])
+ print('SPEED_AUDIT_NATIVE_FAST100_DIRECT_CONSUMPTION',('13029' in src))
 print('SPEED_AUDIT_COMPLETE=true')
 PY
 """

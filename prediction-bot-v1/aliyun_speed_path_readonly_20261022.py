@@ -219,6 +219,24 @@ if pidMatch:
       'hasKlinePull':'/api/v3/klines' in code,
       'usesWs':('WebSocket' in code or 'ws.on(' in code)})
  except Exception as e:print('SPEED_AUDIT_SPOT_PROC_FAIL',type(e).__name__)
+
+if pidMatch:
+ try:
+  pid=pidMatch.group(1)
+  print('SPEED_AUDIT_SPOT_CGROUP',Path('/proc/'+pid+'/cgroup').read_text().strip()[:700])
+  f=Path('/opt/zl-prediction-live/src/fast-signal-engine/index.mjs')
+  sh=Path('/opt/zl-prediction-live/src/fast-signal-engine/shadow-market-readonly.mjs')
+  print('SPEED_AUDIT_SPOT_LIVE_FILES',{'index':f.exists(),'shadow':sh.exists()})
+  if f.exists():print('SPEED_AUDIT_SPOT_INDEX_ANCHORS',
+   {'apiShadowRoute':"url.pathname === '/api/shadow-market-data'" in f.read_text(),
+    'fastRouteAlready':"url.pathname==='/api/shadow-market-fast'" in f.read_text(),
+    'liveSnapshotReader':'createReadOnlyMarketFeed({ live: payload })' in f.read_text()})
+  if sh.exists():print('SPEED_AUDIT_SPOT_SHADOW_ANCHORS',
+   {'cache1800':'const CACHE_MS = 1800;' in sh.read_text(),
+    'spotFunction':'function spot() {' in sh.read_text(),
+    'returnRead': '  return {\\n    async read() {' in sh.read_text(),
+    'readSpotAlready':'readSpot() {' in sh.read_text()})
+ except Exception as e:print('SPEED_AUDIT_SPOT_EXTRA_ERROR',type(e).__name__)
 print('SPEED_AUDIT_COMPLETE=true')
 PY
 """

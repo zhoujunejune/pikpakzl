@@ -2,7 +2,9 @@ name: Diagnose real public prediction round-results visibility
 on:
   push:
     branches: [fix/deepseek5-results-public-visibility-20261022]
-    paths: [.github/workflows/zl-results-public-visibility-audit.yml]
+    paths:
+      - .github/workflows/zl-results-public-visibility-audit.yml
+      - prediction-bot-v1/diagnose_round_results_public.py
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

@@ -1,0 +1,22 @@
+name: Audit real Alibaba prediction take-profit stop-loss runtime
+on:
+  push:
+    branches: [audit/prediction-risk-live-20261022]
+    paths:
+      - .github/workflows/zl-risk-live-readonly-audit-20261022.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Audit settings, controller, actual worker, Binance errors (read-only)
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/live_risk_readonly_audit_20261022.py

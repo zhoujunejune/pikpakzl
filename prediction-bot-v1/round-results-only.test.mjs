@@ -45,7 +45,7 @@ test('ignore unverified, premature or mismatched official settlements',()=>{
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });
 test('no-signal and unobserved rounds are visible, never counted as losses',()=>{
- const dir=mk(),file=path.join(dir,'results.ndjson');let now=R+6500;
+ const dir=mk(),file=path.join(dir,'results.ndjson');let now=R+16500;
  try{
   const a=createRoundResultsJournal({file,clock:()=>now});
   assert.equal(a.finishRound(R,{observed:true}),true);

@@ -72,6 +72,22 @@ if riskpid and riskpid!='0':
     print('RISK_AUDIT_SERVICE_PRIVATE_TMP',n,json.dumps({k:j.get(k) for k in allow if k in j},ensure_ascii=False)[:1400])
    except Exception as e:print('RISK_AUDIT_SERVICE_PRIVATE_TMP',n,type(e).__name__)
  except Exception as e:print('RISK_AUDIT_PRIVATE_TMP_ERROR',type(e).__name__)
+f=Path('/var/lib/zl-exchange-api/prediction/binance.env')
+if f.exists():
+ info=f.stat()
+ keys={}
+ for line in f.read_text().splitlines():
+  if '=' in line:
+   k,v=line.split('=',1)
+   if k in ('BINANCE_PREDICTION_API_KEY','BINANCE_PREDICTION_API_SECRET',
+            'BINANCE_PREDICTION_WALLET_ADDRESS','BINANCE_PREDICTION_WALLET_ID'):
+    keys[k]=bool(v.strip())
+ print('RISK_AUDIT_MANAGER_CREDENTIAL_FILE',{'exists':True,'mode':oct(info.st_mode&0o777),
+   'ownerUid':info.st_uid,'sizeBytes':info.st_size,'fieldNonempty':keys})
+else:print('RISK_AUDIT_MANAGER_CREDENTIAL_FILE',{'exists':False})
+for unit in ('zl-prediction-trade.service','zl-prediction-risk-exits.service'):
+ cmd=subprocess.run(['systemctl','show',unit,'-p','EnvironmentFiles','--value'],capture_output=True,text=True)
+ print('RISK_AUDIT_EFFECTIVE_ENV_FILES',unit,cmd.stdout.replace('\n',' ').strip()[:600])
 for p in ('/tmp/risk-control.json','/tmp/risk-runtime-status.json','/tmp/risk-worker-health.json'):
  f=Path(p)
  if not f.is_file():print('RISK_AUDIT_FILE',p,'NOT_FOUND');continue

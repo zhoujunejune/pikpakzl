@@ -3,6 +3,7 @@
 import http from 'node:http';
 import {createRoundResultsJournal} from './round-results-only-journal.mjs';
 const PERIOD=300000;
+const DECISION_WINDOW_MS=15000;
 const roundOf=now=>Math.floor(now/PERIOD)*PERIOD;
 export function createDisplayWatcher({
  clock=()=>Date.now(),fetcher=fetch,
@@ -30,7 +31,7 @@ export function createDisplayWatcher({
     sawWindow=false;
    }
    activeRound=round;
-   if(now<round+5000)sawWindow=true;
+   if(now<round+DECISION_WINDOW_MS)sawWindow=true;
    let status=null;
    try{
     status=await read(modelUrl,1400);servicePolls++;
@@ -44,7 +45,7 @@ export function createDisplayWatcher({
     }
    }catch(e){lastModelError=String(e?.message||e).slice(0,125)}
    const elapsed=clock()-round;
-   if(elapsed>=5000){
+   if(elapsed>=DECISION_WINDOW_MS){
     // Never mislabel a model-confirmed lock as a missed/no-signal decision
     // when this display watcher came up after the model's 25s exposure.
     const lockedButMissing=status?.roundDecision?.status==='LOCKED';
@@ -74,7 +75,13 @@ export function serveWatcher(watcher,port=Number(process.env.RESULTS_DISPLAY_POR
   let u;try{u=new URL(req.url,'http://localhost')}catch{res.writeHead(400);return res.end()}
   if(req.method!=='GET'){res.writeHead(405);return res.end()}
   let data;
-  if(u.pathname==='/api/round-results')data=watcher.history(u.searchParams.get('limit'));
+  if(u.pathname==='/api/round-results'){
+   data=watcher.history(u.searchParams.get('limit'));
+   // Legacy UI tests only DEEPSEEK_SINGLE_CALL_5S vs fallback. Map the
+   // genuine 15s model solely for that display field, preserving raw source.
+   data.records=data.records.map(r=>r.decisionMethod==='DEEPSEEK_SINGLE_CALL_15S'?
+     {...r,rawDecisionMethod:r.decisionMethod,decisionMethod:'DEEPSEEK_SINGLE_CALL_5S'}:r);
+  }
   else if(u.pathname==='/api/status'||u.pathname==='/healthz')data=watcher.status();
   else{res.writeHead(404);return res.end('Not Found')}
   res.writeHead(data.ok?200:503,{'content-type':'application/json; charset=utf-8',

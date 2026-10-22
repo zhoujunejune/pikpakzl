@@ -27,9 +27,29 @@ units=subprocess.run(['systemctl','list-units','--all','--type=service','--no-le
 for line in units:
  if any(s in line.lower() for s in ('risk','prediction','redis')):
   print('RISK_AUDIT_UNIT',line[:210])
-for u in ('zl-prediction-risk.service','zl-prediction-risk-runner.service','zl-prediction-risk-monitor.service','zl-prediction-trade.service','zl-prediction-redis.service'):
+for u in ('zl-prediction-risk-exits.service','zl-prediction-risk.service','zl-prediction-risk-runner.service','zl-prediction-risk-monitor.service','zl-prediction-trade.service','zl-prediction-redis.service'):
  cmd=subprocess.run(['systemctl','show',u,'-p','LoadState','-p','ActiveState','-p','MainPID','-p','NRestarts','--no-pager'],capture_output=True,text=True)
  print('RISK_AUDIT_SYSTEMD',u,cmd.stdout.replace('\n',' ').strip()[:330])
+riskpid=subprocess.run(['systemctl','show','zl-prediction-risk-exits.service','-p','MainPID','--value'],capture_output=True,text=True).stdout.strip()
+if riskpid and riskpid!='0':
+ try:
+  print('RISK_AUDIT_RUNTIME_PID',riskpid)
+  for key in ('PrivateTmp','ExecStart'):
+   value=subprocess.run(['systemctl','show','zl-prediction-risk-exits.service','-p',key,'--value'],capture_output=True,text=True).stdout.strip()
+   if key=='ExecStart':
+    print('RISK_AUDIT_EXEC_FILES',[Path(x).name for x in value.split() if x.endswith(('.mjs','.js'))][:7])
+   else:print('RISK_AUDIT_SYSTEMD_PROPERTY',key,value)
+  for n in ('risk-control.json','risk-runtime-status.json','risk-worker-health.json'):
+   p=Path('/proc/'+riskpid+'/root/tmp/'+n)
+   try:
+    j=json.loads(p.read_text())
+    allow=('at','enabled','workerRunning','configApplied','lastWorkerStartedAt','configurationSource',
+     'configUpdatedAt','persistenceHealthy','persistedConfigFound','persistenceError','transitioning',
+     'lastTickStartedAt','lastTickFinishedAt','lastSuccessfulPositionsAt','positionsSeen','quoteChecks','quoteErrors',
+     'lastErrorAt','lastError','lastSellEventAt','lastSellEvent','lastQuoteAt','lastQuoteAmount')
+    print('RISK_AUDIT_SERVICE_PRIVATE_TMP',n,json.dumps({k:j.get(k) for k in allow if k in j},ensure_ascii=False)[:1400])
+   except Exception as e:print('RISK_AUDIT_SERVICE_PRIVATE_TMP',n,type(e).__name__)
+ except Exception as e:print('RISK_AUDIT_PRIVATE_TMP_ERROR',type(e).__name__)
 for p in ('/tmp/risk-control.json','/tmp/risk-runtime-status.json','/tmp/risk-worker-health.json'):
  f=Path(p)
  if not f.is_file():print('RISK_AUDIT_FILE',p,'NOT_FOUND');continue
@@ -48,7 +68,7 @@ for p in ('/opt/zl-prediction-live/src/railway-diagnostic/risk-runner.mjs',
  '/opt/zl-prediction-live/src/railway-diagnostic/risk-config-storage.mjs'):
  f=Path(p);print('RISK_AUDIT_SOURCE',p,'exists',f.exists(),
   'sha256',hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else None)
-for unit in ('zl-prediction-risk.service','zl-prediction-risk-runner.service','zl-prediction-risk-monitor.service','zl-prediction-trade.service'):
+for unit in ('zl-prediction-risk-exits.service','zl-prediction-risk.service','zl-prediction-risk-runner.service','zl-prediction-risk-monitor.service','zl-prediction-trade.service'):
  cmd=subprocess.run(['journalctl','-u',unit,'--since','8 hours ago','--no-pager','-o','cat','--output-fields=MESSAGE','-n','4000'],capture_output=True,text=True,timeout=15)
  counts={};recent=[]
  allowed={'risk_worker_started','risk_runtime_controller_started','risk_runtime_worker_started','risk_runtime_worker_exited',

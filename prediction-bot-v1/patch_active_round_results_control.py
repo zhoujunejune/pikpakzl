@@ -39,6 +39,7 @@ inject+=r"""function injectRoundResults(html) {
 }
 """
 src=src.replace(anchor,inject+'\n'+anchor,1)
+src=src.replace("  if (html.includes('id=\"slCard\"')) return html;", "  if (html.includes('id=\"slCard\"')) return injectRoundResults(html);", 1)
 src=src.replace(end_marker,'  return injectRoundResults(out);\n}\n\nlet inner = null;',1)
 route_body=r"""  // Display-only route. Does not change the trading handler.
   if(req.method==='GET'&&url.pathname==='/api/deepseek-round-results'){

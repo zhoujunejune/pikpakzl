@@ -5,12 +5,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import {fileURLToPath} from 'node:url';
+import {createRoundResultsJournal} from './round-results-only-journal.mjs';
 const ID='DEEPSEEK_5M_V1';
 const ROUND_MS=300000;
 const LIMIT_MS=5000;
 const EXPOSE_UNTIL_MS=25000; // existing trade handler may safely re-check the locked signal
 const FEED='http://127.0.0.1:13003/api/shadow-market-data';
 const API='https://api.deepseek.com/chat/completions';
+const OFFICIAL='http://127.0.0.1:13002/api/round-stats';
 const side=x=>x==='UP'||x==='DOWN';
 const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
 function parseTick(raw,now,expectedRound){
@@ -61,6 +63,26 @@ export function createFastProductionProvider({
  let round=roundOf(clock()),attempted=false,pending=false,feedBusy=false,saved=null;
  let snapshot=null,error=null,latency=null,completed=null,modelCalls=0,apiTokens=null;
  let lastMarketAt=null,missed=0;
+ const journal=createRoundResultsJournal({file:String(env.ROUND_RESULTS_FILE||
+  path.join(path.dirname(saveFile),'round-results-only.ndjson')),clock});
+ let firstSeenAt=clock(),journalError=null,lastOfficialError=null,officialBusy=false,officialPollAt=0;
+ const finishRoundSafe=(r,observed)=>{
+  try{journal.finishRound(r,{observed});journalError=null}
+  catch(e){journalError=String(e?.message||e).slice(0,120)}
+ };
+ async function pollOfficial(){
+  const now=clock();
+  if(officialBusy||now-officialPollAt<60000)return;
+  officialBusy=true;officialPollAt=now;
+  try{
+   const response=await fetcher(String(env.DEEPSEEK_OFFICIAL_STATS_URL||OFFICIAL),{
+    signal:AbortSignal.timeout(7000),headers:{Accept:'application/json'}});
+   if(!response.ok)throw Error('OFFICIAL_HTTP_'+response.status);
+   journal.settle(await response.json());lastOfficialError=null;
+  }catch(e){lastOfficialError=String(e?.message||e).slice(0,125)}
+  finally{officialBusy=false}
+ }
+
  // Previous output is for the previous round only; never republish it.
  const commit=(decision,tick)=>{
   const now=clock();
@@ -71,6 +93,8 @@ export function createFastProductionProvider({
   fs.writeFileSync(tmp,JSON.stringify(signal),{mode:0o640});
   fs.renameSync(tmp,saveFile);
   saved=signal;
+  try{journal.recordSignal(signal);journalError=null}
+  catch(e){journalError=String(e?.message||e).slice(0,120)}
   completed={round,result:'LOCKED',elapsedMs:now-round,direction:decision.direction,
    method:decision.method};
   error=null;
@@ -130,13 +154,19 @@ export function createFastProductionProvider({
  function rotate(now){
   const r=roundOf(now);
   if(r===round)return;
+  finishRoundSafe(round,firstSeenAt<round+LIMIT_MS);
+  for(let gap=round+ROUND_MS;gap<r;gap+=ROUND_MS)finishRoundSafe(gap,false);
   if(!saved||saved.round!==round)missed++;
-  round=r;attempted=false;pending=false;feedBusy=false;
+  round=r;firstSeenAt=now;attempted=false;pending=false;feedBusy=false;
   snapshot=null;error=null;latency=null;completed=null;modelCalls=0;apiTokens=null;
  }
  async function tick(){
   const now=clock();rotate(now);
-  if(now-round>=LIMIT_MS||saved?.round===round)return status();
+  if(now-round>=LIMIT_MS||saved?.round===round){
+   if(now-round>=LIMIT_MS)finishRoundSafe(round,firstSeenAt<round+LIMIT_MS);
+   if(now-round>=LIMIT_MS)void pollOfficial();
+   return status();
+  }
   if(!feedBusy){
    feedBusy=true;
    try{
@@ -158,6 +188,7 @@ export function createFastProductionProvider({
   const locked=saved?.round===round;
   const visible=locked&&now<round+EXPOSE_UNTIL_MS;
   const ended=now>=round+LIMIT_MS&&!locked;
+  if(ended)finishRoundSafe(round,firstSeenAt<round+LIMIT_MS);
   return {ok:true,model:ID,providerModel:model,configured:Boolean(key),
    round,signal:visible?saved:null,
    roundDecision:{round,status:locked?'LOCKED':ended?'UNAVAILABLE':'ANALYZING',
@@ -174,9 +205,11 @@ export function createFastProductionProvider({
    error,waitReason:null,lastApiLatencyMs:latency,aiTokens:apiTokens,
    lastDecision:completed,missedRounds:missed,skippedRounds:missed,
    learningDisabled:true,trainingDisabled:true,statisticsDisabled:true,
+   standaloneRoundResultsEnabled:true,roundResultsError:journalError,
+   officialSettlementError:lastOfficialError,
    aiDirectionalRequired:true,realOrderEnabled:false,tradeIntegration:false};
  }
- return {tick,status};
+ return {tick,status,roundResults:(limit)=>journal.history(limit)};
 }
 export function serveFastProduction(p,port=Number(process.env.LLM_SERVICE_PORT||13029)){
  const server=http.createServer((req,res)=>{
@@ -184,6 +217,8 @@ export function serveFastProduction(p,port=Number(process.env.LLM_SERVICE_PORT||
   if(req.method!=='GET'){res.writeHead(405);return res.end()}
   let data,code=200;
   if(['/healthz','/status','/api/status'].includes(u.pathname))data=p.status();
+  else if(u.pathname==='/api/round-results'||u.pathname==='/api/history')
+   data=p.roundResults(u.searchParams.get('limit'));
   else if(u.pathname==='/signal'){
    const st=p.status();
    data=st.signal;

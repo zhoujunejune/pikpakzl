@@ -1,0 +1,42 @@
+name: Read-only live Binance prediction latency breakdown
+on:
+  push:
+    branches: [audit/aliyun-speed-path-20261022]
+    paths:
+      - .github/workflows/zl-aliyun-speed-audit.yml
+      - prediction-bot-v1/aliyun_speed_path_readonly_20261022.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate script does not modify production or disclose secrets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          p=Path('prediction-bot-v1/aliyun_speed_path_readonly_20261022.py')
+          mod=ast.parse(p.read_text())
+          remote=next(n.value.value for n in mod.body if isinstance(n,ast.Assign)
+            and any(isinstance(x,ast.Name) and x.id=='REMOTE' for x in n.targets))
+          r=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          assert r.returncode==0,r.stderr
+          start=remote.index("python3 - <<'PY'")+len("python3 - <<'PY'")
+          end=remote.index("\nPY",start)
+          compile(remote[start:end],'<readonly live speed audit>','exec')
+          assert 'systemctl restart ' not in remote
+          assert 'place-order-bundle' not in remote
+          assert 'Authorization:' not in remote
+          print('SPEED_AUDIT_READ_ONLY_GUARD_PASS=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Extract anonymized four-hour stage latency metrics
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_speed_path_readonly_20261022.py

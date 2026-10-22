@@ -113,6 +113,18 @@ print('NO_SIGNAL_JOURNAL_SUPPORTED',{
  'roundResultsRoute':"u.pathname==='/api/round-results'" in modelSource,
  'emitMethod':"DEEPSEEK_SINGLE_CALL_15S" in modelSource})
 
+
+units=subprocess.run(['systemctl','list-units','--all','--no-legend','--no-pager'],capture_output=True,text=True).stdout
+for line in units.splitlines():
+ if any(x in line for x in ('round-results','display-watcher','prediction-results')):
+  n=line.split()[0]
+  print('NO_SIGNAL_WATCHER_UNIT',n)
+  print('NO_SIGNAL_WATCHER_EXEC',subprocess.run(['systemctl','show',n,'-p','ExecStart','-p','ActiveState'],capture_output=True,text=True).stdout[:950].replace('\n',' '))
+p=pathlib.Path('/opt/zl-prediction-live/deepseek5/round-results-display-watcher.mjs')
+print('NO_SIGNAL_WATCHER_SOURCE',p.exists(),hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else '-')
+j=pathlib.Path('/opt/zl-prediction-live/deepseek5/round-results-only-journal.mjs')
+print('NO_SIGNAL_WATCHER_JOURNAL_SOURCE',j.exists(),hashlib.sha256(j.read_bytes()).hexdigest() if j.exists() else '-')
+
 print('NO_SIGNAL_AUDIT_OK=true')
 
 print('AI15_PREFLIGHT_DONE=true')

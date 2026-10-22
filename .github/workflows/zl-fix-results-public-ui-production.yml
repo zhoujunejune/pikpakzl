@@ -1,0 +1,49 @@
+name: Publish results card on actual public Alibaba prediction frontend
+on:
+  push:
+    branches: [fix/deepseek5-results-public-visibility-20261022]
+    paths: [.github/workflows/zl-fix-results-public-ui-production.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: |
+          python prediction-bot-v1/patch_active_round_results_control.py prediction-bot-v1/patch_round_results_panel.py railway-diagnostic/control-shell.mjs /tmp/actual-control.mjs
+          node --check /tmp/actual-control.mjs
+          grep -q 'roundResultsOnlyCard' /tmp/actual-control.mjs
+          grep -q 'function injectRiskControls(html)' /tmp/actual-control.mjs
+          grep -q "url.pathname==='/api/deepseek-round-results'" /tmp/actual-control.mjs
+          python -m py_compile prediction-bot-v1/active_round_results_ui_release.py
+          python - <<'PY'
+          import ast,subprocess,pathlib
+          s=pathlib.Path('prediction-bot-v1/active_round_results_ui_release.py').read_text()
+          p=ast.parse(s)
+          script=next(x.value.value for x in p.body if isinstance(x,ast.Assign) and
+            len(x.targets)==1 and getattr(x.targets[0],'id',None)=='REMOTE')
+          r=subprocess.run(['bash','-n'],input=script,text=True,capture_output=True)
+          assert r.returncode==0,r.stderr
+          PY
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Safely patch running prediction HTML and verify public navigation
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/active_round_results_ui_release.py

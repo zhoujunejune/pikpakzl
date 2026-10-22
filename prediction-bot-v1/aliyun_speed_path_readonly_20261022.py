@@ -112,7 +112,10 @@ for row in sorted(results,key=lambda x:x['atMs']):
   byround[row['round']][row['event']]=row['atMs']
 intervals=collections.defaultdict(list)
 for r,m in byround.items():
- for a,b in (('deepseek100ms_locked','api_intent_ready'),
+ for a,b in (('deepseek15_locked','api_intent_ready'),
+  ('deepseek15_locked','auto_submit_triggered'),
+  ('deepseek15_locked','api_order_submitted_pending_confirmation'),
+  ('deepseek100ms_locked','api_intent_ready'),
   ('api_intent_ready','auto_submit_triggered'),
   ('auto_submit_triggered','fresh_quote_ready'),
   ('fresh_quote_ready','api_order_submit_attempt'),
@@ -133,6 +136,36 @@ for r in recent:
     'apiLatencyMs','marketEventLagMs','quoteLatencyMs','triggerToQuoteMs',
     'submitLatencyMs','method','code','reason')} for e in events[:12]]})
 print('SPEED_AUDIT_RECENT_ROUNDS',json.dumps(compact[-15:],ensure_ascii=False))
+
+from pathlib import Path
+index=Path('/opt/zl-prediction-live/src/railway-diagnostic/index.mjs')
+wrapper=Path('/opt/zl-prediction-live/src/railway-diagnostic/wrapper.mjs')
+if index.exists():
+ src=index.read_text()
+ a=src.find('async function getSignal(')
+ z=src.find('async function getPaymentBalances(',a) if a>=0 else -1
+ part=src[a:z] if a>=0 and z>a else ''
+ print('SPEED_AUDIT_LIVE_SIGNAL_ROUTING',json.dumps({
+   'indexSourceExists':True,'getSignalFound':a>=0,
+   'deepseekModelStringInGetSignal': 'DEEPSEEK_5M_V1' in part,
+   'hardReturnUnlessSelective8': 'if(choice.model!==SELECTIVE8_MODEL)return null;' in part,
+   'genericFallbackBranch':"NOVICE_LOCAL_URL" in part,
+   'nativeDeepseek13029SignalRoute': '13029' in part,
+   'poll1200ms':'setInterval(prepareWorker, 1200);' in src,
+   'prepareThrottled2500ms':'Date.now() - lastPrepareAttemptAt < 2500' in src,
+   'selectedDeepseekNameInEntireIndex':'DEEPSEEK_5M_V1' in src,
+   'totalSourceBytes':len(src)},ensure_ascii=False))
+if wrapper.exists():
+ wr=wrapper.read_text()
+ print('SPEED_AUDIT_LIVE_WRAPPER',json.dumps({
+ 'hasDeepseekOrderWindow30s':'DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS = 30000' in wr,
+ 'hasSignalRoutePatching':"async function getSignal" in wr or "if(choice.model!==SELECTIVE8_MODEL)return null" in wr,
+ 'hasAutoConfirm':"auto_submit_triggered" in wr,
+ 'sourceBytes':len(wr)},ensure_ascii=False))
+for unit in ('zl-prediction-trade.service','zl-prediction-deepseek5.service'):
+ u=subprocess.run(['systemctl','show',unit,'-p','ExecMainStartTimestamp','-p','ActiveState','--no-pager'],
+  capture_output=True,text=True,timeout=4).stdout
+ print('SPEED_AUDIT_SERVICE_STATE',unit,u.strip().replace('\n',' ')[:210])
 print('SPEED_AUDIT_COMPLETE=true')
 PY
 """

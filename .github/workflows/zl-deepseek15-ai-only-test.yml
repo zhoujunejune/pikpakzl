@@ -1,0 +1,40 @@
+name: Verify DeepSeek only 15 second predictor & trade deadline
+on:
+  push:
+    branches: [fix/deepseek15-ai-only-prod-20261022]
+    paths:
+      - .github/workflows/zl-deepseek15-ai-only-test.yml
+      - prediction-bot-v1/deepseek-single5-production.mjs
+      - prediction-bot-v1/deepseek-only15.test.mjs
+      - railway-diagnostic/wrapper.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Syntax and tests
+        run: |
+          node --check prediction-bot-v1/deepseek-single5-production.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --test prediction-bot-v1/deepseek-only15.test.mjs
+      - name: No price fallback, preserve other order deadlines
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          a=Path('prediction-bot-v1/deepseek-single5-production.mjs').read_text()
+          w=Path('railway-diagnostic/wrapper.mjs').read_text()
+          assert 'const LIMIT_MS=15000;' in a
+          assert 'REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK' not in a
+          assert 'function fallback' not in a and 'const fallback=' not in a
+          assert "method:'DEEPSEEK_SINGLE_CALL_15S'" in a
+          assert "DEEPSEEK_ONLY_ONE_CALL_15S_NO_PRICE_FALLBACK" in a
+          assert 'const ORDER_SUBMIT_DEADLINE_MS = 15000;' in w
+          assert "model === 'DEEPSEEK_5M_V1' ? DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS" in w
+          assert 'const DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS = 30000;' in w
+          print('AI15_EXCLUSIVE_DIRECTION_AND_ORDER_DEADLINE_RULES_PASS')
+          PY

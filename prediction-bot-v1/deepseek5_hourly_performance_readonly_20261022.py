@@ -87,8 +87,9 @@ for target_day in sorted(set(day(r) for r in rows)):
       **summarize([r for r in dayrows if r.get('direction')==direction])},ensure_ascii=False))
 official=[]
 for r in o.get('records') or []:
- if isinstance(r,dict) and isinstance(r.get('roundStartMs'),int) and r.get('productionActual') in ('UP','DOWN') and
-    (r.get('officialSettlementAudit') is not None or r.get('resolutionEvidence') is not None):
+ if (isinstance(r,dict) and isinstance(r.get('roundStartMs'),int) and
+     r.get('productionActual') in ('UP','DOWN') and
+     (r.get('officialSettlementAudit') is not None or r.get('resolutionEvidence') is not None)):
   official.append((r['roundStartMs'],r['productionActual']))
 official=dict(official)
 matched=[r for r in rows if r.get('round') in official and r.get('status')=='LOCKED']

@@ -104,6 +104,18 @@ for target_day in sorted(set(day(r) for r in rows)):
   for h,rr in sorted(slots.items()):
    print('PERFORMANCE_AUDIT_TIME_BUCKET='+json.dumps({'date':target_day,'hours':block,
       'label':'%02d:00-%02d:59'%(h,h+block-1),**summarize(rr)},ensure_ascii=False))
+ for h in sorted(set(hour(r) for r in dayrows)):
+  rr=[r for r in dayrows if hour(r)==h and r.get('status')=='LOCKED' and r.get('actual') in ('UP','DOWN')]
+  stats={'UP':{'n':0,'wins':0},'DOWN':{'n':0,'wins':0}}
+  actual={'UP':0,'DOWN':0}
+  for z in rr:
+   side=z.get('direction');outcome=z.get('actual')
+   if side in stats:
+    stats[side]['n']+=1;stats[side]['wins']+=int(z.get('hit') is True)
+   actual[outcome]+=1
+  print('PERFORMANCE_AUDIT_HOURLY_SIDES='+json.dumps({'date':target_day,
+   'label':'%02d:00-%02d:59'%(h,h),'signals':len(rr),'chosen':stats,
+   'actual':actual,'alwaysDownBaselinePct':round(100*actual['DOWN']/len(rr),2) if rr else None},ensure_ascii=False))
  for kind in ('DEEPSEEK_SINGLE_CALL_5S','REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK'):
   print('PERFORMANCE_AUDIT_METHOD='+json.dumps({'date':target_day,'method':kind,
       **summarize([r for r in dayrows if r.get('decisionMethod')==kind])},ensure_ascii=False))

@@ -39,6 +39,13 @@ def probe(port,route):
   return o
  except HTTPError as e:return {'http':e.code}
  except Exception as e:return {'error':type(e).__name__}
+for port,route in ((13029,'/api/status'),(13029,'/api/round-results?limit=2'),(13001,'/api/status'),(13001,'/api/order-signal-model'),(13001,'/api/deepseek-round-results?limit=2'),(13019,'/api/status'),(13002,'/api/round-stats')):
+ try:
+  with urlopen('http://127.0.0.1:%d%s'%(port,route),timeout=5) as rr:
+   data=json.load(rr)
+   print('PUBLIC_API_PROBE',port,route,json.dumps({'http':rr.status,'ok':data.get('ok'),'model':data.get('model'),'maxCalls':data.get('maxCallsPerRound'),'keys':list(data)[:13]},ensure_ascii=False))
+ except HTTPError as e:print('PUBLIC_API_PROBE',port,route,'HTTP',e.code)
+ except Exception as e:print('PUBLIC_API_PROBE',port,route,'ERROR',type(e).__name__)
 for port in (13000,13001,13029,13018,13019,13020,13030,3000,3002):
  for route in ('/','/trade-control') if port==13001 else ('/',):
   print('PUBLIC_PATH_PROBE',port,route,json.dumps(probe(port,route),ensure_ascii=False)[:3200])

@@ -146,6 +146,17 @@ for root in ('/opt/zl-prediction-live','/usr/local/lib/zl','/etc/systemd/system'
   print('NO_SIGNAL_FIND_RESULT',root,result.stdout[:1200])
  except Exception as e:print('NO_SIGNAL_FIND_ERROR',root,type(e).__name__)
 
+
+pid=129832
+try:
+ cgroup=pathlib.Path('/proc/'+str(pid)+'/cgroup').read_text()
+ print('NO_SIGNAL_WATCHER_CGROUP',cgroup.replace('\n',' ')[:400])
+except Exception as e:print('NO_SIGNAL_WATCHER_CGROUP_ERROR',type(e).__name__)
+for unit in subprocess.run(['systemctl','list-unit-files','--type=service','--no-legend','--no-pager'],
+ capture_output=True,text=True).stdout.splitlines():
+ if any(term in unit.lower() for term in ('result','watch','display')):
+  print('NO_SIGNAL_WATCHER_UNITFILE',unit[:240])
+
 print('NO_SIGNAL_AUDIT_OK=true')
 
 print('AI15_PREFLIGHT_DONE=true')

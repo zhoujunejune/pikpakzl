@@ -1,0 +1,35 @@
+name: Inspect TP-SL live service state before 300ms optimization
+on:
+  push:
+    branches: [fix/risk-exit-300ms-20261023]
+    paths:
+      - .github/workflows/zl-risk300-preflight.yml
+      - prediction-bot-v1/risk300_unit_preflight.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check audit safety and syntax
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          p=Path('prediction-bot-v1/risk300_unit_preflight.py')
+          a=ast.parse(p.read_text());sh=next(x.value.value for x in a.body if isinstance(x,ast.Assign)
+            and any(isinstance(n,ast.Name) and n.id=='REMOTE' for n in x.targets))
+          assert subprocess.run(['bash','-n'],input=sh,text=True).returncode==0
+          assert 'systemctl restart' not in sh
+          print('RISK300_PREFLIGHT_READONLY_VALID=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Query live TP-SL worker and risk control without modification
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/risk300_unit_preflight.py

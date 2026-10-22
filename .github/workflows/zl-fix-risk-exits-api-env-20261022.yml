@@ -1,0 +1,46 @@
+name: Repair live Prediction TP SL saved API credentials binding
+on:
+  push:
+    branches: [fix/aliyun-risk-exits-api-env-20261022]
+    paths:
+      - .github/workflows/zl-fix-risk-exits-api-env-20261022.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/fix_risk_exits_binance_env_20261022.py
+      - run: |
+          python - <<'PY'
+          import ast,subprocess,pathlib
+          s=pathlib.Path('prediction-bot-v1/fix_risk_exits_binance_env_20261022.py').read_text()
+          p=ast.parse(s)
+          remote=next(n.value.value for n in p.body if isinstance(n,ast.Assign) and any(
+            isinstance(x,ast.Name) and x.id=='REMOTE' for x in n.targets))
+          r=subprocess.run(['bash','-n'],input=remote,capture_output=True,text=True)
+          assert r.returncode==0,r.stderr
+          assert 'zl-prediction-risk-exits.service.d' in remote
+          assert 'EnvironmentFile=-/var/lib/zl-exchange-api/prediction/binance.env' in remote
+          assert 'zl-futures-bot-paper.service' in remote
+          PY
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Bind stored Binance credentials to the owner's existing TP SL worker
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/fix_risk_exits_binance_env_20261022.py

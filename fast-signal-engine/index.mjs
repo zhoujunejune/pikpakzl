@@ -1727,6 +1727,14 @@ http.createServer(async (req, res) => {
   res.setHeader('cache-control', 'no-store');
   res.setHeader('access-control-allow-origin', '*');
 
+  // Fast, uncached in-memory BTC snapshot, independently validated by its
+  // DeepSeek consumer. Zero new exchange requests; never touches orders.
+  if (req.method==='GET' && url.pathname==='/api/shadow-market-fast') {
+    const data=breakout20ReadonlyFeed.readSpot();
+    res.writeHead(data.ok?200:503,{'content-type':'application/json; charset=utf-8'});
+    return res.end(JSON.stringify(data));
+  }
+
   // Shadow-only public OHLCV read endpoint. This path cannot control prediction or trading.
   if (req.method === 'GET' && url.pathname === '/api/shadow-market-data') {
     const data = await breakout20ReadonlyFeed.read();

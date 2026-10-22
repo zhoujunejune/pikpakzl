@@ -91,5 +91,5 @@ test('15 second signal build enforces deadline and refuses other rounds',()=>{
  const base={round:ROUND,tick:{round:ROUND,at:ROUND+12900,open:100,price:99},
   decision:{direction:'DOWN',method:'DEEPSEEK_SINGLE_CALL_15S'},providerModel:'deepseek-flash'};
  assert.equal(buildFastSignal({...base,at:ROUND+14200}).latest.direction,'DOWN');
- assert.throws(()=>buildFastSignal({...base,at:ROUND+15000}),/INVALID_FIVE_SECOND_REAL_SIGNAL/);
+ assert.throws(()=>buildFastSignal({...base,at:ROUND+15000}),/INVALID_15_SECOND_REAL_SIGNAL/);
 });

@@ -192,6 +192,33 @@ if index.exists():
   if name in ('SIGNAL_WS_URL','SIGNAL_REDIS_CHANNEL'):val='configured_in_environment'
   print('SPEED_AUDIT_LIVE_SIGNAL_CONSTANT',name,val[:240])
  print('SPEED_AUDIT_NATIVE_FAST100_DIRECT_CONSUMPTION',('13029' in src))
+
+print('SPEED_AUDIT_SPOT_UNIT_FILES')
+for unit in subprocess.run(['systemctl','list-units','--type=service','--all','--no-legend','--no-pager'],
+ capture_output=True,text=True,timeout=6).stdout.splitlines():
+ if any(word in unit.lower() for word in ('market','feed','collector','shadow','signal','redis')):
+  print('SPEED_AUDIT_SPOT_UNIT',unit[:150])
+net=subprocess.run(['ss','-ltnp','sport = :13003'],capture_output=True,text=True,timeout=5).stdout
+print('SPEED_AUDIT_SPOT_PORT',net[:700].replace('\n',' '))
+from pathlib import Path
+import re
+pidMatch=re.search(r'pid=(\d+)',net)
+if pidMatch:
+ proc=Path('/proc/'+pidMatch.group(1))
+ try:
+  argv=[x.decode(errors='replace') for x in proc.joinpath('cmdline').read_bytes().split(b'\0') if x]
+  # Print only file paths and app flags, nothing from env
+  print('SPEED_AUDIT_SPOT_PID',pidMatch.group(1),'cwd',str(proc.joinpath('cwd').resolve()),
+    'entrypointFiles',[v for v in argv if v.endswith(('.mjs','.js','.py'))][:6])
+  for v in argv:
+   if v.endswith(('.mjs','.js','.py')) and Path(v).exists():
+    code=Path(v).read_text()
+    print('SPEED_AUDIT_SPOT_SOURCE',{ 'name':Path(v).name,'len':len(code),
+      'cache1800':'1800' in code,'setInterval': 'setInterval' in code,
+      'spotLagMs':'eventMs' in code,
+      'hasKlinePull':'/api/v3/klines' in code,
+      'usesWs':('WebSocket' in code or 'ws.on(' in code)})
+ except Exception as e:print('SPEED_AUDIT_SPOT_PROC_FAIL',type(e).__name__)
 print('SPEED_AUDIT_COMPLETE=true')
 PY
 """

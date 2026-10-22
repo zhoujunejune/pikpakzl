@@ -58,9 +58,13 @@ def patch(old,new):
 head="const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged."
 patch(head,head+"\nconst DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS = 30000; // AI decision T+15, trade submit T+30; only this selected model.")
 branch="  return model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :"
-patch(branch,"  return model === 'DEEPSEEK_5M_V1' ? DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :\n"+branch)
+patch(branch,"  return model === 'DEEPSEEK_5M_V1' ? DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :\n"+branch.replace('  return ','    ',1))
 old="    : '本轮第15秒订单提交窗口已截止，未发送下单请求';"
 patch(old,"    : p?.signalModelChoice==='DEEPSEEK_5M_V1' ? 'DeepSeek15秒分析模式，本轮第30秒订单提交窗口已截止，未发送下单请求'\n"+old)
+# Runtime wrapper is a JavaScript template; node --check wrapper.mjs alone
+# cannot validate generated server code. Detect duplicate return regression.
+assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :\\n  return model" not in src
+assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :\\n    model === SELECTIVE8_MODEL" in src
 pathlib.Path(sys.argv[2]).write_text(src)
 print('AI15_WRAPPER_SCOPED_ORDER_DEADLINE_PATCH_VALID=true')
 PY

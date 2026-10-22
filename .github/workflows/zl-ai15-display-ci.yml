@@ -1,0 +1,22 @@
+name: Verify DeepSeek15 independent dashboard times
+on:
+  push:
+    branches: [fix/deepseek15-round-display-20261022]
+    paths:
+      - .github/workflows/zl-ai15-display-ci.yml
+      - prediction-bot-v1/round-results-only-journal.mjs
+      - prediction-bot-v1/round-results-display-watcher.mjs
+      - prediction-bot-v1/deepseek15-display-fix.test.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check prediction-bot-v1/round-results-only-journal.mjs
+      - run: node --check prediction-bot-v1/round-results-display-watcher.mjs
+      - run: node --test prediction-bot-v1/round-results-only.test.mjs prediction-bot-v1/round-results-display-watcher.test.mjs prediction-bot-v1/deepseek15-display-fix.test.mjs

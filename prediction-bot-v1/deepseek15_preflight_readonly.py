@@ -33,6 +33,21 @@ for p in ('/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-production-adap
 for unit in ('zl-prediction-deepseek5.service','zl-prediction-trade.service',
  'zl-prediction-risk-exits.service','zl-prediction-redis.service','zl-futures-bot-paper.service'):
  print('AI15_PREFLIGHT_UNIT',unit,subprocess.getoutput('systemctl is-active '+unit))
+for unit in ('zl-prediction-trade.service','zl-prediction-deepseek5.service'):
+  sh=subprocess.run(['systemctl','show',unit,'-p','ActiveState','-p','SubState',
+    '-p','Result','-p','ExecMainStatus','-p','NRestarts','--no-pager'],capture_output=True,text=True)
+  print('AI15_POSTROLLBACK_STATE',unit,sh.stdout.replace('\n',' ').strip()[:600])
+  j=subprocess.run(['journalctl','-u',unit,'--since','8 minutes ago','-n','350','--no-pager','-o','cat'],
+    capture_output=True,text=True).stdout
+  safe=[]
+  for line in j.splitlines():
+    if any(x in line for x in ('SyntaxError:','ReferenceError:','TypeError:','Error [','EADDRINUSE',
+      'Cannot find','Module not found','Exited','Failed','failed','starting','control_panel_started',
+      'ERR_MODULE','Unexpected token','CONFIG','SIGTERM','SIGKILL','open /opt')):
+      # No API credentials, order IDs, wallet details, URL query strings
+      if any(k in line.upper() for k in ('SECRET','PASSWORD','PRIVATE_KEY','AUTHORIZATION','API_KEY','ORDERID','WALLET')):continue
+      safe.append(line[:190])
+  print('AI15_POSTROLLBACK_JOURNAL_ERRORS',unit,json.dumps(safe[-18:])[:3500])
 print('AI15_PREFLIGHT_DONE=true')
 PY
 """

@@ -22,6 +22,19 @@ jobs:
         run: |
           node --check deepseek-single5-production.mjs
           node --test deepseek-only15.test.mjs
+      - name: Compile dynamically generated trading module without starting it
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('railway-diagnostic/wrapper.mjs')
+          code=p.read_text()
+          target='await import(generatedModuleUrl.href);'
+          assert code.count(target)==1
+          Path('railway-diagnostic/compile-trade-wrapper-only.mjs').write_text(code.replace(target,"console.log('GENERATED_TRADE_READY_FOR_SYNTAX_CHECK')"))
+          PY
+          node railway-diagnostic/compile-trade-wrapper-only.mjs
+          node --check railway-diagnostic/trade-control-fixed.mjs
+          echo AI15_GENERATED_TRADER_PARSE_SUCCESS=true
       - name: Verify no price fallback and 30s scoped order window
         run: |
           node --check railway-diagnostic/wrapper.mjs

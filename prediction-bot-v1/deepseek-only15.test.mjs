@@ -93,3 +93,42 @@ test('15 second signal build enforces deadline and refuses other rounds',()=>{
  assert.equal(buildFastSignal({...base,at:ROUND+14200}).latest.direction,'DOWN');
  assert.throws(()=>buildFastSignal({...base,at:ROUND+15000}),/INVALID_15_SECOND_REAL_SIGNAL/);
 });
+
+test('successfully locks fresh DeepSeek direction in every successive 5-minute round',async()=>{
+ let now=ROUND+900,requests=0;
+ const f=file('crossround'),df=f.replace(/\.json$/,'.ndjson');
+ const provider=createFastProductionProvider({
+  env:{DEEPSEEK_API_KEY:'test',LLM_STATE_FILE:f,AI15_DIAGNOSTIC_FILE:df},
+  clock:()=>now,
+  fetcher:async (url)=>{
+   if(url.includes('shadow-market-data')){
+    return {ok:true,json:async()=>({ok:true,readOnly:true,symbol:'BTCUSDT',
+     latest:{eventMs:now,roundStartMs:Math.floor(now/300000)*300000,
+      lastPrice:101,roundOpenPrice:100,marketFeedConnected:true}})};
+   }
+   const direction=++requests===1?'UP':'DOWN';
+   return {ok:true,json:async()=>({choices:[{message:{
+    content:JSON.stringify({direction,reason:'current round AI answer'})}}],usage:{total_tokens:50}})};
+  }
+ });
+ try{
+  await provider.tick();await tick();
+  assert.equal(provider.status().signal?.latest.direction,'UP');
+  assert.equal(provider.status().signal?.latest.decisionMethod,'DEEPSEEK_SINGLE_CALL_15S');
+  assert.equal(provider.status().signal?.round,ROUND);
+  now=ROUND+300000+950;
+  await provider.tick();await tick();
+  assert.equal(requests,2,'Model must actually be invoked for the new round');
+  assert.equal(provider.status().signal?.round,ROUND+300000);
+  assert.equal(provider.status().signal?.latest.direction,'DOWN','Old saved pointer must not suppress a new AI decision');
+  assert.equal(provider.status().signal?.latest.decisionMethod,'DEEPSEEK_SINGLE_CALL_15S');
+  assert.equal(provider.status().lastDecision?.round,ROUND+300000);
+  now=ROUND+600000+1050;
+  await provider.tick();await tick();
+  assert.equal(requests,3,'Third round must also analyze');
+  assert.equal(provider.status().signal?.round,ROUND+600000);
+  assert.equal(provider.status().signal?.latest.direction,'DOWN');
+  const lines=fs.readFileSync(df,'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(lines.filter(z=>z.event==='deepseek15_locked').length,3);
+ }finally{cleanup(f)}
+});

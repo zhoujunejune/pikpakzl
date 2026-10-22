@@ -1,0 +1,40 @@
+name: Verify DeepSeek-only 15s AI signal and 30s order window
+on:
+  push:
+    branches: [fix/deepseek15-ai-only-prod-20261022]
+    paths:
+      - .github/workflows/zl-deepseek15-ai-only-ci.yml
+      - prediction-bot-v1/deepseek-single5-production.mjs
+      - prediction-bot-v1/deepseek-only15.test.mjs
+      - railway-diagnostic/wrapper.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Test 15s AI-only model
+        working-directory: prediction-bot-v1
+        run: |
+          node --check deepseek-single5-production.mjs
+          node --test deepseek-only15.test.mjs
+      - name: Verify no price fallback and 30s scoped order window
+        run: |
+          node --check railway-diagnostic/wrapper.mjs
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('prediction-bot-v1/deepseek-single5-production.mjs').read_text()
+          trade=Path('railway-diagnostic/wrapper.mjs').read_text()
+          assert 'REAL_PRICE_ONLY_BACKUP_NOT_DEEPSEEK' not in src
+          assert 'fallback(' not in src
+          assert "const LIMIT_MS=15000;" in src
+          assert "method:'DEEPSEEK_SINGLE_CALL_15S'" in src
+          assert "DEEPSEEK_ONLY_ONE_CALL_15S_NO_PRICE_FALLBACK" in src
+          assert 'DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS = 30000' in trade
+          assert "model === 'DEEPSEEK_5M_V1'" in trade
+          print('DEEPSEEK15_AI_ONLY_AND_ORDER_WINDOW_TESTS_PASS=true')
+          PY

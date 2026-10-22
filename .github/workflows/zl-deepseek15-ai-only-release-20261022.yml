@@ -1,0 +1,52 @@
+name: Deploy DeepSeek-only 15s prediction with guarded production cutover
+on:
+  push:
+    branches: [fix/deepseek15-ai-only-prod-20261022]
+    paths: [.github/workflows/zl-deepseek15-ai-only-release-20261022.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: |
+          node --check prediction-bot-v1/deepseek-single5-production.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --test prediction-bot-v1/deepseek-only15.test.mjs
+      - name: Validate rollbackable script syntax
+        run: |
+          python - <<'PY'
+          import ast,pathlib,subprocess
+          p=pathlib.Path('prediction-bot-v1/deploy_deepseek15_ai_only_20261022.py')
+          mod=ast.parse(p.read_text())
+          shell=next(n.value.value for n in mod.body if isinstance(n,ast.Assign) and any(
+           isinstance(t,ast.Name) and t.id=='SHELL' for t in n.targets))
+          x=subprocess.run(['bash','-n'],input=shell,text=True,capture_output=True)
+          assert x.returncode==0,x.stderr
+          assert 'FOLLOW_CURRENTLY_ON_ABORT' in shell
+          assert 'LIVE_SOURCE_DRIFT_ABORT' in shell
+          assert "zl-futures-bot-paper.service" in shell
+          assert 'AI15_RELEASE_VERIFIED_SUCCESS' in shell
+          print('AI15_SAFE_DEPLOY_SCRIPT_SYNTAX=true')
+          PY
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Strict preflight, backup, install, restart and verify while follow OFF
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_deepseek15_ai_only_20261022.py

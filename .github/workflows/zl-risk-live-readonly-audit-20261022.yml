@@ -4,6 +4,7 @@ on:
     branches: [audit/prediction-risk-live-20261022]
     paths:
       - .github/workflows/zl-risk-live-readonly-audit-20261022.yml
+      - prediction-bot-v1/live_risk_readonly_audit_20261022.py
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

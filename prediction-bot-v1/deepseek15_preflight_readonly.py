@@ -90,6 +90,15 @@ for r in (panel.get('records') or [])[-15:]:
   'status':r.get('status'),'direction':r.get('direction'),'method':r.get('decisionMethod'),
   'lockedMs':r.get('latencyMs')})
 print('NO_SIGNAL_PANEL_RECENT',json.dumps(v,ensure_ascii=False))
+top=[]
+for r in (panel.get('records') or [])[:10]:
+ if not isinstance(r,dict):continue
+ ts=r.get('round')
+ top.append({'roundLocal':datetime.fromtimestamp(ts/1000,tz).strftime('%Y-%m-%d %H:%M') if isinstance(ts,(int,float)) else None,
+  'status':r.get('status'),'direction':r.get('direction'),'method':r.get('decisionMethod'),
+  'lockedMs':r.get('latencyMs')})
+print('NO_SIGNAL_PANEL_TOP',json.dumps(top,ensure_ascii=False))
+
 feed=get(13003,'/api/shadow-market-data')
 q=feed.get('latest') or {}
 import time as _time

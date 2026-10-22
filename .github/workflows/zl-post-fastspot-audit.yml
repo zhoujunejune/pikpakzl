@@ -1,0 +1,37 @@
+name: Verify deployed BTC fast spot and AI signal latency (read only)
+on:
+  push:
+    branches: [fix/fast-feed-and-trigger-20261022]
+    paths:
+      - .github/workflows/zl-post-fastspot-audit.yml
+      - prediction-bot-v1/post_fastspot_speed_audit.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check read-only audit shell
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          s=Path('prediction-bot-v1/post_fastspot_speed_audit.py').read_text()
+          mod=ast.parse(s)
+          remote=next(n.value.value for n in mod.body if isinstance(n,ast.Assign)
+           and any(isinstance(t,ast.Name) and t.id=='REMOTE' for t in n.targets))
+          assert subprocess.run(['bash','-n'],input=remote,text=True).returncode==0
+          assert 'systemctl restart' not in remote
+          assert 'place-order-bundle' not in remote
+          print('POSTFAST_AUDIT_READONLY_VERIFIED=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Measure fast spot and AI signal latency from live Alibaba process
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/post_fastspot_speed_audit.py

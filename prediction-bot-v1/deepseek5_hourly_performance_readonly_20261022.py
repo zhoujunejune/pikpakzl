@@ -27,6 +27,31 @@ print('PERFORMANCE_AUDIT_CLOCK='+datetime.datetime.now(TZ).isoformat())
 print('PERFORMANCE_AUDIT_MODEL='+json.dumps({k:m.get(k) for k in
  ('ok','model','providerModel','configured','round','maxCallsPerRound',
   'learningDisabled','trainingDisabled','statisticsDisabled','lastDecision')},ensure_ascii=False))
+print('PERFORMANCE_AUDIT_AI_RUNTIME='+json.dumps({k:m.get(k) for k in ('round','lastDecision','analysisModelCalls','busy',
+ 'lastApiLatencyMs','aiTokens','error','featureReady','waitReason','decisionWindowEndMs',
+ 'missedRounds','skippedRounds','lastSignal')},ensure_ascii=False))
+from pathlib import Path
+import subprocess,os
+cmd=subprocess.run(['journalctl','-u','zl-prediction-deepseek5.service','--since','10 hours ago',
+ '--no-pager','-o','cat','-n','5000'],capture_output=True,text=True,timeout=15)
+events=collections.Counter()
+locked=collections.Counter()
+locked_elapsed=[]
+for line in cmd.stdout.splitlines():
+ try:x=json.loads(line)
+ except:continue
+ ev=x.get('event')
+ if ev:
+  events[ev]+=1
+  if ev=='deepseek_single5_locked':
+   locked[str(x.get('method','UNKNOWN'))]+=1
+   if isinstance(x.get('elapsedMs'),(int,float)):locked_elapsed.append(x['elapsedMs'])
+print('PERFORMANCE_AUDIT_AI_JOURNAL='+json.dumps({
+ 'eventCounts':dict(events),'lockedMethods':dict(locked),
+ 'locksObserved':len(locked_elapsed),
+ 'minLockMs':min(locked_elapsed) if locked_elapsed else None,
+ 'maxLockMs':max(locked_elapsed) if locked_elapsed else None,
+ 'availableLogs':cmd.returncode==0},ensure_ascii=False))
 print('PERFORMANCE_AUDIT_FOLLOW='+json.dumps({'enabled':t.get('enabled'),'model':t.get('orderSignalModel'),'statusOk':t.get('ok')},ensure_ascii=False))
 print('PERFORMANCE_AUDIT_RESULTS_SERVICE='+json.dumps({'ok':d.get('ok'),
  'schema':d.get('schema'),'source':d.get('source'),

@@ -1,0 +1,15 @@
+name: Verify simplified five-second signal
+on:
+  push:
+    branches: [feat/deepseek-single5-no-learning-20261022]
+    paths: [.github/workflows/zl-fast-five-check.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check prediction-bot-v1/deepseek-single5-production.mjs

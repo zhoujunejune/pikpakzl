@@ -47,9 +47,6 @@ grep -q 'DEEPSEEK_SINGLE_CALL_15S' "$work/journal.mjs"
 # Match production filenames so imports resolve. Do not modify persisted result journal.
 cp "$work/watcher.mjs" "$work/round-results-display-watcher.mjs"
 cp "$work/journal.mjs" "$work/round-results-only-journal.mjs"
-node "$work/round-results-display-watcher.mjs" --help >/dev/null 2>&1 && exit 13 || true
-# Above attempted direct invocation would open an extra listener; therefore
-# never rely on it as a validation. Validate only node --check and CI tests.
 archive=/var/lib/zl-prediction/archive/source-backups/deepseek-ai15-display-COMMIT_SHA
 test ! -e "$archive"
 mkdir -p "$archive"

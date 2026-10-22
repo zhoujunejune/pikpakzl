@@ -4,6 +4,7 @@ on:
     branches: [fix/deepseek15-ai-only-prod-20261022]
     paths:
       - .github/workflows/zl-deepseek15-ai-only-production.yml
+      - prediction-bot-v1/deepseek15_ai_only_guarded_release.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

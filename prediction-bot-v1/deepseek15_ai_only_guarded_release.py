@@ -63,8 +63,8 @@ old="    : '本轮第15秒订单提交窗口已截止，未发送下单请求';"
 patch(old,"    : p?.signalModelChoice==='DEEPSEEK_5M_V1' ? 'DeepSeek15秒分析模式，本轮第30秒订单提交窗口已截止，未发送下单请求'\n"+old)
 # Runtime wrapper is a JavaScript template; node --check wrapper.mjs alone
 # cannot validate generated server code. Detect duplicate return regression.
-assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :\\n  return model" not in src
-assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :\\n    model === SELECTIVE8_MODEL" in src
+assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :" + chr(10) + "  return model" not in src
+assert "DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS :" + chr(10) + "    model === SELECTIVE8_MODEL" in src
 pathlib.Path(sys.argv[2]).write_text(src)
 print('AI15_WRAPPER_SCOPED_ORDER_DEADLINE_PATCH_VALID=true')
 PY

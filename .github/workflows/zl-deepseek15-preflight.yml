@@ -2,7 +2,9 @@ name: DeepSeek15 real Alibaba preflight (read only)
 on:
   push:
     branches: [fix/deepseek15-ai-only-prod-20261022]
-    paths: [.github/workflows/zl-deepseek15-preflight.yml]
+    paths:
+      - .github/workflows/zl-deepseek15-preflight.yml
+      - prediction-bot-v1/deepseek15_preflight_readonly.py
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

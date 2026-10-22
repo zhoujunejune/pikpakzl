@@ -154,7 +154,15 @@ if index.exists():
    'poll1200ms':'setInterval(prepareWorker, 1200);' in src,
    'prepareThrottled2500ms':'Date.now() - lastPrepareAttemptAt < 2500' in src,
    'selectedDeepseekNameInEntireIndex':'DEEPSEEK_5M_V1' in src,
-   'totalSourceBytes':len(src)},ensure_ascii=False))
+   'totalSourceBytes':len(src),
+   'modelRoutingOrder':{
+     'deepseekMentionPos':part.find('DEEPSEEK_5M_V1'),
+     'hardSelectiveReturnPos':part.find('if(choice.model!==SELECTIVE8_MODEL)return null;'),
+     'firstDeepseekBranchBeforeReturn':0<=part.find('DEEPSEEK_5M_V1')<part.find('if(choice.model!==SELECTIVE8_MODEL)return null;'),
+     'deepseekSourceHttpLocal':part.count('127.0.0.1:13029'),
+     'signalWiringExcerpt':part[max(0,part.find('DEEPSEEK_5M_V1')-220):part.find('DEEPSEEK_5M_V1')+370]
+        if 'DEEPSEEK_5M_V1' in part else None}
+ },ensure_ascii=False))
 if wrapper.exists():
  wr=wrapper.read_text()
  print('SPEED_AUDIT_LIVE_WRAPPER',json.dumps({

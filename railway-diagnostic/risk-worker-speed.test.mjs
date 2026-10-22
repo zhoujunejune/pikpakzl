@@ -25,6 +25,14 @@ const oldSell = `      await sellPosition(wallet, payment, position, topic, targ
 
     cleanupSellState(activeTokens);`;
 
+const default300 = "const POLL_MS = Math.max(300, Number(process.env.AUTO_RISK_POLL_MS || process.env.AUTO_TAKE_PROFIT_POLL_MS || 300));";
+const default500 = "const POLL_MS = Math.max(300, Number(process.env.AUTO_RISK_POLL_MS || process.env.AUTO_TAKE_PROFIT_POLL_MS || 500));";
+test('default risk worker interval is 300ms and still honors the hard 300ms lower bound',()=>{
+  assert.equal(source.split(default300).length-1,1);
+  assert.equal(source.split(default500).length-1,0);
+  assert.match(source,/const RETRY_MS = Math.max\(1000,/);
+});
+
 test('risk-worker has exactly one asynchronous payment prefetch and awaits at SELL', () => {
   assert.equal(source.split(newPrepare).length - 1, 1);
   assert.equal(source.split(newSell).length - 1, 1);
@@ -33,7 +41,7 @@ test('risk-worker has exactly one asynchronous payment prefetch and awaits at SE
 });
 
 test('risk formulas, thresholds, quote rules, SELL and retry code are byte-for-byte unchanged', () => {
-  const baseline = source.replace(newPrepare, oldPrepare).replace(newSell, oldSell);
+  const baseline = source.replace(newPrepare, oldPrepare).replace(newSell, oldSell).replace(default300, default500);
   const gitObject = crypto.createHash('sha1')
     .update('blob ' + Buffer.byteLength(baseline) + String.fromCharCode(0))
     .update(baseline).digest('hex');

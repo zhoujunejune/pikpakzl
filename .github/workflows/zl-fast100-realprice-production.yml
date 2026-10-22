@@ -1,0 +1,53 @@
+name: Restore DeepSeek first 100ms current BTC price fallback Alibaba production
+on:
+  push:
+    branches: [fix/deepseek100ms-fallback-20261022]
+    paths:
+      - .github/workflows/zl-fast100-realprice-production.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check prediction-bot-v1/deepseek-single5-production.mjs
+      - run: node --test prediction-bot-v1/deepseek100ms-fallback.test.mjs
+      - name: Verify guarded release cannot restart live order/trading service
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          p=Path('prediction-bot-v1/deploy_fast100_realprice_20261022.py')
+          src=p.read_text();a=ast.parse(src)
+          remote=next(n.value.value for n in a.body if isinstance(n,ast.Assign) and
+            any(isinstance(x,ast.Name) and x.id=='REMOTE' for x in n.targets))
+          check=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          assert check.returncode==0,check.stderr
+          assert 'FAST100_PRODUCTION_RELEASE_SUCCESS=true' in remote
+          assert 'systemctl restart zl-prediction-deepseek5.service' in remote
+          assert 'systemctl restart zl-prediction-trade.service' not in remote
+          assert 'systemctl restart zl-prediction-risk-exits.service' not in remote
+          assert 'OWNER_SWITCH_CHANGED_DURING_DEPLOY_ABORT' in remote
+          print('FAST100_RELEASE_GUARDS_VALID=true')
+          PY
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Restart only model provider, preserve live owner follow state and position risk exits
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_fast100_realprice_20261022.py

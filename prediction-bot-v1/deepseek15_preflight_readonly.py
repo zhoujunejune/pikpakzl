@@ -79,6 +79,31 @@ for line in log.stdout.splitlines():
 print('NO_SIGNAL_EVENT_COUNTS',json.dumps(Counter(e['event'] for e in events),ensure_ascii=False))
 print('NO_SIGNAL_ERRORS',json.dumps([e for e in events if e['event']!='deepseek15_locked'][-30:],ensure_ascii=False))
 print('NO_SIGNAL_LAST_LOCKS',json.dumps([e for e in events if e['event']=='deepseek15_locked'][-8:],ensure_ascii=False))
+
+panel=get(13045,'/api/round-results?limit=22')
+print('NO_SIGNAL_PANEL_HEALTH',json.dumps({k:panel.get(k) for k in ('ok','source','schema','generatedAt','settlementLastAt','error','records','summary') if k!='records'},ensure_ascii=False)[:1700])
+v=[]
+for r in (panel.get('records') or [])[-15:]:
+ if not isinstance(r,dict):continue
+ ts=r.get('round')
+ v.append({'roundLocal':datetime.fromtimestamp(ts/1000,tz).strftime('%H:%M') if isinstance(ts,(int,float)) else None,
+  'status':r.get('status'),'direction':r.get('direction'),'method':r.get('decisionMethod'),
+  'lockedMs':r.get('latencyMs')})
+print('NO_SIGNAL_PANEL_RECENT',json.dumps(v,ensure_ascii=False))
+feed=get(13003,'/api/shadow-market-data')
+q=feed.get('latest') or {}
+import time as _time
+print('NO_SIGNAL_FEED',json.dumps({'ok':feed.get('ok'),'symbol':feed.get('symbol'),
+  'readOnly':feed.get('readOnly'),'marketFeedConnected':q.get('marketFeedConnected'),
+  'eventAgeMs':int(_time.time()*1000)-q.get('eventMs') if isinstance(q.get('eventMs'),(int,float)) else None,
+  'roundStartMs':q.get('roundStartMs'),'pricePresent':bool(q.get('lastPrice')),
+  'openPresent':bool(q.get('roundOpenPrice'))},ensure_ascii=False))
+modelSource=pathlib.Path('/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-production-adapter.mjs').read_text()
+print('NO_SIGNAL_JOURNAL_SUPPORTED',{
+ 'roundResultsImport':"createRoundResultsJournal" in modelSource,
+ 'roundResultsRoute':"u.pathname==='/api/round-results'" in modelSource,
+ 'emitMethod':"DEEPSEEK_SINGLE_CALL_15S" in modelSource})
+
 print('NO_SIGNAL_AUDIT_OK=true')
 
 print('AI15_PREFLIGHT_DONE=true')

@@ -4,6 +4,7 @@ on:
     branches: [fix/aliyun-risk-exits-api-env-20261022]
     paths:
       - .github/workflows/zl-fix-risk-exits-api-env-20261022.yml
+      - prediction-bot-v1/fix_risk_exits_binance_env_20261022.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

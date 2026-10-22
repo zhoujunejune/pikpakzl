@@ -22,7 +22,7 @@ function newBot(label,clock,fetcher){
 test('DeepSeek can win if its actual valid UP is returned within 100ms',async()=>{
  let now=ROUND+18,apiCalls=0;
  const {p,f}=newBot('fast-ai',()=>now,async url=>{
-  if(url.includes('shadow-market-data'))return {ok:true,json:async()=>quote(now,ROUND)};
+  if(url.includes('/api/shadow-market-'))return {ok:true,json:async()=>quote(now,ROUND)};
   apiCalls++;return {ok:true,json:async()=>({
    choices:[{message:{content:'{"direction":"UP","reason":"fast"}'}}],usage:{total_tokens:12}})};
  });
@@ -42,7 +42,7 @@ test('DeepSeek can win if its actual valid UP is returned within 100ms',async()=
 test('At 100ms, valid current-round price produces UP without waiting for slow DeepSeek',async()=>{
  let now=ROUND+22,apiCalls=0,answer;
  const {p,f}=newBot('fallback',()=>now,async url=>{
-  if(url.includes('shadow-market-data'))return {ok:true,json:async()=>quote(now,ROUND,100.5,100)};
+  if(url.includes('/api/shadow-market-'))return {ok:true,json:async()=>quote(now,ROUND,100.5,100)};
   apiCalls++;return new Promise(resolve=>{answer=()=>resolve({ok:true,json:async()=>({
     choices:[{message:{content:'{"direction":"DOWN"}'}}]})})});
  });
@@ -65,7 +65,7 @@ test('At 100ms, valid current-round price produces UP without waiting for slow D
 test('When the first valid quote arrives at T+2s, lock honestly at T+2s, not fake 100ms',async()=>{
  let now=ROUND+90,feedValid=false,aiCalls=0;
  const {p,f}=newBot('late-quote',()=>now,async url=>{
-  if(url.includes('shadow-market-data'))return {ok:true,json:async()=>feedValid?
+  if(url.includes('/api/shadow-market-'))return {ok:true,json:async()=>feedValid?
     quote(now,ROUND,99,100):quote(now,ROUND-300000,99,100)};
   aiCalls++;throw Error('MODEL_CALL_NOT_EXPECTED');
  });
@@ -86,7 +86,7 @@ test('When the first valid quote arrives at T+2s, lock honestly at T+2s, not fak
 test('No previous-round quote can ever manufacture the next round prediction',async()=>{
  let now=ROUND+500,aiCalls=0,valid=true;
  const {p,f}=newBot('cross-round',()=>now,async url=>{
-  if(url.includes('shadow-market-data')){
+  if(url.includes('/api/shadow-market-')){
    const thisRound=Math.floor(now/300000)*300000;
    return {ok:true,json:async()=>quote(now,valid?thisRound:thisRound-300000,100.1,100)};
   }
@@ -110,7 +110,7 @@ test('No previous-round quote can ever manufacture the next round prediction',as
 test('At t<100ms, no current quote means no signal and never previous round fallback',async()=>{
  let now=ROUND+60,requests=0;
  const {p,f}=newBot('before-target',()=>now,async url=>{
-  if(url.includes('shadow-market-data'))return {ok:true,json:async()=>quote(now,ROUND-300000)};
+  if(url.includes('/api/shadow-market-'))return {ok:true,json:async()=>quote(now,ROUND-300000)};
   requests++;return {ok:true,json:async()=>({})};
  });
  try{

@@ -1,0 +1,31 @@
+name: Verify independent five-second official-result timeline
+on:
+  push:
+    branches: [feat/deepseek5-round-results-panel-20261022]
+    paths:
+      - .github/workflows/zl-round-results-ci.yml
+      - prediction-bot-v1/round-results-only-journal.mjs
+      - prediction-bot-v1/deepseek-single5-production.mjs
+      - prediction-bot-v1/round-results-only.test.mjs
+      - prediction-bot-v1/patch_round_results_panel.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: node --check prediction-bot-v1/round-results-only-journal.mjs
+      - run: node --check prediction-bot-v1/deepseek-single5-production.mjs
+      - run: node --test prediction-bot-v1/fast5-backend-smoke.test.mjs prediction-bot-v1/round-results-only.test.mjs
+      - run: |
+          python prediction-bot-v1/patch_fast5_panel.py railway-diagnostic/panel-stats-shell.mjs /tmp/panel-fast5.mjs
+          python prediction-bot-v1/patch_round_results_panel.py /tmp/panel-fast5.mjs /tmp/panel-result.mjs
+          node --check /tmp/panel-result.mjs
+          grep -q 'roundResultsOnlyCard' /tmp/panel-result.mjs
+          grep -q 'api/deepseek-round-results' /tmp/panel-result.mjs
+          ! grep -q 'const statsCard = ' /tmp/panel-result.mjs

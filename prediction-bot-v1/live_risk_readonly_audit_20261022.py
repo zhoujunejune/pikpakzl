@@ -34,6 +34,28 @@ riskpid=subprocess.run(['systemctl','show','zl-prediction-risk-exits.service','-
 if riskpid and riskpid!='0':
  try:
   print('RISK_AUDIT_RUNTIME_PID',riskpid)
+  # Read only environment key names and presence, NEVER secret values.
+  try:
+   raw=Path('/proc/'+riskpid+'/environ').read_bytes().split(b'\0')
+   keynames={entry.split(b'=',1)[0].decode('utf8','replace') for entry in raw if b'=' in entry}
+   print('RISK_AUDIT_MAIN_KEY_PRESENCE',{'apiKey':('BINANCE_PREDICTION_API_KEY' in keynames),
+    'apiSecret':('BINANCE_PREDICTION_API_SECRET' in keynames),
+    'walletId':('BINANCE_PREDICTION_WALLET_ID' in keynames)})
+  except Exception as e:print('RISK_AUDIT_MAIN_KEY_ERROR',type(e).__name__)
+  childfile=Path('/proc/'+riskpid+'/task/'+riskpid+'/children')
+  if childfile.is_file():
+   for childpid in childfile.read_text().split()[:4]:
+    try:
+     raw=Path('/proc/'+childpid+'/environ').read_bytes().split(b'\0')
+     entries={pair.split(b'=',1)[0].decode('utf8','replace'):len(pair.split(b'=',1)[1])>0
+       for pair in raw if b'=' in pair}
+     print('RISK_AUDIT_WORKER_KEY_PRESENCE',{'apiKeySet':entries.get('BINANCE_PREDICTION_API_KEY',False),
+      'apiSecretSet':entries.get('BINANCE_PREDICTION_API_SECRET',False),
+      'walletAddressSet':entries.get('BINANCE_PREDICTION_WALLET_ADDRESS',False),
+      'walletIdSet':entries.get('BINANCE_PREDICTION_WALLET_ID',False),
+      'tpEnabledSettingPresent':entries.get('AUTO_TAKE_PROFIT_ENABLED',False),
+      'slEnabledSettingPresent':entries.get('AUTO_STOP_LOSS_ENABLED',False)})
+    except Exception as e:print('RISK_AUDIT_WORKER_KEY_ERROR',type(e).__name__)
   for key in ('PrivateTmp','ExecStart'):
    value=subprocess.run(['systemctl','show','zl-prediction-risk-exits.service','-p',key,'--value'],capture_output=True,text=True).stdout.strip()
    if key=='ExecStart':
@@ -84,7 +106,7 @@ for unit in ('zl-prediction-risk-exits.service','zl-prediction-risk.service','zl
    counts[event]=counts.get(event,0)+1
    if event not in ('risk_check',):
     recent.append({k:j.get(k) for k in ('event','at','error','httpStatus','code','reason',
-      'hasTotalCost','hasShares','hasToWin') if k in j})
+      'hasTotalCost','hasShares','hasToWin','hasCredentials','scope','takeProfitEnabled','stopLossEnabled','pollMs') if k in j})
  print('RISK_AUDIT_EVENT_COUNTS',unit,json.dumps(counts,ensure_ascii=False))
  print('RISK_AUDIT_RECENT_EXCEPT_CHECKS',unit,json.dumps(recent[-15:],ensure_ascii=False)[:3700])
 PY

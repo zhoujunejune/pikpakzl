@@ -80,7 +80,7 @@ for pid in ids[:3]:
   print('RISK_SPEED_WORKER_ENV',config)
  except Exception as e:print('RISK_SPEED_WORKER_ENV_ERROR',type(e).__name__)
 # Do not expose tokenIDs, orderIds, amounts, wallet addresses or account details in logs.
-cmd=['journalctl','-u','zl-prediction-risk-exits.service','--since','8 hours ago',
+cmd=['journalctl','-u','zl-prediction-risk-exits.service','--since','20 minutes ago',
  '--no-pager','-o','json','-n','20000']
 p=subprocess.run(cmd,capture_output=True,text=True,timeout=19)
 events=[]
@@ -121,6 +121,38 @@ print('RISK_SPEED_TRIGGER_TO_SELL_CANDIDATES',json.dumps({
  'latency':summarize([x['durationMs'] for x in trigger_to_submit]),
  'byOutcome':dict(collections.Counter(x['outcome'] for x in trigger_to_submit)),
  'latest':trigger_to_submit[-15:]},ensure_ascii=False))
+
+# Inspect worker's mount namespace /tmp: systemd PrivateTmp means host /tmp is unrelated.
+workerPids=[]
+for proc in pathlib.Path('/proc').glob('[0-9]*'):
+ try:
+  parts=[x for x in (proc/'cmdline').read_bytes().split(b'\0') if x]
+  if any(x.endswith(b'risk-worker.mjs') for x in parts):workerPids.append(proc)
+ except Exception:continue
+print('RISK_SPEED_WORKER_PROCESS_COUNT',len(workerPids))
+for proc in workerPids[:3]:
+ paths=[proc/'root/tmp/risk-worker-health.json',proc/'root/tmp/risk-runtime-status.json']
+ for fp in paths:
+  try:
+   h=json.loads(fp.read_text())
+   safe={k:h.get(k) for k in ('at','lastTickStartedAt','lastTickFinishedAt',
+    'lastSuccessfulPositionsAt','positionsSeen','lastQuoteAt','quoteChecks',
+    'quoteErrors','lastError','lastSellEventAt','lastSellEvent','workerRunning','configApplied') if k in h}
+   print('RISK_SPEED_WORKER_NAMESPACE_HEALTH',json.dumps(safe,ensure_ascii=False))
+  except Exception as e:print('RISK_SPEED_WORKER_NAMESPACE_HEALTH_FAILED',type(e).__name__)
+p=subprocess.run(['journalctl','-u','zl-prediction-risk-exits.service','--since','20 minutes ago',
+ '--no-pager','-o','cat','-n','14000'],capture_output=True,text=True,timeout=12)
+recent=[]
+for line in p.stdout.splitlines():
+ try:
+  e=json.loads(line)
+  if e.get('event') in ('risk_triggered','risk_sell_submitted','risk_sell_unknown',
+   'risk_sell_failed','risk_positions_error','risk_worker_started'):
+   recent.append({'event':e['event'],'at':e.get('at'),
+    'reason':e.get('reason') if e.get('reason') in ('STOP_LOSS','TAKE_PROFIT') else None,
+    'pollMs':e.get('pollMs') if e.get('event')=='risk_worker_started' else None})
+ except Exception:continue
+print('RISK_SPEED_LAST20M_CRITICAL_EVENTS',json.dumps(recent[-25:],ensure_ascii=False))
 print('RISK_SPEED_COMPLETE=true')
 PY
 """

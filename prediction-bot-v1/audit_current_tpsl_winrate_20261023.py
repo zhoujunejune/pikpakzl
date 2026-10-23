@@ -181,6 +181,65 @@ print('TPWIN_RISK_EXIT_BY_STOP_SETTING',json.dumps({
  'tpQuoteReturnPct':summ([x['grossExpectedReturnPct'] for x in v if x['reason']=='TAKE_PROFIT']),
  'slQuoteReturnPct':summ([x['grossExpectedReturnPct'] for x in v if x['reason']=='STOP_LOSS'])}
  for key,v in sorted(stopStats.items())},ensure_ascii=False))
+
+# Counterfactual on only current 55%-SL settled/SELL-submitted positions:
+# replay quotes observed by this risk worker BEFORE the actual first SELL.
+# Moving the SL nearer needs no future quotes beyond actual exit.
+# This is gross quoted liquidation PnL, not executed Binance fill price.
+hist=collections.defaultdict(list)
+finished=set()
+replays=[]
+for line in journal.splitlines():
+ try:
+  z=json.loads(line)
+  ev=z.get('event')
+  token=str(z.get('tokenId') or '')
+  if not token:continue
+ except Exception:continue
+ if ev=='risk_check' and token not in finished:
+  try:
+   cost=float(z.get('totalCost'));amount=float(z.get('currentSellAmount'))
+   sl=float(z.get('slTarget'));tp=float(z.get('tpTarget'))
+   if all(math.isfinite(x) for x in (cost,amount,sl,tp)) and cost>0 and tp>0 and sl>=0:
+    slPct=int(round((1-sl/cost)*100))
+    if 1<=slPct<=100:
+     hist[token].append({'cost':cost,'amount':amount,'tp':tp,'stop':slPct})
+  except Exception:pass
+ if ev=='risk_sell_submitted' and token not in finished:
+  finished.add(token)
+  path=hist.get(token,[])
+  try:
+   cost=float(z.get('totalCost'));amount=float(z.get('currentSellAmount'))
+   setting=path[-1]['stop'] if path else None
+   if not(setting==55 and cost>0):continue
+   tp=path[-1]['tp']
+   # Include submitted quote (sometimes refreshed shortly after risk_check).
+   steps=path+[{'cost':cost,'amount':amount,'tp':tp,'stop':55}]
+   row={'actualExitReason':z.get('reason'),'actualGrossPct':(amount/cost-1)*100,
+      'quotedChecks':len(steps)}
+   for candidate in (40,45,50,55):
+    outcome=None
+    for q in steps:
+     if q['amount']>=q['tp']:
+      outcome={'type':'TP','gross':(q['amount']/q['cost']-1)*100};break
+     if q['amount']<=q['cost']*(1-candidate/100):
+      outcome={'type':'SL','gross':(q['amount']/q['cost']-1)*100};break
+    row[str(candidate)]=outcome
+   replays.append(row)
+  except Exception:pass
+print('TPWIN_CURRENT55_QUOTE_REPLAY',json.dumps({
+ 'n':len(replays),
+ 'originalExit':dict(collections.Counter(x['actualExitReason'] for x in replays)),
+ 'quoteChecksMedian':statistics.median([x['quotedChecks'] for x in replays]) if replays else None,
+ 'candidates':{
+   str(candidate):{
+    'replayedN':sum(x.get(str(candidate)) is not None for x in replays),
+    'TP':sum((x.get(str(candidate)) or {}).get('type')=='TP' for x in replays),
+    'SL':sum((x.get(str(candidate)) or {}).get('type')=='SL' for x in replays),
+    'grossExpectedReturnPct':summ([x[str(candidate)]['gross'] for x in replays
+      if x.get(str(candidate)) is not None]),
+    'incomplete':sum(x.get(str(candidate)) is None for x in replays)}
+   for candidate in (40,45,50,55)}},ensure_ascii=False))
 print('TPWIN_AUDIT_COMPLETE=true')
 PY
 """

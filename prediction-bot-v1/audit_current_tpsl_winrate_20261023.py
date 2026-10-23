@@ -240,6 +240,67 @@ print('TPWIN_CURRENT55_QUOTE_REPLAY',json.dumps({
       if x.get(str(candidate)) is not None]),
     'incomplete':sum(x.get(str(candidate)) is None for x in replays)}
    for candidate in (40,45,50,55)}},ensure_ascii=False))
+
+# Additional feasible counterfactual grid: TP<=35% (higher TP would require
+# price paths AFTER the original sale and therefore is unobservable here).
+# Quote targets are estimated from current 35% max-profit rule; exact Binance
+# fills and fees are NOT known. Optimize only as descriptive in-sample evidence.
+grid={}
+for tpPercent in (20,25,30,35):
+ for stopPercent in (35,40,45,50,55):
+  result=[]
+  for sample in replays:
+   # Need each original position's quote time series; use ephemeral
+   # recomputation below from hist and first-submitted quotes by token.
+   pass
+# Reconstruct completed quotes by token from the same already read journal.
+byToken=collections.defaultdict(list)
+completed=set()
+samples=[]
+for line in journal.splitlines():
+ try:
+  z=json.loads(line)
+  token=str(z.get('tokenId') or '')
+  ev=z.get('event')
+  if not token or token in completed:continue
+ except:continue
+ if ev=='risk_check':
+  try:
+   cost=float(z['totalCost']);amount=float(z['currentSellAmount'])
+   rawTp=float(z['tpTarget']);rawSl=float(z['slTarget'])
+   if cost>0 and rawTp>cost and all(map(math.isfinite,(cost,amount,rawTp,rawSl))):
+    setting=round((1-rawSl/cost)*100)
+    byToken[token].append((cost,amount,rawTp,setting))
+  except Exception:pass
+ elif ev=='risk_sell_submitted':
+  completed.add(token)
+  h=byToken.get(token,[])
+  if not h or h[-1][3]!=55:continue
+  try:
+   cost=float(z['totalCost']);amount=float(z['currentSellAmount'])
+   if cost>0:h=h+[(cost,amount,h[-1][2],55)]
+   samples.append(h)
+  except Exception:pass
+for tpPercent in (20,25,30,35):
+ for stopPercent in (35,40,45,50,55):
+  vals=[];types=collections.Counter();missing=0
+  for steps in samples:
+   found=None
+   for cost,amount,currentTp,setting in steps:
+    tpThreshold=cost+(currentTp-cost)*tpPercent/35
+    if amount>=tpThreshold:
+     found=('TP',(amount/cost-1)*100);break
+    if amount<=cost*(1-stopPercent/100):
+     found=('SL',(amount/cost-1)*100);break
+   if found:
+    types[found[0]]+=1;vals.append(found[1])
+   else:missing+=1
+  grid[f'{tpPercent}/{stopPercent}']={'tpN':types['TP'],'slN':types['SL'],
+   'quotesN':len(vals),'incomplete':missing,
+   'avgGrossQuotedReturnPct':round(statistics.mean(vals),3) if vals else None}
+print('TPWIN_CURRENT55_TP_SL_GRID',json.dumps({
+ 'samplePositions':len(samples),'grid':grid,
+ 'method':'historic visible quotes to original SELL only; not live fills'},ensure_ascii=False))
 print('TPWIN_AUDIT_COMPLETE=true')
 PY
 """

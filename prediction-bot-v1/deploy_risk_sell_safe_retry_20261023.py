@@ -148,17 +148,26 @@ for i in range(45):
  time.sleep(1)
 else:raise RuntimeError('RISK_WORKER_NOT_HEALTHY_ROLLBACK')
 assert all(c.get(k)==v for k,v in before.items()),'RISK_SETTINGS_DRIFT'
-out=subprocess.run(['journalctl','-u','zl-prediction-risk-exits.service',
- '--since','3 minutes ago','--no-pager','-o','cat','-n','250'],
- capture_output=True,text=True,timeout=10).stdout
-started=[]
-for line in out.splitlines():
- try:
-  j=json.loads(line)
-  if j.get('event')=='risk_worker_started':started.append(j)
- except:continue
-assert started and started[-1].get('pollMs')==300
-assert started[-1].get('unknownSellPolicy')=='VERIFY_EXCHANGE_HISTORY_OR_BLOCK'
+# Child status can be published by the runner before the child has logged its
+# risk_worker_started event. Wait for the exact NEW worker banner; never accept
+# an older 300ms worker as proof of deploying the retry implementation.
+for wait in range(45):
+ out=subprocess.run(['journalctl','-u','zl-prediction-risk-exits.service',
+  '--since','3 minutes ago','--no-pager','-o','cat','-n','350'],
+  capture_output=True,text=True,timeout=10).stdout
+ started=[]
+ for line in out.splitlines():
+  try:
+   j=json.loads(line)
+   if j.get('event')=='risk_worker_started':started.append(j)
+  except:continue
+ if started and started[-1].get('pollMs')==300 and started[-1].get('unknownSellPolicy')=='VERIFY_EXCHANGE_HISTORY_OR_BLOCK':
+  break
+ time.sleep(0.5)
+else:
+ print('RISKRETRY_WORKER_BANNERS_OBSERVED',[
+  {k:v.get(k) for k in ('pollMs','retryMs','unknownSellPolicy')} for v in started[-3:]])
+ raise RuntimeError('NEW_RISK_RETRY_WORKER_BANNER_NOT_VISIBLE_ROLLBACK')
 assert isinstance(started[-1].get('retryMs'),int) and 1000<=started[-1]['retryMs']<=10000
 for unit in ('zl-prediction-risk-exits.service','zl-prediction-trade.service',
  'zl-prediction-v3.service','zl-prediction-deepseek5.service',

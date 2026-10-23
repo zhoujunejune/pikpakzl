@@ -12,7 +12,7 @@ INSTANCE='b67374069bb3457ba6a3a2ede9305d3f'
 REMOTE=r"""#!/bin/bash
 set -Eeuo pipefail
 python3 - <<'PY'
-import collections,datetime,json,subprocess,urllib.request,time,math,os
+import collections,datetime,json,subprocess,urllib.request,time,math,os,re
 from zoneinfo import ZoneInfo
 TZ=ZoneInfo('Asia/Singapore')
 now=int(time.time()*1000)

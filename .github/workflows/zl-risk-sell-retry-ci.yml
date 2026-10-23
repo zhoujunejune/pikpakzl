@@ -1,0 +1,39 @@
+name: Validate safe TP-SL automatic retry and ambiguous order reconciliation
+on:
+  push:
+    branches: [fix/risk-sell-safe-retry-20261023]
+    paths:
+      - .github/workflows/zl-risk-sell-retry-ci.yml
+      - railway-diagnostic/risk-worker.mjs
+      - railway-diagnostic/risk-sell-retry.mjs
+      - railway-diagnostic/risk-sell-retry.test.mjs
+      - railway-diagnostic/risk-worker-speed.test.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --check railway-diagnostic/risk-sell-retry.mjs
+      - run: node --test railway-diagnostic/risk-sell-retry.test.mjs railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Enforce trading safety checks before any deployment
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('railway-diagnostic/risk-worker.mjs').read_text()
+          assert "const POLL_MS = Math.max(300," in s
+          assert "const QUOTE_MIN_REMAINING_MS = 250;" in s
+          assert "statusUnknown: true" in s
+          assert "timeInForce: 'FOK'" in s
+          assert "const statusUnknown = Boolean(call?.network) || Number(call?.status || 0) >= 500;" in s
+          assert "if (state?.statusUnknown)" in s
+          assert 'risk_unknown_reconcile_pending' in s
+          assert "const RETRY_MS = Math.max(1000" in s
+          assert "reconcileExactUnknownOrder" in s
+          print('RISK_SELL_RETRY_GUARDS_VERIFIED=true')
+          PY

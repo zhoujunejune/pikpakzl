@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {reconcileExactUnknownOrder} from './risk-sell-retry.mjs';
+import {classifySubmittedRiskSellOrder,safeToRetryUnfilledSubmitted} from './risk-sell-finality.mjs';
 const source=fs.readFileSync(new URL('./risk-worker.mjs',import.meta.url),'utf8');
 const start=source.indexOf('function stateBlocksSell(state) {');
 const end=source.indexOf('async function sellPosition(',start);
@@ -12,7 +13,9 @@ function harness({apiResponse, now=Date.now()}={}){
  const events=[],sellState=new Map(),calls=[];
  const DateStub=class extends Date {static now(){return now;}};
  const sandbox={sellState,RETRY_MS:1000,SLOW_RETRY_MS:5000,UNKNOWN_RECONCILE_MS:10000,
-   Date:DateStub,reconcileExactUnknownOrder,log:(name,fields)=>events.push({name,...fields}),
+   Date:DateStub,reconcileExactUnknownOrder,classifySubmittedRiskSellOrder,safeToRetryUnfilledSubmitted,
+   SUBMITTED_RECONCILE_MS:5000,persistPendingSellState:()=>{},
+   log:(name,fields)=>events.push({name,...fields}),
    signedGet:async(path,args)=>{
      calls.push({path,args});
      return apiResponse?apiResponse(path,args):{ok:true,data:{orders:[]}};

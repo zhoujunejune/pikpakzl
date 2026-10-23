@@ -1,0 +1,71 @@
+name: Roll back prediction TP SL to stable fixed 300ms safely
+on:
+  push:
+    branches: [rollback/risk-adaptive-to-stable-20261023]
+    paths:
+      - .github/workflows/zl-risk-stable-rollback.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-risk-exits
+  cancel-in-progress: false
+jobs:
+  test_stable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Load exact last known working worker and check build/safety
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,re,subprocess
+          p=Path('prediction-bot-v1/rollback_risk_adaptive_to_stable_20261023.py')
+          m=ast.parse(p.read_text())
+          sh=next(a.value.value for a in m.body if isinstance(a,ast.Assign)
+            for t in a.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          z=subprocess.run(['bash','-n'],input=sh,text=True,capture_output=True)
+          assert z.returncode==0,z.stderr
+          blocks=re.findall(r"python3[^\n]*?<<'PY'\n(.*?)\nPY",sh,re.S)
+          assert len(blocks)>=3,len(blocks)
+          for i,part in enumerate(blocks):compile(part,f'rollback-script-{i}','exec')
+          for key in ('RISK_ROLLBACK_VERIFIED_EMPTY_BINANCE_POSITIONS=true',
+            'RISK_ROLLBACK_STABLE_200MS_ACCEL_REMOVED=true',
+            'RISK_ROLLBACK_DURABLE_SELL_JOURNAL_WRITABLE=true',
+            'PENDING_UNSETTLED_SELL_DO_NOT_RESTART',
+            'USER_FOLLOW_SWITCH_CHANGED',
+            'RISK_ROLLBACK_ROLLBACK_NOT_SAFE_PENDING_SELL=true'):
+            assert key in sh,key
+          print('RISK_ROLLBACK_SAFETY_GUARDS_VALID=true')
+          PY
+          curl --fail --silent --show-error --location --max-time 20             https://raw.githubusercontent.com/zhoujunejune/pikpakzl/99358b7e91509fd9ee1b22a99d886fd938320845/railway-diagnostic/risk-worker.mjs             -o railway-diagnostic/risk-worker.mjs
+          node --check railway-diagnostic/risk-worker.mjs
+          node --test railway-diagnostic/risk-prepost-journal-erofs.test.mjs railway-diagnostic/risk-sell-finality.test.mjs railway-diagnostic/risk-sell-postsubmit-recovery.test.mjs railway-diagnostic/risk-sell-safe-retry.test.mjs railway-diagnostic/risk-sell-retry.test.mjs railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('railway-diagnostic/risk-worker.mjs').read_text()
+          assert "const SUBMITTED_RECONCILE_MS = 5000;" in s
+          assert "const POLL_MS = Math.max(300," in s
+          assert "NEAR_TARGET_FAST_POLL_MS" not in s
+          assert "risk_sell_journal_ready" in s
+          assert "risk_sell_not_submitted_journal_unavailable" in s
+          assert "safeToRetryUnfilledSubmitted({" in s
+          assert "persistPendingSellState(); // must succeed BEFORE sending a real SELL" in s
+          print('RISK_ROLLBACK_EXACT_STABLE_WORKER_TESTED=true')
+          PY
+  restore:
+    needs: test_stable
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Only during verified no-position window restore original live TP SL risk worker
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/rollback_risk_adaptive_to_stable_20261023.py

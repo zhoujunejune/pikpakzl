@@ -1,0 +1,31 @@
+name: Validate adaptive TP SL fast scan and order finality safeguards
+on:
+  push:
+    branches: [fix/risk-adaptive-fast-confirm-20261023]
+    paths:
+      - .github/workflows/zl-risk-adaptive-fast-ci.yml
+      - railway-diagnostic/risk-worker.mjs
+      - railway-diagnostic/risk-adaptive-fast-confirm.test.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --test railway-diagnostic/risk-adaptive-fast-confirm.test.mjs railway-diagnostic/risk-prepost-journal-erofs.test.mjs railway-diagnostic/risk-sell-finality.test.mjs railway-diagnostic/risk-sell-postsubmit-recovery.test.mjs railway-diagnostic/risk-sell-safe-retry.test.mjs railway-diagnostic/risk-sell-retry.test.mjs railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Confirm trade-order code and journal startup unaffected
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('railway-diagnostic/risk-worker.mjs').read_text()
+          assert 'persistPendingSellState(); // must succeed BEFORE sending a real SELL' in s
+          assert "process.exit(75)" in s
+          assert "log('risk_sell_journal_ready'" in s
+          assert "const SUBMITTED_RECONCILE_MS = 2500;" in s
+          print('ADAPTIVE_RISK_ORDER_SAFETY_PASSED=true')
+          PY

@@ -1,0 +1,39 @@
+name: Inspect latest failed TP SL execution on Alibaba read only
+on:
+  push:
+    branches: [audit/risk-live-order-20261023]
+    paths:
+      - .github/workflows/zl-latest-tpsl-audit.yml
+      - prediction-bot-v1/audit_latest_tpsl_order_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate safe read-only remote script
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          mod=ast.parse(Path('prediction-bot-v1/audit_latest_tpsl_order_20261023.py').read_text())
+          sh=next(n.value.value for n in mod.body if isinstance(n,ast.Assign)
+           for k in n.targets if isinstance(k,ast.Name) and k.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=sh,text=True).returncode==0
+          a=sh.index("python3 - <<'PY'")+len("python3 - <<'PY'")
+          compile(sh[a:sh.index("\nPY",a)],'<read only audit>','exec')
+          assert 'systemctl restart ' not in sh
+          assert 'place-order-bundle' not in sh and 'get-quote' not in sh
+          assert 'method=POST' not in sh
+          print('RISK_LATEST_READONLY_CONFIRMED=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Query live risk worker logs and optional signed read-only ongoing positions
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/audit_latest_tpsl_order_20261023.py

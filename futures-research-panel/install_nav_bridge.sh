@@ -148,6 +148,9 @@ curl -fsSL --retry 3 --max-time 25 \
   "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/install_aliyun.sh" -o "$event10_installer"
 curl -fsSL --retry 3 --max-time 25 \
   "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/install_routes.sh" -o "$event10_routes"
+bash -n "$event10_installer"
+bash -n "$event10_routes"
+echo EVENT10_INSTALLER_STATIC_CHECKS_PASS=true
 bash "$event10_installer"
 bash "$event10_routes"
 echo EVENT10_ALI_INSTALL_FROM_APPROVED_NAV_WORKFLOW_COMPLETE=true

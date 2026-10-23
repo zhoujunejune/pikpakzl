@@ -137,3 +137,17 @@ echo "NAV_LIVE_PRODUCTION_PIDS_UNCHANGED=true"
 echo "NAV_AUTHENTICATION_PRESERVED=true"
 echo "NAV_INDEPENDENT_SHADOW_ACTIVE=true"
 echo "NAV_INSTALL_COMPLETE=true"
+
+
+# Install the independent EVENT10 signal UI after original navigation checks.
+# EVENT10 has no Binance order-writing endpoint.
+event10_installer=$(mktemp)
+event10_routes=$(mktemp)
+trap 'rm -f "$event10_installer" "$event10_routes"' EXIT
+curl -fsSL --retry 3 --max-time 25 \
+  "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/install_aliyun.sh" -o "$event10_installer"
+curl -fsSL --retry 3 --max-time 25 \
+  "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/install_routes.sh" -o "$event10_routes"
+bash "$event10_installer"
+bash "$event10_routes"
+echo EVENT10_ALI_INSTALL_FROM_APPROVED_NAV_WORKFLOW_COMPLETE=true

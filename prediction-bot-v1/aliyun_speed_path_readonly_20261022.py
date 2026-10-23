@@ -308,6 +308,33 @@ if not out:
   {'submitLocal':stamp(at),'roundLocal':stamp(r),
    'signalEventCount':len(signals.get(r,[]))} for at,r in recent_submits],ensure_ascii=False))
 
+# Inspect existing service logs only for any official exchange timestamps.
+timestamp_fields=('createTime','modifyTime','terminalTime','fillTime','tradeTime',
+ 'executionTime','executedAt','filledAt','exchangeTime','transactionTime')
+time_presence={}
+for unit in ('zl-prediction-trade.service','zl-prediction-deepseek5.service'):
+ logs=subprocess.run(['journalctl','-u',unit,'--since','12 hours ago','-o','json',
+   '--no-pager','-n','40000'],capture_output=True,text=True,timeout=25)
+ counter=collections.Counter()
+ numeric_examples={}
+ for row in logs.stdout.splitlines():
+  try:
+   record=json.loads(row)
+   val=json.loads(record.get('MESSAGE',''))
+   if not isinstance(val,dict):continue
+   def collect(obj,depth=0):
+    if not isinstance(obj,dict) or depth>2:return
+    for k,v in obj.items():
+     if k in timestamp_fields:
+      counter[k]+=1
+      if k not in numeric_examples and isinstance(v,(int,float)):
+       numeric_examples[k]=datetime.fromtimestamp(v/(1000 if v>1e12 else 1),TZ).isoformat() if v>0 else 'zero'
+     elif isinstance(v,dict):collect(v,depth+1)
+   collect(val)
+  except Exception:pass
+ time_presence[unit]={'fieldsSeen':dict(counter),'sampleTimesOnly':numeric_examples}
+print('EXCHANGE_TIMESTAMP_IN_EXISTING_LOGS',json.dumps(time_presence,ensure_ascii=False))
+
 print('SPEED_AUDIT_COMPLETE=true')
 PY
 """

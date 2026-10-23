@@ -39,7 +39,14 @@ def read(commit):
 now=read(sha)
 prev=read(before)
 live=Path('/opt/zl-prediction-live/src/railway-diagnostic/risk-worker.mjs').read_text()
-assert live==prev,'STOP_UNEXPECTED_LIVE_TPSL_SOURCE_DRIFT'
+healthDefault="const WORKER_HEALTH_FILE = '/tmp/risk-worker-health.json';"
+healthOverride="const WORKER_HEALTH_FILE = process.env.RISK_WORKER_HEALTH_FILE || '/tmp/risk-worker-health.json';"
+assert prev.count(healthDefault)==1 and now.count(healthDefault)==1
+if live==prev.replace(healthDefault,healthOverride):
+ now=now.replace(healthDefault,healthOverride)
+ print('EROFS_EXISTING_HEALTH_FILE_OVERRIDE_PRESERVED=true')
+else:
+ assert live==prev,'STOP_UNEXPECTED_LIVE_TPSL_SOURCE_DRIFT'
 assert 'risk_sell_not_submitted_journal_unavailable' in now
 assert "log('risk_sell_journal_ready'" in now
 assert "const POLL_MS = Math.max(300" in now

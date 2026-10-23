@@ -7,7 +7,7 @@ test -f /etc/zl-prediction/deepseek5.env
 node=/opt/zl-prediction-node/bin/node
 test -x "$node"
 install -d -m 0755 /opt/zl-event10
-for f in server.mjs panel.html server.test.mjs;do
+for f in server.mjs manual-engine.mjs panel.html server.test.mjs;do
  curl -fsSL --retry 3 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/$f" -o "/opt/zl-event10/$f"
 done
 "$node" --check /opt/zl-event10/server.mjs
@@ -21,7 +21,7 @@ User=zl-pred
 Group=zl-pred
 EnvironmentFile=/etc/zl-prediction/deepseek5.env
 Environment=EVENT10_PORT=13020
-Environment=EVENT10_STATE_FILE=/var/lib/zl-event10/history.json
+Environment=EVENT10_STATE_FILE=/var/lib/zl-event10/manual-sessions-v2.json
 ExecStart=/opt/zl-prediction-node/bin/node /opt/zl-event10/server.mjs
 StateDirectory=zl-event10
 Restart=on-failure

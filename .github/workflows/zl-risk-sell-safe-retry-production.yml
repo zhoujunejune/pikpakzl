@@ -1,0 +1,55 @@
+name: Deploy guarded TP-SL retries after safe quiet window
+on:
+  push:
+    branches: [fix/risk-sell-safe-retry-20261023]
+    paths:
+      - .github/workflows/zl-risk-sell-safe-retry-production.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-risk-exits
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --check railway-diagnostic/risk-sell-retry.mjs
+      - run: node --test railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/risk-sell-retry.test.mjs railway-diagnostic/risk-sell-safe-retry.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Verify deploy guard and rollback
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          s=Path('prediction-bot-v1/deploy_risk_sell_safe_retry_20261023.py').read_text()
+          m=ast.parse(s)
+          sh=next(v.value.value for v in m.body if isinstance(v,ast.Assign)
+            and any(isinstance(t,ast.Name) and t.id=='REMOTE' for t in v.targets))
+          c=subprocess.run(['bash','-n'],input=sh,text=True,capture_output=True)
+          assert c.returncode==0,c.stderr
+          assert sh.index('trap rollback ERR')<sh.index('cp -p "$W/new-helper.mjs" "$helper"')
+          assert 'UNKNOWN_SELL_STILL_NEEDS_RECONCILIATION_ABORT_DEPLOY' in sh
+          assert 'NO_SAFE_DEPLOY_WINDOW_KEEP_OLD_EXECUTOR' in sh
+          assert 'RISK_SETTINGS_DRIFT' in sh
+          assert 'systemctl restart zl-prediction-trade.service' not in sh
+          assert 'systemctl restart zl-futures-bot-paper.service' not in sh
+          print('RISKRETRY_DEPLOY_SAFETY_PASSED=true')
+          PY
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Apply TP-SL safe retries only during quiet position window
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_risk_sell_safe_retry_20261023.py

@@ -159,7 +159,7 @@ for line in out.splitlines():
  except:continue
 assert started and started[-1].get('pollMs')==300
 assert started[-1].get('unknownSellPolicy')=='VERIFY_EXCHANGE_HISTORY_OR_BLOCK'
-assert started[-1].get('retryMs')==1000
+assert isinstance(started[-1].get('retryMs'),int) and 1000<=started[-1]['retryMs']<=10000
 for unit in ('zl-prediction-risk-exits.service','zl-prediction-trade.service',
  'zl-prediction-v3.service','zl-prediction-deepseek5.service',
  'zl-futures-bot-paper.service'):

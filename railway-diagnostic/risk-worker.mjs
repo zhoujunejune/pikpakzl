@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import {reconcileExactUnknownOrder} from './risk-sell-retry.mjs';
+import {classifySubmittedRiskSellOrder,safeToRetryUnfilledSubmitted} from './risk-sell-finality.mjs';
 
 const API = 'https://api.binance.com';
 const API_KEY = process.env.BINANCE_PREDICTION_API_KEY || '';
@@ -16,6 +17,8 @@ const POLL_MS = Math.max(300, Number(process.env.AUTO_RISK_POLL_MS || process.en
 const RETRY_MS = Math.max(1000, Number(process.env.AUTO_RISK_RETRY_MS || process.env.AUTO_TAKE_PROFIT_RETRY_MS || 1000));
 const SLOW_RETRY_MS = 5000; // prevent endless fast failures when exchange rejects requests
 const UNKNOWN_RECONCILE_MS = 10000; // never blindly repeat an ambiguous SELL
+const SUBMITTED_RECONCILE_MS = 5000;
+const SELL_PENDING_FILE = process.env.RISK_SELL_PENDING_FILE || '/var/lib/zl-prediction/risk-sell-pending-v1.json';
 const DEFAULT_SLIPPAGE_BPS = Number(process.env.AUTO_TAKE_PROFIT_SLIPPAGE_BPS || 1200);
 const DEFAULT_FEE_RATE_BPS = Number(process.env.AUTO_TAKE_PROFIT_FEE_RATE_BPS || 200);
 const SCOPE = String(process.env.AUTO_RISK_SCOPE || process.env.AUTO_TAKE_PROFIT_SCOPE || 'BTC_5M').toUpperCase();
@@ -28,6 +31,39 @@ let paymentCache = null;
 let paymentCacheAt = 0;
 const topicCache = new Map();
 const sellState = new Map();
+// Persist the unconfirmed SELL fence across worker restarts. A crash between
+// dispatch and the HTTP response is UNKNOWN, never a license to sell again.
+// The file is protected mode 0600 and updated by atomic rename.
+function persistPendingSellState(){
+  const outstanding=[...sellState].filter(([,v])=>
+    v?.statusUnknown || v?.submitted || v?.inFlight);
+  const temp=SELL_PENDING_FILE+'.tmp-'+process.pid;
+  try{
+    fs.writeFileSync(temp,JSON.stringify({schema:1,at:Date.now(),outstanding}),
+      {encoding:'utf8',mode:0o600,flag:'w'});
+    fs.renameSync(temp,SELL_PENDING_FILE);
+  }catch(err){
+    try{fs.unlinkSync(temp)}catch{}
+    throw err;
+  }
+}
+function restorePendingSellState(){
+  if(!fs.existsSync(SELL_PENDING_FILE))return;
+  const src=JSON.parse(fs.readFileSync(SELL_PENDING_FILE,'utf8'));
+  if(src?.schema!==1||!Array.isArray(src.outstanding)||
+     src.outstanding.length>200)throw Error('INVALID_PENDING_SELL_JOURNAL');
+  for(const row of src.outstanding){
+    if(!Array.isArray(row)||row.length!==2||
+       typeof row[0]!=='string'||!row[0]||!row[1]||typeof row[1]!=='object')
+      throw Error('CORRUPT_PENDING_SELL_JOURNAL');
+    const v=row[1];
+    if(v.inFlight){
+      v.inFlight=false;v.statusUnknown=true;v.submitted=false;
+    }
+    if(v.submitted||v.statusUnknown)sellState.set(row[0],v);
+  }
+}
+restorePendingSellState();
 // Read-only health output for the control panel. No trade inputs or decisions depend on it.
 const WORKER_HEALTH_FILE = '/tmp/risk-worker-health.json';
 const health = {
@@ -423,19 +459,23 @@ async function reconcileUnknownSell(wallet, position, state) {
     const retry=scheduleKnownFailure(tokenId,state,'EXACT_UNFILLED_REJECTED_SELL',
       'BINANCE_RECONCILED_REJECTION');
     sellState.set(tokenId,retry);
+    persistPendingSellState();
     log('risk_unknown_reconciled_rejected',{tokenId,autoRetryAfterMs:retry.retryAfterAt-now,
       freshQuoteRequired:true});
     return;
   }
+  // An uncorrelated token+timestamp is not proof this was OUR SELL.
   const match=sameSell.find(o=>
     reconcileExactUnknownOrder(o,{quoteId:state.quoteId,tokenId})
-      ==='ORDER_OBSERVED_DO_NOT_RETRY')||sameSell[0];
+      ==='ORDER_OBSERVED_DO_NOT_RETRY');
   if (match) {
     sellState.set(tokenId, {
       ...state, statusUnknown: false, submitted: true,
       orderId: String(match.orderId ?? '') || null, error: null,
+      lastStatusCheckAt:0,originalShares:state.originalShares??position.shares,
       resolvedAt: now,
     });
+    persistPendingSellState();
     log('risk_unknown_order_found', { tokenId, hadOrderId: Boolean(match.orderId) });
   } else {
     log('risk_unknown_reconcile_pending', {
@@ -443,6 +483,68 @@ async function reconcileUnknownSell(wallet, position, state) {
       retrySellBlocked: true,
     });
   }
+}
+
+// Confirm accepted SELLs independently. A returned orderId is NOT proof that
+// the exchange filled the order. A definitive zero-fill failure removes the
+// fence only if the exact orderId is confirmed and shares are unchanged.
+async function reconcileSubmittedSell(wallet,position,state){
+  const now=Date.now();
+  if(state.confirmedFilled)return;
+  if(now-Number(state.lastStatusCheckAt||0)<SUBMITTED_RECONCILE_MS)return;
+  const tokenId=String(position.tokenId||'');
+  const orderId=String(state.orderId||'');
+  if(!tokenId||!orderId){
+    log('risk_sell_finality_pending',{tokenId,reason:'NO_EXACT_ORDER_ID'});
+    return;
+  }
+  state.lastStatusCheckAt=now;
+  const history=await signedGet('/sapi/v1/w3w/wallet/prediction/order/history',
+    {walletAddress:wallet.walletAddress,offset:0,limit:100});
+  if(!history.ok){
+    log('risk_sell_finality_pending',{tokenId,reason:'ORDER_HISTORY_UNAVAILABLE',
+      httpStatus:history.status||null});
+    return;
+  }
+  const orders=Array.isArray(history.data?.orders)?history.data.orders:[];
+  const matches=orders.filter(x=>String(x?.orderId??'')===orderId);
+  if(matches.length!==1){
+    // Missing history may simply be replication delay; no retry permission.
+    log('risk_sell_finality_pending',{tokenId,reason:'EXACT_ORDER_NOT_YET_IN_HISTORY'});
+    return;
+  }
+  const kind=classifySubmittedRiskSellOrder(matches[0],orderId);
+  if(kind==='FILLED'){
+    sellState.set(tokenId,{...state,confirmedFilled:true,statusUnknown:false,
+      submitted:true,verifiedAt:now});
+    persistPendingSellState();
+    log('risk_sell_fill_confirmed',{tokenId,verifiedBy:'BINANCE_ORDER_HISTORY'});
+    return;
+  }
+  if(kind==='FAILED_EXPLICIT_ZERO'){
+    // An order can be FAILED in history while active API still says OPENING.
+    // Cross-check the active endpoint using documented exact orderId filter.
+    const active=await signedGet('/sapi/v1/w3w/wallet/prediction/order/list',
+      {walletAddress:wallet.walletAddress,orderId});
+    if(safeToRetryUnfilledSubmitted({historyResult:history,
+      activeResult:active,orderId,originalShares:state.originalShares,
+      currentShares:position.shares})){
+      const next=scheduleKnownFailure(tokenId,state,'BINANCE_SELL_FAILED_ZERO_FILL',
+        'POST_SUBMISSION_TERMINAL_FAILURE');
+      sellState.set(tokenId,next);
+      persistPendingSellState();
+      log('risk_sell_final_failed_retry_scheduled',{tokenId,
+        retryMs:next.retryAfterAt-now,originalOrderVerifiedFailed:true,
+        unchangedPosition:true,freshQuoteRequired:true});
+      return;
+    }
+    log('risk_sell_finality_pending',{tokenId,
+      reason:'FAILURE_UNCONFIRMED_BY_ACTIVE_OR_POSITION'});
+    return;
+  }
+  log('risk_sell_finality_pending',{tokenId,
+    reason:kind==='PARTIAL_OR_CONFLICT_BLOCK'?'PARTIAL_FILL_BLOCKS_RETRY':
+      kind==='PENDING'?'ORDER_STILL_PENDING':'ORDER_STATE_UNVERIFIED'});
 }
 
 async function sellPosition(wallet, payment, position, topic, targets, initialQuoteResult, initialEvaluation) {
@@ -486,6 +588,13 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
     }
 
     const sellRequestAt = Date.now();
+    // Atomic preflight fence: if the process dies during Binance POST, a
+    // future worker must reconcile before ever sending another SELL.
+    sellState.set(tokenId,{...previous,inFlight:false,submitted:false,
+      statusUnknown:true,sellRequestAt,quoteId:quoteResult.quote.quoteId,
+      originalShares:position.shares,lastAttemptAt:sellRequestAt,
+      lastReconciledAt:0});
+    persistPendingSellState(); // must succeed BEFORE sending a real SELL
     const placed = await placeSell(wallet, payment, quoteResult);
     if (!placed.ok) {
       if (placed.statusUnknown) {
@@ -502,6 +611,7 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
           orderId: null,
           error: placed.error,
         });
+        persistPendingSellState();
         log('risk_sell_unknown', {
           tokenId,
           reason: evaluation.reason,
@@ -513,6 +623,7 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
         return;
       }
       sellState.set(tokenId, scheduleKnownFailure(tokenId, previous, placed.error, 'SELL_POST_KNOWN_FAILURE'));
+      persistPendingSellState();
       log('risk_sell_failed', {
         tokenId,
         reason: evaluation.reason,
@@ -532,9 +643,11 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       retryAfterAt: 0,
       submittedAt: Date.now(),
       lastAttemptAt: Date.now(),
-      orderId: placed.orderId,
+      orderId: placed.orderId,quoteId:quoteResult.quote.quoteId,
+      originalShares:position.shares,lastStatusCheckAt:0,confirmedFilled:false,
       error: null,
     });
+    persistPendingSellState();
     const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;
     log('risk_sell_submitted', {
       tokenId,
@@ -553,17 +666,23 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       sellRequestAt: Date.now(), lastAttemptAt: Date.now(), lastReconciledAt: 0,
       quoteId:initialQuoteResult?.quote?.quoteId, originalShares:position.shares,
       error: String(e?.message || e).slice(0,160) });
+    try{persistPendingSellState()}catch(persistError){
+      log('risk_sell_state_persist_failed',{tokenId,
+        reason:'KEEP_UNKNOWN_FENCE_ON_DISK_AND_STOP_AUTOMATED_RESELL'});
+    }
     log('risk_sell_exception', { tokenId, error: e?.message || String(e) });
   }
 }
 
 function cleanupSellState(activeTokenIds) {
   const now = Date.now();
+  let removed=false;
   for (const [tokenId, state] of sellState.entries()) {
     if (activeTokenIds.has(tokenId)) continue;
     const age = now - Number(state.submittedAt || state.lastAttemptAt || 0);
-    if (age > STATE_CLEANUP_MS) sellState.delete(tokenId);
+    if (age > STATE_CLEANUP_MS){sellState.delete(tokenId);removed=true}
   }
+  if(removed)persistPendingSellState();
 }
 
 async function tick() {
@@ -615,6 +734,12 @@ async function tick() {
         catch (e) { log('risk_unknown_reconcile_error', {
           tokenId, error: String(e?.message || e).slice(0,100), retrySellBlocked: true
         }); }
+        continue;
+      }
+      if(state?.submitted){
+        try{await reconcileSubmittedSell(wallet,position,state)}
+        catch(e){log('risk_sell_finality_pending',{tokenId,
+          reason:'ORDER_STATUS_RECONCILIATION_ERROR',retrySellBlocked:true})}
         continue;
       }
       if (stateBlocksSell(state)) continue;
@@ -689,6 +814,8 @@ log('risk_worker_started', {
   retryMs: RETRY_MS,
   retrySlowAfterFailures: 3,
   unknownSellPolicy: 'VERIFY_EXCHANGE_HISTORY_OR_BLOCK',
+  acceptedSellPolicy:'RECHECK_BINANCE_ORDER_ID_TERMINAL_STATUS_AND_RETRY_ONLY_ZERO_FILL',
+  pendingSellRecovery:'ATOMIC_LOCAL_JOURNAL_BEFORE_POST',
   scope: SCOPE,
   hasCredentials: Boolean(API_KEY && API_SECRET),
   hasWalletAddress: Boolean(ENV_WALLET_ADDRESS),

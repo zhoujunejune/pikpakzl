@@ -4,6 +4,7 @@ on:
     branches: [fix/risk-sell-journal-erofs-20261023]
     paths:
       - .github/workflows/zl-risk-erofs-production.yml
+      - prediction-bot-v1/deploy_risk_erofs_repair_20261023.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

@@ -594,7 +594,20 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       statusUnknown:true,sellRequestAt,quoteId:quoteResult.quote.quoteId,
       originalShares:position.shares,lastAttemptAt:sellRequestAt,
       lastReconciledAt:0});
-    persistPendingSellState(); // must succeed BEFORE sending a real SELL
+    // If saving the PRE-POST fence fails, no Binance SELL has been sent.
+    // This is a *known local failure*, not an ambiguous exchange execution.
+    // Retry the entire TP/SL evaluation after the journal is writable again.
+    try {
+      persistPendingSellState(); // must succeed BEFORE sending a real SELL
+    } catch (journalErr) {
+      const known = scheduleKnownFailure(tokenId, previous,
+        'PENDING_SELL_JOURNAL_UNAVAILABLE','PRE_POST_JOURNAL_WRITE');
+      sellState.set(tokenId, known);
+      log('risk_sell_not_submitted_journal_unavailable',{
+        tokenId, code:String(journalErr?.code || 'UNKNOWN_LOCAL_IO_ERROR').slice(0,30),
+        failedBeforeExchangePost:true,retryMs:known.retryAfterAt-Date.now()});
+      return;
+    }
     const placed = await placeSell(wallet, payment, quoteResult);
     if (!placed.ok) {
       if (placed.statusUnknown) {

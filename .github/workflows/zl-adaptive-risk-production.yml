@@ -1,0 +1,62 @@
+name: Guarded deploy adaptive TP SL near-target speed Alibaba
+on:
+  push:
+    branches: [fix/risk-adaptive-fast-confirm-20261023]
+    paths:
+      - .github/workflows/zl-adaptive-risk-production.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-risk-exits
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --test railway-diagnostic/risk-adaptive-fast-confirm.test.mjs railway-diagnostic/risk-prepost-journal-erofs.test.mjs railway-diagnostic/risk-sell-finality.test.mjs railway-diagnostic/risk-sell-postsubmit-recovery.test.mjs railway-diagnostic/risk-sell-safe-retry.test.mjs railway-diagnostic/risk-sell-retry.test.mjs railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Validate shell, embedded Python and guard rails
+        run: |
+          python - <<'PY'
+          import ast,subprocess,re
+          from pathlib import Path
+          src=Path('prediction-bot-v1/deploy_adaptive_risk_20261023.py').read_text()
+          mod=ast.parse(src)
+          sh=next(v.value.value for v in mod.body if isinstance(v,ast.Assign)
+            for t in v.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          r=subprocess.run(['bash','-n'],input=sh,text=True,capture_output=True)
+          assert r.returncode==0,r.stderr
+          blocks=re.findall(r"python3(?: - [^\n]*)? <<'PY'\n(.*?)\nPY",sh,re.S)
+          assert len(blocks)>=3,len(blocks)
+          for idx,block in enumerate(blocks):compile(block,f'safety-script-{idx}','exec')
+          for required in ('NO_VERIFIED_EMPTY_POSITION_WINDOW_DEPLOY_ABORTED',
+           'PENDING_UNSETTLED_SELL_DO_NOT_RESTART',
+           'ADAPTIVE_RELEASE_EXACT_LIVE_BASELINE_CONFIRMED',
+           'ADAPTIVE_RELEASE_DURABLE_SELL_JOURNAL_WRITABLE=true',
+           'ADAPTIVE_RELEASE_ROLLBACK_NOT_SAFE_PENDING_SELL=true',
+           "'tab':'ONGOING'",
+           'USER_FOLLOW_SWITCH_CHANGED'):
+           assert required in sh,required
+          for forbidden in ('systemctl restart zl-prediction-trade',
+           'systemctl restart zl-futures-bot','place-order-bundle'):
+           assert forbidden not in sh,forbidden
+          print('ADAPTIVE_RELEASE_DEPLOY_SCRIPT_VALID=true')
+          PY
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Check actual zero-position safety window and deploy only isolated risk worker
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_adaptive_risk_20261023.py

@@ -123,6 +123,10 @@ journal=subprocess.run(['journalctl','-u','zl-prediction-risk-exits.service',
  capture_output=True,text=True,timeout=22).stdout
 types=collections.Counter()
 checks=[];exits=[]
+# Infer configured stop from each position's observed quote-derived target
+# before SELL; no order IDs, token IDs, or wallet fields leave the server.
+lastStopByToken={}
+stopStats=collections.defaultdict(list)
 for line in journal.splitlines():
  try:
   z=json.loads(line)
@@ -131,6 +135,13 @@ for line in journal.splitlines():
   if not str(event).startswith('risk_'):continue
  except:continue
  types[event]+=1
+ if event=='risk_check':
+  try:
+   cost=float(z.get('totalCost'));sl=float(z.get('slTarget'))
+   if cost>0 and sl>=0 and z.get('tokenId'):
+    stopPct=round((1-sl/cost)*100)
+    if 1<=stopPct<=100:lastStopByToken[str(z['tokenId'])]=stopPct
+  except Exception:pass
  if event=='risk_check':
   try:
    cost=float(z.get('totalCost'))
@@ -145,7 +156,12 @@ for line in journal.splitlines():
  if event=='risk_sell_submitted':
   try:
    cost=float(z['totalCost']);amt=float(z['currentSellAmount'])
-   if cost>0:exits.append({'reason':z.get('reason'),'grossExpectedReturnPct':round((amt/cost-1)*100,2)})
+   if cost>0:
+    stop=lastStopByToken.get(str(z.get('tokenId')))
+    rec={'reason':z.get('reason'),'grossExpectedReturnPct':round((amt/cost-1)*100,2),
+     'stopSetting':stop}
+    exits.append(rec)
+    stopStats[str(stop) if stop is not None else 'UNKNOWN'].append(rec)
   except Exception:pass
 print('TPWIN_RISK_EVENT_COUNTS',dict(types))
 print('TPWIN_RISK_QUOTE_CHECKS',json.dumps({
@@ -157,6 +173,14 @@ print('TPWIN_RISK_SELL_SUBMITTED',json.dumps({
  'byReason':dict(collections.Counter(x['reason'] for x in exits)),
  'quotedGrossReturnsPct':summ([x['grossExpectedReturnPct'] for x in exits]),
  'detailLast12':exits[-12:]},ensure_ascii=False))
+print('TPWIN_RISK_EXIT_BY_STOP_SETTING',json.dumps({
+ key:{'submittedN':len(v),
+ 'tpSubmits':sum(x['reason']=='TAKE_PROFIT' for x in v),
+ 'slSubmits':sum(x['reason']=='STOP_LOSS' for x in v),
+ 'quotedGrossReturnPct':summ([x['grossExpectedReturnPct'] for x in v]),
+ 'tpQuoteReturnPct':summ([x['grossExpectedReturnPct'] for x in v if x['reason']=='TAKE_PROFIT']),
+ 'slQuoteReturnPct':summ([x['grossExpectedReturnPct'] for x in v if x['reason']=='STOP_LOSS'])}
+ for key,v in sorted(stopStats.items())},ensure_ascii=False))
 print('TPWIN_AUDIT_COMPLETE=true')
 PY
 """

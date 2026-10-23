@@ -46,6 +46,26 @@ for line in logs.splitlines():
    counts[event]=counts.get(event,0)+1
  except:continue
 print('SELLRETRY_PREFLIGHT_LAST60_RISK_EVENTS',json.dumps(counts))
+
+recent=subprocess.run(['journalctl','-u','zl-prediction-risk-exits.service',
+ '--since','15 minutes ago','-o','cat','--no-pager','-n','800'],
+ capture_output=True,text=True,timeout=11).stdout
+started=[]
+for line in recent.splitlines():
+ try:
+  q=json.loads(line)
+  if q.get('event')=='risk_worker_started':
+   started.append({k:q.get(k) for k in ('pollMs','retryMs','unknownSellPolicy',
+     'takeProfitPercent','stopLossPercent','retrySlowAfterFailures')})
+ except:continue
+print('SELLRETRY_PREFLIGHT_WORKER_STARTS',json.dumps(started[-7:],ensure_ascii=False))
+print('SELLRETRY_PREFLIGHT_WORKER_SOURCE_RETRY_POLICY',
+ {'hasNewReconcile': 'reconcileUnknownSell(' in a,
+  'hasRetryScheduler':'scheduleKnownFailure(' in a,
+  'hasNewHelperImport':"from './risk-sell-retry.mjs'" in a})
+print('SELLRETRY_PREFLIGHT_UNIT_CURRENT',subprocess.run(
+ ['systemctl','is-active','zl-prediction-risk-exits.service'],
+ capture_output=True,text=True,timeout=5).stdout.strip())
 print('SELLRETRY_PREFLIGHT_READONLY_COMPLETE=true')
 PY
 """

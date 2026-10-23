@@ -65,6 +65,7 @@ for r in sorted(events):
  if not isinstance(code,(int,str)) or len(str(code))>14:code=None
  out.append({'round':label(r),'failedAt':label(failures[-1][0]),
   'reasonCategory':cls(last),'httpStatus':last.get('httpStatus'),
+  'serverMessageRedacted':re.sub(r'[0-9]+','#',re.sub(r'\b[A-Za-z0-9_]{24,}\b','[REDACTED]',str(last.get('error') or '')[:180])),
   'exchangeCode':code,'eventCounts':dict(outcomes)})
 print('QUOTE_FAILURE_AUDIT_STATUS',json.dumps({'journalOk':p.returncode==0,
  'checkedLocal':datetime.now(tz).isoformat(),'failedRounds':len(out),

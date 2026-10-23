@@ -1,0 +1,56 @@
+name: Repair TP SL state journal read-only mount on Alibaba safely
+on:
+  push:
+    branches: [fix/risk-sell-journal-erofs-20261023]
+    paths:
+      - .github/workflows/zl-risk-erofs-production.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-risk-exits
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --test railway-diagnostic/risk-prepost-journal-erofs.test.mjs railway-diagnostic/risk-sell-finality.test.mjs railway-diagnostic/risk-sell-postsubmit-recovery.test.mjs railway-diagnostic/risk-sell-safe-retry.test.mjs railway-diagnostic/risk-sell-retry.test.mjs railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Validate protected host patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          m=ast.parse(Path('prediction-bot-v1/deploy_risk_erofs_repair_20261023.py').read_text())
+          cmd=next(z.value.value for z in m.body if isinstance(z,ast.Assign)
+            for t in z.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          p=subprocess.run(['bash','-n'],input=cmd,text=True,capture_output=True)
+          assert p.returncode==0,p.stderr
+          for marker in (
+            'ReadWritePaths=/var/lib/zl-prediction/rounds /var/lib/zl-prediction/risk-sell-recovery',
+            'FOLLOW_ENABLED_DO_NOT_DISRUPT_REAL_POSITION',
+            'EROFS_ROLLBACK_STARTED=true',
+            'NEW_WORKER_NOT_WRITABLE_IN_SANDBOX_AUTOROLLBACK',
+            'EROFS_REPAIR_PRODUCTION_SUCCESS=true'):
+            assert marker in cmd,marker
+          assert 'systemctl restart zl-prediction-trade.service' not in cmd
+          assert 'systemctl restart zl-futures-bot-paper.service' not in cmd
+          print('EROFS_DEPLOY_SAFETY_CHECKS_PASSED=true')
+          PY
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Fix only prediction TP SL systemd writable journal, no trading changes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_risk_erofs_repair_20261023.py

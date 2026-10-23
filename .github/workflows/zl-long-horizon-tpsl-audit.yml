@@ -1,0 +1,40 @@
+name: Read-only seven day TP SL risk quote outcomes and parameter analysis
+on:
+  push:
+    branches: [audit/long-horizon-tpsl-20261023]
+    paths:
+      - .github/workflows/zl-long-horizon-tpsl-audit.yml
+      - prediction-bot-v1/audit_long_horizon_risk_quotes_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate read-only shell and Python
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          s=Path('prediction-bot-v1/audit_long_horizon_risk_quotes_20261023.py').read_text()
+          a=ast.parse(s)
+          sh=next(n.value.value for n in a.body if isinstance(n,ast.Assign)
+             for t in n.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=sh,text=True).returncode==0
+          start=sh.index("python3 - <<'PY'")+len("python3 - <<'PY'")
+          compile(sh[start:sh.index("\nPY",start)],'<read only>','exec')
+          assert 'systemctl restart' not in sh
+          assert 'place-order-bundle' not in sh
+          assert 'BINANCE_PREDICTION_API_SECRET' not in sh
+          print('LONGTP_READONLY_SCRIPT_VALID=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Aggregate seven day historical TP SL from on-host risk journal
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/audit_long_horizon_risk_quotes_20261023.py

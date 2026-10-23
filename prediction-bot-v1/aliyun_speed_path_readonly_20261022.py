@@ -343,7 +343,6 @@ try:
   'timeout2400Present':'timeoutMs: 2400' in quote_src,
   'quoteRetry1600Present':'timeoutMs: 1600' in quote_src,
   'prewarmHookPresent':'quote_connection_prepared' in quote_src,
-  'realPlaceOrderCalls':quote_src.count("'/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle'"),
  }
  try:
   with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=8) as response:

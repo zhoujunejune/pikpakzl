@@ -131,9 +131,9 @@ for i in range(140):
  if 100000<phase<230000 and not recent_sell():
   if empty_twice():
    c,t=status()
+   saved=json.loads((w/'settings.json').read_text())
    if (all(c.get(k)==v for k,v in cfg.items())
-       and t.get('enabled')==(w.joinpath('settings.json') and
-         json.loads((w/'settings.json').read_text())['followEnabled'])
+       and t.get('enabled')==saved['followEnabled']
        and no_pending() and not recent_sell()):
     found=True
     break

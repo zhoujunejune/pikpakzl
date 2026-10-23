@@ -12,6 +12,7 @@ class NavigationTests(unittest.TestCase):
         html='<html><body><nav><a href="/dashboard/">合约机器人</a><a href="/prediction/">预测机器人</a><a href="/api-keys/">交易所 API 管理</a></nav><button id="live-toggle">开关</button></body></html>'
         out=m.decorate(html)
         self.assertIn('href="/futures-lab/"',out)
+        self.assertIn('href="/event10/"',out)
         self.assertIn('live-toggle',out)
         self.assertIn('href="/prediction/"',out)
         self.assertEqual(out.count('/futures-lab/'),1)
@@ -20,6 +21,7 @@ class NavigationTests(unittest.TestCase):
         html='<html><body style="margin:0"><div><button>开始跟随</button><a href="/api-keys/">API</a></div></body></html>'
         out=m.decorate(html,prediction=True)
         self.assertIn(m.MAIN+'/futures-lab/',out)
+        self.assertIn(m.MAIN+'/event10/',out)
         self.assertIn(m.MAIN+'/dashboard/',out)
         self.assertIn(m.PRED+'/',out)
         self.assertIn('开始跟随',out)

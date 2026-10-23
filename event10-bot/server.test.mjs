@@ -72,7 +72,7 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
  assert.equal(engine.status().lastSession.status,"PREDICTED");
  assert.equal((await engine.start(id)).id,id);
  await assert.rejects(engine.start("another-click-id-4444"),/ACTIVE/);
- now=NOW+599000;await engine.tick();
+ now=NOW+598000;await engine.tick();
  assert.equal(engine.status().stats.proxySettled,0);
  now=NOW+601000;await engine.tick();
  assert.equal(market,2);

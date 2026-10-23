@@ -835,6 +835,17 @@ log('risk_worker_started', {
   hasWalletId: Boolean(ENV_WALLET_ID),
 });
 
+// Startup health is not complete until the SAME sandboxed Node worker has
+// proven it can atomically update the durable SELL-state journal.
+try{
+  persistPendingSellState();
+  log('risk_sell_journal_ready',{writable:true,restoredOutstanding:sellState.size});
+}catch(e){
+  log('risk_sell_journal_unavailable',{code:String(e?.code||'LOCAL_IO_ERROR').slice(0,32),
+    ordersBlocked:true});
+  process.exit(75);
+}
+
 const healthTimer = setInterval(emitHealth, 2000);
 healthTimer.unref();
 emitHealth();

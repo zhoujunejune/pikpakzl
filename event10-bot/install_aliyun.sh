@@ -36,5 +36,27 @@ EOF
 systemctl daemon-reload
 systemctl enable --now zl-event10-deepseek >/dev/null
 systemctl restart zl-event10-deepseek
-curl --retry 5 --retry-delay 2 -fsS --max-time 5 http://127.0.0.1:13020/api/status |
- python3 -c 'import json,sys;x=json.load(sys.stdin);assert x["configured"] and not x["autoTradingEnabled"] and not x["executionAvailable"];print("EVENT10_BACKEND_READY=true")'
+ready=0
+for i in $(seq 1 20);do
+  if curl -fsS --max-time 4 http://127.0.0.1:13020/api/status -o /tmp/zl-event10-status.json 2>/dev/null;then
+    ready=1
+    break
+  fi
+  sleep 2
+done
+if test "$ready" -ne 1;then
+  echo EVENT10_STARTUP_DIAGNOSTICS
+  systemctl status zl-event10-deepseek --no-pager -l || true
+  journalctl -u zl-event10-deepseek -n 25 --no-pager -o cat || true
+  exit 41
+fi
+python3 - <<'PY'
+import json
+with open('/tmp/zl-event10-status.json') as f:
+ x=json.load(f)
+assert x['configured'] is True, 'EVENT10_DEEPSEEK_NOT_CONFIGURED'
+assert x['autoTradingEnabled'] is False and x['executionAvailable'] is False
+print('EVENT10_BACKEND_READY=true')
+print('EVENT10_PROVIDER_MODEL='+str(x['providerModel']))
+PY
+rm -f /tmp/zl-event10-status.json

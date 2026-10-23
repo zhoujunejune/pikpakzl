@@ -39,6 +39,22 @@ const ema=(a,n)=>{
   for(const v of a.slice(n))value=value+(v-value)*k;
   return value;
 };
+function macd(a){
+  if(a.length<35)return null;
+  const diffs=[];
+  for(let i=25;i<a.length;i++)diffs.push(ema(a.slice(0,i+1),12)-ema(a.slice(0,i+1),26));
+  if(diffs.length<9)return null;
+  const line=diffs.at(-1),signal=ema(diffs,9);
+  return {line:round(line,5),signal:round(signal,5),histogram:round(line-signal,5)};
+}
+function atr(rows,n=14){
+  const last=rows.slice(-(n+1));let total=0;
+  for(let i=1;i<last.length;i++){
+    const cur=last[i],prev=last[i-1];
+    total+=Math.max(cur.h-cur.l,Math.abs(cur.h-prev.c),Math.abs(cur.l-prev.c));
+  }
+  return round(total/n,3);
+}
 export function buildSnapshot(data, now) {
   const price=checkedTick(data,now);
   const one=candles(data,"1m",60000,now);
@@ -52,6 +68,8 @@ export function buildSnapshot(data, now) {
   const highest=Math.max(...last20.map(x=>x.h)),lowest=Math.min(...last20.map(x=>x.l));
   return {...price,indicators:{
     rsi1m14:round(rsi(c1),2),rsi5m14:round(rsi(c5),2),
+    macd1m:macd(c1),macd5m:macd(c5),
+    atr1m14:atr(one),atr5m14:atr(five),
     ema1m9:round(ema(c1,9),2),ema1m21:round(ema(c1,21),2),
     ema5m9:round(ema(c5,9),2),ema5m21:round(ema(c5,21),2),
     momentum1m5Pct:round((c1.at(-1)/c1.at(-6)-1)*100),

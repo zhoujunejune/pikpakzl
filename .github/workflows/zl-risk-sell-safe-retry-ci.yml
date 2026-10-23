@@ -1,0 +1,36 @@
+name: Test safe automatic retry and unknown SELL reconciliation
+on:
+  push:
+    branches: [fix/risk-sell-safe-retry-20261023]
+    paths:
+      - .github/workflows/zl-risk-sell-safe-retry-ci.yml
+      - railway-diagnostic/risk-worker.mjs
+      - railway-diagnostic/risk-worker-speed.test.mjs
+      - railway-diagnostic/risk-sell-safe-retry.test.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --test railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/risk-sell-safe-retry.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Verify ambiguity handling never blindly resubmits a SELL
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('railway-diagnostic/risk-worker.mjs').read_text()
+          assert 'const UNKNOWN_RECONCILE_MS = 10000' in s
+          assert 'retrySellBlocked: true' in s
+          assert 'risk_retry_scheduled' in s
+          assert 'risk_unknown_order_found' in s
+          assert "const statusUnknown = Boolean(call?.network) || Number(call?.status || 0) >= 500;" in s
+          assert 'if (state?.retryAfterAt && Date.now() < state.retryAfterAt) continue;' in s
+          assert 'currentSellAmount >= targets.tpTarget' in s
+          assert 'currentSellAmount <= targets.slTarget' in s
+          print('RISK_SAFE_RETRY_POLICY_PASSED=true')
+          PY

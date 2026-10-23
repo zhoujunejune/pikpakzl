@@ -54,7 +54,7 @@ end=s.index('\nfunction publicPending()',start)
 sub=s[start:end]
 old="const quoteCall = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/get-quote', quoteBody);"
 assert sub.count(old)==1
-new="""let quoteCall = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/get-quote',
+new='''let quoteCall = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/get-quote',
     quoteBody, {timeoutMs: 2400});
   // ZL_QUOTE_SPEED_20261023: only the non-money-moving QUOTE may retry.
   // Never retry on HTTP 418/429/451, explicit rejection or unknown order result.
@@ -65,13 +65,13 @@ new="""let quoteCall = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/ge
       round:pendingAction.round, stage:'quote_only', elapsedMs:Date.now()-startedAt}));
     quoteCall = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/get-quote',
       quoteBody, {timeoutMs: 1600});
-  }"""
+  }'''
 sub=sub.replace(old,new)
 s=s[:start]+sub+s[end:]
 
 marker='setInterval(() => refreshLastOrderStatus(false), 2500);'
 assert s.count(marker)==1
-warm="""// ZL_QUOTE_SPEED_20261023: one public Binance time ping before each new round.
+warm='''// ZL_QUOTE_SPEED_20261023: one public Binance time ping before each new round.
 // Reuse the shared Node fetch connection; no credentials, quote or order request.
 let lastQuoteWarmRound=0;
 setInterval(()=>{
@@ -87,7 +87,7 @@ setInterval(()=>{
     .catch(e=>console.log(JSON.stringify({event:'quote_connection_prewarm_failed',
       round:next,reason:String(e?.name||'NETWORK').slice(0,35)})));
 },200);
-"""
+'''
 s=s.replace(marker,marker+'\n'+warm)
 p.write_text(s)
 

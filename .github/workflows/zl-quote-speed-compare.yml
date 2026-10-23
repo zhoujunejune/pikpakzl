@@ -1,0 +1,40 @@
+name: Compare live Alibaba quote speed before and after deployment (read-only)
+on:
+  push:
+    branches: [audit/aliyun-speed-path-20261022]
+    paths:
+      - .github/workflows/zl-quote-speed-compare.yml
+      - prediction-bot-v1/aliyun_quote_speed_compare_readonly_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate read-only audit
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          p=Path('prediction-bot-v1/aliyun_quote_speed_compare_readonly_20261023.py')
+          tree=ast.parse(p.read_text())
+          remote=next(n.value.value for n in tree.body if isinstance(n,ast.Assign)
+            for t in n.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=remote,text=True).returncode==0
+          assert 'systemctl restart' not in remote
+          assert 'place-order-bundle' not in remote
+          start=remote.index("python3 - <<'PY'")+len("python3 - <<'PY'")
+          end=remote.index('\nPY',start)
+          compile(remote[start:end],'<quote latency compare>','exec')
+          print('QUOTESPEED_READONLY_VERIFIED=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Compare true production signal quote submit latencies on Alibaba
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_quote_speed_compare_readonly_20261023.py

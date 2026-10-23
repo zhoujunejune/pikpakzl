@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import {reconcileExactUnknownOrder} from './risk-sell-retry.mjs';
 
 const API = 'https://api.binance.com';
 const API_KEY = process.env.BINANCE_PREDICTION_API_KEY || '';
@@ -406,12 +407,29 @@ async function reconcileUnknownSell(wallet, position, state) {
   const rows = [history, active].flatMap(r => r.ok && Array.isArray(r.data?.orders) ? r.data.orders : []);
   const tokenId = String(position.tokenId || '');
   const since = state.sellRequestAt || state.submittedAt || state.lastAttemptAt;
-  const match = rows.find(o => {
+  const sameSell = rows.filter(o => {
     const token = String(o?.tokenId ?? o?.token?.tokenId ?? o?.marketTokenId ?? '');
     const side = String(o?.side ?? o?.tradeSide ?? '').toUpperCase();
     const t = parseOrderTimestamp(o);
     return token === tokenId && side === 'SELL' && t != null && t >= since - 2000 && t <= now + 2000;
   });
+  // An exact Binance record proving terminal rejection with ZERO filled shares
+  // can be safely re-evaluated. An absent order or vague token/time match cannot.
+  const exactRejected=sameSell.some(o=>reconcileExactUnknownOrder(o,{
+    quoteId:state.quoteId,tokenId})==='REJECTED_NO_FILL_CAN_REEVALUATE');
+  const sameShares=Number.isFinite(Number(state.originalShares))&&
+    Number(position.shares)===Number(state.originalShares);
+  if(exactRejected&&sameShares&&history.ok&&active.ok){
+    const retry=scheduleKnownFailure(tokenId,state,'EXACT_UNFILLED_REJECTED_SELL',
+      'BINANCE_RECONCILED_REJECTION');
+    sellState.set(tokenId,retry);
+    log('risk_unknown_reconciled_rejected',{tokenId,autoRetryAfterMs:retry.retryAfterAt-now,
+      freshQuoteRequired:true});
+    return;
+  }
+  const match=sameSell.find(o=>
+    reconcileExactUnknownOrder(o,{quoteId:state.quoteId,tokenId})
+      ==='ORDER_OBSERVED_DO_NOT_RETRY')||sameSell[0];
   if (match) {
     sellState.set(tokenId, {
       ...state, statusUnknown: false, submitted: true,
@@ -477,6 +495,8 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
           statusUnknown: true,
           submittedAt: Date.now(),
           sellRequestAt,
+          quoteId:quoteResult.quote.quoteId,
+          originalShares:position.shares,
           lastAttemptAt: Date.now(),
           lastReconciledAt: 0,
           orderId: null,
@@ -531,6 +551,7 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
     // Unknown outcome may already have sold on Binance: never blindly resend.
     sellState.set(tokenId, { inFlight: false, submitted: false, statusUnknown: true,
       sellRequestAt: Date.now(), lastAttemptAt: Date.now(), lastReconciledAt: 0,
+      quoteId:initialQuoteResult?.quote?.quoteId, originalShares:position.shares,
       error: String(e?.message || e).slice(0,160) });
     log('risk_sell_exception', { tokenId, error: e?.message || String(e) });
   }

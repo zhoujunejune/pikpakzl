@@ -154,6 +154,44 @@ print('LONGTP_RECENT_SELL_SUMMARY',json.dumps([{
  'nSubmitted':len(p['submits']),'postsubmitFailures':p['retries'],
  'fillConfirmedByHistory':p['fills']>0}
  for tok,p,last in latest],ensure_ascii=False))
+# Important: paired historical quote replay with complete observed exits only.
+# Compare strategy variations on the SAME original positions (no era bias).
+def sim(p,last,tpPct,slPct):
+ for q in sorted((q for q in p['quotes'] if q['at']<=last['at']),key=lambda q:q['at']):
+  tp=q['cost']+(q['tp']-q['cost'])*tpPct/35
+  sl=q['cost']*(1-slPct/100)
+  if q['q']>=tp:return ('TP',(q['q']/q['cost']-1)*100)
+  if q['q']<=sl:return ('SL',(q['q']/q['cost']-1)*100)
+ return None
+candidatePairs=((25,25),(25,30),(30,30),(30,35),(35,25),(35,30),(35,35),(35,40))
+segments=[
+ ('CURRENT35_FIRST25',sorted(bySetting.get('35',[]),key=lambda t:t[1]['at'])[:25]),
+ ('CURRENT35_MIDDLE25',sorted(bySetting.get('35',[]),key=lambda t:t[1]['at'])[25:50]),
+ ('CURRENT35_LATEST25',sorted(bySetting.get('35',[]),key=lambda t:t[1]['at'])[50:75]),
+ ('ALL35_STOP',bySetting.get('35',[])),
+ ('ALL55_STOP',bySetting.get('55',[])),
+ ('ALL70_STOP',bySetting.get('70',[])),
+ ('COMBINED_35_55_70',bySetting.get('35',[])+bySetting.get('55',[])+bySetting.get('70',[]))
+]
+for name,arr in segments:
+ out={}
+ for tpPct,slPct in candidatePairs:
+  results=[sim(p,last,tpPct,slPct) for p,last in arr if p['quotes']]
+  matched=[x for x in results if x]
+  vals=[x[1] for x in matched]
+  out[f'{tpPct}/{slPct}']={'n':len(matched),'censored':len(results)-len(matched),
+   'tp':sum(x[0]=='TP' for x in matched),
+   'sl':sum(x[0]=='SL' for x in matched),
+   'meanGrossQuotePct':round(statistics.mean(vals),3) if vals else None}
+ print('LONGTP_PAIRED_VALIDATION',name,json.dumps(out,ensure_ascii=False))
+# Stop overshoot: a -35% stop trigger is not guaranteed a -35% fill.
+overshoot=collections.defaultdict(list)
+for setting,arr in bySetting.items():
+ for p,last in arr:
+  if last['reason']=='STOP_LOSS' and setting.isdigit():
+   overshoot[setting].append(-float(setting)-last['grossReturnPct'])
+for setting,a in sorted(overshoot.items()):
+ print('LONGTP_STOP_OVERSHOOT_PCTPOINTS',setting,stat(a))
 print('LONGTP_COMPARISON_COMPLETE=true')
 PY
 """

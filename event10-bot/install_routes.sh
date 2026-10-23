@@ -63,7 +63,7 @@ import urllib.request
 for uri,marker in (
  ("http://127.0.0.1:13019/dashboard/",'href="/event10/"'),
  ("http://127.0.0.1:13019/",'/event10/'),
- ("http://127.0.0.1:13020/",'真实自动下单不可用')
+ ("http://127.0.0.1:13020/",'锁定当前参考价并让 DeepSeek 分析')
 ):
  with urllib.request.urlopen(uri,timeout=12) as r:
   assert r.status==200 and marker in r.read().decode('utf-8'),uri

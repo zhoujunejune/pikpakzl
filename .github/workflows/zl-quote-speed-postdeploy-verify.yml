@@ -1,0 +1,38 @@
+name: Verify deployed quote-speed patch on Alibaba (read only)
+on:
+  push:
+    branches: [audit/aliyun-speed-path-20261022]
+    paths:
+      - .github/workflows/zl-quote-speed-postdeploy-verify.yml
+      - prediction-bot-v1/aliyun_quote_speed_postdeploy_verify.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate strict read-only audit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          p=Path('prediction-bot-v1/aliyun_quote_speed_postdeploy_verify.py')
+          tree=ast.parse(p.read_text())
+          remote=next(x.value.value for x in tree.body if isinstance(x,ast.Assign)
+            for y in x.targets if isinstance(y,ast.Name) and y.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=remote,text=True).returncode==0
+          assert 'systemctl restart' not in remote
+          assert 'place-order-bundle' not in remote
+          assert 'secrets.' not in remote
+          print('QUOTE_SPEED_READONLY_GUARD_PASS=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Verify live Alibaba quote patch and health without mutation
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_quote_speed_postdeploy_verify.py

@@ -20,6 +20,7 @@ FUTURES_HTML = "http://127.0.0.1:10000/dashboard/"
 PREDICTION_HTML = "http://127.0.0.1:13001/"
 LIMIT = 2_000_000
 LAB_LINK = '<a href="/futures-lab/" aria-label="影子模型自动训练">影子模型 · 自动训练</a>'
+EVENT10_LINK = '<a href="/event10/" aria-label="DeepSeek 10分钟事件合约">事件合约 · EVENT10</a>'
 PRED_NAV = (
     '<nav aria-label="切换机器人" style="display:flex;flex-wrap:wrap;gap:9px;'
     'padding:12px 14px;background:#132038;border-bottom:1px solid #30415e;'
@@ -28,6 +29,8 @@ PRED_NAV = (
     '<a style="padding:8px;color:#9ed6ff" href="' + PRED + '/">预测机器人</a>'
     '<a style="padding:8px;color:#9ed6ff" href="' + MAIN +
     '/futures-lab/" aria-label="影子模型自动训练">影子模型 · 自动训练</a>'
+    '<a style="padding:8px;color:#9ed6ff" href="' + MAIN +
+    '/event10/" aria-label="DeepSeek 10分钟事件合约">事件合约 · EVENT10</a>'
     '</nav>'
 )
 
@@ -35,16 +38,18 @@ def decorate(raw, prediction=False):
     if not isinstance(raw,str) or "<html" not in raw.lower() or "<body" not in raw.lower():
         raise ValueError("upstream not recognized as HTML")
     if prediction:
-        if MAIN + "/futures-lab/" in raw:
+        if MAIN + "/futures-lab/" in raw and MAIN + "/event10/" in raw:
             return raw
         # This production prediction page has no common <nav> at all.
         return re.sub(r"(<body(?:\s[^>]*)?>)",lambda match:match.group(1)+PRED_NAV,
                       raw,count=1,flags=re.IGNORECASE)
-    if 'href="/futures-lab/"' in raw:
+    if 'href="/futures-lab/"' in raw and 'href="/event10/"' in raw:
         return raw
     # Preserve every original live trading control, script and navigation item.
     if '<nav>' in raw and '</nav>' in raw:
-        return raw.replace('</nav>',LAB_LINK+'</nav>',1)
+        return raw.replace('</nav>',
+                           ('' if 'href="/futures-lab/"' in raw else LAB_LINK)+
+                           ('' if 'href="/event10/"' in raw else EVENT10_LINK)+'</nav>',1)
     return re.sub(r"(<body(?:\s[^>]*)?>)",lambda match:match.group(1)+PRED_NAV,
                   raw,count=1,flags=re.IGNORECASE)
 

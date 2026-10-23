@@ -1,0 +1,36 @@
+name: Read-only risk SELL retry deployment preflight
+on:
+  push:
+    branches: [fix/risk-sell-safe-retry-20261023]
+    paths:
+      - .github/workflows/zl-risk-retry-preflight.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate read-only script
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          s=Path('prediction-bot-v1/risk_sell_retry_preflight_readonly.py').read_text()
+          mod=ast.parse(s)
+          r=next(n.value.value for n in mod.body if isinstance(n,ast.Assign)
+            and any(isinstance(y,ast.Name) and y.id=='REMOTE' for y in n.targets))
+          assert subprocess.run(['bash','-n'],input=r,text=True).returncode==0
+          assert 'systemctl restart ' not in r
+          assert 'place-order-bundle' not in r
+          print('SELLRETRY_PREFLIGHT_SCRIPT_SAFE=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Check risk worker live source and active SELL events without order modification
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/risk_sell_retry_preflight_readonly.py

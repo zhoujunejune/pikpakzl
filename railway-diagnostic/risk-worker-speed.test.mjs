@@ -20,7 +20,7 @@ const newSell = `      // Payment routing is needed only at the original SELL su
 const default300 = "const POLL_MS = Math.max(300, Number(process.env.AUTO_RISK_POLL_MS || process.env.AUTO_TAKE_PROFIT_POLL_MS || 300));";
 test('default risk worker interval is 300ms and still honors the hard 300ms lower bound',()=>{
   assert.equal(source.split(default300).length-1,1);
-  assert.equal(source.split(default500).length-1,0);
+  assert.equal(source.includes('AUTO_TAKE_PROFIT_POLL_MS || 500));'),false);
   assert.match(source,/const RETRY_MS = Math.max\(1000,/);
 });
 

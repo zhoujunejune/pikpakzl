@@ -96,7 +96,7 @@ test('retry worker writes pre-POST fence to persistent store, then monitors Bina
  assert.ok(body.includes('orderId: placed.orderId'));
  assert.ok(source.includes('if(state?.submitted){'));
  assert.ok(source.includes('await reconcileSubmittedSell(wallet,position,state)'));
- assert.ok(source.includes('if(!evaluation.triggered) continue;'));
+ assert.match(source,/if\s*\(!evaluation\.triggered\)\s*continue;/);
  assert.ok(source.includes('const quoteResult = await getSellQuote(wallet, position, topic);'));
 });
 test('durable in-flight fence restores as UNKNOWN after a process crash',()=>{

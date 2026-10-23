@@ -1,86 +1,31 @@
-# EVENT10 · DeepSeek 10-minute event contract analysis
+# EVENT10：手动10分钟 DeepSeek BTC方向分析
 
-Status: CODE REVIEW / NOT DEPLOYED / NO LIVE ORDERS.
+## 工作流程
 
-This independent prototype adds a BTCUSDT 10-minute analysis cadence with a
-DeepSeek decision (UP, DOWN, or WAIT), persistent signal history and a
-mobile-friendly dashboard. It never uses Binance signed order endpoints and
-never submits an order.
+1. 用户点击按钮，后台从现有 BTCUSDT 只读行情源取最新 tick、已收盘1m和5m K线。校验时效、交易对、价格与K线；不使用过期行情。
+2. 以行情 tick 时间和价格作为参考起点，立即冻结时间戳、参考价、RSI/EMA/MACD/ATR/动量/成交量等特征。参考到期时间为起点 + 600000ms。
+3. 仅当用户点击时发起 DeepSeek 分析，不自动按10分钟周期分析。AI输出必须为 UP 或 DOWN；如果返回 WAIT、非法 JSON 或调用异常，则至多重试4次，仍无法有效判断则记录失败，不伪造方向。
+4. 10分钟后后台从同一公开行情源读取新 tick，必须在参考到期后15秒内、且样本本身不过期，才做 UP/DOWN 比较；持平不计入胜率。无法取得接近到期时间的真实数据则记录无法核验。
+5. 前台单独显示参考价、模型方向、预计到期时间、真实取样时间、参考结束价、代理命中率和日志。后台专用持久化文件为 /var/lib/zl-event10/manual-sessions-v2.json，和旧自动任务互不混合。
 
-## Critical platform limitation
+## 官方事件合约与数据口径
 
-Binance's event-contract FAQ (updated May 2026) explicitly says Event
-Contracts are available only in the Android and iOS app and do not
-offer an official order API:
-https://www.binance.com/zh-CN/support/faq/detail/172247f1c4b8401ab106fb63900f3825
+当前价格来源是 BTC 公开行情代理，不是币安事件合约实际开仓或到期指数。币安 App 实际订单的开仓时间可能在提交后的下一秒，价格取该秒的事件合约指数。币安未公开事件合约交易接口，因此无法自动读取真实事件成交价格、官方结算结果或自动下单，不能把代理行情命中率标为官方事件合约胜率。
 
-The 10-minute event-contract expiry is anchored to the actual confirmed
-opening time, not necessarily a fixed Unix ten-minute clock. This prototype
-runs ten-minute analysis cycles only; it must not present those as official
-event contracts or their settlement windows. Event contract index prices,
-payout quotes, positions, official outcomes and win-rate are unknown.
+币安官方规则：https://www.binance.com/zh-CN/support/faq/detail/172247f1c4b8401ab106fb63900f3825
 
-Do not re-purpose a Binance perpetual futures endpoint to place event
-contracts. Do not reverse-engineer restricted/private mobile API endpoints,
-reuse app authentication tokens, automate the mobile app to bypass API limits,
-or bypass regional restrictions.
+## API
 
-## Architecture
+- GET /event10/ : 中文前台（原有 Caddy Basic Auth）
+- GET /event10/api/status : 状态与独立统计
+- GET /event10/api/history : 已记录手动轮次
+- POST /event10/api/start : 用户主动点击唯一触发入口，需要同源 Origin、自定义点击头和幂等请求 ID，不提交交易订单
+- GET /healthz : 本地服务健康检查
 
-- server.mjs: loopback-only Node 20+ HTTP server; GET endpoints only.
-- panel.html: mobile-friendly standalone dashboard, auto-refreshing status.
-- Reuses only the existing internal read-only BTCUSDT spot/public proxy
-  endpoint http://127.0.0.1:13003/api/shadow-market-data.
-- Uses the existing DeepSeek API contract (/chat/completions) with a
-  separate 10-minute prompt, never the five-minute prediction outcome.
-- Every analysis cycle starts on a Unix 10-minute boundary. Signals may be
-  generated in the initial 5–180 seconds; up to three DeepSeek attempts with
-  a WAIT option. One final direction is stored per cycle.
-- History is on a separate local durable file (300 records maximum), never
-  mixed into production prediction stats, nor counted as executed orders.
-- All trading APIs, POST routes and real-auto-trading switches are
-  intentionally absent. Response status always has
-  autoTradingEnabled:false, executionAvailable:false.
+服务只监听 127.0.0.1:13020，使用现有安全的 DeepSeek 服务器密钥配置。没有币安账户交易写接口，也不重启现有预测和合约交易引擎。
 
-## Developer run (non-production)
-
-Use Node.js 20+ and run:
+## 测试
 
     node --test event10-bot/server.test.mjs
-    EVENT10_STATE_FILE=/tmp/event10-test-history.json node event10-bot/server.mjs
 
-Open http://127.0.0.1:13020/ from the host.
-
-Configuration via server-side secrets (never commit secrets):
-
-- DEEPSEEK_API_KEY: required for automatic DeepSeek analysis.
-- EVENT10_DEEPSEEK_MODEL: optional, defaults to configured DEEPSEEK_MODEL
-  or deepseek-flash.
-- DEEPSEEK_API_URL: optional, defaults to official DeepSeek HTTPS endpoint.
-- EVENT10_READONLY_FEED: internal read-only JSON BTC market data source.
-- EVENT10_STATE_FILE: isolated writable persistent state path.
-- EVENT10_PORT: loopback-only listener port, defaults to 13020.
-
-Endpoints:
-
-- GET / or GET /event10/: dashboard.
-- GET /api/status: status, decision, and hard disabled trade capability.
-- GET /api/history: signal log without invented official settlements.
-- GET /healthz: lightweight health.
-
-## Production deployment prerequisites
-
-This PR deliberately does not change Alibaba Cloud Caddy routing,
-GitHub Actions production deployments, DeepSeek production engine, existing
-futures or prediction worker processes, or shared API key manager.
-
-To surface a new /event10/ menu item on Alibaba Cloud, first install and
-verify a separate event10 service and reverse proxy with the existing
-Basic Auth, then update the existing read-only navigation bridge. Do not add
-a live link before the service exists, and do not restart the trade workers.
-Keep its DeepSeek key in a dedicated server-side environment file.
-
-Before any change to real execution, verify an officially supported
-Binance Event Contracts API, live quote/payout schema, account eligibility,
-trade confirmation, idempotency/ambiguous-order reconciliation, and outcome
-settlement. Until that occurs, no real order automation is possible here.
+真实首次预测应由用户点击前台开始，10分钟后才能验证公开行情结果。所有自动化测试里的行情均是模拟样本，不代表真实交易胜率。

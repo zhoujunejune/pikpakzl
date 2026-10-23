@@ -1,0 +1,37 @@
+name: Independently verify live adaptive TP SL scan on Alibaba
+on:
+  push:
+    branches: [fix/risk-adaptive-fast-confirm-20261023]
+    paths:
+      - .github/workflows/zl-adaptive-risk-postdeploy-audit.yml
+      - prediction-bot-v1/verify_adaptive_risk_live_readonly_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Confirm read-only script
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          mod=ast.parse(Path('prediction-bot-v1/verify_adaptive_risk_live_readonly_20261023.py').read_text())
+          sh=next(n.value.value for n in mod.body if isinstance(n,ast.Assign)
+            for t in n.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=sh,text=True).returncode==0
+          a=sh.index("python3 - <<'PY'")+len("python3 - <<'PY'")
+          compile(sh[a:sh.index("\nPY",a)],'<readonly-audit>','exec')
+          assert 'systemctl restart' not in sh and 'place-order-bundle' not in sh
+          print('POST_ADAPTIVE_READONLY_VERIFIED=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect actual running service and quote/SELL telemetry
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/verify_adaptive_risk_live_readonly_20261023.py

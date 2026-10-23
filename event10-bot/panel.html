@@ -1,127 +1,176 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ZL · EVENT10 十分钟事件合约分析</title>
+<meta name="theme-color" content="#0c1421"><title>EVENT10 · 手动10分钟DeepSeek预测</title>
 <style>
 :root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC",sans-serif}
 *{box-sizing:border-box}
 body{margin:0;background:#0c1421;color:#edf4ff;line-height:1.55}
-main{max-width:960px;margin:0 auto;padding:18px 15px 60px}
-h1{font-size:25px;margin:15px 0 2px}h2{font-size:17px;margin:0 0 12px}
-nav{display:flex;gap:9px;flex-wrap:wrap}nav a{color:#a9d8ff;background:#162942;text-decoration:none;padding:8px 12px;border-radius:10px;font-size:14px}
-nav a.active{background:#256eae;color:white}
-p{margin:8px 0}.muted{color:#aebed1}.small{font-size:13px}
-.card{background:#162338;border:1px solid #30445e;border-radius:16px;padding:17px;margin:14px 0}
-.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}
-.metric{background:#0e1b2c;border-radius:12px;padding:13px;min-width:0;overflow-wrap:anywhere}
-.metric small{color:#a6bbd4;display:block;font-size:12px}.metric strong{font-size:20px;display:block;margin-top:4px}
-.warn{border-left:4px solid #ebbb72;padding:12px 14px;background:#30291f;border-radius:7px}
-.row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.good{color:#49dfa5}.bad{color:#fa8596}.warntext{color:#f4c97f}
-button{background:#2471b9;border:1px solid #3c91d8;color:white;padding:11px 15px;border-radius:10px;font:inherit;cursor:pointer}
-button:disabled{opacity:.5;cursor:not-allowed}
-table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}td,th{padding:10px 8px;text-align:left;border-bottom:1px solid #30435d}
-th{color:#aec3df}.tablewrap{overflow-x:auto}
-.tag{background:#283c59;border-radius:30px;padding:5px 10px;font-size:12px}
-@media(max-width:700px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-</style></head>
-<body><main>
-<nav aria-label="切换机器人">
-<a href="/dashboard/">合约机器人</a>
-<a href="/prediction/">预测机器人</a>
-<a href="/futures-lab/">策略模拟</a>
-<a href="/event10/" class="active" aria-current="page">EVENT10 事件合约</a>
+main{max-width:940px;margin:auto;padding:18px 14px 60px}
+h1{font-size:24px;margin:15px 0 3px}h2{font-size:17px;margin:0 0 12px}
+nav{display:flex;flex-wrap:wrap;gap:7px}
+nav a{color:#add5ff;text-decoration:none;background:#192b43;padding:8px 10px;border-radius:10px;font-size:13px}
+nav a.active{background:#285c9d;color:#fff}
+.card{background:#172439;border:1px solid #31435c;border-radius:16px;padding:17px;margin:14px 0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.metric{background:#101c2e;border-radius:11px;padding:13px;min-width:0;overflow-wrap:anywhere}
+.metric small{display:block;font-size:12px;color:#aabed6}
+.metric strong{display:block;font-size:19px;margin-top:4px;font-variant-numeric:tabular-nums}
+.sub{color:#b5c5d9;font-size:13px}
+.notice{background:#2c281e;border-left:4px solid #f2ba6a;padding:12px 14px;border-radius:8px;font-size:13px}
+.good{color:#49dda6}.bad{color:#ff8293}.yellow{color:#ffcf7b}
+button{padding:13px 18px;border-radius:12px;background:#1673c1;color:white;border:1px solid #3a99e5;font:600 16px system-ui;cursor:pointer;min-height:50px}
+button:disabled{opacity:.43;cursor:not-allowed}button.secondary{background:#1f3450}
+.status{border:1px solid #49627e;border-radius:25px;padding:5px 12px;font-size:13px}
+.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #31445d}
+th{color:#a9c6e7}
+@media(max-width:700px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}button.primary{width:100%}}
+</style></head><body><main>
+<nav aria-label="机器人切换">
+<a href="/dashboard/">合约机器人</a><a href="/prediction/">5分钟预测机器人</a>
+<a href="/futures-lab/">策略模拟</a><a href="/event10/" class="active" aria-current="page">EVENT10</a>
 </nav>
-<h1>EVENT10 · DeepSeek 10分钟分析</h1>
-<p class="muted small">独立10分钟分析周期 · BTCUSDT · 上涨/下跌/等待 · 不修改其他机器人</p>
-<div class="warn"><strong>真实自动下单不可用</strong>
-<p class="small">币安事件合约目前仅支持其 Android / iOS App，不开放官方事件合约下单 API。本页面不会提交事件合约订单；展示的行情为公开 BTC 行情代理，不是官方事件合约指数、入场报价或到期结算数据。请勿把这里的信号视为成交。</p></div>
-<section class="card">
-<div class="row"><h2>机器人运行状态</h2><span class="tag" id="status">读取中</span></div>
-<div class="grid">
-<div class="metric"><small>分析模型</small><strong id="model">—</strong></div>
-<div class="metric"><small>本轮 DeepSeek 决策</small><strong id="decision">—</strong></div>
-<div class="metric"><small>距离下一分析周期</small><strong id="countdown">—</strong></div>
-<div class="metric"><small>最近分析用时</small><strong id="latency">—</strong></div>
+<h1>EVENT10 · 手动10分钟 AI 预测</h1>
+<p class="sub">BTCUSDT · 点击时锁定参考价 · DeepSeek 给出 UP/DOWN · 10分钟后自动对比</p>
+<div class="notice">
+<strong>这不是币安事件合约真实开仓。</strong>
+按钮只会记录公开 BTC 行情参考价并触发预测，不会使用账户余额或提交订单。事件合约的实际开仓价与到期价格由币安官方指数决定，此页面的参考行情未证实等于该指数。下方仅统计公开行情代理命中率，绝不冒充官方结算胜率。
 </div>
-<p class="small muted" id="round">—</p>
-<p class="small" id="message" aria-live="polite">正在获取状态……</p>
-<div class="row"><button type="button" id="refresh">刷新状态</button><span class="small muted" id="updated">—</span></div>
+<section class="card">
+<div class="row"><h2>手动启动新的一轮</h2><span class="status" id="engine">连接中</span></div>
+<button class="primary" id="start" type="button">锁定当前参考价并让 DeepSeek 分析</button>
+<div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时数据服务状态…</div>
+<p class="sub">只有你点击才会分析；不会按整点或每隔10分钟自动发信号。每次点击后，以服务器成功获取的最新有效 BTC 行情快照为开始时间，10分钟后核对同一数据源。</p>
 </section>
 <section class="card">
-<h2>自动化设置</h2>
+<div class="row"><h2>当前 / 最近一次分析</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
-<div class="metric"><small>DeepSeek 自动分析</small><strong id="analysis">—</strong></div>
-<div class="metric"><small>10分钟周期</small><strong>固定</strong></div>
-<div class="metric"><small>事件合约自动下单</small><strong class="bad">关闭</strong></div>
-<div class="metric"><small>官方结果回填</small><strong class="warntext">不可用</strong></div>
+<div class="metric"><small>锁定参考价（非官方开仓价）</small><strong id="openPrice">—</strong></div>
+<div class="metric"><small>DeepSeek 最终方向</small><strong id="direction">—</strong></div>
+<div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
+<div class="metric"><small>10分钟后参考价</small><strong id="closePrice">—</strong></div>
 </div>
-<div style="margin-top:15px">
-<button disabled title="币安尚未提供事件合约官方下单 API">开启事件合约自动下单（暂不支持）</button>
+<div class="grid" style="margin-top:10px">
+<div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
+<div class="metric"><small>计划参考结束时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
+<div class="metric"><small>模型判断耗时</small><strong id="latency">—</strong></div>
+<div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
-<p class="small muted">仅在未来币安正式提供可用的事件合约交易接口、通过交易权限与订单验收后，才可以单独接入实盘执行。当前不存在后台偷偷下单、复用普通永续合约接口或自动重试未确认订单的行为。</p>
+<p class="sub" id="reason">点击按钮开始分析。</p>
+<p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
 </section>
 <section class="card">
-<h2>最近一次信号</h2>
+<h2>独立统计（非官方结算）</h2>
 <div class="grid">
-<div class="metric"><small>方向</small><strong id="lastDirection">—</strong></div>
-<div class="metric"><small>模型置信度</small><strong id="confidence">—</strong></div>
-<div class="metric"><small>判断时参考价格</small><strong id="price">—</strong></div>
-<div class="metric"><small>是否真实成交</small><strong class="bad">否</strong></div>
+<div class="metric"><small>手动启动次数</small><strong id="total">0</strong></div>
+<div class="metric"><small>有最终方向次数</small><strong id="decided">0</strong></div>
+<div class="metric"><small>公开行情已核对次数</small><strong id="settled">0</strong></div>
+<div class="metric"><small>公开行情命中率</small><strong id="accuracy">—</strong></div>
 </div>
-<p id="reason" class="muted">等待 DeepSeek 给出分析结果</p>
+<p class="sub">数据过期、DeepSeek 调用失败、缺少到期价格时会明确记录失败或无法核验，不会虚构 UP/DOWN、结算结果或胜率。这里不显示资金盈亏。</p>
 </section>
-<section class="card"><h2>历史分析记录</h2>
-<div class="tablewrap"><table><thead><tr><th>10分钟分析周期</th><th>方向</th><th>置信度</th><th>参考价格</th><th>币安订单</th><th>官方结算</th></tr></thead>
-<tbody id="history"><tr><td colspan="6">读取中</td></tr></tbody></table></div>
-<p class="small muted">只有 DeepSeek 真正给出的方向才计入记录。未取得币安事件合约官方结算前，不伪造胜率、订单记录或盈亏。每个分析周期只保存一个最终方向；事件合约实际到期时刻应以币安确认的开仓时间计算，而不是这里的整点分析时钟。</p>
+<section class="card">
+<div class="row"><h2>后台历史记录</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
+<div class="tablewrap"><table><thead><tr>
+<th>开始时间</th><th>参考价</th><th>AI方向</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
+</tr></thead><tbody id="records"><tr><td colspan="6">读取中…</td></tr></tbody></table></div>
+<p class="sub">历史记录存储在阿里云独立文件中。用于技术验证，不对应币安实际订单；官方事件合约胜率暂无可信的自动回填渠道。</p>
 </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const fmtTime=t=>Number.isFinite(Number(t))?new Date(Number(t)).toLocaleString():"—";
-const fmtPrice=n=>Number.isFinite(n)?n.toFixed(2):"—";
-let cycle=null,loading=false;
-function updateCountdown(){
-if(cycle===null)return;
-const next=cycle+600000,secs=Math.max(0,Math.floor((next-Date.now())/1000));
-$("countdown").textContent=String(Math.floor(secs/60)).padStart(2,"0")+":"+String(secs%60).padStart(2,"0");
+let active=null,inflight=false,pendingRequestId=null;
+const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{hour12:false}):"—";
+const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
+const phaseText={ANALYZING:"DeepSeek 正在分析",PREDICTED:"方向已确定，等待核对",FAILED:"AI分析失败",COMPLETE:"已核对"};
+const statusText=(v)=>{
+ if(v==="PUBLIC_MARKET_PROXY_ONLY")return "代理行情已核对";
+ if(v==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")return "到期时数据不足";
+ if(v==="FAILED")return "分析失败";
+ return "尚未核对";
+};
+function directionStyle(el,v){el.className=v==="UP"?"good":v==="DOWN"?"bad":"yellow";}
+function updateClock(){
+ if(!active){$("remaining").textContent="—";return;}
+ let n=Math.max(0,Math.floor((active.expiresAt-Date.now())/1000));
+ $("remaining").textContent=String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0");
 }
-async function load(){
-if(loading)return;loading=true;
-try{
-const [s,h]=await Promise.all([fetch("api/status",{cache:"no-store"}),fetch("api/history",{cache:"no-store"})]);
-if(!s.ok||!h.ok)throw Error("状态接口 HTTP "+s.status+"/"+h.status);
-const d=await s.json(),history=await h.json(),signal=d.currentSignal,last=d.lastSignal;
-cycle=d.round;
-$("status").textContent=d.configured?"自动分析运行中":"待配置 DeepSeek API";
-$("status").className="tag "+(d.configured?"good":"warntext");
-$("model").textContent=d.providerModel||"—";
-$("decision").textContent=signal?signal.direction:(d.busy?"分析中":"暂未锁定");
-$("decision").className=signal?(signal.direction==="UP"?"good":"bad"):"warntext";
-$("latency").textContent=Number.isFinite(d.modelLatencyMs)?d.modelLatencyMs+" ms":"—";
-$("analysis").textContent=d.autoSignalEnabled?"已开启":"未配置";
-$("analysis").className=d.autoSignalEnabled?"good":"warntext";
-$("round").textContent="本轮开始时间："+fmtTime(d.round)+" · 分析时间窗：开轮后5–180秒 · 每轮最多尝试3次";
-$("message").textContent=d.error?("最近一次分析结果："+d.error):d.configured?"正在按周期自动分析；页面无需一直打开。":"尚未配置独立服务的 DeepSeek 密钥，不会生成假信号。";
-$("lastDirection").textContent=last?.direction||"—";
-$("confidence").textContent=Number.isFinite(last?.confidence)?(last.confidence*100).toFixed(1)+"%（非胜率）":"—";
-$("price").textContent=fmtPrice(last?.observedProxyPrice);
-$("reason").textContent=last?.reason||"等待 DeepSeek 给出分析结果";
-$("history").replaceChildren();
-const entries=history.records||[];
-if(!entries.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=6;td.textContent="尚无真实 DeepSeek 分析记录";tr.append(td);$("history").append(tr);}
-for(const r of entries){
-const tr=document.createElement("tr");
-for(const v of [fmtTime(r.round),r.direction,Number.isFinite(r.confidence)?(r.confidence*100).toFixed(1)+"%":"—",
-fmtPrice(r.observedProxyPrice),"未提交","未获取"]){const td=document.createElement("td");td.textContent=v;tr.append(td);}
-$("history").append(tr);
+function display(d){
+ const s=d.lastSession||null;
+ active=d.active||null;
+ $("engine").textContent=d.configured?"DeepSeek 已配置":"DeepSeek 未配置";
+ $("engine").className="status "+(d.configured?"good":"bad");
+ $("start").disabled=inflight||!d.configured||!!d.active||d.busyStart;
+ if(s){
+  $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
+  $("openPrice").textContent=price(s.openPrice);
+  $("openedAt").textContent=when(s.openedAt);
+  $("expiresAt").textContent=when(s.expiresAt);
+  $("direction").textContent=s.direction|| (s.status==="ANALYZING"?"分析中":"无有效方向");
+  directionStyle($("direction"),s.direction);
+  $("latency").textContent=Number.isFinite(s.modelLatencyMs)?(s.modelLatencyMs/1000).toFixed(1)+"秒":"—";
+  $("closePrice").textContent=price(s.closePrice);
+  $("result").textContent=typeof s.proxyHit==="boolean"?(s.proxyHit?"代理命中":"代理未命中"):
+    s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
+  $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
+  $("reason").textContent=s.error?"错误："+s.error:(s.reason||"正在等待模型给出方向");
+  $("dataQuality").textContent="参考行情快照延迟："+(s.openAgeMs??"—")+"ms；参考数据源：币安 BTC 公开行情代理；"+
+    (s.expirySampleLagMs!=null?"到期采样延迟："+s.expirySampleLagMs+"ms；":"")+
+    "非事件合约官方开仓与结算价格。";
+ }else{
+  $("phase").textContent="尚未开始";
+ }
+ const stats=d.stats||{};
+ $("total").textContent=stats.total??0;
+ $("decided").textContent=stats.validDirections??0;
+ $("settled").textContent=stats.proxySettled??0;
+ $("accuracy").textContent=stats.proxyAccuracyPct==null?"—":stats.proxyAccuracyPct.toFixed(2)+"%";
+ updateClock();
 }
-$("updated").textContent="页面刷新："+new Date().toLocaleTimeString();
-updateCountdown();
-}catch(e){$("status").textContent="服务不可用";$("message").textContent=String(e);}
-finally{loading=false;}
+async function refresh(){
+ try{
+  const [r,h]=await Promise.all([
+    fetch("api/status",{cache:"no-store"}),
+    fetch("api/history",{cache:"no-store"})
+  ]);
+  if(!r.ok||!h.ok)throw Error("HTTP "+r.status+"/"+h.status);
+  const d=await r.json(),log=await h.json();
+  display(d);
+  if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
+    d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
+  const rows=$("records");rows.replaceChildren();
+  if(!log.records?.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=6;td.textContent="暂无手动预测记录";tr.append(td);rows.append(tr);}
+  for(const s of log.records||[]){
+   const tr=document.createElement("tr");
+   const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
+     s.proxyOutcome==="FLAT"?"持平":s.settlementStatus?"未核验":"待到期";
+   for(const v of [when(s.openedAt),price(s.openPrice),s.direction||"—",
+     price(s.closePrice),res,s.settlementStatus?statusText(s.settlementStatus):phaseText[s.status]||s.status]){
+     const td=document.createElement("td");td.textContent=v;tr.append(td);
+   }rows.append(tr);
+  }
+ }catch(e){$("engine").textContent="无法连接";$("message").textContent="读取失败："+String(e);}
 }
-$("refresh").addEventListener("click",load);
-load();setInterval(load,8000);setInterval(updateCountdown,1000);
-</script>
-</body></html>
+async function startClick(){
+ if(inflight)return;
+ inflight=true;$("start").disabled=true;$("message").textContent="正在向阿里云请求真实行情并锁定参考价…";
+ if(!pendingRequestId){
+  const v=new Uint8Array(16);crypto.getRandomValues(v);
+  pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
+ }
+ try{
+  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",
+    headers:{"X-Event10-Action":"manual-open","X-Event10-Request-ID":pendingRequestId}});
+  const d=await r.json();
+  if(!r.ok||!d.ok)throw Error(d.error||"启动失败");
+  pendingRequestId=null;
+  $("message").textContent="已经锁定公开市场参考价，正在获取 DeepSeek 的 UP/DOWN 判断。";
+  await refresh();
+ }catch(e){$("message").textContent="未成功开始："+String(e);}
+ finally{inflight=false;await refresh();}
+}
+$("start").addEventListener("click",startClick);
+$("refresh").addEventListener("click",refresh);
+refresh();setInterval(refresh,4000);setInterval(updateClock,1000);
+</script></body></html>

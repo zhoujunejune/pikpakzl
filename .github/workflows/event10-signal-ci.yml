@@ -30,9 +30,11 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('event10-bot/server.mjs').read_text()
-          assert 'autoTradingEnabled:false' in s
-          assert 'executionAvailable:false' in s
-          assert 'READ_ONLY_NO_TRADING_ENDPOINT' in s
+          assert 'NO_EVENT_CONTRACT_ORDER_API' in s
+          e=Path('event10-bot/manual-engine.mjs').read_text()
+          assert 'autoTradingEnabled:false' in e
+          assert 'executionAvailable:false' in e
+          assert 'ALLOWED_ORIGINS' in s
           for forbidden in ('/fapi/v1/order','/papi/v1/order','/api/v3/order',
                             'BINANCE_API_SECRET','place-order-bundle'):
               assert forbidden not in s,forbidden

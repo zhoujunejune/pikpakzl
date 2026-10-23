@@ -1,0 +1,43 @@
+name: Verify accepted TP SL SELL finality and safe resubmission
+on:
+  push:
+    branches: [fix/risk-sell-postsubmit-recovery-20261023]
+    paths:
+      - .github/workflows/zl-risk-postsubmit-ci.yml
+      - railway-diagnostic/risk-worker.mjs
+      - railway-diagnostic/risk-sell-finality.mjs
+      - railway-diagnostic/risk-sell-finality.test.mjs
+      - railway-diagnostic/risk-sell-postsubmit-recovery.test.mjs
+      - railway-diagnostic/risk-sell-safe-retry.test.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check railway-diagnostic/risk-worker.mjs
+      - run: node --check railway-diagnostic/risk-sell-finality.mjs
+      - run: node --test railway-diagnostic/risk-sell-finality.test.mjs railway-diagnostic/risk-sell-postsubmit-recovery.test.mjs railway-diagnostic/risk-sell-safe-retry.test.mjs railway-diagnostic/risk-sell-retry.test.mjs railway-diagnostic/risk-worker-speed.test.mjs railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Confirm TP SL user settings, order safety and no unknown retry
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('railway-diagnostic/risk-worker.mjs').read_text()
+          j=Path('railway-diagnostic/risk-sell-finality.mjs').read_text()
+          for m in ["currentSellAmount >= targets.tpTarget",
+           "currentSellAmount <= targets.slTarget",
+           "const QUOTE_MIN_REMAINING_MS = 250;",
+           "const POLL_MS = Math.max(300,",
+           "side: 'SELL'","timeInForce: 'FOK'",
+           "function persistPendingSellState(){",
+           "if(state?.submitted){","if (state?.statusUnknown)",
+           "safeToRetryUnfilledSubmitted(",
+           "persistPendingSellState(); // must succeed BEFORE sending a real SELL"]:
+           assert m in s,m
+          assert "FILLED" in j and "FAILED_EXPLICIT_ZERO" in j
+          print('POSTSUBMIT_RISK_GUARDS_VERIFIED=true')
+          PY

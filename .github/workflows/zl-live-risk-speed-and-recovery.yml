@@ -1,0 +1,39 @@
+name: Read-only live TP SL latency and failure-recovery audit
+on:
+  push:
+    branches: [audit/risk-latency-1642-20261023]
+    paths:
+      - .github/workflows/zl-live-risk-speed-and-recovery.yml
+      - prediction-bot-v1/live_risk_speed_and_recovery_readonly_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Syntax and read-only checks
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          p=Path('prediction-bot-v1/live_risk_speed_and_recovery_readonly_20261023.py')
+          tree=ast.parse(p.read_text())
+          script=next(n.value.value for n in tree.body if isinstance(n,ast.Assign)
+              for t in n.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=script,text=True,capture_output=True).returncode==0
+          a=script.index("python3 - <<'PY'")+len("python3 - <<'PY'")
+          compile(script[a:script.index("\nPY",a)],'live read-only benchmark','exec')
+          assert 'systemctl restart' not in script
+          assert 'place-order-bundle' not in script
+          print('LIVE_SPEED_READONLY_VALIDATED=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Compare quote checks, SELL execution timing and retry statuses on live Alibaba
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/live_risk_speed_and_recovery_readonly_20261023.py

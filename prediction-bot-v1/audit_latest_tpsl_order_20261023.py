@@ -9,7 +9,7 @@ INSTANCE='b67374069bb3457ba6a3a2ede9305d3f'
 REMOTE=r"""#!/bin/bash
 set -Eeuo pipefail
 python3 - <<'PY'
-import json,subprocess,datetime,time,urllib.request,collections,hashlib,hmac,pathlib,urllib.parse,re
+import json,subprocess,datetime,time,urllib.request,collections,hashlib,hmac,pathlib,urllib.parse,re,os
 from zoneinfo import ZoneInfo
 tz=ZoneInfo('Asia/Singapore')
 now=int(time.time()*1000)
@@ -153,6 +153,40 @@ try:
  else:print('RISK_LATEST_SIGNED_POSITION_PROBE_SKIPPED',{'hasKey':bool(key),
    'hasSecret':bool(secret),'hasWallet':bool(wallet)})
 except Exception as e:print('RISK_LATEST_POSITION_READ_ERROR',type(e).__name__)
+
+# Pinpoint journal save permissions and exception root cause without credentials.
+print('RISK_LATEST_PERSIST_ERROR_DETAIL_START')
+err=subprocess.run(['journalctl','-u','zl-prediction-risk-exits.service',
+ '--since','2026-10-23 07:05:00 UTC','--no-pager','-o','cat','-n','2000'],
+ capture_output=True,text=True,timeout=10).stdout
+for line in err.splitlines():
+ try:
+  j=json.loads(line)
+  if j.get('event') not in ('risk_sell_state_persist_failed','risk_sell_exception',
+   'risk_tick_exception','risk_sell_finality_pending'):continue
+  note=str(j.get('error') or j.get('reason') or '')
+  # only error code/name and static file path. No wallet/token IDs.
+  print('RISK_LATEST_PERSIST_ERROR',{'at':j.get('at'),'event':j['event'],
+    'errorType':note.split(':',1)[0][:100],
+    'pathHint':'risk-sell-recovery' in note,
+    'reason':note[:220] if re.match(r'^[A-Z_0-9]+(?:\\b|:)',note) else type(note).__name__})
+ except:continue
+risk=pathlib.Path('/var/lib/zl-prediction/risk-sell-recovery')
+for obj in (risk.parent,risk,risk/'pending-v1.json'):
+ try:
+  stat=obj.stat()
+  print('RISK_LATEST_FS_PERMS',str(obj),
+   {'exists':True,'mode':oct(stat.st_mode&0o777),'uid':stat.st_uid,
+    'gid':stat.st_gid,'rootWritable':os.access(obj,os.W_OK)})
+ except Exception as e:print('RISK_LATEST_FS_PERMS',str(obj),'ERROR',type(e).__name__)
+try:
+ workerpid=int(pidproc[0])
+ proc=pathlib.Path('/proc')/str(workerpid)
+ st=proc.joinpath('status').read_text()
+ print('RISK_LATEST_WORKER_IDS',[(l.split(':',1)[0],l.split(':',1)[1].strip())
+  for l in st.splitlines() if l.startswith(('Uid:','Gid:','Groups:','Name:'))])
+ print('RISK_LATEST_WORKER_CWD',str(proc.joinpath('cwd').resolve()))
+except Exception as e:print('RISK_LATEST_WORKER_ID_ERROR',type(e).__name__)
 print('RISK_LATEST_AUDIT_COMPLETE=true')
 PY
 """

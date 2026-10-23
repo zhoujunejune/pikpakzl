@@ -4,6 +4,7 @@ on:
     branches: [fix/risk-sell-safe-retry-20261023]
     paths:
       - .github/workflows/zl-risk-sell-safe-retry-production.yml
+      - prediction-bot-v1/deploy_risk_sell_safe_retry_20261023.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

@@ -17,7 +17,10 @@ const POLL_MS = Math.max(300, Number(process.env.AUTO_RISK_POLL_MS || process.en
 const RETRY_MS = Math.max(1000, Number(process.env.AUTO_RISK_RETRY_MS || process.env.AUTO_TAKE_PROFIT_RETRY_MS || 1000));
 const SLOW_RETRY_MS = 5000; // prevent endless fast failures when exchange rejects requests
 const UNKNOWN_RECONCILE_MS = 10000; // never blindly repeat an ambiguous SELL
-const SUBMITTED_RECONCILE_MS = 5000;
+const SUBMITTED_RECONCILE_MS = 2500;
+const NEAR_TARGET_FAST_POLL_MS = 200;
+const NEAR_TARGET_DISTANCE_PCT = 8;
+const NEAR_TARGET_WINDOW_MS = 2500;
 const SELL_PENDING_FILE = process.env.RISK_SELL_PENDING_FILE || '/var/lib/zl-prediction/risk-sell-recovery/pending-v1.json';
 const DEFAULT_SLIPPAGE_BPS = Number(process.env.AUTO_TAKE_PROFIT_SLIPPAGE_BPS || 1200);
 const DEFAULT_FEE_RATE_BPS = Number(process.env.AUTO_TAKE_PROFIT_FEE_RATE_BPS || 200);
@@ -26,6 +29,8 @@ const QUOTE_MIN_REMAINING_MS = 250;
 const STATE_CLEANUP_MS = 60000;
 
 let workerBusy = false;
+let lastTickStartedMs = 0;
+let fastPollUntilMs = 0;
 let walletCache = null;
 let paymentCache = null;
 let paymentCacheAt = 0;
@@ -268,6 +273,19 @@ function evaluateRisk(targets, quote) {
   return { ok: true, currentSellAmount, tpTriggered, slTriggered, triggered: Boolean(reason), reason };
 }
 
+function isNearRealQuoteThreshold(targets, evaluation) {
+  const value = Number(evaluation?.currentSellAmount);
+  const cost = Number(targets?.totalCost);
+  if (!Number.isFinite(value) || !Number.isFinite(cost) || cost <= 0 ||
+      !evaluation?.ok || evaluation?.triggered) return false;
+  const levels = [
+    TAKE_PROFIT_ENABLED ? Number(targets?.tpTarget) : NaN,
+    STOP_LOSS_ENABLED ? Number(targets?.slTarget) : NaN,
+  ].filter(Number.isFinite);
+  if (!levels.length) return false;
+  return levels.some(level => Math.abs(value - level) <= cost * NEAR_TARGET_DISTANCE_PCT / 100);
+}
+
 function quoteTooCloseToExpiry(quote) {
   const expireAt = Number(quote?.expireAt || 0);
   return expireAt > 0 && expireAt - Date.now() < QUOTE_MIN_REMAINING_MS;
@@ -366,10 +384,12 @@ async function getSellQuote(wallet, position, topic) {
     feeRateBps,
     fundingSource: 'MPC',
   };
+  const quoteRequestAtMs = Date.now();
   const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/get-quote', body);
-  if (!call.ok) return asError(call, 'SELL_GET_QUOTE_FAILED');
-  if (!call.data?.quoteId) return { ok: false, error: 'SELL_QUOTE_ID_MISSING' };
-  return { ok: true, quote: call.data, slippageBps };
+  const quoteFetchMs = Date.now() - quoteRequestAtMs;
+  if (!call.ok) return { ...asError(call, 'SELL_GET_QUOTE_FAILED'), quoteFetchMs };
+  if (!call.data?.quoteId) return { ok: false, error: 'SELL_QUOTE_ID_MISSING', quoteFetchMs };
+  return { ok: true, quote: call.data, slippageBps, quoteFetchMs };
 }
 
 async function placeSell(wallet, payment, sellQuote) {
@@ -518,7 +538,9 @@ async function reconcileSubmittedSell(wallet,position,state){
     sellState.set(tokenId,{...state,confirmedFilled:true,statusUnknown:false,
       submitted:true,verifiedAt:now});
     persistPendingSellState();
-    log('risk_sell_fill_confirmed',{tokenId,verifiedBy:'BINANCE_ORDER_HISTORY'});
+    log('risk_sell_fill_confirmed',{tokenId,verifiedBy:'BINANCE_ORDER_HISTORY',
+      confirmationObservedMs:Math.max(0,now-Number(state.submittedAt||now)),
+      note:'EXCHANGE_HISTORY_CONFIRMED_NOT_EXCHANGE_FILL_TIMESTAMP'});
     return;
   }
   if(kind==='FAILED_EXPLICIT_ZERO'){
@@ -608,6 +630,7 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
         failedBeforeExchangePost:true,retryMs:known.retryAfterAt-Date.now()});
       return;
     }
+    const sellPostStartedAt = Date.now();
     const placed = await placeSell(wallet, payment, quoteResult);
     if (!placed.ok) {
       if (placed.statusUnknown) {
@@ -672,6 +695,8 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       targetAmount,
       quoteAveragePrice: quoteResult.quote?.averagePrice ?? null,
       quoteAmountOut: quoteResult.quote?.amountOut ?? null,
+      exchangePostResponseMs:Date.now()-sellPostStartedAt,
+      quoteFetchMs:quoteResult.quoteFetchMs ?? null,
     });
   } catch (e) {
     // Unknown outcome may already have sold on Binance: never blindly resend.
@@ -701,6 +726,11 @@ function cleanupSellState(activeTokenIds) {
 async function tick() {
   if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED) || workerBusy) return;
   if (!API_KEY || !API_SECRET) return;
+  const now = Date.now();
+  const nearTarget = now < fastPollUntilMs;
+  const minimumBetweenStartsMs = nearTarget ? NEAR_TARGET_FAST_POLL_MS : POLL_MS;
+  if(lastTickStartedMs && now - lastTickStartedMs < minimumBetweenStartsMs) return;
+  lastTickStartedMs = now;
   workerBusy = true;
   health.lastTickStartedAt = new Date().toISOString();
   try {
@@ -786,6 +816,10 @@ async function tick() {
         continue;
       }
 
+      // Accelerate only after a current real SELL quote has approached TP/SL.
+      // Every accelerated iteration still requotes & revalidates the threshold.
+      if (isNearRealQuoteThreshold(targets, evaluation))
+        fastPollUntilMs = Date.now() + NEAR_TARGET_WINDOW_MS;
       // Keep retry count through a fresh quote; only a confirmed SELL clears it.
       if (state?.error) sellState.set(tokenId, { ...state, error: null });
 
@@ -797,6 +831,8 @@ async function tick() {
         slTarget: targets.slTarget,
         tpTriggered: evaluation.tpTriggered,
         slTriggered: evaluation.slTriggered,
+        quoteFetchMs: quoteResult.quoteFetchMs ?? null,
+        fastNearTarget: Date.now() < fastPollUntilMs,
       });
 
       if (!evaluation.triggered) continue;
@@ -824,6 +860,9 @@ log('risk_worker_started', {
   stopLossEnabled: STOP_LOSS_ENABLED,
   stopLossPercent: STOP_LOSS_PERCENT,
   pollMs: POLL_MS,
+  fastPollMs: NEAR_TARGET_FAST_POLL_MS,
+  nearTargetDistancePct: NEAR_TARGET_DISTANCE_PCT,
+  submittedCheckMs: SUBMITTED_RECONCILE_MS,
   retryMs: RETRY_MS,
   retrySlowAfterFailures: 3,
   unknownSellPolicy: 'VERIFY_EXCHANGE_HISTORY_OR_BLOCK',
@@ -850,4 +889,8 @@ const healthTimer = setInterval(emitHealth, 2000);
 healthTimer.unref();
 emitHealth();
 setInterval(tick, POLL_MS);
+const nearTargetTimer = setInterval(() => {
+  if(Date.now() < fastPollUntilMs) void tick();
+}, NEAR_TARGET_FAST_POLL_MS);
+nearTargetTimer.unref();
 void tick();

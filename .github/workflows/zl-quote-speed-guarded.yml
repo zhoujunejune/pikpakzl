@@ -1,0 +1,80 @@
+name: Guarded Alibaba prediction quote-speed deployment
+on:
+  push:
+    branches: [fix/quote-speed-guarded-20261023]
+    paths:
+      - .github/workflows/zl-quote-speed-guarded.yml
+      - prediction-bot-v1/deploy_quote_speed_guarded_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-trade-control-singlehost
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: node --check railway-diagnostic/index.mjs
+      - run: node --check railway-diagnostic/wrapper.mjs
+      - run: node --test railway-diagnostic/order-submit-window.test.mjs
+      - name: Exercise exact runtime patch in disposable directory only
+        run: |
+          python - <<'PY'
+          import ast, pathlib, subprocess, tempfile, shutil
+          d=pathlib.Path('prediction-bot-v1/deploy_quote_speed_guarded_20261023.py')
+          mod=ast.parse(d.read_text())
+          remote=next(n.value.value for n in mod.body if isinstance(n,ast.Assign)
+           for k in n.targets if isinstance(k,ast.Name) and k.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True).returncode==0
+          assert 'OWNER_FOLLOW_ON_NO_RESTART' in remote
+          assert 'ORDER_IN_FLIGHT_NO_RESTART' in remote
+          assert 'QUOTE_SPEED_ROLLBACK_TRIGGERED=true' in remote
+          assert 'systemctl restart zl-prediction-deepseek5.service' not in remote
+          assert 'systemctl restart zl-prediction-risk-exits.service' not in remote
+          marker='python3 - "$WORK" <<'+"'PY'\n"
+          assert remote.count(marker)==1
+          patch=remote.split(marker,1)[1].split('\nPY\n',1)[0]
+          compile(patch,'<quote-speed-staged-patch>','exec')
+          with tempfile.TemporaryDirectory() as td:
+           work=pathlib.Path(td)
+           original=pathlib.Path('railway-diagnostic/index.mjs').read_text()
+           (work/'index.mjs').write_text(original)
+           shutil.copy2('railway-diagnostic/wrapper.mjs',work/'wrapper.mjs')
+           p=subprocess.run(['python','-c',patch,str(work)],capture_output=True,text=True)
+           assert p.returncode==0,(p.stdout,p.stderr)
+           changed=(work/'index.mjs').read_text()
+           assert changed.count('ZL_QUOTE_SPEED_20261023')>=2
+           assert changed.count("'/sapi/v1/w3w/wallet/prediction/trade/get-quote'")==original.count("'/sapi/v1/w3w/wallet/prediction/trade/get-quote'")+1
+           assert changed.count("'/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle'")==original.count("'/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle'")
+           assert 'timeoutMs: 2400' in changed and 'timeoutMs: 1600' in changed
+           assert 'if (!quoteCall.ok && quoteCall.network && quoteCall.timeout' in changed
+           assert "if(!enabled||!tradeAmountText)return;" in changed
+           for file in ('index.mjs','wrapper.mjs'):
+            x=subprocess.run(['node','--check',str(work/file)],capture_output=True,text=True)
+            assert x.returncode==0,(file,x.stderr)
+           x=subprocess.run(['node',str(work/'wrapper.mjs')],capture_output=True,text=True)
+           assert x.returncode==0,x.stderr
+           x=subprocess.run(['node','--check',str(work/'trade-control-fixed.mjs')],capture_output=True,text=True)
+           assert x.returncode==0,x.stderr
+          print('QUOTE_SPEED_STAGED_PATCH_AND_GENERATED_BACKEND_PASS=true')
+          PY
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy only if owner follow OFF and no order is in flight
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/deploy_quote_speed_guarded_20261023.py

@@ -30,7 +30,7 @@ jobs:
             for t in v.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
           r=subprocess.run(['bash','-n'],input=sh,text=True,capture_output=True)
           assert r.returncode==0,r.stderr
-          blocks=re.findall(r"python3(?: - [^\n]*)? <<'PY'\n(.*?)\nPY",sh,re.S)
+          blocks=re.findall(r"python3[^\n]*?<<'PY'\n(.*?)\nPY",sh,re.S)
           assert len(blocks)>=3,len(blocks)
           for idx,block in enumerate(blocks):compile(block,f'safety-script-{idx}','exec')
           for required in ('NO_VERIFIED_EMPTY_POSITION_WINDOW_DEPLOY_ABORTED',

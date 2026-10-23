@@ -1,0 +1,65 @@
+name: Restore original five-second prediction signal only on Alibaba (guarded)
+on:
+  push:
+    branches: [fix/restore-single5-signal-only-20261023]
+    paths:
+      - .github/workflows/zl-restore-single5-signal-only.yml
+      - prediction-bot-v1/restore_single5_signal_only_20261023.mjs
+      - prediction-bot-v1/restore_single5_signal_only_20261023.test.mjs
+      - prediction-bot-v1/restore_single5_signal_only_aliyun_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: node --check prediction-bot-v1/restore_single5_signal_only_20261023.mjs
+      - run: node --test prediction-bot-v1/restore_single5_signal_only_20261023.test.mjs
+      - name: Guard deployed source and unchanged trade/risk binaries
+        run: |
+          python - <<'PY'
+          import ast,subprocess
+          from pathlib import Path
+          p=Path('prediction-bot-v1/restore_single5_signal_only_aliyun_20261023.py')
+          tree=ast.parse(p.read_text())
+          remote=next(v.value.value for v in tree.body if isinstance(v,ast.Assign)
+           for x in v.targets if isinstance(x,ast.Name) and x.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True).returncode==0
+          assert 'RESTORE5_ROLLBACK_TRIGGERED=true' in remote
+          assert 'FOLLOW_CHANGED_ABORT' in remote
+          assert 'ORDER_IN_FLIGHT' in remote
+          assert 'RESTORE5_TRADE_AND_RISK_UNTOUCHED=true' in remote
+          assert 'systemctl restart zl-prediction-trade.service' not in remote
+          assert 'systemctl restart zl-prediction-risk-exits.service' not in remote
+          assert 'ZL_QUOTE_SPEED_20261023' in remote
+          assert 'const LIMIT_MS=5000;' in remote
+          assert 'clock()<round+4450' in remote
+          source=Path('prediction-bot-v1/restore_single5_signal_only_20261023.mjs').read_text()
+          assert "const FEED='http://127.0.0.1:13003/api/shadow-market-fast'" in source
+          assert 'maxCallsPerRound:1' in source and 'LIVE_BTC_ONE_CALL_OR_REAL_PRICE_BACKUP_5S' in source
+          assert "place-order-bundle" not in source
+          print('RESTORE5_DEPLOY_VALIDATED=true')
+          PY
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Replace prediction signal service only in safe round window
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/restore_single5_signal_only_aliyun_20261023.py

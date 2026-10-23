@@ -335,6 +335,29 @@ for unit in ('zl-prediction-trade.service','zl-prediction-deepseek5.service'):
  time_presence[unit]={'fieldsSeen':dict(counter),'sampleTimesOnly':numeric_examples}
 print('EXCHANGE_TIMESTAMP_IN_EXISTING_LOGS',json.dumps(time_presence,ensure_ascii=False))
 
+# Read-only confirmation of production quote speed code and service state.
+try:
+ quote_src=Path('/opt/zl-prediction-live/src/railway-diagnostic/index.mjs').read_text()
+ quote_live={
+  'quoteOptimizationMarkerPresent':'ZL_QUOTE_SPEED_20261023' in quote_src,
+  'timeout2400Present':'timeoutMs: 2400' in quote_src,
+  'quoteRetry1600Present':'timeoutMs: 1600' in quote_src,
+  'prewarmHookPresent':'quote_connection_prepared' in quote_src,
+  'realPlaceOrderCalls':quote_src.count("'/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle'"),
+ }
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=8) as response:
+   quote_status=json.load(response)
+  quote_live['tradeApiHealthy']=quote_status.get('ok') is True
+  quote_live['followEnabled']=quote_status.get('enabled')
+  quote_live['selectedOrderModel']=quote_status.get('orderSignalModel')
+ except Exception as err:quote_live['tradeStatusErrorType']=type(err).__name__
+ quote_live['tradeActive']=subprocess.run(['systemctl','is-active','--quiet',
+  'zl-prediction-trade.service']).returncode==0
+ print('POST_QUOTE_SPEED_PRODUCTION_READONLY_CONFIRM',json.dumps(quote_live,ensure_ascii=False))
+except Exception as err:
+ print('POST_QUOTE_SPEED_PRODUCTION_READONLY_ERROR',type(err).__name__)
+
 print('SPEED_AUDIT_COMPLETE=true')
 PY
 """

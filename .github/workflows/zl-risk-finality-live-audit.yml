@@ -1,0 +1,38 @@
+name: Verify Alibaba live TP SL finality and durable order fence
+on:
+  push:
+    branches: [fix/risk-sell-postsubmit-recovery-20261023]
+    paths:
+      - .github/workflows/zl-risk-finality-live-audit.yml
+      - prediction-bot-v1/audit_risk_finality_live_20261023.py
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify_read_only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Inspect audit safety and syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          obj=ast.parse(Path('prediction-bot-v1/audit_risk_finality_live_20261023.py').read_text())
+          sh=next(x.value.value for x in obj.body if isinstance(x,ast.Assign)
+            for t in x.targets if isinstance(t,ast.Name) and t.id=='REMOTE')
+          assert subprocess.run(['bash','-n'],input=sh,text=True).returncode==0
+          i=sh.index("python3 - <<'PY'")+len("python3 - <<'PY'")
+          compile(sh[i:sh.index("\nPY",i)],'risk read-only','exec')
+          assert 'systemctl restart' not in sh
+          assert 'place-order-bundle' not in sh
+          print('POSTSELL_READONLY_CODE_SAFE=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Confirm running live risk worker, durable journal and exact orderId status checker
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/audit_risk_finality_live_20261023.py

@@ -12,7 +12,9 @@ const STOP_LOSS_ENABLED = !['0', 'false', 'off', 'no'].includes(String(process.e
 const TAKE_PROFIT_PERCENT = Number(process.env.AUTO_TAKE_PROFIT_PERCENT || 50);
 const STOP_LOSS_PERCENT = Number(process.env.AUTO_STOP_LOSS_PERCENT || 50);
 const POLL_MS = Math.max(300, Number(process.env.AUTO_RISK_POLL_MS || process.env.AUTO_TAKE_PROFIT_POLL_MS || 300));
-const RETRY_MS = Math.max(1000, Number(process.env.AUTO_RISK_RETRY_MS || process.env.AUTO_TAKE_PROFIT_RETRY_MS || 2500));
+const RETRY_MS = Math.max(1000, Number(process.env.AUTO_RISK_RETRY_MS || process.env.AUTO_TAKE_PROFIT_RETRY_MS || 1000));
+const SLOW_RETRY_MS = 5000; // prevent endless fast failures when exchange rejects requests
+const UNKNOWN_RECONCILE_MS = 10000; // never blindly repeat an ambiguous SELL
 const DEFAULT_SLIPPAGE_BPS = Number(process.env.AUTO_TAKE_PROFIT_SLIPPAGE_BPS || 1200);
 const DEFAULT_FEE_RATE_BPS = Number(process.env.AUTO_TAKE_PROFIT_FEE_RATE_BPS || 200);
 const SCOPE = String(process.env.AUTO_RISK_SCOPE || process.env.AUTO_TAKE_PROFIT_SCOPE || 'BTC_5M').toUpperCase();
@@ -360,11 +362,76 @@ function stateBlocksSell(state) {
   return Boolean(state?.inFlight || state?.submitted || state?.statusUnknown);
 }
 
+function nextRetryDelay(failures) {
+  return failures <= 3 ? RETRY_MS : Math.max(SLOW_RETRY_MS, RETRY_MS);
+}
+function scheduleKnownFailure(tokenId, previous, error, stage) {
+  const failures = Math.max(0, Number(previous?.failures) || 0) + 1;
+  const retryMs = nextRetryDelay(failures);
+  const next = {
+    ...(previous || {}),
+    inFlight: false,
+    submitted: false,
+    statusUnknown: false,
+    failures,
+    lastAttemptAt: Date.now(),
+    retryAfterAt: Date.now() + retryMs,
+    error: String(error || 'RETRYABLE_SELL_FAILURE').slice(0,160),
+  };
+  log('risk_retry_scheduled', { tokenId, stage, failures, retryMs });
+  return next;
+}
+function parseOrderTimestamp(row) {
+  for (const key of ['createTime','createdAt','createdTime','orderTime','timestamp']) {
+    const raw = row?.[key];
+    const v = typeof raw === 'number' ? raw : /^\d+$/.test(String(raw || '')) ? Number(raw) : Date.parse(String(raw || ''));
+    if (!Number.isFinite(v)) continue;
+    const ms = v < 100000000000 ? v * 1000 : v;
+    if (ms > 1000000000000) return ms;
+  }
+  return null;
+}
+// A network timeout or HTTP 5xx is NOT an unfilled order. Search exchange
+// history/active orders; only a precisely matched, recent SELL is confirmable.
+// A missing entry is NOT proof of failure or permission to submit another SELL.
+async function reconcileUnknownSell(wallet, position, state) {
+  const now = Date.now();
+  if (now - (state.lastReconciledAt || 0) < UNKNOWN_RECONCILE_MS) return;
+  state.lastReconciledAt = now;
+  const params = { walletAddress: wallet.walletAddress, offset: 0, limit: 100 };
+  const [history, active] = await Promise.all([
+    signedGet('/sapi/v1/w3w/wallet/prediction/order/history', params),
+    signedGet('/sapi/v1/w3w/wallet/prediction/order/list', params),
+  ]);
+  const rows = [history, active].flatMap(r => r.ok && Array.isArray(r.data?.orders) ? r.data.orders : []);
+  const tokenId = String(position.tokenId || '');
+  const since = state.sellRequestAt || state.submittedAt || state.lastAttemptAt;
+  const match = rows.find(o => {
+    const token = String(o?.tokenId ?? o?.token?.tokenId ?? o?.marketTokenId ?? '');
+    const side = String(o?.side ?? o?.tradeSide ?? '').toUpperCase();
+    const t = parseOrderTimestamp(o);
+    return token === tokenId && side === 'SELL' && t != null && t >= since - 2000 && t <= now + 2000;
+  });
+  if (match) {
+    sellState.set(tokenId, {
+      ...state, statusUnknown: false, submitted: true,
+      orderId: String(match.orderId ?? '') || null, error: null,
+      resolvedAt: now,
+    });
+    log('risk_unknown_order_found', { tokenId, hadOrderId: Boolean(match.orderId) });
+  } else {
+    log('risk_unknown_reconcile_pending', {
+      tokenId, historyOk: Boolean(history.ok), activeOk: Boolean(active.ok),
+      retrySellBlocked: true,
+    });
+  }
+}
+
 async function sellPosition(wallet, payment, position, topic, targets, initialQuoteResult, initialEvaluation) {
   const tokenId = targets.tokenId;
   const previous = sellState.get(tokenId);
   if (stateBlocksSell(previous)) return;
-  if (previous?.lastAttemptAt && Date.now() - previous.lastAttemptAt < RETRY_MS) return;
+  if (previous?.retryAfterAt && Date.now() < previous.retryAfterAt) return;
 
   sellState.set(tokenId, { ...(previous || {}), inFlight: true, lastAttemptAt: Date.now(), error: null });
   try {
@@ -374,13 +441,13 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
     if (quoteTooCloseToExpiry(quoteResult.quote)) {
       quoteResult = await getSellQuote(wallet, position, topic);
       if (!quoteResult.ok) {
-        sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: quoteResult.error });
+        sellState.set(tokenId, scheduleKnownFailure(tokenId, previous, quoteResult.error, 'EXPIRED_QUOTE_REFRESH'));
         log('risk_sell_quote_failed', { tokenId, error: quoteResult.error, code: quoteResult.code ?? null, httpStatus: quoteResult.httpStatus ?? null, network: Boolean(quoteResult.network) });
         return;
       }
       evaluation = evaluateRisk(targets, quoteResult.quote);
       if (!evaluation.ok) {
-        sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: evaluation.error });
+        sellState.set(tokenId, scheduleKnownFailure(tokenId, previous, evaluation.error, 'QUOTE_EVALUATION'));
         log('risk_sell_quote_failed', { tokenId, error: evaluation.error });
         return;
       }
@@ -400,6 +467,7 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       }
     }
 
+    const sellRequestAt = Date.now();
     const placed = await placeSell(wallet, payment, quoteResult);
     if (!placed.ok) {
       if (placed.statusUnknown) {
@@ -408,7 +476,9 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
           submitted: false,
           statusUnknown: true,
           submittedAt: Date.now(),
+          sellRequestAt,
           lastAttemptAt: Date.now(),
+          lastReconciledAt: 0,
           orderId: null,
           error: placed.error,
         });
@@ -422,7 +492,7 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
         });
         return;
       }
-      sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: placed.error });
+      sellState.set(tokenId, scheduleKnownFailure(tokenId, previous, placed.error, 'SELL_POST_KNOWN_FAILURE'));
       log('risk_sell_failed', {
         tokenId,
         reason: evaluation.reason,
@@ -438,6 +508,8 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       inFlight: false,
       submitted: true,
       statusUnknown: false,
+      failures: 0,
+      retryAfterAt: 0,
       submittedAt: Date.now(),
       lastAttemptAt: Date.now(),
       orderId: placed.orderId,
@@ -456,7 +528,10 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       quoteAmountOut: quoteResult.quote?.amountOut ?? null,
     });
   } catch (e) {
-    sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: e?.message || String(e) });
+    // Unknown outcome may already have sold on Binance: never blindly resend.
+    sellState.set(tokenId, { inFlight: false, submitted: false, statusUnknown: true,
+      sellRequestAt: Date.now(), lastAttemptAt: Date.now(), lastReconciledAt: 0,
+      error: String(e?.message || e).slice(0,160) });
     log('risk_sell_exception', { tokenId, error: e?.message || String(e) });
   }
 }
@@ -514,19 +589,26 @@ async function tick() {
       }
 
       const state = sellState.get(tokenId);
+      if (state?.statusUnknown) {
+        try { await reconcileUnknownSell(wallet, position, state); }
+        catch (e) { log('risk_unknown_reconcile_error', {
+          tokenId, error: String(e?.message || e).slice(0,100), retrySellBlocked: true
+        }); }
+        continue;
+      }
       if (stateBlocksSell(state)) continue;
-      if (state?.lastAttemptAt && state?.error && Date.now() - state.lastAttemptAt < RETRY_MS) continue;
+      if (state?.retryAfterAt && Date.now() < state.retryAfterAt) continue;
 
       const topic = await getTopic(position.marketTopicId);
       if (!topic) {
-        sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: 'MARKET_DETAIL_UNAVAILABLE' });
+        sellState.set(tokenId, scheduleKnownFailure(tokenId, state, 'MARKET_DETAIL_UNAVAILABLE', 'MARKET_DETAIL'));
         log('risk_sell_quote_failed', { tokenId, marketTopicId: position.marketTopicId, error: 'MARKET_DETAIL_UNAVAILABLE' });
         continue;
       }
 
       const quoteResult = await getSellQuote(wallet, position, topic);
       if (!quoteResult.ok) {
-        sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: quoteResult.error });
+        sellState.set(tokenId, scheduleKnownFailure(tokenId, state, quoteResult.error, 'QUOTE_REQUEST'));
         log('risk_sell_quote_failed', {
           tokenId,
           marketTopicId: position.marketTopicId,
@@ -540,12 +622,13 @@ async function tick() {
 
       const evaluation = evaluateRisk(targets, quoteResult.quote);
       if (!evaluation.ok) {
-        sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: evaluation.error });
+        sellState.set(tokenId, scheduleKnownFailure(tokenId, state, evaluation.error, 'QUOTE_EVALUATION'));
         log('risk_sell_quote_failed', { tokenId, marketTopicId: position.marketTopicId, error: evaluation.error });
         continue;
       }
 
-      if (state?.error) sellState.set(tokenId, { ...state, error: null, lastAttemptAt: 0 });
+      // Keep retry count through a fresh quote; only a confirmed SELL clears it.
+      if (state?.error) sellState.set(tokenId, { ...state, error: null });
 
       log('risk_check', {
         tokenId,
@@ -583,6 +666,8 @@ log('risk_worker_started', {
   stopLossPercent: STOP_LOSS_PERCENT,
   pollMs: POLL_MS,
   retryMs: RETRY_MS,
+  retrySlowAfterFailures: 3,
+  unknownSellPolicy: 'VERIFY_EXCHANGE_HISTORY_OR_BLOCK',
   scope: SCOPE,
   hasCredentials: Boolean(API_KEY && API_SECRET),
   hasWalletAddress: Boolean(ENV_WALLET_ADDRESS),

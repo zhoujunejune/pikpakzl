@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import {reconcileExactUnknownOrder} from './risk-sell-retry.mjs';
 const source=fs.readFileSync(new URL('./risk-worker.mjs',import.meta.url),'utf8');
 const start=source.indexOf('function stateBlocksSell(state) {');
 const end=source.indexOf('async function sellPosition(',start);
@@ -11,7 +12,7 @@ function harness({apiResponse, now=Date.now()}={}){
  const events=[],sellState=new Map(),calls=[];
  const DateStub=class extends Date {static now(){return now;}};
  const sandbox={sellState,RETRY_MS:1000,SLOW_RETRY_MS:5000,UNKNOWN_RECONCILE_MS:10000,
-   Date:DateStub,log:(name,fields)=>events.push({name,...fields}),
+   Date:DateStub,reconcileExactUnknownOrder,log:(name,fields)=>events.push({name,...fields}),
    signedGet:async(path,args)=>{
      calls.push({path,args});
      return apiResponse?apiResponse(path,args):{ok:true,data:{orders:[]}};
@@ -53,11 +54,11 @@ test('unknown SELL is resolved only with strict current-token, SELL side and rec
      {tokenId:'TGT',side:'BUY',orderId:'wrongSide',createTime:now},
      {tokenId:'OLD',side:'SELL',orderId:'wrongToken',createTime:now},
      {tokenId:'TGT',side:'SELL',orderId:'oldSell',createTime:now-60000},
-   ]:[{tokenId:'TGT',side:'SELL',orderId:'order123',createTime:now-500}]}
+   ]:[{tokenId:'TGT',side:'SELL',quoteId:'q123',status:'PENDING',orderId:'order123',createTime:now-500}]}
  })});
- const state={statusUnknown:true,sellRequestAt:now-1000,lastReconciledAt:0};
+ const state={statusUnknown:true,quoteId:'q123',originalShares:5,sellRequestAt:now-1000,lastReconciledAt:0};
  h.sellState.set('TGT',state);
- await h.m.reconcileUnknownSell({walletAddress:'testWallet'},{tokenId:'TGT'},state);
+ await h.m.reconcileUnknownSell({walletAddress:'testWallet'},{tokenId:'TGT',shares:5},state);
  assert.equal(h.sellState.get('TGT').statusUnknown,false);
  assert.equal(h.sellState.get('TGT').submitted,true);
  assert.equal(h.sellState.get('TGT').orderId,'order123');

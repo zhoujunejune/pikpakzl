@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/zl-quote-speed-guarded.yml
       - prediction-bot-v1/deploy_quote_speed_guarded_20261023.py
+      - railway-diagnostic/order-submit-window.test.mjs
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

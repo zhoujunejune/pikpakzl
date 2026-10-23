@@ -4,6 +4,7 @@ on:
     branches: [fix/risk-sell-safe-retry-20261023]
     paths:
       - .github/workflows/zl-risk-retry-preflight.yml
+      - prediction-bot-v1/risk_sell_retry_preflight_readonly.py
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

@@ -208,7 +208,11 @@ function showSources(coverage){
 function display(d){
  const s=d.lastSession||null;
  active=d.active||null;
- $("engine").textContent=d.configured?"DeepSeek 已配置":"DeepSeek 未配置";
+ const thinkingStatus=d.lastReasoningObserved===true?" · 实际推理已核验":
+   d.lastReasoningObserved===false?" · 未检测到推理内容":" · 等待下次分析验证";
+ $("engine").textContent=d.configured?
+   "DeepSeek 已配置 · 深度思考 High 已开启"+thinkingStatus:
+   "DeepSeek 未配置";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured||!!d.active||d.busyStart;
  if(s){

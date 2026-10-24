@@ -12,11 +12,11 @@ curl -fsS --max-time 4 http://127.0.0.1:13021/api/health -o /tmp/zl-event10-stre
 curl -fsS --max-time 4 http://127.0.0.1:13020/api/status -o /tmp/zl-event10-session-before.json 2>/dev/null || true
 stream_old_sha="$(sha256sum /opt/zl-event10/trade-stream-collector.mjs 2>/dev/null | awk '{print $1}' || true)"
 install -d -m 0755 /opt/zl-event10
-for f in server.mjs manual-engine.mjs market-enrichment.mjs decision-review.mjs compact-evidence.mjs chinese-display.mjs trade-stream-collector.mjs panel.html server.test.mjs market-enrichment.test.mjs decision-review.test.mjs compact-evidence.test.mjs trade-stream-collector.test.mjs ui-layout.test.mjs chinese-display.test.mjs;do
+for f in server.mjs manual-engine.mjs market-enrichment.mjs decision-review.mjs compact-evidence.mjs price-structure.mjs chinese-display.mjs trade-stream-collector.mjs panel.html server.test.mjs market-enrichment.test.mjs decision-review.test.mjs compact-evidence.test.mjs price-structure.test.mjs trade-stream-collector.test.mjs ui-layout.test.mjs chinese-display.test.mjs;do
  curl -fsSL --retry 3 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/$f" -o "/opt/zl-event10/$f"
 done
 "$node" --check /opt/zl-event10/server.mjs
-"$node" --test /opt/zl-event10/server.test.mjs /opt/zl-event10/market-enrichment.test.mjs /opt/zl-event10/decision-review.test.mjs /opt/zl-event10/compact-evidence.test.mjs /opt/zl-event10/trade-stream-collector.test.mjs /opt/zl-event10/ui-layout.test.mjs /opt/zl-event10/chinese-display.test.mjs
+"$node" --test /opt/zl-event10/server.test.mjs /opt/zl-event10/market-enrichment.test.mjs /opt/zl-event10/decision-review.test.mjs /opt/zl-event10/compact-evidence.test.mjs /opt/zl-event10/price-structure.test.mjs /opt/zl-event10/trade-stream-collector.test.mjs /opt/zl-event10/ui-layout.test.mjs /opt/zl-event10/chinese-display.test.mjs
 cat >/etc/systemd/system/zl-event10-deepseek.service <<'EOF'
 [Unit]
 Description=ZL Event Contract Ten Minute Read Only DeepSeek Signal
@@ -63,8 +63,8 @@ assert x['configured'] is True, 'EVENT10_DEEPSEEK_NOT_CONFIGURED'
 assert x['autoTradingEnabled'] is False and x['executionAvailable'] is False
 print('EVENT10_BACKEND_READY=true')
 print('EVENT10_PROVIDER_MODEL='+str(x['providerModel']))
-assert x.get('decisionReviewVersion')=='EVENT10_COMPACT_EVIDENCE_V5_20261024', 'EVENT10_NEW_PROMPT_VERSION_NOT_ACTIVE'
-print('EVENT10_COMPACT_EVIDENCE_V5_ACTIVE=true')
+assert x.get('decisionReviewVersion')=='EVENT10_AI_PRICE_STRUCTURE_V6_20261024', 'EVENT10_NEW_PROMPT_VERSION_NOT_ACTIVE'
+print('EVENT10_AI_PRICE_STRUCTURE_V6_ACTIVE=true')
 assert x.get('explanationLanguage')=='zh-CN', 'CHINESE_PROMPT_NOT_ACTIVE'
 print('EVENT10_CHINESE_EXPLANATIONS_ENABLED=true')
 assert x.get('thinkingMode')=='enabled', 'EVENT10_THINKING_NOT_EXPLICITLY_ENABLED'

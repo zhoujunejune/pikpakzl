@@ -5,6 +5,13 @@ export function buildDecisionReview(session){
  const d=compactEvidence(session);
  const warnings=[];
  const p=d.shortPriceTrend,t=d.fifteenMinuteContext,c=d.continuousFlow10m,s=d.shortFuturesPriceResponse;
+ const zone=d.priceStructure;
+ if(zone?.confirmedThreeBarBreakout==="UP"&&t?.trend==="DOWN")
+  warnings.push("BREAKOUT_VS_HIGHER_TREND: confirmed 1m upside breakout contrasts with 15m futures background");
+ if(zone?.confirmedThreeBarBreakout==="DOWN"&&t?.trend==="UP")
+  warnings.push("BREAKOUT_VS_HIGHER_TREND: confirmed 1m downside breakout contrasts with 15m futures background");
+ if(zone?.lastThreeClosedBarsTrend==="MIXED")
+  warnings.push("NO_PERSISTENT_SHORT_TREND: recent closed 1m bars did not keep a consistent direction");
  if(t?.rsi14<=30)warnings.push("OVERSOLD_REVERSAL_RISK: 15m RSI low; a 10-minute rebound and continued fall both remain plausible");
  if(t?.rsi14>=70)warnings.push("OVERBOUGHT_PULLBACK_RISK: 15m RSI high; an upside extension and pullback both remain plausible");
  if(t&&p){
@@ -24,7 +31,7 @@ export function buildDecisionReview(session){
   warnings.push("MISSING_"+item.toUpperCase()+": unavailable or insufficient verified observations");
  return {
   version:REVIEW_VERSION,
-  purpose:"Minimal 10m prediction evidence. Four optional sections, no overlapping trend indicators or cross-price comparison.",
+  purpose:"V6 five curated sections: confirmed reference-market dynamic price zones and short persistence augment prior V5 inputs. Correlated signals must not be double counted.",
   warnings,
   missingVerifiedSections:d.limitations.missingVerifiedSections,
   riskOfOverconfidentDecision:warnings.length>=3?"HIGH":warnings.length>0?"ELEVATED":"UNASSESSED",

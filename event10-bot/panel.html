@@ -44,6 +44,16 @@ th{color:#a9c6e7}
 <p class="sub">只有你点击才会分析；不会按整点或每隔10分钟自动发信号。每次点击后，以服务器成功获取的最新有效 BTC 行情快照为开始时间，10分钟后核对同一数据源。</p>
 </section>
 <section class="card">
+<div class="row"><h2>后台持续成交采集（无需点击分析）</h2><span id="collectorState" class="status">检查中</span></div>
+<div class="grid">
+<div class="metric"><small>本进程已采集聚合成交</small><strong id="streamCount">—</strong></div>
+<div class="metric"><small>最近成交接收延迟</small><strong id="streamLag">—</strong></div>
+<div class="metric"><small>检测到的采集缺口</small><strong id="streamGaps">—</strong></div>
+<div class="metric"><small>连续数据覆盖</small><strong id="streamCoverage">—</strong></div>
+</div>
+<p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
+</section>
+<section class="card">
 <div class="row"><h2>当前 / 最近一次分析</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
 <div class="metric"><small>锁定参考价（非官方开仓价）</small><strong id="openPrice">—</strong></div>
@@ -149,6 +159,27 @@ function display(d){
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
  updateClock();
 }
+async function refreshCollector(){
+ try{
+  const r=await fetch("api/stream-health",{cache:"no-store"});
+  if(!r.ok)throw Error("COLLECTOR_HTTP_"+r.status);
+  const d=await r.json();
+  const live=d.connected&&d.lastReceivedAt!=null&&Date.now()-d.lastReceivedAt<=5000;
+  $("collectorState").textContent=live?"持续接收中":d.connected?"连接中·无新事件":"已断线/重连中";
+  $("collectorState").className="status "+(live?"good":"yellow");
+  $("streamCount").textContent=(d.totalSinceProcessStart??0).toLocaleString("zh-CN");
+  $("streamLag").textContent=d.lastEventLatencyMs==null?"—":d.lastEventLatencyMs+" ms";
+  $("streamGaps").textContent=d.gapCount??0;
+  const w=d.windows||{};
+  $("streamCoverage").textContent=["60s","300s","600s"].filter(x=>w[x]?.complete).map(x=>({ "60s":"1分钟","300s":"5分钟","600s":"10分钟"})[x]).join(" / ")||"数据积累中";
+  $("collectorExplanation").textContent="不点击时也持续采集，独立保存聚合成交日志。"+
+   (d.lastError?"最近错误："+d.lastError+"。":"")+
+   " 已记录重连次数："+(d.reconnectCount??0)+"；每轮分析仅使用通过完整性检查的历史窗口。";
+ }catch{
+  $("collectorState").textContent="采集服务不可用";$("collectorState").className="status bad";
+  $("collectorExplanation").textContent="后台采集服务暂时无法验证，不能宣称采集正常。";
+ }
+}
 async function refresh(){
  try{
   const [r,h]=await Promise.all([
@@ -204,5 +235,5 @@ $("checkDataSources").addEventListener("click",async()=>{
  }catch(e){$("featureSummary").textContent="数据源检查失败："+String(e);}
  finally{btn.disabled=false;}
 });
-refresh();setInterval(refresh,4000);setInterval(updateClock,1000);
+refresh();refreshCollector();setInterval(refresh,4000);setInterval(refreshCollector,5000);setInterval(updateClock,1000);
 </script></body></html>

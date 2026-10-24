@@ -37,6 +37,7 @@ for at,e in trade:
  if isinstance(r,int) and d in ('UP','DOWN') and r<=at<r+300000:
   buys[r].append((at,d))
 stopchecks=collections.defaultdict(list)
+quoteTracks=collections.defaultdict(list)
 stoptriggers=collections.defaultdict(list)
 sell=collections.defaultdict(list)
 workerStarts=[]
@@ -47,9 +48,11 @@ for at,e in risk:
  if event=='risk_check':
   try:
    cost=float(e['totalCost']);sl=float(e['slTarget'])
-   if cost>0 and math.isfinite(sl):
+   q=float(e['currentSellAmount'])
+   if cost>0 and math.isfinite(sl) and math.isfinite(q):
     pct=round((1-sl/cost)*100)
     stopchecks[str(token)].append((at,pct))
+    quoteTracks[str(token)].append((at,(q/cost-1)*100))
   except (ValueError,TypeError,KeyError):pass
  if event=='risk_triggered' and e.get('reason')=='STOP_LOSS':
   stoptriggers[str(token)].append(at)
@@ -83,6 +86,39 @@ reason['journalRiskEvents']=len(risk)
 reason['journalTradeEvents']=len(trade)
 reason['historicalBuys']=sum(map(len,buys.values()))
 reason['loggerHealthy']=int(tc==0 and rc==0)
+# Reconstruct observed quote-path drawdowns of all tracked OPEN positions.
+# Never use imaginary prices after a sale. Exclude snapshots starting late.
+thresholdRows=[]
+trackSkip=collections.Counter()
+for tok,samples in quoteTracks.items():
+ grouped=collections.defaultdict(list)
+ for at,pnl in samples:grouped[at//300000*300000].append((at,pnl))
+ for rnd,snapshots in grouped.items():
+  if rnd+300000>now:trackSkip['round_open']+=1;continue
+  entries=[(at,d) for at,d in buys.get(rnd,[]) if at<rnd+300000]
+  if len(set(d for _,d in entries))!=1 or not entries:
+   trackSkip['buy_direction_unavailable']+=1;continue
+  enter,side=min(entries)
+  sample=sorted([(at,pnl) for at,pnl in snapshots if enter<=at<rnd+300000])
+  if not sample:trackSkip['no_quotes_after_entry']+=1;continue
+  if sample[0][0]-enter>45000:
+   trackSkip['first_quote_late']+=1;continue
+  settingBefore=[(at,p) for at,p in stopchecks[tok] if enter<=at<=sample[-1][0]]
+  setting=settingBefore[0][1] if settingBefore else None
+  hits={}
+  for cutoff in (20,25,30,35,40,45,50,55,60,70,80,90):
+   first=next((at for at,pnl in sample if pnl<=-cutoff),None)
+   if first is not None:hits[str(cutoff)]=int(first-rnd)
+  trackSell=sorted(sell.get(tok,[]))
+  sold=bool(trackSell and rnd<=trackSell[0][0]<rnd+300000)
+  thresholdRows.append({'r':rnd,'d':side,'setting':setting,'firstQuoteAfterEntryMs':sample[0][0]-enter,
+   'quoteChecks':len(sample),'minSeenPct':round(min(p for at,p in sample),2),
+   'hitsMs':hits,'soldAtStop':sold,'entryOffsetMs':enter-rnd})
+print('STOP35_QUOTE_TRACK_META',json.dumps({'positionsWithChecks':len(quoteTracks),
+ 'joinedCompleteEarlyQuotePaths':len(thresholdRows),'skipped':dict(trackSkip)}),flush=True)
+print('STOP35_QUOTE_TRACK_ROWS',json.dumps(sorted(thresholdRows,key=lambda q:q['r'])[-250:],
+ separators=(',',':'),ensure_ascii=False),flush=True)
+
 print('STOP35_META',json.dumps(dict(reason),ensure_ascii=False),flush=True)
 print('STOP35_ROUND_ROWS',json.dumps(sorted(results,key=lambda x:x['r'])[-250:],
  separators=(',',':'),ensure_ascii=False),flush=True)

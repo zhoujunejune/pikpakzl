@@ -66,7 +66,7 @@ for key in ('60s','300s','600s'):
     w=(stream.get('windows') or {}).get(key) or {}
     print('EVENT10_LIVE_WINDOW_'+key+'='+json.dumps({k:w.get(k) for k in ['complete','issues','observedGroups','eventLatencyP95Ms']},separators=(',',':')))
 print('EVENT10_AUDIT_RECORDS_FOUND='+str(len(hist)))
-for n,h in enumerate(hist[:6]):
+for n,h in enumerate(hist[:15]):
     features=h.get('features') or {}
     enr=(h.get('enrichment') or {}).get('features') or {}
     cflow=h.get('continuousTradeFlow') or {}
@@ -90,6 +90,14 @@ for n,h in enumerate(hist[:6]):
      'clickToCaptureMs':h.get('clickToCaptureMs'),
      'indicators':cond,'extra':market,'availability':cov,
      'continuousWindows':list((cflow.get('windows') or {}).keys())}
+    record['explanationLanguage']=h.get('explanationLanguage')
+    record['decisionReviewVersion']=h.get('decisionReviewVersion')
+    record['reviewWarnings']=(h.get('decisionReview') or {}).get('warnings',[])[:5]
+    record['arguments']={k:(v or '')[:150] for k,v in (h.get('analysisArguments') or {}).items()}
+    record['openAgeMs']=h.get('openAgeMs')
+    record['startToModelFinishMs']=(h['modelFinishedAt']-h['openedAt']) if isinstance(h.get('modelFinishedAt'),int) and isinstance(h.get('openedAt'),int) else None
+    if n>=6:
+        record={k:record.get(k) for k in ('seq','startedUtc','endedUtc','status','direction','confidence','openPrice','closePrice','proxyOutcome','proxyHit','deltaPct','settlementStatus','expirySampleLagMs','modelLatencyMs','decisionReviewVersion','availability')}
     print('EVENT10_ROUND_'+str(n+1)+'='+json.dumps(record,ensure_ascii=False,separators=(',',':')))
 print('EVENT10_AUDIT_NO_PRODUCTION_WRITES=true')
 PYAUDIT
@@ -114,7 +122,7 @@ PYAUDIT
                 try:raw=base64.b64decode(raw,validate=True).decode("utf8","replace")
                 except Exception:pass
                 print("NAV_DEPLOY_STATUS",st,"EXIT",result.exit_code)
-                print("NAV_DEPLOY_TAIL",raw[-13000:] if audit_only else raw[-4000:])
+                print("NAV_DEPLOY_TAIL",raw[-25000:] if audit_only else raw[-4000:])
                 return 0 if st=="Success" and int(result.exit_code)==0 else 5
         print("NAV_DEPLOY_TIMEOUT_UNCONFIRMED")
         return 6

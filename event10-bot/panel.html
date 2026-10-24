@@ -58,6 +58,10 @@ th{color:#a9c6e7}
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
 <p class="sub" id="reason">点击按钮开始分析。</p>
+<div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
+<p id="featureSummary" class="sub">仅在点击或手动检查时读取额外行情；断线和 HTTP 451 将明确标记，不补假数据。</p>
+<div id="featureHealth" class="grid" aria-live="polite"></div>
+<p class="sub">检查按钮不会启动 DeepSeek 或创建预测轮次。15分钟合约K线与指数价属于衍生品公开行情，并非已验证的事件合约官方结算指数。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
 </section>
 <section class="card">
@@ -96,6 +100,22 @@ function updateClock(){
  let n=Math.max(0,Math.floor((active.expiresAt-Date.now())/1000));
  $("remaining").textContent=String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0");
 }
+const sectionNames={fifteenMinute:"15分钟K线",orderBook:"买卖盘口",aggressiveFlow:"主动成交订单流",futuresIndex:"指数价格/资金费率",openInterest:"实时持仓量",openInterestChange:"5分钟持仓变化"};
+function showSources(coverage){
+ const el=$("featureHealth");el.replaceChildren();
+ const items=Object.entries(coverage||{});
+ const ready=items.filter(([,v])=>v.available).length;
+ $("featureSummary").textContent=items.length?
+  "经本次数据源检查，已获得 "+ready+"/"+items.length+" 项辅助数据。缺失项目不参与模型分析。":
+  "尚未检查额外数据接口。首次点击预测时也会自动检查。";
+ for(const [k,v] of items){
+  const div=document.createElement("div");div.className="metric";
+  const name=document.createElement("small");name.textContent=sectionNames[k]||k;
+  const flag=document.createElement("strong");flag.style.fontSize="13px";
+  flag.textContent=v.available?"可用":"不可用："+String(v.error||"UNKNOWN");
+  flag.className=v.available?"good":"yellow";div.append(name,flag);el.append(div);
+ }
+}
 function display(d){
  const s=d.lastSession||null;
  active=d.active||null;
@@ -126,6 +146,7 @@ function display(d){
  $("decided").textContent=stats.validDirections??0;
  $("settled").textContent=stats.proxySettled??0;
  $("accuracy").textContent=stats.proxyAccuracyPct==null?"—":stats.proxyAccuracyPct.toFixed(2)+"%";
+ showSources(d.lastFeatureCoverage||d.lastDataProbe?.availability||null);
  updateClock();
 }
 async function refresh(){
@@ -172,5 +193,16 @@ async function startClick(){
 }
 $("start").addEventListener("click",startClick);
 $("refresh").addEventListener("click",refresh);
+$("checkDataSources").addEventListener("click",async()=>{
+ const btn=$("checkDataSources");btn.disabled=true;
+ $("featureSummary").textContent="正在检查币安公开接口连通性和时间戳…";
+ try{
+  const r=await fetch("api/data-health",{cache:"no-store"});
+  const data=await r.json();
+  if(!r.ok||!data.ok)throw Error(data.error||"检查失败");
+  showSources(data.availability);
+ }catch(e){$("featureSummary").textContent="数据源检查失败："+String(e);}
+ finally{btn.disabled=false;}
+});
 refresh();setInterval(refresh,4000);setInterval(updateClock,1000);
 </script></body></html>

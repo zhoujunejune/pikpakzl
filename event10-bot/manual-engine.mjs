@@ -4,6 +4,7 @@ import path from "node:path";
 import {collectPublicFeatures,tenMinuteWindow} from "./market-enrichment.mjs";
 import {buildDecisionReview,REVIEW_VERSION} from "./decision-review.mjs";
 import {compactEvidence,COMPACT_VERSION} from "./compact-evidence.mjs";
+import {confirmedPriceStructure} from "./price-structure.mjs";
 export const HORIZON_MS = 600_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
@@ -69,7 +70,7 @@ export function buildSnapshot(data, now) {
   const last20=one.slice(-20);
   const meanVolume=one.slice(-21,-1).reduce((a,b)=>a+b.v,0)/20;
   const highest=Math.max(...last20.map(x=>x.h)),lowest=Math.min(...last20.map(x=>x.l));
-  return {...price,indicators:{
+  return {...price,priceStructure:confirmedPriceStructure(one,price.price,price.observedAt,atr(one)),indicators:{
     rsi1m14:round(rsi(c1),2),rsi5m14:round(rsi(c5),2),
     macd1m:macd(c1),macd5m:macd(c5),
     atr1m14:atr(one),atr5m14:atr(five),
@@ -121,16 +122,22 @@ function prompt(session){
   thinking:{type:"enabled"},reasoning_effort:"high",
   messages:[
    {role:"system",content:[
-     "你是BTC未来600秒方向分析器，只分析输入里的四组经过校验的核心证据。",
+     "你是BTC未来600秒方向分析器，只分析输入里的五组经过校验的核心证据。",
      "预测目标是同一公开参考价格在600秒后高于(UP)或低于(DOWN)当前参考价。",
      "每次有效响应必须二选一 UP/DOWN，不返回 WAIT；如果调用失败就显式失败，不编造。",
      "步骤1：看短周期1m/5m价格动量、最近10分钟走势和ATR波动幅度。",
+     "步骤1a：查看同一参考行情1分钟闭合K线提取的最近支撑区、阻力区、距离ATR、",
+     "过去五根的上涨下跌次数与最近三根方向持续性，辨别区间反弹与趋势突破。",
+     "支撑阻力只是历史价位聚类，并非未来必反弹或必回落。",
      "步骤2：看15分钟的趋势方向和RSI，只作为背景，超卖不必然UP，超买不必然DOWN。",
      "步骤3：看唯一一组完整600秒连续主动成交方向；不要重复计票其他嵌套窗口。",
      "步骤4：若有合格的短期样本，比较同一BTCUSDT永续合约、同一采样窗口内的",
      "主动买卖压力和成交价格变动；没校验成功就不做吸收或破位结论。",
      "不同市场的绝对价格不能互相相减；期货成交价不是参考指数价。",
      "成交量不等于未来方向。时间周期和买卖压力冲突时比较上涨和下跌两种假设。",
+     "支撑阻力、短期动量和持续性基于同一组1分钟K线，不能当成三票独立信号。",
+     "若3根闭合K线确认突破，但参考价回落到区间内，必须评估假突破风险。",
+     "若短期方向没有持续性，不得把单根K线涨跌夸大为确定趋势。",
      "任何来源缺失都要明确表达不确定性，不能推断缺失数据。",
      "禁用重复的MACD、多个EMA数值、订单簿、资金费率和持仓变化解释。",
      "只输出JSON：direction(UP或DOWN)、confidence(0..1主观判断，不是胜率)、",
@@ -180,7 +187,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       manualStartEnabled:!!key,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
-      enrichmentVersion:"EVENT10_COMPACT_SOURCES_V5",
+      enrichmentVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6",
       decisionReviewVersion:REVIEW_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"enabled",reasoningEffort:"high",
       lastReasoningObserved:h?.reasoningObserved??null,
@@ -323,10 +330,10 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const session={id,clickReceivedAt,openedAt:snapshot.observedAt,
         clickToCaptureMs:clock()-clickReceivedAt,
         expiresAt:snapshot.observedAt+HORIZON_MS,openPrice:snapshot.price,
-        openAgeMs:snapshot.observedAgeMs,features:snapshot.indicators,
+        openAgeMs:snapshot.observedAgeMs,priceStructure:snapshot.priceStructure,features:snapshot.indicators,
         rollingTenMinutes,enrichment:enriched,continuousTradeFlow,featureAvailability:availability,
         sourceWarnings:optional.caveats,
-        featureBundleVersion:"EVENT10_COMPACT_SOURCES_V5",
+        featureBundleVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6",
         decisionReviewVersion:REVIEW_VERSION,decisionReview:null,compactEvidence:null,analysisArguments:null,
         source:SOURCE,status:"ANALYZING",direction:null,
         model,attempts:0,confidence:null,reason:null,modelFinishedAt:null,

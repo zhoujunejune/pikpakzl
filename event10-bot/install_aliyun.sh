@@ -6,6 +6,10 @@ test "$(systemctl is-active zl-prediction-deepseek5)" = active
 test -f /etc/zl-prediction/deepseek5.env
 node=/opt/zl-prediction-node/bin/node
 test -x "$node"
+# Read-only PRE-deployment snapshot: establish whether existing live stream
+# has real 1m/5m/10m windows BEFORE replacing the collector process.
+curl -fsS --max-time 4 http://127.0.0.1:13021/api/health -o /tmp/zl-event10-stream-before.json 2>/dev/null || true
+curl -fsS --max-time 4 http://127.0.0.1:13020/api/status -o /tmp/zl-event10-session-before.json 2>/dev/null || true
 install -d -m 0755 /opt/zl-event10
 for f in server.mjs manual-engine.mjs market-enrichment.mjs trade-stream-collector.mjs panel.html server.test.mjs market-enrichment.test.mjs trade-stream-collector.test.mjs;do
  curl -fsSL --retry 3 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/$f" -o "/opt/zl-event10/$f"
@@ -138,3 +142,32 @@ PY
 rm -f /tmp/zl-event10-trade-stream.json
 
 
+
+python3 - <<'PY'
+import json,pathlib
+p=pathlib.Path('/tmp/zl-event10-stream-before.json')
+if p.exists():
+ try:
+  d=json.loads(p.read_text())
+  print('EVENT10_BEFORE_COLLECTOR_CONNECTED='+str(d.get('connected')))
+  print('EVENT10_BEFORE_COLLECTOR_SAMPLES='+str(d.get('samplesBuffered')))
+  print('EVENT10_BEFORE_COLLECTOR_GAPS='+str(d.get('gapCount')))
+  print('EVENT10_BEFORE_COLLECTOR_RECONNECTS='+str(d.get('reconnectCount')))
+  print('EVENT10_BEFORE_COLLECTOR_LAST_RECEIVED='+str(d.get('lastReceivedAt')))
+  for k,v in (d.get('windows') or {}).items():
+   print('EVENT10_BEFORE_WINDOW_'+str(k)+'_COMPLETE='+str(v.get('complete'))+
+     '_ISSUES='+','.join(v.get('issues') or []))
+ except Exception:
+  print('EVENT10_BEFORE_COLLECTOR_UNREADABLE=true')
+else:print('EVENT10_BEFORE_COLLECTOR_MISSING=true')
+q=pathlib.Path('/tmp/zl-event10-session-before.json')
+if q.exists():
+ try:
+  d=json.loads(q.read_text())
+  coverage=d.get('lastFeatureCoverage') or {}
+  for k,v in sorted(coverage.items()):
+   if v.get('available') is False:
+    print('EVENT10_BEFORE_FEATURE_'+str(k).upper()+'_BLOCKER='+str(v.get('error')))
+ except Exception:pass
+PY
+rm -f /tmp/zl-event10-stream-before.json /tmp/zl-event10-session-before.json

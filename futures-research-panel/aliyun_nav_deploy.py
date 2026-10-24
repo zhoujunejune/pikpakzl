@@ -4,7 +4,7 @@
 Uses the existing GitHub encrypted Alibaba deployment secrets. Never imports,
 edits, restarts or controls any trading logic or model settings.
 """
-import base64,os,re,sys,time
+import base64,json,os,re,sys,time
 from alibabacloud_swas_open20200601.client import Client
 from alibabacloud_swas_open20200601 import models as m
 from alibabacloud_tea_openapi import models as a
@@ -34,6 +34,66 @@ https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/futures-research-p
 export APP_SHA={sha}
 bash "$s"
 """
+    # A tightly-scoped, read-only inspection of EVENT10 when a tagged push
+    # explicitly requests it. No production install, restart, or trade operation.
+    try:
+        event=json.load(open(os.environ.get("GITHUB_EVENT_PATH",""),encoding="utf8"))
+        audit_only=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
+                    "[EVENT10-READ-ONLY-AUDIT]" in str((event.get("head_commit") or {}).get("message","")))
+    except (OSError,ValueError,TypeError):
+        audit_only=False
+    if audit_only:
+        cmd="""#!/bin/bash
+set -Eeuo pipefail
+python3 - <<'PYAUDIT'
+import json,urllib.request,datetime,collections,time
+def get(path):
+    with urllib.request.urlopen('http://127.0.0.1:13020'+path,timeout=6) as r:
+        return json.load(r)
+def tm(ms):
+    if not isinstance(ms,(int,float)):return None
+    return datetime.datetime.fromtimestamp(ms/1000,datetime.timezone.utc).isoformat(timespec='seconds')
+stat=get('/api/status')
+hist=get('/api/history').get('records',[])
+try:
+    stream=get('/api/stream-health')
+except Exception as exc:stream={'connected':False,'error':type(exc).__name__}
+print('EVENT10_READ_ONLY_AUDIT=true')
+print('EVENT10_PROD_MODEL='+str(stat.get('providerModel')))
+print('EVENT10_PROD_STATS='+json.dumps(stat.get('stats'),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_LIVE_STREAM='+json.dumps({k:stream.get(k) for k in ['connected','gapCount','missingAggregateIds','underlyingTradeIdSkips','reconnectCount','lastEventLatencyMs']},ensure_ascii=False,separators=(',',':')))
+for key in ('60s','300s','600s'):
+    w=(stream.get('windows') or {}).get(key) or {}
+    print('EVENT10_LIVE_WINDOW_'+key+'='+json.dumps({k:w.get(k) for k in ['complete','issues','observedGroups','eventLatencyP95Ms']},separators=(',',':')))
+print('EVENT10_AUDIT_RECORDS_FOUND='+str(len(hist)))
+for n,h in enumerate(hist[:6]):
+    features=h.get('features') or {}
+    enr=(h.get('enrichment') or {}).get('features') or {}
+    cflow=h.get('continuousTradeFlow') or {}
+    cond={k:features.get(k) for k in ['rsi1m14','rsi5m14','ema1m9','ema1m21','ema5m9','ema5m21','momentum1m5Pct','momentum5m15Pct','volumeRatio1m','location1m20']}
+    market={}
+    for k in ['fifteenMinute','orderBook','aggressiveFlow','futuresIndex','openInterestChange']:
+        x=enr.get(k)
+        if x:
+            filt=['rsi14','ema9','ema21','moveLast45mPct','imbalanceTop20','deltaNotionalUsd','takerBuyFraction','indexPrice','change5mPct','observedAt']
+            market[k]={q:x.get(q) for q in filt if q in x}
+    cov={k:('OK' if v.get('available') else v.get('error')) for k,v in (h.get('featureAvailability') or {}).items()}
+    record={'seq':n+1,'startedUtc':tm(h.get('openedAt')),'endedUtc':tm(h.get('expiresAt')),
+     'model':h.get('model'),'status':h.get('status'),'direction':h.get('direction'),
+     'confidence':h.get('confidence'),'reason':(h.get('reason') or '')[:240],
+     'openPrice':h.get('openPrice'),'closePrice':h.get('closePrice'),
+     'closeObservedAtUtc':tm(h.get('closeObservedAt')),
+     'deltaPct':h.get('returnPct'),'proxyOutcome':h.get('proxyOutcome'),
+     'proxyHit':h.get('proxyHit'),'settlementStatus':h.get('settlementStatus'),
+     'expirySampleLagMs':h.get('expirySampleLagMs'),
+     'modelLatencyMs':h.get('modelLatencyMs'),
+     'clickToCaptureMs':h.get('clickToCaptureMs'),
+     'indicators':cond,'extra':market,'availability':cov,
+     'continuousWindows':list((cflow.get('windows') or {}).keys())}
+    print('EVENT10_ROUND_'+str(n+1)+'='+json.dumps(record,ensure_ascii=False,separators=(',',':')))
+print('EVENT10_AUDIT_NO_PRODUCTION_WRITES=true')
+PYAUDIT
+"""
     try:
         r=client.run_command(m.RunCommandRequest(region_id=REGION,instance_id=INSTANCE,
             name="zl-three-menu-read-only-ui-only",type="RunShellScript",
@@ -54,7 +114,7 @@ bash "$s"
                 try:raw=base64.b64decode(raw,validate=True).decode("utf8","replace")
                 except Exception:pass
                 print("NAV_DEPLOY_STATUS",st,"EXIT",result.exit_code)
-                print("NAV_DEPLOY_TAIL",raw[-4000:])
+                print("NAV_DEPLOY_TAIL",raw[-13000:] if audit_only else raw[-4000:])
                 return 0 if st=="Success" and int(result.exit_code)==0 else 5
         print("NAV_DEPLOY_TIMEOUT_UNCONFIRMED")
         return 6

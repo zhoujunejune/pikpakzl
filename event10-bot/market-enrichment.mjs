@@ -106,7 +106,18 @@ function aggressiveTrades(rows,now){
    }
  }
  const total=buys+sells;
+ const ordered=filtered.slice().sort((a,b)=>a.T-b.T);
+ const first=ordered[0],last=ordered.at(-1);
+ const tradeSpanMs=last.T-first.T;
+ const verifiedPriceResponse=ordered.length>=20&&tradeSpanMs>=20000&&tradeSpanMs<=120000;
+ const priceMovePct=verifiedPriceResponse?
+   round((num(last.p)/num(first.p)-1)*100,5):null;
  return {sampledTradeGroups:filtered.length,windowSeconds:120,
+   tradeSpanMs,verifiedPriceResponse,
+   futuresFirstTradePrice:verifiedPriceResponse?num(first.p):null,
+   futuresLastTradePrice:verifiedPriceResponse?num(last.p):null,
+   futuresPriceMovePct:priceMovePct,
+   priceResponseSource:"BINANCE_USDM_BTCUSDT_AGGTRADES_SAME_SAMPLE",
    earliestTradeAt:Math.min(...filtered.map(x=>x.T)),
    latestTradeAt:Math.max(...filtered.map(x=>x.T)),
    takerBuyNotionalUsd:round(buys,2),takerSellNotionalUsd:round(sells,2),

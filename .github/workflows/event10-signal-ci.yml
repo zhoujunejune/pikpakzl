@@ -24,7 +24,7 @@ jobs:
       - name: Validate syntax and tests, with no live Binance or DeepSeek credentials
         run: |
           node --check event10-bot/server.mjs
-          node --test event10-bot/server.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/trade-stream-collector.test.mjs
+          node --test event10-bot/server.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/trade-stream-collector.test.mjs event10-bot/ui-layout.test.mjs
       - name: Verify event contract trade execution is always unsupported
         run: |
           python3 - <<'PY'

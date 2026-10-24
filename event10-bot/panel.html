@@ -188,7 +188,7 @@ async function refreshCollector(){
   $("streamCoverage").textContent=["60s","300s","600s"].filter(x=>w[x]?.complete).map(x=>({ "60s":"1分钟","300s":"5分钟","600s":"10分钟"})[x]).join(" / ")||"数据积累中";
   $("collectorExplanation").textContent="不点击时也持续采集，独立保存聚合成交日志。"+
    (d.lastError?"最近错误："+d.lastError+"。":"")+
-   " 已记录重连次数："+(d.reconnectCount??0)+"；每轮分析仅使用通过完整性检查的历史窗口。";
+   " 已记录重连次数："+(d.reconnectCount??0)+"；底层成交ID跳号："+(d.underlyingTradeIdSkips??0)+"（不等于聚合事件丢失）。每轮只使用真正完整的窗口。";
  }catch{
   $("collectorState").textContent="采集服务不可用";$("collectorState").className="status bad";
   $("collectorExplanation").textContent="后台采集服务暂时无法验证，不能宣称采集正常。";

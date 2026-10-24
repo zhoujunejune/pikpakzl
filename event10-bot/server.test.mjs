@@ -60,7 +60,14 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
    api++;
    assert.equal(opts.method,"POST");
    assert.equal(opts.body.includes("PREDICT_10_MIN_AFTER_MANUAL_CAPTURE"),true);
-   return json({choices:[{message:{content:api===1?'{"direction":"WAIT","reason":"unclear"}':'{"direction":"UP","confidence":0.52,"reason":"momentum and trend"}'}}]});
+   const outbound=JSON.parse(opts.body);
+   assert.deepEqual(outbound.thinking,{type:"enabled"});
+   assert.equal(outbound.reasoning_effort,"high");
+   assert.equal(outbound.response_format.type,"json_object");
+   return json({choices:[{message:{
+    content:api===1?'{"direction":"WAIT","reason":"unclear"}':'{"direction":"UP","confidence":0.52,"reason":"momentum and trend"}',
+    reasoning_content:api===1?"":"推理后选UP"
+   }}],usage:{completion_tokens_details:{reasoning_tokens:117}}});
   }});
  await engine.tick();assert.equal(market,0);assert.equal(api,0);
  const started=await engine.start(id);
@@ -70,6 +77,14 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
  await flush();await flush();
  assert.equal(api,2);
  assert.equal(engine.status().lastSession.direction,"UP");
+ assert.equal(engine.status().thinkingMode,"enabled");
+ assert.equal(engine.status().reasoningEffort,"high");
+ assert.equal(engine.status().lastReasoningObserved,true);
+ assert.equal(engine.status().lastReasoningTokenCount,117);
+ assert.equal(engine.status().lastSession.thinkingRequested,true);
+ assert.equal(engine.status().lastSession.reasoningObserved,true);
+ assert.equal(engine.status().lastSession.reasoningTokenCount,117);
+ assert.equal(JSON.stringify(engine.status()).includes("推理后选UP"),false);
  assert.equal(engine.status().lastSession.featureBundleVersion,"EVENT10_COMPACT_SOURCES_V5");
  assert.equal(engine.status().lastSession.enrichment.available,0);
  assert.equal(engine.status().lastSession.featureAvailability.fifteenMinute.error,"REGION_RESTRICTED_451");
@@ -160,6 +175,9 @@ test("as-of continuous BTC trade window is accepted even if LIVE collector has l
  assert.equal(session.continuousTradeFlow.windows["300s"],undefined);
  await flush();await flush();
  assert.equal(engine.status().lastSession.direction,"UP");
+ assert.deepEqual(promptInput.thinking,{type:"enabled"});
+ assert.equal(promptInput.reasoning_effort,"high");
+ assert.equal(engine.status().lastReasoningObserved,false);
  assert.ok(promptInput.messages[1].content.includes("compactEvidence"));
  const frozenPayload=JSON.parse(promptInput.messages[1].content);
  assert.equal(frozenPayload.compactEvidence.version,"EVENT10_COMPACT_EVIDENCE_V5_20261024");

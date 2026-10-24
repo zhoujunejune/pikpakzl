@@ -1,6 +1,7 @@
 // Manual EVENT10 analysis engine. Always no real Binance event-contract order endpoints.
 import fs from "node:fs";
 import path from "node:path";
+import {collectPublicFeatures,tenMinuteWindow} from "./market-enrichment.mjs";
 export const HORIZON_MS = 600_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
@@ -123,13 +124,22 @@ function prompt(session) {
         "The supplied BTC market proxy is NOT verified as Binance Event Contracts",
         "official index/open/settlement price. Never claim the app placed an order",
         "or that an eventual proxy comparison is official Event Contract settlement.",
-        "Do not use price observations after the user's snapshot."
+        "Do not use price observations after the user's snapshot.",
+        "Depth snapshots can contain spoofed/cancelled orders, and recent aggregated",
+        "trades and OI/funding are imperfect, correlated auxiliary features.",
+        "Missing enriched data is truly missing; never infer fake substitute values.",
+        "Additional Binance futures public market data is NOT Binance event-contract",
+        "official reference pricing. Analyzing more indicators does not prove higher accuracy."
       ].join(" ")},
       {role:"user",content:JSON.stringify({
         purpose:"PREDICT_10_MIN_AFTER_MANUAL_CAPTURE",
         capturedAt:session.openedAt,expiresAt:session.expiresAt,
         referencePrice:session.openPrice,marketSource:SOURCE,
-        observedAt:session.openedAt,features:session.features
+        observedAt:session.openedAt,features:session.features,
+        rollingLastTenClosedMinutes:session.rollingTenMinutes,
+        enrichedBinancePublicData:session.enrichment,
+        featureAvailability:session.featureAvailability,
+        sourceWarnings:session.sourceWarnings
       })}
     ]
   };
@@ -147,6 +157,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,modelCalls=0,lastError=null;
   let lastCheckAt=0;
+  let lastDataProbe=null;
   const persist=()=>store(file,history);
   const latest=()=>history.at(-1)||null;
   const stats=()=>{const decided=history.filter(x=>["UP","DOWN"].includes(x.direction));
@@ -164,6 +175,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       manualStartEnabled:!!key,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
+      enrichmentVersion:"EVENT10_PUBLIC_USDM_V2",
+      lastFeatureCoverage:h?.featureAvailability||null,lastDataProbe,
       active:h&&["ANALYZING","PREDICTED","FAILED"].includes(h.status)&&clock()<h.expiresAt?h:null,
       lastSession:h,stats:stats()};
   };
@@ -212,15 +225,36 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     if(history.some(x=>clock()<x.expiresAt && ["ANALYZING","PREDICTED","FAILED"].includes(x.status)))
       throw Error("TEN_MINUTE_SESSION_ALREADY_ACTIVE");
     busyStart=true;
+    const clickReceivedAt=clock();
     try{
+      // Collect optional public USD-M features BEFORE freezing the reference tick.
+      // This avoids using future information after the claimed entry reference time.
+      const optional=await collectPublicFeatures({fetcher,now:clock});
       const receivedAt=clock();
       const feed=await readFeed();
       const snapshot=buildSnapshot(feed,clock());
+      const rollingTenMinutes=tenMinuteWindow(feed,clock());
+      const availability={...optional.availability};
+      const filtered={};
+      for(const [section,value] of Object.entries(optional.features)){
+        const observed=value.observedAt??value.latestTradeAt??value.latestClosedAt??null;
+        if(observed!==null&&observed>snapshot.observedAt){
+          availability[section]={available:false,error:"NEWER_THAN_REFERENCE_TICK"};
+        }else filtered[section]=value;
+      }
+      const enriched={source:optional.source,features:filtered,
+        available:Object.keys(filtered).length,total:optional.total};
+      lastDataProbe={checkedAt:clock(),available:enriched.available,total:enriched.total,
+        availability};
       // Signal and reference price are frozen from ONE verified tick near the click.
       if(clock()-receivedAt>7000)throw Error("CAPTURE_REQUEST_TOO_SLOW");
-      const session={id,clickReceivedAt:receivedAt,openedAt:snapshot.observedAt,
+      const session={id,clickReceivedAt,openedAt:snapshot.observedAt,
+        clickToCaptureMs:clock()-clickReceivedAt,
         expiresAt:snapshot.observedAt+HORIZON_MS,openPrice:snapshot.price,
         openAgeMs:snapshot.observedAgeMs,features:snapshot.indicators,
+        rollingTenMinutes,enrichment:enriched,featureAvailability:availability,
+        sourceWarnings:optional.caveats,
+        featureBundleVersion:"EVENT10_PUBLIC_USDM_V2",
         source:SOURCE,status:"ANALYZING",direction:null,
         model,attempts:0,confidence:null,reason:null,modelFinishedAt:null,
         closePrice:null,closeObservedAt:null,expirySampleLagMs:null,
@@ -271,5 +305,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     }catch(e){lastError="SETTLE_"+String(e?.message||e).slice(0,120);}
     finally{busySettle=false;}
   }
-  return {status,start,tick,history:all};
+  async function probe(){
+    // Read-only diagnostics: no session creation and no DeepSeek/model API request.
+    const d=await collectPublicFeatures({fetcher,now:clock});
+    lastDataProbe={checkedAt:clock(),available:d.available,total:d.total,
+      availability:d.availability};
+    return {ok:true,...lastDataProbe,source:d.source,
+      officialEventContractIndex:false,realOrderPlaced:false};
+  }
+  return {status,start,tick,probe,history:all};
 }

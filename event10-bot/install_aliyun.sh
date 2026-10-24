@@ -7,11 +7,11 @@ test -f /etc/zl-prediction/deepseek5.env
 node=/opt/zl-prediction-node/bin/node
 test -x "$node"
 install -d -m 0755 /opt/zl-event10
-for f in server.mjs manual-engine.mjs panel.html server.test.mjs;do
+for f in server.mjs manual-engine.mjs market-enrichment.mjs panel.html server.test.mjs market-enrichment.test.mjs;do
  curl -fsSL --retry 3 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/$f" -o "/opt/zl-event10/$f"
 done
 "$node" --check /opt/zl-event10/server.mjs
-"$node" --test /opt/zl-event10/server.test.mjs
+"$node" --test /opt/zl-event10/server.test.mjs /opt/zl-event10/market-enrichment.test.mjs
 cat >/etc/systemd/system/zl-event10-deepseek.service <<'EOF'
 [Unit]
 Description=ZL Event Contract Ten Minute Read Only DeepSeek Signal
@@ -60,3 +60,17 @@ print('EVENT10_BACKEND_READY=true')
 print('EVENT10_PROVIDER_MODEL='+str(x['providerModel']))
 PY
 rm -f /tmp/zl-event10-status.json
+# Public market input availability check. Does not place an order or call DeepSeek.
+curl -fsS --max-time 15 http://127.0.0.1:13020/api/data-health > /tmp/zl-event10-data-health.json
+python3 - <<'PY'
+import json
+with open('/tmp/zl-event10-data-health.json') as f: d=json.load(f)
+assert d['ok'] and d['total']==6
+assert d['officialEventContractIndex'] is False
+print('EVENT10_EXTRA_PUBLIC_SOURCES_AVAILABLE='+str(d['available'])+'/6')
+for key,st in sorted(d['availability'].items()):
+ print('EVENT10_EXTRA_SOURCE_'+key.upper()+'='+('READY' if st['available'] else st['error']))
+print('EVENT10_NO_EVENT_CONTRACT_TRADE=true')
+PY
+rm -f /tmp/zl-event10-data-health.json
+

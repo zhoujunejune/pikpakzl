@@ -129,7 +129,9 @@ function prompt(session) {
         "trades and OI/funding are imperfect, correlated auxiliary features.",
         "Missing enriched data is truly missing; never infer fake substitute values.",
         "Additional Binance futures public market data is NOT Binance event-contract",
-        "official reference pricing. Analyzing more indicators does not prove higher accuracy."
+        "official reference pricing. Analyzing more indicators does not prove higher accuracy.",
+        "Continuous flow is a 100ms aggregate event stream, not raw individual fills.",
+        "Only use continuous windows when all coverage/latency checks passed."
       ].join(" ")},
       {role:"user",content:JSON.stringify({
         purpose:"PREDICT_10_MIN_AFTER_MANUAL_CAPTURE",
@@ -138,6 +140,7 @@ function prompt(session) {
         observedAt:session.openedAt,features:session.features,
         rollingLastTenClosedMinutes:session.rollingTenMinutes,
         enrichedBinancePublicData:session.enrichment,
+        continuousAggTradeFlow:session.continuousTradeFlow||null,
         featureAvailability:session.featureAvailability,
         sourceWarnings:session.sourceWarnings
       })}
@@ -149,6 +152,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const model=String(env.EVENT10_DEEPSEEK_MODEL||env.DEEPSEEK_MODEL||"deepseek-flash");
   const endpoint=String(env.DEEPSEEK_API_URL||"https://api.deepseek.com/chat/completions");
   const feedUrl=String(env.EVENT10_READONLY_FEED||"http://127.0.0.1:13003/api/shadow-market-data");
+  const streamUrl="http://127.0.0.1:13021/api/features";
   const file=String(env.EVENT10_STATE_FILE||"/var/lib/zl-event10/manual-sessions-v2.json");
   const history=load(file);
   for(const h of history)if(h.status==="ANALYZING"){
@@ -230,11 +234,36 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // Collect optional public USD-M features BEFORE freezing the reference tick.
       // This avoids using future information after the claimed entry reference time.
       const optional=await collectPublicFeatures({fetcher,now:clock});
+      // Independent background collector runs even when this model is not clicked.
+      let continuous=null,continuousError="COLLECTOR_UNAVAILABLE";
+      try{
+        const cr=await fetcher(streamUrl,{signal:AbortSignal.timeout(1800),headers:{Accept:"application/json"}});
+        if(!cr.ok)throw Error("COLLECTOR_HTTP_"+cr.status);
+        const cj=await cr.json();
+        if(cj?.ok===true&&cj?.source==="BINANCE_USDM_AGGTRADE_100MS_PUBLIC_WEBSOCKET")continuous=cj;
+        else throw Error("COLLECTOR_UNVERIFIED");
+      }catch(e){continuousError=String(e?.message||e).slice(0,80)}
       const receivedAt=clock();
       const feed=await readFeed();
       const snapshot=buildSnapshot(feed,clock());
       const rollingTenMinutes=tenMinuteWindow(feed,clock());
       const availability={...optional.availability};
+      let continuousTradeFlow=null;
+      if(continuous){
+        const windows={};
+        for(const [name,w] of Object.entries(continuous.windows||{})){
+          if(w.complete===true&&continuous.lastReceivedAt<=snapshot.observedAt&&
+              w.to<=snapshot.observedAt&&snapshot.observedAt-continuous.lastReceivedAt<=5000)
+            windows[name]=w;
+        }
+        if(Object.keys(windows).length){
+          continuousTradeFlow={source:continuous.source,
+            receivedAt:continuous.lastReceivedAt,windows,
+            missingAggregateIds:continuous.missingAggregateIds,
+            gapCount:continuous.gapCount,reconnectCount:continuous.reconnectCount};
+          availability.continuousAggTrade={available:true,windows:Object.keys(windows)};
+        }else availability.continuousAggTrade={available:false,error:"INCOMPLETE_OR_UNFRESH_STREAM_WINDOW"};
+      }else availability.continuousAggTrade={available:false,error:continuousError};
       const filtered={};
       for(const [section,value] of Object.entries(optional.features)){
         const observed=value.observedAt??value.latestTradeAt??value.latestClosedAt??null;
@@ -252,7 +281,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         clickToCaptureMs:clock()-clickReceivedAt,
         expiresAt:snapshot.observedAt+HORIZON_MS,openPrice:snapshot.price,
         openAgeMs:snapshot.observedAgeMs,features:snapshot.indicators,
-        rollingTenMinutes,enrichment:enriched,featureAvailability:availability,
+        rollingTenMinutes,enrichment:enriched,continuousTradeFlow,featureAvailability:availability,
         sourceWarnings:optional.caveats,
         featureBundleVersion:"EVENT10_PUBLIC_USDM_V2",
         source:SOURCE,status:"ANALYZING",direction:null,

@@ -27,7 +27,7 @@ test("auto-refresh displays the confirmed newest server record; never a fabricat
  assert.match(page,/args\.downCase/);
  assert.match(page,/args\.decisiveEvidence/);
  assert.match(page,/args\.uncertainty/);
- assert.match(page,/textContent=name\+"："+val/);
+ assert.ok(page.includes('p.textContent=name+"："+val;'));
 });
 test("unique HTML ids and mobile width fit; no trading controls added",()=>{
  const ids=[...page.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);

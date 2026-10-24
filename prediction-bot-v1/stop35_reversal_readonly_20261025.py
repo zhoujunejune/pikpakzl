@@ -15,8 +15,8 @@ python3 - <<'PY'
 import json,subprocess,time,collections,math,urllib.request
 now=int(time.time()*1000)
 def journal(unit):
- result=subprocess.run(['journalctl','-u',unit,'--since','8 days ago','--no-pager',
-  '-o','json','-n','170000'],capture_output=True,text=True,timeout=85)
+ result=subprocess.run(['journalctl','-u',unit,'--since','40 hours ago','--no-pager',
+  '-o','json','-n','45000'],capture_output=True,text=True,timeout=50)
  events=[]
  for row in result.stdout.splitlines():
   try:
@@ -104,8 +104,8 @@ def main():
   region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
  inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=INSTANCE,
   name='zl-stop35-reversal-readonly',type='RunShellScript',working_user='root',
-  command_content=REMOTE,timeout=170)).body.invoke_id
- for _ in range(92):
+  command_content=REMOTE,timeout=150)).body.invoke_id
+ for _ in range(95):
   time.sleep(2)
   r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
    region_id='ap-southeast-1',instance_id=INSTANCE,invoke_id=inv)).body.invocation_result

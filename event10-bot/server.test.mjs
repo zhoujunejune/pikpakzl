@@ -26,6 +26,7 @@ test("strict current BTC read-only tick and closed-candle features",()=>{
  assert.equal(d.price,101000);
  assert.ok(d.indicators.rsi1m14>=0);
  assert.ok(d.indicators.bars1m>=36);
+ assert.equal(d.priceStructure.source,"SAME_PUBLIC_REFERENCE_CLOSED_1M_CANDLES");
  assert.throws(()=>checkedTick(fixture(NOW,NOW-15000),NOW),/STALE/);
  assert.throws(()=>checkedTick({...fixture(),readOnly:false},NOW),/UNVERIFIED/);
 });
@@ -85,12 +86,12 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
  assert.equal(engine.status().lastSession.reasoningObserved,true);
  assert.equal(engine.status().lastSession.reasoningTokenCount,117);
  assert.equal(JSON.stringify(engine.status()).includes("推理后选UP"),false);
- assert.equal(engine.status().lastSession.featureBundleVersion,"EVENT10_COMPACT_SOURCES_V5");
+ assert.equal(engine.status().lastSession.featureBundleVersion,"EVENT10_PRICE_STRUCTURE_SOURCES_V6");
  assert.equal(engine.status().lastSession.enrichment.available,0);
  assert.equal(engine.status().lastSession.featureAvailability.fifteenMinute.error,"REGION_RESTRICTED_451");
  assert.equal(engine.status().lastSession.featureAvailability.continuousAggTrade.available,false);
  assert.equal(engine.status().lastSession.rollingTenMinutes.closed1mBars,10);
- assert.equal(engine.status().lastSession.decisionReviewVersion,"EVENT10_COMPACT_EVIDENCE_V5_20261024");
+ assert.equal(engine.status().lastSession.decisionReviewVersion,"EVENT10_AI_PRICE_STRUCTURE_V6_20261024");
  assert.equal(engine.status().lastSession.status,"PREDICTED");
  assert.equal((await engine.start(id)).id,id);
  await assert.rejects(engine.start("another-click-id-4444"),/ACTIVE/);
@@ -180,7 +181,7 @@ test("as-of continuous BTC trade window is accepted even if LIVE collector has l
  assert.equal(engine.status().lastReasoningObserved,false);
  assert.ok(promptInput.messages[1].content.includes("compactEvidence"));
  const frozenPayload=JSON.parse(promptInput.messages[1].content);
- assert.equal(frozenPayload.compactEvidence.version,"EVENT10_COMPACT_EVIDENCE_V5_20261024");
+ assert.equal(frozenPayload.compactEvidence.version,"EVENT10_AI_PRICE_STRUCTURE_V6_20261024");
  assert.ok(promptInput.messages[0].content.includes("UP/DOWN"));
  assert.ok(promptInput.messages[0].content.includes("不返回 WAIT"));
  assert.ok(promptInput.messages[0].content.includes("不同市场的绝对价格不能互相相减"));
@@ -190,6 +191,8 @@ test("as-of continuous BTC trade window is accepted even if LIVE collector has l
  assert.equal(JSON.parse(promptInput.messages[1].content).explanationLanguage,"简体中文");
  assert.equal(Object.keys(frozenPayload).join(","),"purpose,version,outputLanguage,explanationLanguage,referencePrice,capturedAt,expiresAt,compactEvidence");
  assert.equal(frozenPayload.compactEvidence.continuousFlow10m,null); // only 60s is complete
+ assert.ok(frozenPayload.compactEvidence.priceStructure);
+ assert.equal(frozenPayload.compactEvidence.priceStructure.lastThreeClosedBarsTrend!=="",true);
  assert.equal("enrichedBinancePublicData" in frozenPayload,false);
  assert.equal("continuousAggTradeFlow" in frozenPayload,false);
  assert.equal("rollingLastTenClosedMinutes" in frozenPayload,false);

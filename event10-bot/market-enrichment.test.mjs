@@ -48,6 +48,8 @@ test("all six Binance futures public input families validated without any signed
  assert.deepEqual(Object.keys(d.features).sort(), [...ENRICHMENT_NAMES].sort());
  assert.ok(d.features.orderBook.imbalanceTop20<0);
  assert.ok(d.features.aggressiveFlow.takerBuyFraction>0);
+ assert.equal(d.features.aggressiveFlow.verifiedPriceResponse,false);
+ assert.equal(d.features.aggressiveFlow.futuresPriceMovePct,null);
  assert.equal(d.features.futuresIndex.indexPrice,100010);
  assert.equal(d.features.fifteenMinute.candles,45);
  assert.equal(d.features.openInterestChange.change5mPct,10);

@@ -135,7 +135,7 @@ function display(d){
     s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
   $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
   $("reason").textContent=s.error?"错误："+s.error:(s.reason||"正在等待模型给出方向");
-  $("dataQuality").textContent="参考行情快照延迟："+(s.openAgeMs??"—")+"ms；参考数据源：币安 BTC 公开行情代理；"+
+  $("dataQuality").textContent="点击到参考价采集耗时："+(s.clickToCaptureMs??"—")+"ms；参考行情快照延迟："+(s.openAgeMs??"—")+"ms；数据源：BTC 公开行情代理；"+
     (s.expirySampleLagMs!=null?"到期采样延迟："+s.expirySampleLagMs+"ms；":"")+
     "非事件合约官方开仓与结算价格。";
  }else{
@@ -146,7 +146,7 @@ function display(d){
  $("decided").textContent=stats.validDirections??0;
  $("settled").textContent=stats.proxySettled??0;
  $("accuracy").textContent=stats.proxyAccuracyPct==null?"—":stats.proxyAccuracyPct.toFixed(2)+"%";
- showSources(d.lastFeatureCoverage||d.lastDataProbe?.availability||null);
+ showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
  updateClock();
 }
 async function refresh(){

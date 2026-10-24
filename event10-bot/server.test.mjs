@@ -126,3 +126,37 @@ test("POST manual click is same-origin protected, GET never triggers analysis",a
   assert.equal((await created.json()).session.realOrderPlaced,false);
  }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+test("as-of continuous BTC trade window is accepted even if LIVE collector has later trades",async()=>{
+ let now=NOW,observedAsOf=null,promptInput=null;
+ const f=stateFile();
+ const engine=createEngine({clock:()=>now,env:{DEEPSEEK_API_KEY:"TEST_ONLY",EVENT10_STATE_FILE:f},
+  fetcher:async(url,opts)=>{
+   if(url.startsWith("https://fapi.binance.com/"))return {ok:false,status:451};
+   if(url.includes("shadow-market-data"))return json(fixture(now,now-1000));
+   if(url.includes("127.0.0.1:13021/api/features")){
+    observedAsOf=Number(new URL(url).searchParams.get("asof"));
+    return json({ok:true,source:"BINANCE_USDM_AGGTRADE_100MS_PUBLIC_WEBSOCKET",
+      asOf:observedAsOf,lastReceivedAt:now-200,
+      missingAggregateIds:0,gapCount:0,reconnectCount:0,
+      windows:{
+        "60s":{complete:true,to:observedAsOf-250,lastStreamReceiveAgeMs:250,
+          observedGroups:2000,takerBuyNotionalUsd:300000,takerSellNotionalUsd:200000},
+        "300s":{complete:false,to:observedAsOf-250,lastStreamReceiveAgeMs:250,
+          issues:["INSUFFICIENT_CONTINUOUS_UPTIME"]},
+        "600s":{complete:false,to:observedAsOf-250,lastStreamReceiveAgeMs:250,
+          issues:["INSUFFICIENT_CONTINUOUS_UPTIME"]}
+      }});
+   }
+   promptInput=JSON.parse(opts.body);
+   return json({choices:[{message:{content:'{"direction":"UP","confidence":0.51,"reason":"sample"}'}}]});
+  }});
+ const session=await engine.start("asof-collector-test-001");
+ assert.equal(observedAsOf,NOW-1000);
+ assert.deepEqual(session.featureAvailability.continuousAggTrade.windows,["60s"]);
+ assert.equal(session.continuousTradeFlow.windows["60s"].observedGroups,2000);
+ assert.equal(session.continuousTradeFlow.windows["300s"],undefined);
+ await flush();await flush();
+ assert.equal(engine.status().lastSession.direction,"UP");
+ assert.ok(promptInput.messages[1].content.includes("continuousAggTradeFlow"));
+});

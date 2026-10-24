@@ -153,10 +153,21 @@ function prompt(session) {
         "Only use observations at/before frozen reference timestamp; never infer",
         "real Binance Event Contract official settlement or a placed order.",
         "Historical examples of 3 rounds are far too few to learn fixed trading",
-        "weights or a reversal rule. No retrospective outcome leaks into this call."
+        "weights or a reversal rule. No retrospective outcome leaks into this call.",
+        "OUTPUT LANGUAGE MUST BE SIMPLIFIED CHINESE (简体中文, zh-CN).",
+        "All explanation field VALUES reason, upCase, downCase,",
+        "decisiveEvidence and uncertainty MUST be written in clear, natural",
+        "simplified Chinese. Keep technical acronyms RSI/MACD/EMA and direction",
+        "UP or DOWN unchanged; JSON field keys must stay in English.",
+        "Do not write English explanatory sentences even if market inputs",
+        "and system instructions contain English. These explanations will",
+        "be shown directly to a Chinese-speaking user on a mobile screen.",
+        "Use concise Chinese, avoid jargon where possible, but explain",
+        "conflicting signals, uncertainty and the strongest decision evidence."
       ].join(" ")},
       {role:"user",content:JSON.stringify({
         purpose:"PREDICT_10_MIN_AFTER_MANUAL_CAPTURE",
+        outputLanguage:"zh-CN",explanationLanguage:"简体中文",
         capturedAt:session.openedAt,expiresAt:session.expiresAt,
         referencePrice:session.openPrice,marketSource:SOURCE,
         observedAt:session.openedAt,features:session.features,
@@ -203,7 +214,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
       enrichmentVersion:"EVENT10_PUBLIC_USDM_V2",
-      decisionReviewVersion:REVIEW_VERSION,
+      decisionReviewVersion:REVIEW_VERSION,explanationLanguage:"zh-CN",
       lastFeatureCoverage:h?.featureAvailability||null,lastDataProbe,
       active:h&&["ANALYZING","PREDICTED","FAILED"].includes(h.status)&&clock()<h.expiresAt?h:null,
       lastSession:h,stats:stats()};

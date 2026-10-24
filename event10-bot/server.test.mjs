@@ -120,6 +120,7 @@ test("POST manual click is same-origin protected, GET never triggers analysis",a
   assert.equal(stat.stats.total,0);
   assert.equal((await fetch(host+"/api/start",{method:"POST"})).status,403);
   assert.equal((await fetch(host+"/api/order",{method:"POST"})).status,405);
+  assert.equal((await fetch(host+"/api/localize-latest",{method:"POST"})).status,403);
   const created=await fetch(host+"/api/start",{method:"POST",headers:{
     Origin:"https://47-237-188-69.sslip.io",
     "X-Event10-Action":"manual-open","X-Event10-Request-ID":"browser-unique-click-0001"}});
@@ -164,6 +165,8 @@ test("as-of continuous BTC trade window is accepted even if LIVE collector has l
  assert.equal(frozenPayload.decisionQualityChecklist.version,"EVENT10_BALANCED_EVIDENCE_V3_20261024");
  assert.ok(promptInput.messages[0].content.includes("Evaluate an UP scenario AND a DOWN scenario"));
  assert.ok(promptInput.messages[0].content.includes("NEVER WAIT"));
+ assert.ok(promptInput.messages[0].content.includes("OUTPUT LANGUAGE MUST BE SIMPLIFIED CHINESE"));
+ assert.equal(JSON.parse(promptInput.messages[1].content).explanationLanguage,"简体中文");
  assert.equal(frozenPayload.referencePrice,101000);
  assert.equal("proxyHit" in frozenPayload,false);
 });

@@ -111,6 +111,50 @@ th{color:#a9c6e7}
 <script>
 const $=id=>document.getElementById(id);
 let active=null,inflight=false,pendingRequestId=null;
+const attemptedChineseTranslations=new Set();
+const hasChinese=text=>typeof text==="string"&&/[\u3400-\u9fff]/u.test(text);
+const needsChineseText=s=>{
+ if(!s||s.status!=="PREDICTED"||s.displayChinese)return false;
+ const parts=[s.reason,s.analysisArguments?.upCase,s.analysisArguments?.downCase,
+   s.analysisArguments?.decisiveEvidence,s.analysisArguments?.uncertainty];
+ return parts.some(t=>typeof t==="string"&&/[A-Za-z]{4,}/.test(t)&&!hasChinese(t));
+};
+const warningTitles={
+ HIGH_VOLUME_RANGE_HIGH:"异常放量且价格接近区间高点，警惕假突破和买单被吸收",
+ HIGH_VOLUME_RANGE_LOW:"异常放量且价格接近区间低点，警惕下跌延续或恐慌反转",
+ POSSIBLE_BUY_ABSORPTION:"主动买入较多但价格仍弱，存在买单被吸收的可能",
+ POSSIBLE_SELL_ABSORPTION:"主动卖出较多但价格偏强，存在卖单被吸收的可能",
+ HIGHER_TIMEFRAME_VS_FLOW_CONFLICT:"较大周期趋势与主动成交方向相互矛盾",
+ ORDERBOOK_VS_FLOW_CONFLICT:"盘口挂单压力与真实主动成交方向存在冲突",
+ FLOW_WINDOWS_DISAGREE:"不同成交数据窗口的方向不一致，应检查时间范围",
+ TIMEFRAME_TREND_CONFLICT:"不同时间周期的趋势方向存在分歧",
+ NO_VERIFIED_CONTINUOUS_FLOW:"没有完整有效的连续成交流，不可依据短时间抽样判断完整成交趋势"
+};
+const readableWarning=w=>{
+ const code=String(w||"").split(":")[0];
+ if(code.startsWith("MISSING_")){
+  const id=code.slice(8).toLowerCase();
+  const labels={fifteenminute:"15分钟K线",orderbook:"盘口数据",
+    aggressiveflow:"主动成交数据",futuresindex:"指数价格",openinterestchange:"持仓量变化",
+    continuousaggtrade:"连续成交流"};
+  return (labels[id]||"辅助行情")+"未通过校验，本轮不使用";
+ }
+ return warningTitles[code]||"其他数据冲突或质量限制（参阅下方数据覆盖情况）";
+};
+async function localizeLegacyLatest(s){
+ if(!needsChineseText(s)||attemptedChineseTranslations.has(s.id))return;
+ attemptedChineseTranslations.add(s.id);
+ try{
+  const response=await fetch("api/localize-latest",{method:"POST",credentials:"same-origin",
+    headers:{"X-Event10-Action":"translate-legacy-only"}});
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw Error("TRANSLATION_FAILED");
+  await refresh();
+ }catch{
+  $("quickReason").textContent="这轮记录来自旧版英文说明。中文翻译暂时不可用，可刷新页面重新尝试。";
+ }
+}
+
 const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{hour12:false}):"—";
 const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
 const phaseText={ANALYZING:"DeepSeek 正在分析",PREDICTED:"方向已确定，等待核对",FAILED:"AI分析失败",COMPLETE:"已核对"};
@@ -168,8 +212,11 @@ function display(d){
   $("quickDirection").textContent=s.direction||(s.status==="ANALYZING"?"AI 正在分析…":s.status==="FAILED"?"分析失败":"等待结果");
   $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
   $("quickOpen").textContent="锁定参考价："+price(s.openPrice)+" USDT";
+  const waitChinese=needsChineseText(s);
+  const explanation=s.displayChinese?.reason||s.reason;
   $("quickReason").textContent=s.status==="ANALYZING"?"已锁定参考价，DeepSeek 正在比较 UP 与 DOWN 两种方向…":
-    s.error?"分析失败："+s.error:(s.reason||"模型已给出方向；详细的双向证据请查看下方。");
+    s.error?"分析失败："+s.error:waitChinese?"正在翻译旧版分析理由为简体中文…":
+    (explanation||"模型已给出方向；详细的双向证据请查看下方。");
   $("quickTimestamp").textContent="开始："+when(s.openedAt)+" ｜ 参考到期："+when(s.expiresAt)+
     " ｜ 仅供公开行情预测，不是事件合约官方开仓价或成交记录。";
   $("openPrice").textContent=price(s.openPrice);
@@ -182,14 +229,14 @@ function display(d){
   $("result").textContent=typeof s.proxyHit==="boolean"?(s.proxyHit?"代理命中":"代理未命中"):
     s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
   $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
-  $("reason").textContent=s.error?"错误："+s.error:(s.reason||"正在等待模型给出方向");
+  $("reason").textContent=s.error?"错误："+s.error:(waitChinese?"旧版英文分析说明正在转换为简体中文…":explanation||"正在等待模型给出方向");
   const detail=$("analysisDetail");detail.replaceChildren();
   if(s.decisionReviewVersion){
    const v=document.createElement("p");
-   v.textContent="分析逻辑："+s.decisionReviewVersion+"（双向证据核对，不是自动训练的模型权重）";
+   v.textContent="分析逻辑：多周期趋势、主动成交及盘口双向证据核对（V3；不是模型权重自动训练）";
    detail.append(v);
   }
-  const args=s.analysisArguments||{};
+  const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});
   for(const [name,val] of [
     ["支持UP的证据",args.upCase],["支持DOWN的证据",args.downCase],
     ["最终决定性依据",args.decisiveEvidence],["不确定性",args.uncertainty]]){
@@ -200,7 +247,7 @@ function display(d){
   const review=s.decisionReview||{};
   if(review.warnings?.length){
    const p=document.createElement("p");
-   p.textContent="本轮检测到的证据冲突/数据限制："+review.warnings.slice(0,5).join("；");
+   p.textContent="本轮检测到的证据冲突/数据限制："+review.warnings.slice(0,5).map(readableWarning).join("；");
    detail.append(p);
   }
   $("dataQuality").textContent="点击到参考价采集耗时："+(s.clickToCaptureMs??"—")+"ms；参考行情快照延迟："+(s.openAgeMs??"—")+"ms；数据源：BTC 公开行情代理；"+
@@ -254,6 +301,7 @@ async function refresh(){
   if(!r.ok||!h.ok)throw Error("HTTP "+r.status+"/"+h.status);
   const d=await r.json(),log=await h.json();
   display(d);
+  if(d.lastSession)void localizeLegacyLatest(d.lastSession);
   if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
     d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
   const rows=$("records");rows.replaceChildren();

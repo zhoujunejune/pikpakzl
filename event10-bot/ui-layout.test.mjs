@@ -36,3 +36,15 @@ test("unique HTML ids and mobile width fit; no trading controls added",()=>{
  assert.match(page,/overflow-wrap:anywhere/);
  assert.doesNotMatch(page,/\/fapi\/v1\/order|\/api\/v3\/order|trade\/submit|placeEventOrder/);
 });
+
+test("all visible analysis fields are served from Chinese display, not old English",()=>{
+ assert.match(page,/s\.displayChinese\?\.reason\|\|s\.reason/);
+ assert.match(page,/s\.displayChinese\|\|s\.analysisArguments/);
+ assert.match(page,/正在翻译旧版分析理由为简体中文/);
+ assert.match(page,/translate-legacy-only/);
+ assert.match(page,/review\.warnings\.slice\(0,5\)\.map\(readableWarning\)/);
+ assert.match(page,/支持UP的证据/);
+ assert.match(page,/支持DOWN的证据/);
+ assert.match(page,/最终决定性依据/);
+ assert.match(page,/不确定性/);
+});

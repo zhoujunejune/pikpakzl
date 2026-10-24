@@ -81,3 +81,12 @@ prompt 要求 DeepSeek 独立考虑 UP、DOWN 两种假设及其反证后选择�
 这是**推理流程和输入质量改进**，不是重新训练 DeepSeek 的权重。仅有三条历史样本，不把误判样本作为硬编码看空规则或训练标签，也没有声称胜率已经提升。原历史记录/统计不重置，版本字段 decisionReviewVersion=EVENT10_BALANCED_EVIDENCE_V3_20261024 用于之后做真实前后对照。不会修改真实下单、盘口/成交流或自动生成预测的逻辑。
 
 部署时若常驻聚合成交采集器源码未变且服务仍活动，不重启它，保护已积累的1/5/10分钟缓存和缺口统计。
+
+
+## EVENT10 简体中文分析结果显示
+
+新增 DeepSeek zh-CN 输出指令：每次人工点击后，reason、upCase、downCase、decisiveEvidence、uncertainty 等解释文本要求直接使用自然简体中文；JSON 字段键和 UP/DOWN 方向标签仍保留英文技术标识。技术缩写 RSI/MACD/EMA 可以保留。原本模型的预测规则、价格、周期和 API 配置不变。
+
+以前保存的英文预测结果不改方向、参考价格、结算、状态、统计等原始字段。前台对最新已完成但仍带英文解释的记录，可以自动发起受同源保护的 POST /api/localize-latest，调用同一现有 DeepSeek 密钥进行一次解释文本翻译（不是新的行情预测）。翻译存储到独立的 /var/lib/zl-event10/chinese-display-cache.json，仅通过状态响应的 displayChinese 展示；不覆盖原始历史。若翻译故障，显示中文诊断提示，不能编造中文原文。
+
+前台从 V3 的英文证据冲突编码映射为中文风险说明。新的状态接口提供 explanationLanguage=zh-CN，供部署验证。所有模型策略、自动预测开关、订单接口、10分钟结算和其他实盘交易程序不变。

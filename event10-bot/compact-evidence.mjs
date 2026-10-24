@@ -1,6 +1,6 @@
 // Intentionally minimal evidence fed to EVENT10 DeepSeek.
 // Raw data and prior round history remain preserved for audit only.
-export const COMPACT_VERSION="EVENT10_COMPACT_EVIDENCE_V5_20261024";
+export const COMPACT_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6_20261024";
 const finite=n=>typeof n==="number"&&Number.isFinite(n);
 const n=v=>finite(v)?v:null;
 export function compactEvidence(session){
@@ -8,10 +8,16 @@ export function compactEvidence(session){
  const fifteen=e.fifteenMinute||{},rest=e.aggressiveFlow||{};
  const verified=session.continuousTradeFlow?.windows?.["600s"]||null;
  const last10=session.rollingTenMinutes||{};
+ const structure=session.priceStructure;
+ const validStructure=structure?.source==="SAME_PUBLIC_REFERENCE_CLOSED_1M_CANDLES"&&
+   Number.isSafeInteger(structure.lastClosedCandleAt)&&
+   structure.lastClosedCandleAt<=session.openedAt&&
+   session.openedAt-structure.lastClosedCandleAt<=120000;
  const sameRest=rest.verifiedPriceResponse===true&&finite(rest.futuresPriceMovePct)&&
    finite(rest.takerBuyFraction)&&Number(rest.tradeSpanMs)>=20000;
  const checks={
   proxyCandles:finite(f.momentum1m5Pct)&&finite(f.momentum5m15Pct)&&finite(f.atr1m14),
+  verifiedPriceStructure:validStructure,
   fifteenMinute:finite(fifteen.ema9)&&finite(fifteen.ema21)&&finite(fifteen.rsi14),
   fullTenMinuteFlow:!!verified&&verified.complete===true&&
     finite(verified.buyFraction)&&finite(verified.netTakerNotionalUsd),
@@ -33,6 +39,9 @@ export function compactEvidence(session){
       Number((100*f.atr1m14/session.openPrice).toFixed(5)):null,
     priceSource:"SAME_READONLY_REFERENCE_1M_5M_CANDLES"
   }:null,
+  // Technical price zones share the SAME 1m bars with short momentum;
+  // do not treat the two sections as statistically independent votes.
+  priceStructure:checks.verifiedPriceStructure?structure:null,
   fifteenMinuteContext:checks.fifteenMinute?{
     trend:fifteen.ema9>fifteen.ema21?"UP":fifteen.ema9<fifteen.ema21?"DOWN":"FLAT",
     rsi14:n(fifteen.rsi14),
@@ -55,6 +64,7 @@ export function compactEvidence(session){
     missingVerifiedSections:missing,
     referencePriceNotComparableInAbsoluteTermsToFutures:true,
     latestStreamWindowOverlapsShortRestSample:true,
+    priceStructureOverlapsShortPriceMomentum:true,
     subjectiveConfidenceIsNotCalibratedWinProbability:true
   }
  };

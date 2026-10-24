@@ -21,7 +21,9 @@ test("confirmed support and resistance only from 100 closed contiguous minute ba
 });
 test("never accept future, gapped or unclosed candles into price zones",()=>{
  const rows=make();
- assert.equal(confirmedPriceStructure([...rows,{...rows.at(-1),t:now}],100000,now,29),null);
+ const withFuture=confirmedPriceStructure([...rows,{...rows.at(-1),t:now}],100000,now,29);
+ const normal=confirmedPriceStructure(rows,100000,now,29);
+ assert.deepEqual(withFuture,normal); // future closed candle excluded, never consumed
  const gap=make();gap[90].t+=1000;
  assert.equal(confirmedPriceStructure(gap,100000,now,29),null);
  assert.equal(confirmedPriceStructure(rows,100000,now+500000,29),null);
@@ -42,5 +44,7 @@ test("no look-ahead into settling tick; intervals are determined by closed bar t
  const rows=make();
  const a=confirmedPriceStructure(rows,100010,now,28);
  assert.equal(a.lastClosedCandleAt,now);
- assert.equal(confirmedPriceStructure(rows,100010,now-1,28),null);
+ const prior=confirmedPriceStructure(rows,100010,now-1,28);
+ assert.equal(prior.lastClosedCandleAt,now-60000);
+ assert.ok(prior.lastClosedCandleAt<=now-1);
 });

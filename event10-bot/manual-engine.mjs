@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {collectPublicFeatures,tenMinuteWindow} from "./market-enrichment.mjs";
 import {buildDecisionReview,REVIEW_VERSION} from "./decision-review.mjs";
+import {compactEvidence,COMPACT_VERSION} from "./compact-evidence.mjs";
 export const HORIZON_MS = 600_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
@@ -114,88 +115,37 @@ function store(file,records){
   fs.writeFileSync(tmp,JSON.stringify(records),{mode:0o600});
   fs.renameSync(tmp,file);
 }
-function prompt(session) {
-  return {
-    model:"deepseek-flash",response_format:{type:"json_object"},
-    messages:[
-      {role:"system",content:[
-        "You are an evidence-critical, two-sided BTC market forecaster.",
-        "Objective: will the SAME public BTC reference price be higher (UP)",
-        "or lower (DOWN) exactly 600 seconds after the provided manual capture?",
-        "A valid response MUST choose exactly UP or DOWN. NEVER WAIT or neutral.",
-        "Perform the following competing-hypothesis evaluation internally:",
-        "1) Read 1m / 5m / 15m closed-candle price action and rolling 10m context.",
-        "Distinguish trend continuation vs reversal and avoid double-counting",
-        "EMA, MACD, RSI and momentum as independent confirmations.",
-        "2) Separate aggression from PRICE RESPONSE. A large net taker-buy delta",
-        "or breakout alone does NOT prove price will rise. When buying dominates",
-        "but price remains below EMAs, momentum is down, or ask liquidity is heavy,",
-        "explicitly evaluate liquidity absorption or failed breakout possibilities.",
-        "Symmetrically evaluate sell pressure against resilient/rising prices.",
-        "3) Compare stronger timeframes with short intraminute moves. A countertrend",
-        "signal needs independently persuasive price-response evidence; do not",
-        "assume the market will bounce because price seems low.",
-        "4) Check the orderbook is a cancellable point-in-time sample and REST",
-        "aggTrades can cover less than a full 2 minutes. Prefer verified continuous",
-        "60s/300s/600s flow where available; do not count REST and continuous",
-        "overlapping prints as separate independent evidence.",
-        "PRICE INTEGRITY: referencePrice, 1m/5m proxy indicators and USD-M",
-        "futures last-trade/depth/index observations are different price scopes.",
-        "NEVER subtract or compare their absolute prices to claim buyers were",
-        "absorbed or that a breakout failed. The BTCUSDT USD-M futures",
-        "aggressiveFlow.futuresPriceMovePct is from the SAME futures trade sample",
-        "as the aggression delta, and may only be used if verifiedPriceResponse",
-        "is true. If missing, mark absorption unproven, not negative evidence.",
-        "CHECK OVERSOLD REVERSALS: when 15m RSI is very weak but 1m/5m price",
-        "momentum or trend is recovering, genuinely evaluate a 10m bounce",
-        "against further downtrend. RSI oversold does NOT automatically mean UP.",
-        "Symmetrically check elevated RSI with short-term deterioration for",
-        "potential pullback, but never force DOWN from RSI alone.",
-        "Explain why the final direction beats the competing scenario based",
-        "on the SAME market's price response, timestamp and source quality.",
-        "If large sell flow conflicts with strengthening short-term price",
-        "action, treat this as a real conflicting signal, not a one-way veto.",
-        "5) Explicitly consider 15m/5m trend vs flow disagreement, volume spikes",
-        "at range extremes, OI change limitations, source staleness and missing data.",
-        "Do NOT make high-certainty claims merely from a bullish or bearish",
-        "majority of correlated indicators. Do NOT have a blanket UP/DOWN bias.",
-        "Evaluate an UP scenario AND a DOWN scenario, identify the strongest",
-        "disconfirming observation for each, then choose the more supported side.",
-        "Output JSON only: direction UP|DOWN, confidence numeric 0..1 (subjective",
-        "uncalibrated judgment, NOT proven win probability), upCase, downCase,",
-        "decisiveEvidence, uncertainty, reason. Keep each text field concise.",
-        "If evidence is mixed you MUST still pick UP or DOWN and explicitly name",
-        "the conflict and uncertainty; do not fake data or ignore opposing evidence.",
-        "Only use observations at/before frozen reference timestamp; never infer",
-        "real Binance Event Contract official settlement or a placed order.",
-        "Historical examples of 3 rounds are far too few to learn fixed trading",
-        "weights or a reversal rule. No retrospective outcome leaks into this call.",
-        "OUTPUT LANGUAGE MUST BE SIMPLIFIED CHINESE (简体中文, zh-CN).",
-        "All explanation field VALUES reason, upCase, downCase,",
-        "decisiveEvidence and uncertainty MUST be written in clear, natural",
-        "simplified Chinese. Keep technical acronyms RSI/MACD/EMA and direction",
-        "UP or DOWN unchanged; JSON field keys must stay in English.",
-        "Do not write English explanatory sentences even if market inputs",
-        "and system instructions contain English. These explanations will",
-        "be shown directly to a Chinese-speaking user on a mobile screen.",
-        "Use concise Chinese, avoid jargon where possible, but explain",
-        "conflicting signals, uncertainty and the strongest decision evidence."
-      ].join(" ")},
-      {role:"user",content:JSON.stringify({
-        purpose:"PREDICT_10_MIN_AFTER_MANUAL_CAPTURE",
-        outputLanguage:"zh-CN",explanationLanguage:"简体中文",
-        capturedAt:session.openedAt,expiresAt:session.expiresAt,
-        referencePrice:session.openPrice,marketSource:SOURCE,
-        observedAt:session.openedAt,features:session.features,
-        rollingLastTenClosedMinutes:session.rollingTenMinutes,
-        enrichedBinancePublicData:session.enrichment,
-        continuousAggTradeFlow:session.continuousTradeFlow||null,
-        decisionQualityChecklist:session.decisionReview,
-        featureAvailability:session.featureAvailability,
-        sourceWarnings:session.sourceWarnings
-      })}
-    ]
-  };
+function prompt(session){
+ const data=session.compactEvidence||compactEvidence(session);
+ return {model:"deepseek-flash",response_format:{type:"json_object"},
+  messages:[
+   {role:"system",content:[
+     "你是BTC未来600秒方向分析器，只分析输入里的四组经过校验的核心证据。",
+     "预测目标是同一公开参考价格在600秒后高于(UP)或低于(DOWN)当前参考价。",
+     "每次有效响应必须二选一 UP/DOWN，不返回 WAIT；如果调用失败就显式失败，不编造。",
+     "步骤1：看短周期1m/5m价格动量、最近10分钟走势和ATR波动幅度。",
+     "步骤2：看15分钟的趋势方向和RSI，只作为背景，超卖不必然UP，超买不必然DOWN。",
+     "步骤3：看唯一一组完整600秒连续主动成交方向；不要重复计票其他嵌套窗口。",
+     "步骤4：若有合格的短期样本，比较同一BTCUSDT永续合约、同一采样窗口内的",
+     "主动买卖压力和成交价格变动；没校验成功就不做吸收或破位结论。",
+     "不同市场的绝对价格不能互相相减；期货成交价不是参考指数价。",
+     "成交量不等于未来方向。时间周期和买卖压力冲突时比较上涨和下跌两种假设。",
+     "任何来源缺失都要明确表达不确定性，不能推断缺失数据。",
+     "禁用重复的MACD、多个EMA数值、订单簿、资金费率和持仓变化解释。",
+     "只输出JSON：direction(UP或DOWN)、confidence(0..1主观判断，不是胜率)、",
+     "reason、upCase、downCase、decisiveEvidence、uncertainty，",
+     "所有文字字段必须是简体中文，JSON字段名及UP/DOWN保留英文。",
+     "记录仅是公开市场代理方向研究，不是事件合约真实成交或官方结算。"
+   ].join(" ")},
+   {role:"user",content:JSON.stringify({
+     purpose:"PREDICT_10_MIN_AFTER_MANUAL_CAPTURE",
+     version:COMPACT_VERSION,
+     outputLanguage:"zh-CN",explanationLanguage:"简体中文",
+     referencePrice:session.openPrice,
+     capturedAt:session.openedAt,expiresAt:session.expiresAt,
+     compactEvidence:data
+   })}
+  ]};
 }
 export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) {
   const key=String(env.DEEPSEEK_API_KEY||"");
@@ -229,7 +179,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       manualStartEnabled:!!key,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
-      enrichmentVersion:"EVENT10_PUBLIC_USDM_V2",
+      enrichmentVersion:"EVENT10_COMPACT_SOURCES_V5",
       decisionReviewVersion:REVIEW_VERSION,explanationLanguage:"zh-CN",
       lastFeatureCoverage:h?.featureAvailability||null,lastDataProbe,
       active:h&&["ANALYZING","PREDICTED","FAILED"].includes(h.status)&&clock()<h.expiresAt?h:null,
@@ -365,14 +315,15 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         openAgeMs:snapshot.observedAgeMs,features:snapshot.indicators,
         rollingTenMinutes,enrichment:enriched,continuousTradeFlow,featureAvailability:availability,
         sourceWarnings:optional.caveats,
-        featureBundleVersion:"EVENT10_PUBLIC_USDM_V2",
-        decisionReviewVersion:REVIEW_VERSION,decisionReview:null,analysisArguments:null,
+        featureBundleVersion:"EVENT10_COMPACT_SOURCES_V5",
+        decisionReviewVersion:REVIEW_VERSION,decisionReview:null,compactEvidence:null,analysisArguments:null,
         source:SOURCE,status:"ANALYZING",direction:null,
         model,attempts:0,confidence:null,reason:null,modelFinishedAt:null,
         closePrice:null,closeObservedAt:null,expirySampleLagMs:null,
         proxyOutcome:null,proxyHit:null,returnPct:null,
         officialEventOutcome:null,officialEventHit:null,
         realOrderPlaced:false,error:null};
+      session.compactEvidence=compactEvidence(session);
       session.decisionReview=buildDecisionReview(session);
       history.push(session);
       if(history.length>500)history.splice(0,history.length-500);

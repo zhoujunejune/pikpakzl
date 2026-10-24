@@ -238,7 +238,7 @@ function display(d){
   const detail=$("analysisDetail");detail.replaceChildren();
   if(s.decisionReviewVersion){
    const v=document.createElement("p");
-   v.textContent="分析逻辑：多周期趋势、主动成交及盘口双向证据核对（V4；价格口径与反转风险核验；不是模型权重自动训练）";
+   v.textContent="分析逻辑：V5 精简版，仅使用短周期走势、15分钟趋势和RSI、ATR及经核验的连续量价数据（不属于自动训练）";
    detail.append(v);
   }
   const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});

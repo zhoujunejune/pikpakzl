@@ -38,21 +38,22 @@ test("rolling ten minutes requires ten consecutive CLOSED 1-minute bars",()=>{
  broken.candles["1m"].items.splice(-4,1);
  assert.throws(()=>tenMinuteWindow(broken,NOW),/GAPPED_ROLLING_10M_CANDLES/);
 });
-test("all six Binance futures public input families validated without any signed order endpoint",async()=>{
+test("only two relevant Binance public input families are requested; no unrelated REST calls",async()=>{
  const seen=[];
  const d=await collectPublicFeatures({now:()=>NOW,fetcher:async url=>{
   seen.push(url);
   return testJson(payload(url,NOW));
  }});
- assert.equal(d.available,6);
+ assert.equal(d.available,2);
  assert.deepEqual(Object.keys(d.features).sort(), [...ENRICHMENT_NAMES].sort());
- assert.ok(d.features.orderBook.imbalanceTop20<0);
+ assert.equal(d.features.orderBook,undefined);
+ assert.equal(seen.length,2);
  assert.ok(d.features.aggressiveFlow.takerBuyFraction>0);
  assert.equal(d.features.aggressiveFlow.verifiedPriceResponse,false);
  assert.equal(d.features.aggressiveFlow.futuresPriceMovePct,null);
- assert.equal(d.features.futuresIndex.indexPrice,100010);
+ assert.equal(d.features.futuresIndex,undefined);
  assert.equal(d.features.fifteenMinute.candles,45);
- assert.equal(d.features.openInterestChange.change5mPct,10);
+ assert.equal(d.features.openInterestChange,undefined);
  for(const url of seen){
    assert.ok(url.startsWith("https://fapi.binance.com/"));
    assert.doesNotMatch(url,/\/order(?:\?|$)|\/balance|\/account|\/leverage/);
@@ -60,21 +61,21 @@ test("all six Binance futures public input families validated without any signed
 });
 test("451/418/timeout and malformed timestamps are explicitly marked unavailable",async()=>{
  const d=await collectPublicFeatures({now:()=>NOW,fetcher:async url=>{
-  if(url.includes("depth"))return {ok:false,status:451};
+  if(url.includes("interval=15m"))return {ok:false,status:451};
   if(url.includes("aggTrades"))return {ok:false,status:418};
-  if(url.includes("premiumIndex"))return testJson({...payload(url,NOW),time:NOW-500000});
+
   return testJson(payload(url,NOW));
  }});
- assert.equal(d.available,3);
- assert.equal(d.availability.orderBook.error,"REGION_RESTRICTED_451");
+ assert.equal(d.available,0);
+ assert.equal(d.availability.fifteenMinute.error,"REGION_RESTRICTED_451");
  assert.equal(d.availability.aggressiveFlow.error,"IP_BLOCK_418");
- assert.equal(d.availability.futuresIndex.error,"INDEX_STALE");
+
  assert.equal(d.features.futuresIndex,undefined);
 });
 test("source data from one-off sample does not claim official event-contract settlement",async()=>{
  const d=await collectPublicFeatures({now:()=>NOW,fetcher:async url=>testJson(payload(url,NOW))});
  assert.equal(d.eventsContractIndexOfficial,false);
- assert.match(d.caveats.join(" "),/not authenticated Event Contract/);
- assert.match(d.features.orderBook.caveat,/cancelled/);
+ assert.match(d.caveats.join(" "),/not identical|not/);
+ assert.equal(d.features.orderBook,undefined);
  assert.match(d.features.aggressiveFlow.caveat,/not full/);
 });

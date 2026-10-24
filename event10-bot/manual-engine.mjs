@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {collectPublicFeatures,tenMinuteWindow} from "./market-enrichment.mjs";
+import {buildDecisionReview,REVIEW_VERSION} from "./decision-review.mjs";
 export const HORIZON_MS = 600_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
@@ -89,7 +90,11 @@ export function parseDirection(raw) {
   if(value?.direction!=="UP"&&value?.direction!=="DOWN")throw Error("AI_MUST_OUTPUT_UP_OR_DOWN");
   return {direction:value.direction,confidence:
     finite(value.confidence)&&value.confidence>=0&&value.confidence<=1?
-      value.confidence:null,reason:String(value.reason||"").slice(0,300)};
+      value.confidence:null,reason:String(value.reason||"").slice(0,300),
+    upCase:String(value.upCase||"").slice(0,240),
+    downCase:String(value.downCase||"").slice(0,240),
+    decisiveEvidence:String(value.decisiveEvidence||"").slice(0,240),
+    uncertainty:String(value.uncertainty||"").slice(0,240)};
 }
 export function scoreProxy(openPrice,closePrice,direction) {
   if(!finite(openPrice)||!finite(closePrice)||openPrice<=0||closePrice<=0||
@@ -114,24 +119,41 @@ function prompt(session) {
     model:"deepseek-flash",response_format:{type:"json_object"},
     messages:[
       {role:"system",content:[
-        "You are an analytical model estimating whether BTC price will be HIGHER or LOWER",
-        "exactly 600 seconds after the user's MANUAL snapshot. A valid successful",
-        "analysis MUST decide UP or DOWN, never WAIT, never neutral. Use observed",
-        "market conditions, technical indicators, volatility and their limitations.",
-        "Return JSON ONLY with direction UP or DOWN, confidence from 0 to 1, and",
-        "reason up to 300 characters. Even when uncertain choose the more likely",
-        "direction, but explain the uncertainty and do not fabricate certainty.",
-        "The supplied BTC market proxy is NOT verified as Binance Event Contracts",
-        "official index/open/settlement price. Never claim the app placed an order",
-        "or that an eventual proxy comparison is official Event Contract settlement.",
-        "Do not use price observations after the user's snapshot.",
-        "Depth snapshots can contain spoofed/cancelled orders, and recent aggregated",
-        "trades and OI/funding are imperfect, correlated auxiliary features.",
-        "Missing enriched data is truly missing; never infer fake substitute values.",
-        "Additional Binance futures public market data is NOT Binance event-contract",
-        "official reference pricing. Analyzing more indicators does not prove higher accuracy.",
-        "Continuous flow is a 100ms aggregate event stream, not raw individual fills.",
-        "Only use continuous windows when all coverage/latency checks passed."
+        "You are an evidence-critical, two-sided BTC market forecaster.",
+        "Objective: will the SAME public BTC reference price be higher (UP)",
+        "or lower (DOWN) exactly 600 seconds after the provided manual capture?",
+        "A valid response MUST choose exactly UP or DOWN. NEVER WAIT or neutral.",
+        "Perform the following competing-hypothesis evaluation internally:",
+        "1) Read 1m / 5m / 15m closed-candle price action and rolling 10m context.",
+        "Distinguish trend continuation vs reversal and avoid double-counting",
+        "EMA, MACD, RSI and momentum as independent confirmations.",
+        "2) Separate aggression from PRICE RESPONSE. A large net taker-buy delta",
+        "or breakout alone does NOT prove price will rise. When buying dominates",
+        "but price remains below EMAs, momentum is down, or ask liquidity is heavy,",
+        "explicitly evaluate liquidity absorption or failed breakout possibilities.",
+        "Symmetrically evaluate sell pressure against resilient/rising prices.",
+        "3) Compare stronger timeframes with short intraminute moves. A countertrend",
+        "signal needs independently persuasive price-response evidence; do not",
+        "assume the market will bounce because price seems low.",
+        "4) Check the orderbook is a cancellable point-in-time sample and REST",
+        "aggTrades can cover less than a full 2 minutes. Prefer verified continuous",
+        "60s/300s/600s flow where available; do not count REST and continuous",
+        "overlapping prints as separate independent evidence.",
+        "5) Explicitly consider 15m/5m trend vs flow disagreement, volume spikes",
+        "at range extremes, OI change limitations, source staleness and missing data.",
+        "Do NOT make high-certainty claims merely from a bullish or bearish",
+        "majority of correlated indicators. Do NOT have a blanket UP/DOWN bias.",
+        "Evaluate an UP scenario AND a DOWN scenario, identify the strongest",
+        "disconfirming observation for each, then choose the more supported side.",
+        "Output JSON only: direction UP|DOWN, confidence numeric 0..1 (subjective",
+        "uncalibrated judgment, NOT proven win probability), upCase, downCase,",
+        "decisiveEvidence, uncertainty, reason. Keep each text field concise.",
+        "If evidence is mixed you MUST still pick UP or DOWN and explicitly name",
+        "the conflict and uncertainty; do not fake data or ignore opposing evidence.",
+        "Only use observations at/before frozen reference timestamp; never infer",
+        "real Binance Event Contract official settlement or a placed order.",
+        "Historical examples of 3 rounds are far too few to learn fixed trading",
+        "weights or a reversal rule. No retrospective outcome leaks into this call."
       ].join(" ")},
       {role:"user",content:JSON.stringify({
         purpose:"PREDICT_10_MIN_AFTER_MANUAL_CAPTURE",
@@ -141,6 +163,7 @@ function prompt(session) {
         rollingLastTenClosedMinutes:session.rollingTenMinutes,
         enrichedBinancePublicData:session.enrichment,
         continuousAggTradeFlow:session.continuousTradeFlow||null,
+        decisionQualityChecklist:session.decisionReview,
         featureAvailability:session.featureAvailability,
         sourceWarnings:session.sourceWarnings
       })}
@@ -180,6 +203,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
       enrichmentVersion:"EVENT10_PUBLIC_USDM_V2",
+      decisionReviewVersion:REVIEW_VERSION,
       lastFeatureCoverage:h?.featureAvailability||null,lastDataProbe,
       active:h&&["ANALYZING","PREDICTED","FAILED"].includes(h.status)&&clock()<h.expiresAt?h:null,
       lastSession:h,stats:stats()};
@@ -209,6 +233,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         session.direction=parsed.direction;
         session.confidence=parsed.confidence;
         session.reason=parsed.reason;
+        session.analysisArguments={upCase:parsed.upCase,downCase:parsed.downCase,
+          decisiveEvidence:parsed.decisiveEvidence,uncertainty:parsed.uncertainty};
         session.modelFinishedAt=clock();
         session.modelLatencyMs=clock()-started;
         session.status="PREDICTED";session.error=null;
@@ -313,12 +339,14 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         rollingTenMinutes,enrichment:enriched,continuousTradeFlow,featureAvailability:availability,
         sourceWarnings:optional.caveats,
         featureBundleVersion:"EVENT10_PUBLIC_USDM_V2",
+        decisionReviewVersion:REVIEW_VERSION,decisionReview:null,analysisArguments:null,
         source:SOURCE,status:"ANALYZING",direction:null,
         model,attempts:0,confidence:null,reason:null,modelFinishedAt:null,
         closePrice:null,closeObservedAt:null,expirySampleLagMs:null,
         proxyOutcome:null,proxyHit:null,returnPct:null,
         officialEventOutcome:null,officialEventHit:null,
         realOrderPlaced:false,error:null};
+      session.decisionReview=buildDecisionReview(session);
       history.push(session);
       if(history.length>500)history.splice(0,history.length-500);
       persist();

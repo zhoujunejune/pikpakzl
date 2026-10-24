@@ -115,6 +115,48 @@ for n,h in enumerate(hist[:15]):
     if n>=6:
         record={k:record.get(k) for k in ('seq','startedUtc','endedUtc','status','direction','confidence','openPrice','closePrice','proxyOutcome','proxyHit','deltaPct','settlementStatus','expirySampleLagMs','modelLatencyMs','decisionReviewVersion','availability')}
     print('EVENT10_ROUND_'+str(n+1)+'='+json.dumps(record,ensure_ascii=False,separators=(',',':')))
+# Latest post-V5/post-high reports are printed last so they survive
+# cloud command's log tail truncation. Read-only; original records unchanged.
+def summarise(items):
+ settled=[x for x in items if isinstance(x.get('proxyHit'),bool)]
+ hit=sum(1 for x in settled if x['proxyHit'] is True)
+ return {'records':len(items),'settled':len(settled),'hits':hit,
+         'misses':len(settled)-hit,
+         'accuracyPct':round(100*hit/len(settled),2) if settled else None,
+         'pending':sum(1 for x in items if x.get('status')=='PREDICTED' and x.get('proxyHit') is None),
+         'up':sum(1 for x in settled if x.get('direction')=='UP'),
+         'down':sum(1 for x in settled if x.get('direction')=='DOWN'),
+         'reasoningConfirmed':sum(1 for x in items if x.get('reasoningObserved') is True),
+         'reasoningUnconfirmed':sum(1 for x in items if x.get('reasoningObserved') is False)}
+v5=[h for h in hist if h.get('decisionReviewVersion')=='EVENT10_COMPACT_EVIDENCE_V5_20261024']
+afterhigh=[h for h in v5 if h.get('thinkingRequested') is True]
+beforehigh=[h for h in v5 if h.get('thinkingRequested') is not True]
+print('EVENT10_AUDIT_V5_ALL='+json.dumps(summarise(v5),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_AUDIT_V5_PRE_HIGH='+json.dumps(summarise(beforehigh),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_AUDIT_V5_AFTER_HIGH='+json.dumps(summarise(afterhigh),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_AUDIT_LATEST_10='+json.dumps(summarise(hist[:10]),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_AUDIT_CURRENT_THINKING='+json.dumps({
+    'thinkingMode':stat.get('thinkingMode'),
+    'reasoningEffort':stat.get('reasoningEffort'),
+    'lastReasoningObserved':stat.get('lastReasoningObserved'),
+    'lastReasoningTokenCount':stat.get('lastReasoningTokenCount'),
+    'model':stat.get('providerModel'),
+    'reviewVersion':stat.get('decisionReviewVersion')},ensure_ascii=False,separators=(',',':')))
+for i,h in enumerate(hist[:12]):
+ row={
+    'n':i+1,'atUTC':tm(h.get('openedAt')),'direction':h.get('direction'),
+    'status':h.get('status'),'ref':h.get('openPrice'),'end':h.get('closePrice'),
+    'proxyHit':h.get('proxyHit'),'outcome':h.get('proxyOutcome'),
+    'deltaPct':h.get('returnPct'),
+    'version':h.get('decisionReviewVersion'),
+    'thinkingRequested':h.get('thinkingRequested'),
+    'reasoningObserved':h.get('reasoningObserved'),
+    'reasoningTokenCount':h.get('reasoningTokenCount'),
+    'modelLatencyMs':h.get('modelLatencyMs'),
+    'settlementStatus':h.get('settlementStatus'),
+    'reason':str(h.get('reason') or '')[:100]
+ }
+ print('EVENT10_LATEST_'+str(i+1)+'='+json.dumps(row,ensure_ascii=False,separators=(',',':')))
 print('EVENT10_AUDIT_NO_PRODUCTION_WRITES=true')
 PYAUDIT
 """

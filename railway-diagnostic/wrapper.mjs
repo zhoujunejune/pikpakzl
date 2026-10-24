@@ -13,26 +13,30 @@ const AUTO_CONFIRM_MAX_ORDERS_PER_ROUND = Math.max(1, Number(process.env.AUTO_CO
 const AUTO_CONFIRM_COOLDOWN_MS = Math.max(0, Number(process.env.AUTO_CONFIRM_COOLDOWN_MS || 2500));
 const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.env.AUTO_CONFIRM_STOP_ON_ERROR || 'true'));
 const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
+const SELECTIVE30_ORDER_DEADLINE_MS = 30000; // New qualified Selective V2 + Edge 30-second policy only.
 const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
 const EDGE_ORDER_DEADLINE_MS = 8000; // Edge model strictly ends at T+8 seconds.
+function orderSubmitDeadlineForModel(model) {
+  return model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :
+    model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS :
+    model === EDGE_MODEL ? EDGE_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
+}
 function orderSubmitWindowOpen(round, now = Date.now(), model = null) {
   const start = Number(round);
-  const cutoff = model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS :
-    model === EDGE_MODEL ? EDGE_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
+  const cutoff = orderSubmitDeadlineForModel(model);
   return Number.isSafeInteger(start) && start > 0 && now >= start && now < start + cutoff;
 }
 function rejectExpiredOrderWindow(p, stage) {
   if (orderSubmitWindowOpen(p?.round, Date.now(), p?.signalModelChoice)) return false;
   const elapsedMs = Date.now() - Number(p?.round);
   p.state = 'ORDER_WINDOW_EXPIRED';
-  p.error = p?.signalModelChoice===DYNAMIC_MODEL
-    ? '动态模型本轮交易窗口已截止，未发送下单请求'
+  p.error = p?.signalModelChoice===SELECTIVE8_MODEL
+    ? '30秒策略本轮第30秒订单提交窗口已截止，未发送下单请求'
+    : p?.signalModelChoice===DYNAMIC_MODEL ? '动态模型本轮交易窗口已截止，未发送下单请求'
     : p?.signalModelChoice===EDGE_MODEL ? 'EDGE模型前8秒入场窗口已截止，未发送下单请求'
     : '本轮第15秒订单提交窗口已截止，未发送下单请求';
   console.log(JSON.stringify({ event:'order_submit_deadline_expired',
-    round:p.round, elapsedMs, deadlineMs:p?.signalModelChoice===DYNAMIC_MODEL
-      ?DYNAMIC_ORDER_DEADLINE_MS:p?.signalModelChoice===EDGE_MODEL
-        ?EDGE_ORDER_DEADLINE_MS:ORDER_SUBMIT_DEADLINE_MS, stage }));
+    round:p.round, elapsedMs, deadlineMs:orderSubmitDeadlineForModel(p?.signalModelChoice), stage }));
   return true;
 }
 
@@ -181,38 +185,28 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     source,
   }));
 
-  // Independent execution criteria for EDGE_5M_V1 only.
-  // The other three model execution paths and global EV_FILTER_ENABLED stay untouched.
+  // EDGE model selection, immutable 8s evidence, explicit user toggle and
+  // genuine Binance quote remain mandatory. Training progress is informational.
+  // Never substitute an uncalibrated score for a market win probability.
   if (p.signalModelChoice===EDGE_MODEL) {
-    const prob=Number(current.modelProbability);
+    const quotePrice=Number(quote.chance);
+    if (current.executionEligible!==true||
+        !Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1) {
+      p.state=isAuto?'AUTO_FAILED':'READY';
+      p.blockReason=current.executionEligible!==true?'EDGE5_SIGNAL_INVALID':'EDGE5_QUOTE_INVALID';
+      p.error='EDGE方向证据或币安订单报价无效，本轮未下单';
+      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
+    }
+    const prob=typeof current.modelProbability==='number'&&
+      Number.isFinite(current.modelProbability)&&current.calibrationReady===true
+      ?current.modelProbability:null;
     const cost=Math.max(0,Number(process.env.EDGE5_FEE_BUFFER||0.01))+
       Math.max(0,Number(process.env.EDGE5_SLIPPAGE_BUFFER||0.005));
-    const minEdge=Math.max(0.03,Number(process.env.EDGE5_MIN_EDGE||0.04));
-    const maxPrice=Math.min(0.99,Number(process.env.EDGE5_MAX_ENTRY_PRICE||0.55));
-    const quotePrice=Number(quote.chance);
-    const trusted=current.calibrationReady===true&&current.executionEligible===true&&
-      Number(current.calibrationSamples)>=5000&&
-      Number.isFinite(prob)&&prob>=0.5&&prob<=1;
-    const buyProbability=(current.rawDirection===p.signal)?prob:1-prob;
-    const edge=buyProbability-quotePrice-cost;
-    if(!trusted||!Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1||
-       !Number.isFinite(edge)||quotePrice>maxPrice||edge<minEdge){
-      p.state=isAuto?'EV_FILTERED':'READY';
-      p.blockReason=!trusted?'EDGE5_NOT_CALIBRATED':
-        !Number.isFinite(quotePrice)||quotePrice<=0||quotePrice>=1?'EDGE5_QUOTE_INVALID':
-        quotePrice>maxPrice?'EDGE5_PRICE_ABOVE_CAP':'EDGE5_INSUFFICIENT_EDGE';
-      p.error='EDGE模型未通过实时概率、买入价和成本校验，本轮不下单';
-      p.modelProbability=trusted?buyProbability:null;
-      p.quoteChance=Number.isFinite(quotePrice)?quotePrice:null;
-      p.edge=Number.isFinite(edge)?Number(edge.toFixed(6)):null;
-      p.minEdge=minEdge;
-      p.calibrationSamples=current.calibrationSamples||0;
-      console.log(JSON.stringify({event:'edge5_execution_filtered',round:p.round,
-        reason:p.blockReason,modelProbability:p.modelProbability,
-        quotePrice:p.quoteChance,edge:p.edge,minEdge,cost}));
-      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason,
-        modelProbability:p.modelProbability,quotePrice:p.quoteChance,edge:p.edge,minEdge}};
-    }
+    const buyProbability=prob===null?null:(current.rawDirection===p.signal?prob:1-prob);
+    p.modelProbability=buyProbability;
+    p.quoteChance=quotePrice;
+    p.edge=buyProbability===null?null:Number((buyProbability-quotePrice-cost).toFixed(6));
+    // Non-calibrated models remain explicitly uncalibrated; do not imply 75% accuracy.
   }
 
   if (EV_FILTER_ENABLED) {
@@ -414,11 +408,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
           (currentRetry.upstreamModel!==EDGE_MODEL||currentRetry.signalId!==p.signalId||
            currentRetry.executionEligible!==true||
            !Number.isFinite(Number(nextQuote.quote?.chance))||
-           Number(nextQuote.quote.chance)>Number(process.env.EDGE5_MAX_ENTRY_PRICE||0.55)||
-           (Number(currentRetry.rawDirection===p.signal?currentRetry.modelProbability:1-currentRetry.modelProbability)-
-             Number(nextQuote.quote.chance)-Number(process.env.EDGE5_FEE_BUFFER||0.01)-
-             Number(process.env.EDGE5_SLIPPAGE_BUFFER||0.005))<
-             Number(process.env.EDGE5_MIN_EDGE||0.04)))||
+           Number(nextQuote.quote.chance)<=0||
+           Number(nextQuote.quote.chance)>=1))||
        rejectExpiredOrderWindow(p,'before_retry_place_order')){
       p.state='RETRY_ABORTED';
       p.error='重试时信号、轮次或下单设置不再有效';
@@ -639,7 +630,7 @@ const notFoundIndex = source.indexOf(notFoundMarker, confirmStartIndex);
 if (confirmStartIndex < 0 || notFoundIndex < 0) throw new Error('CONFIRM_ROUTE_MARKERS_NOT_FOUND');
 const newConfirmRoute = String.raw`  if (req.method === 'POST' && url.pathname === '/api/confirm') {
     const body = await readBody(req);
-    if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
+    if (!pinOK(body.pin, req)) return send(res, 401, { ok: false, error: '请先通过站点登录验证' });
 
     const p = pendingAction;
     if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
@@ -716,12 +707,19 @@ const clientJs = String.raw`(function(){
       for(i=0;i<items.length;i++){ if(items[i].enabled&&Number(items[i].availableBalanceDisplay)>0){ first=items[i]; break; } }
       if(!first){ for(i=0;i<items.length;i++){ if(items[i].enabled){ first=items[i]; break; } } }
       if(!first&&items.length) first=items[0];
-      if(b.ok&&first){
+      if(b.previewConnectionOk===true){
+        html('walletBalance','<span class="ok">API 已连接（只读）</span>');
+        text('walletMeta','Render 公开测试环境不显示账户余额和资金数据');
+      }else if(b.ok&&first){
         html('walletBalance','<span class="ok">'+first.availableBalanceDisplay+' USDT</span>');
         text('walletMeta','账户：'+first.accountType+' · Binance Prediction 实时可用余额');
       }else{
-        html('walletBalance','<span class="bad">读取失败</span>');
-        text('walletMeta',(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':''));
+        html('walletBalance',b.error==='BINANCE_API_CREDENTIALS_MISSING'
+          ?'<span class="warn">交易账户未接入</span>'
+          :'<span class="bad">读取失败</span>');
+        text('walletMeta',b.error==='BINANCE_API_CREDENTIALS_MISSING'
+          ?'V3只读行情API已配置；本前台没有交易账户密钥，余额暂不可读取。'
+          :(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':''));
       }
 
       currentPending=j.pendingAction||null;
@@ -794,9 +792,9 @@ const clientJs = String.raw`(function(){
     var pinEl=el('pin'),button=el('egressProbeBtn');
     if(!pinEl||!pinEl.value){text('egressProbeResult','请先填写上方控制 PIN');return;}
     if(button){button.disabled=true;button.textContent='检测中...';}
-    text('egressProbeResult','正在查询 Railway 服务器公网出口...');
+    text('egressProbeResult','正在检查 Render 服务器公网出口...');
     request('POST','/api/egress-ip',{pin:pinEl.value},function(code,j){
-      if(button){button.disabled=false;button.textContent='检测 Railway 出口 IP（只读）';}
+      if(button){button.disabled=false;button.textContent='检测 Render 出口 IP（只读）';}
       if(code!==200||!j.ok){text('egressProbeResult',(j&&j.error)||'检测失败');return;}
       var consistency=j.consistency==='MATCH'?'两个来源一致':
         j.consistency==='DIFFERENT_EGRESS_IPS'?'注意：两个来源的IP不同':'仅一个来源成功';
@@ -810,10 +808,10 @@ const clientJs = String.raw`(function(){
   };
 
   window.setV=function(v){
-    var amountEl=el('amount'),pinEl=el('pin');
+    var amountEl=el('amount');
     var a=Number(amountEl&&amountEl.value);
     if(v&&amountEl&&amountEl.value&&(!isFinite(a)||a<1)){ alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准'); return; }
-    request('POST','/api/control',{enabled:v,amount:v&&amountEl?amountEl.value:undefined,pin:pinEl?pinEl.value:''},function(code,j){
+    request('POST','/api/control',{enabled:v,amount:v&&amountEl?amountEl.value:undefined},function(code,j){
       if(code<200||code>=300){ alert((j&&j.error)||'操作失败'); return; }
       refresh();
     });
@@ -822,9 +820,9 @@ const clientJs = String.raw`(function(){
   window.confirmOrder=function(){
     if(autoMode) return;
     if(!currentPending||currentPending.state!=='READY') return;
-    var btn=el('confirmBtn'),pinEl=el('pin');
+    var btn=el('confirmBtn');
     if(btn){ btn.disabled=true; btn.textContent='正在获取最新 Quote 并提交...'; }
-    request('POST','/api/confirm',{pin:pinEl?pinEl.value:'',confirmationToken:currentPending.confirmationToken},function(code,j){
+    request('POST','/api/confirm',{confirmationToken:currentPending.confirmationToken},function(code,j){
       if(code<200||code>=300){ alert(((j&&j.error)||'下单失败')+(j&&j.code!=null?' ('+j.code+')':'')); }
       refresh();
     });
@@ -848,5 +846,7 @@ if(!source.includes(marker)) throw new Error('HEALTH_ROUTE_MARKER_NOT_FOUND');
 const route="  if (req.method === 'GET' && url.pathname === '/panel-client.js') {\n    return send(res, 200, "+JSON.stringify(clientJs)+", 'application/javascript; charset=utf-8');\n  }\n\n";
 source=source.replace(marker,route+marker);
 
-fs.writeFileSync('/app/trade-control-fixed.mjs',source);
-await import('file:///app/trade-control-fixed.mjs');
+// Keep generated module alongside index.mjs so relative imports resolve on both Railway and Render.
+const generatedModuleUrl = new URL('./trade-control-fixed.mjs', import.meta.url);
+fs.writeFileSync(generatedModuleUrl,source);
+await import(generatedModuleUrl.href);

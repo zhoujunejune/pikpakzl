@@ -1,0 +1,42 @@
+name: EVENT10 isolated DeepSeek signal CI (no deploy)
+on:
+  push:
+    branches: [feature/event10-deepseek-signal]
+    paths:
+      - "event10-bot/**"
+      - ".github/workflows/event10-signal-ci.yml"
+  pull_request:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - "event10-bot/**"
+      - ".github/workflows/event10-signal-ci.yml"
+permissions:
+  contents: read
+jobs:
+  isolated-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate syntax and tests, with no live Binance or DeepSeek credentials
+        run: |
+          node --check event10-bot/server.mjs
+          node --test event10-bot/server.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/compact-evidence.test.mjs event10-bot/price-structure.test.mjs event10-bot/trade-stream-collector.test.mjs event10-bot/ui-layout.test.mjs event10-bot/chinese-display.test.mjs
+      - name: Verify event contract trade execution is always unsupported
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('event10-bot/server.mjs').read_text()
+          assert 'NO_EVENT_CONTRACT_ORDER_API' in s
+          e=Path('event10-bot/manual-engine.mjs').read_text()
+          assert 'autoTradingEnabled:false' in e
+          assert 'executionAvailable:false' in e
+          assert 'ALLOWED_ORIGINS' in s
+          for forbidden in ('/fapi/v1/order','/papi/v1/order','/api/v3/order',
+                            'BINANCE_API_SECRET','place-order-bundle'):
+              assert forbidden not in s,forbidden
+          print('EVENT10_NO_TRADING_PATHS=true')
+          PY

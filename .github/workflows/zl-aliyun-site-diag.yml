@@ -1,0 +1,28 @@
+name: Alibaba prediction site 502 readonly diagnostics
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-site-diag.yml'
+      - 'prediction-bot-v1/aliyun_site_diagnose.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Alibaba SWAS API SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only site, port, process and Caddy health investigation
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_site_diagnose.py
+
+# Read-only 502 investigation after DeepSeek statistics rollout.

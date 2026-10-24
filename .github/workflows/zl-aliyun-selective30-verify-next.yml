@@ -1,0 +1,28 @@
+name: Verify next complete real-market 30-second prediction decision
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_selective30_verify_next_round.py'
+      - '.github/workflows/zl-aliyun-selective30-verify-next.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-prediction-selective30-next-round-readonly
+  cancel-in-progress: false
+jobs:
+  observe-next-5min:
+    runs-on: ubuntu-latest
+    timeout-minutes: 11
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/aliyun_selective30_verify_next_round.py
+      - run: pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Wait for next real 5-minute Binance round and inspect immutable signal lock
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_selective30_verify_next_round.py

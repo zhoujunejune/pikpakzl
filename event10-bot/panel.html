@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0c1421"><title>EVENT10 · 手动10分钟DeepSeek预测</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:#0c1421;color:#edf4ff;line-height:1.55}
+main{max-width:940px;margin:auto;padding:18px 14px 60px}
+h1{font-size:24px;margin:15px 0 3px}h2{font-size:17px;margin:0 0 12px}
+nav{display:flex;flex-wrap:wrap;gap:7px}
+nav a{color:#add5ff;text-decoration:none;background:#192b43;padding:8px 10px;border-radius:10px;font-size:13px}
+nav a.active{background:#285c9d;color:#fff}
+.card{background:#172439;border:1px solid #31435c;border-radius:16px;padding:17px;margin:14px 0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.metric{background:#101c2e;border-radius:11px;padding:13px;min-width:0;overflow-wrap:anywhere}
+.metric small{display:block;font-size:12px;color:#aabed6}
+.metric strong{display:block;font-size:19px;margin-top:4px;font-variant-numeric:tabular-nums}
+.sub{color:#b5c5d9;font-size:13px}
+.notice{background:#2c281e;border-left:4px solid #f2ba6a;padding:12px 14px;border-radius:8px;font-size:13px}
+.good{color:#49dda6}.bad{color:#ff8293}.yellow{color:#ffcf7b}
+button{padding:13px 18px;border-radius:12px;background:#1673c1;color:white;border:1px solid #3a99e5;font:600 16px system-ui;cursor:pointer;min-height:50px}
+button:disabled{opacity:.43;cursor:not-allowed}button.secondary{background:#1f3450}
+.status{border:1px solid #49627e;border-radius:25px;padding:5px 12px;font-size:13px}
+.signal-panel{background:#10283f;border:1px solid #326391;border-radius:14px;margin-top:14px;padding:15px;overflow-wrap:anywhere}
+.signal-direction{display:block;font-size:30px;font-weight:800;line-height:1.25;letter-spacing:.025em}
+.signal-price{font-size:13px;color:#b8d1ec;font-variant-numeric:tabular-nums}
+.signal-reason{font-size:14px;line-height:1.7;margin:10px 0 0;color:#dce9f9;white-space:pre-wrap;overflow-wrap:anywhere}
+.signal-detail-title{font-size:12px;color:#a9c5e6;margin:12px 0 4px;font-weight:700}
+
+.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #31445d}
+th{color:#a9c6e7}
+@media(max-width:700px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}button.primary{width:100%}}
+</style></head><body><main>
+<nav aria-label="机器人切换">
+<a href="/dashboard/">合约机器人</a><a href="/prediction/">5分钟预测机器人</a>
+<a href="/futures-lab/">策略模拟</a><a href="/event10/" class="active" aria-current="page">EVENT10</a>
+</nav>
+<h1>EVENT10 · 手动10分钟 AI 预测</h1>
+<p class="sub">BTCUSDT · 点击时锁定参考价 · DeepSeek 给出 UP/DOWN · 10分钟后自动对比</p>
+<div class="notice">
+<strong>这不是币安事件合约真实开仓。</strong>
+按钮只会记录公开 BTC 行情参考价并触发预测，不会使用账户余额或提交订单。事件合约的实际开仓价与到期价格由币安官方指数决定，此页面的参考行情未证实等于该指数。下方仅统计公开行情代理命中率，绝不冒充官方结算胜率。
+</div>
+<section class="card">
+<div class="row"><h2>手动启动新的一轮</h2><span class="status" id="engine">连接中</span></div>
+<button class="primary" id="start" type="button">锁定当前参考价并让 DeepSeek 分析</button>
+<div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时数据服务状态…</div>
+<div class="signal-panel" id="immediatePrediction" aria-live="polite" aria-atomic="false">
+ <div class="row"><strong>本轮 DeepSeek 分析结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
+ <div class="row" style="margin-top:10px">
+  <strong id="quickDirection" class="signal-direction">尚未分析</strong>
+  <span class="signal-price" id="quickOpen">锁定参考价：—</span>
+ </div>
+ <div id="quickReason" class="signal-reason">点击上方按钮后，这里会自动显示模型方向和分析原因。</div>
+ <p class="sub" id="quickTimestamp">模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。</p>
+</div>
+<p class="sub">只有你点击才会分析；不会按整点或每隔10分钟自动发信号。每次点击后，以服务器成功获取的最新有效 BTC 行情快照为开始时间，10分钟后核对同一数据源。</p>
+</section>
+<section class="card">
+<div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
+<div class="grid">
+<div class="metric"><small>锁定参考价（非官方开仓价）</small><strong id="openPrice">—</strong></div>
+<div class="metric"><small>DeepSeek 最终方向</small><strong id="direction">—</strong></div>
+<div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
+<div class="metric"><small>10分钟后参考价</small><strong id="closePrice">—</strong></div>
+</div>
+<div class="grid" style="margin-top:10px">
+<div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
+<div class="metric"><small>计划参考结束时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
+<div class="metric"><small>模型判断耗时</small><strong id="latency">—</strong></div>
+<div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
+</div>
+<p class="sub" id="reason">点击按钮开始分析。</p>
+<div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
+<div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
+<p id="featureSummary" class="sub">仅在点击或手动检查时读取额外行情；断线和 HTTP 451 将明确标记，不补假数据。</p>
+<div id="featureHealth" class="grid" aria-live="polite"></div>
+<p class="sub">检查按钮不会启动 DeepSeek 或创建预测轮次。15分钟合约K线与指数价属于衍生品公开行情，并非已验证的事件合约官方结算指数。</p>
+<p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
+</section>
+<section class="card">
+<div class="row"><h2>后台持续成交采集（无需点击分析）</h2><span id="collectorState" class="status">检查中</span></div>
+<div class="grid">
+<div class="metric"><small>本进程已采集聚合成交</small><strong id="streamCount">—</strong></div>
+<div class="metric"><small>最近成交接收延迟</small><strong id="streamLag">—</strong></div>
+<div class="metric"><small>检测到的采集缺口</small><strong id="streamGaps">—</strong></div>
+<div class="metric"><small>连续数据覆盖</small><strong id="streamCoverage">—</strong></div>
+</div>
+<p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
+</section>
+<section class="card">
+<h2>独立统计（非官方结算）</h2>
+<div class="grid">
+<div class="metric"><small>手动启动次数</small><strong id="total">0</strong></div>
+<div class="metric"><small>有最终方向次数</small><strong id="decided">0</strong></div>
+<div class="metric"><small>公开行情已核对次数</small><strong id="settled">0</strong></div>
+<div class="metric"><small>公开行情命中率</small><strong id="accuracy">—</strong></div>
+</div>
+<p class="sub">数据过期、DeepSeek 调用失败、缺少到期价格时会明确记录失败或无法核验，不会虚构 UP/DOWN、结算结果或胜率。这里不显示资金盈亏。</p>
+</section>
+<section class="card">
+<div class="row"><h2>后台历史记录</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
+<div class="tablewrap"><table><thead><tr>
+<th>开始时间</th><th>参考价</th><th>AI方向</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
+</tr></thead><tbody id="records"><tr><td colspan="6">读取中…</td></tr></tbody></table></div>
+<p class="sub">历史记录存储在阿里云独立文件中。用于技术验证，不对应币安实际订单；官方事件合约胜率暂无可信的自动回填渠道。</p>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let active=null,inflight=false,pendingRequestId=null;
+const attemptedChineseTranslations=new Set();
+const hasChinese=text=>typeof text==="string"&&/[\u3400-\u9fff]/u.test(text);
+const needsChineseText=s=>{
+ if(!s||s.status!=="PREDICTED"||s.displayChinese)return false;
+ const parts=[s.reason,s.analysisArguments?.upCase,s.analysisArguments?.downCase,
+   s.analysisArguments?.decisiveEvidence,s.analysisArguments?.uncertainty];
+ return parts.some(t=>typeof t==="string"&&/[A-Za-z]{4,}/.test(t)&&!hasChinese(t));
+};
+const warningTitles={
+ BREAKOUT_VS_HIGHER_TREND:"3根1分钟K线确认突破，但与15分钟背景趋势冲突",
+ NO_PERSISTENT_SHORT_TREND:"最近3根已收盘1分钟K线方向未持续，不能把瞬间涨跌当趋势",
+ MISSING_VERIFIEDPRICESTRUCTURE:"1分钟K线价格结构数据不足，本轮不参考支撑阻力",
+ OVERSOLD_REVERSAL_RISK:"15分钟RSI明显偏弱或超卖，不能机械认定继续下跌",
+ OVERSOLD_SHORT_TERM_RECOVERY:"15分钟超卖但短周期出现转强迹象，必须认真评估反弹",
+ OVERBOUGHT_PULLBACK_RISK:"15分钟RSI明显偏高，不能机械认定继续上涨",
+ OVERBOUGHT_SHORT_TERM_WEAKENING:"15分钟偏强但短周期走弱，评估回调风险",
+ FLOW_PRICE_RESPONSE_UNVERIFIED:"合约成交采样不足，无法验证同一市场量价关系，不推断吸收",
+ HIGH_VOLUME_RANGE_HIGH:"异常放量且价格接近区间高点，警惕假突破和买单被吸收",
+ HIGH_VOLUME_RANGE_LOW:"异常放量且价格接近区间低点，警惕下跌延续或恐慌反转",
+ POSSIBLE_BUY_ABSORPTION:"主动买入较多但价格仍弱，存在买单被吸收的可能",
+ POSSIBLE_SELL_ABSORPTION:"主动卖出较多但价格偏强，存在卖单被吸收的可能",
+ HIGHER_TIMEFRAME_VS_FLOW_CONFLICT:"较大周期趋势与主动成交方向相互矛盾",
+ ORDERBOOK_VS_FLOW_CONFLICT:"盘口挂单压力与真实主动成交方向存在冲突",
+ FLOW_WINDOWS_DISAGREE:"不同成交数据窗口的方向不一致，应检查时间范围",
+ TIMEFRAME_TREND_CONFLICT:"不同时间周期的趋势方向存在分歧",
+ NO_VERIFIED_CONTINUOUS_FLOW:"没有完整有效的连续成交流，不可依据短时间抽样判断完整成交趋势"
+};
+const readableWarning=w=>{
+ const code=String(w||"").split(":")[0];
+ if(code.startsWith("MISSING_")){
+  const id=code.slice(8).toLowerCase();
+  const labels={fifteenminute:"15分钟K线",orderbook:"盘口数据",
+    aggressiveflow:"主动成交数据",futuresindex:"指数价格",openinterestchange:"持仓量变化",
+    continuousaggtrade:"连续成交流"};
+  return (labels[id]||"辅助行情")+"未通过校验，本轮不使用";
+ }
+ return warningTitles[code]||"其他数据冲突或质量限制（参阅下方数据覆盖情况）";
+};
+async function localizeLegacyLatest(s){
+ if(!needsChineseText(s)||attemptedChineseTranslations.has(s.id))return;
+ attemptedChineseTranslations.add(s.id);
+ try{
+  const response=await fetch("api/localize-latest",{method:"POST",credentials:"same-origin",
+    headers:{"X-Event10-Action":"translate-legacy-only"}});
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw Error("TRANSLATION_FAILED");
+  await refresh();
+ }catch{
+  $("quickReason").textContent="这轮记录来自旧版英文说明。中文翻译暂时不可用，可刷新页面重新尝试。";
+ }
+}
+
+const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{hour12:false}):"—";
+const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
+const phaseText={ANALYZING:"DeepSeek 正在分析",PREDICTED:"方向已确定，等待核对",FAILED:"AI分析失败",COMPLETE:"已核对"};
+const statusText=(v)=>{
+ if(v==="PUBLIC_MARKET_PROXY_ONLY")return "代理行情已核对";
+ if(v==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")return "到期时数据不足";
+ if(v==="FAILED")return "分析失败";
+ return "尚未核对";
+};
+function directionStyle(el,v){el.className=v==="UP"?"good":v==="DOWN"?"bad":"yellow";}
+function updateClock(){
+ if(!active){$("remaining").textContent="—";return;}
+ let n=Math.max(0,Math.floor((active.expiresAt-Date.now())/1000));
+ $("remaining").textContent=String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0");
+}
+const sectionNames={fifteenMinute:"15分钟K线",orderBook:"买卖盘口",aggressiveFlow:"主动成交订单流",futuresIndex:"指数价格/资金费率",openInterest:"实时持仓量",openInterestChange:"5分钟持仓变化",continuousAggTrade:"连续WebSocket成交历史"};
+const sourceErrorNames={
+ NEWER_THAN_REFERENCE_TICK:"采样时间晚于锁定参考价，已安全排除",
+ INCOMPLETE_OR_UNFRESH_STREAM_WINDOW:"所需历史窗口不完整或未通过时效检查",
+ COLLECTOR_UNAVAILABLE:"连续采集器未连接",
+ INSUFFICIENT_CONTINUOUS_UPTIME:"连接连续时间不足",
+ COLLECTION_GAP_IN_WINDOW:"采集窗口内存在断流或跳号",
+ TRADE_STREAM_STALE:"成交事件过期"
+};
+function showSources(coverage){
+ const el=$("featureHealth");el.replaceChildren();
+ const items=Object.entries(coverage||{});
+ const ready=items.filter(([,v])=>v.available).length;
+ $("featureSummary").textContent=items.length?
+  "上次检查或预测时，获得 "+ready+"/"+items.length+" 项辅助数据。这是当时的记录，不代表接口现在仍不可用。":
+  "尚未检查额外数据接口。首次点击预测时也会自动检查。";
+ for(const [k,v] of items){
+  const div=document.createElement("div");div.className="metric";
+  const name=document.createElement("small");name.textContent=sectionNames[k]||k;
+  const flag=document.createElement("strong");flag.style.fontSize="13px";
+  flag.textContent=v.available?"可用":"未用于分析："+(sourceErrorNames[v.error]||String(v.error||"UNKNOWN"));
+  flag.title=v.error||"";
+  if(!v.available&&Array.isArray(v.reasons)&&v.reasons.length){
+   const more=document.createElement("small");
+   more.textContent=v.reasons.join("；").slice(0,260);
+   div.append(more);
+  }
+  flag.className=v.available?"good":"yellow";div.append(name,flag);el.append(div);
+ }
+}
+function display(d){
+ const s=d.lastSession||null;
+ active=d.active||null;
+ const thinkingStatus=d.lastReasoningObserved===true?" · 实际推理已核验":
+   d.lastReasoningObserved===false?" · 未检测到推理内容":" · 等待下次分析验证";
+ $("engine").textContent=d.configured?
+   "DeepSeek 已配置 · 深度思考 High 已开启"+thinkingStatus:
+   "DeepSeek 未配置";
+ $("engine").className="status "+(d.configured?"good":"bad");
+ $("start").disabled=inflight||!d.configured||!!d.active||d.busyStart;
+ if(s){
+  $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
+  $("quickPhase").textContent=$("phase").textContent;
+  $("quickDirection").textContent=s.direction||(s.status==="ANALYZING"?"AI 正在分析…":s.status==="FAILED"?"分析失败":"等待结果");
+  $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
+  $("quickOpen").textContent="锁定参考价："+price(s.openPrice)+" USDT";
+  const waitChinese=needsChineseText(s);
+  const explanation=s.displayChinese?.reason||s.reason;
+  $("quickReason").textContent=s.status==="ANALYZING"?"已锁定参考价，DeepSeek 正在比较 UP 与 DOWN 两种方向…":
+    s.error?"分析失败："+s.error:waitChinese?"正在翻译旧版分析理由为简体中文…":
+    (explanation||"模型已给出方向；详细的双向证据请查看下方。");
+  $("quickTimestamp").textContent="开始："+when(s.openedAt)+" ｜ 参考到期："+when(s.expiresAt)+
+    " ｜ 仅供公开行情预测，不是事件合约官方开仓价或成交记录。";
+  $("openPrice").textContent=price(s.openPrice);
+  $("openedAt").textContent=when(s.openedAt);
+  $("expiresAt").textContent=when(s.expiresAt);
+  $("direction").textContent=s.direction|| (s.status==="ANALYZING"?"分析中":"无有效方向");
+  directionStyle($("direction"),s.direction);
+  $("latency").textContent=Number.isFinite(s.modelLatencyMs)?(s.modelLatencyMs/1000).toFixed(1)+"秒":"—";
+  $("closePrice").textContent=price(s.closePrice);
+  $("result").textContent=typeof s.proxyHit==="boolean"?(s.proxyHit?"代理命中":"代理未命中"):
+    s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
+  $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
+  $("reason").textContent=s.error?"错误："+s.error:(waitChinese?"旧版英文分析说明正在转换为简体中文…":explanation||"正在等待模型给出方向");
+  const detail=$("analysisDetail");detail.replaceChildren();
+  if(s.decisionReviewVersion){
+   const v=document.createElement("p");
+   v.textContent="分析逻辑：V6 AI价格结构版，新增1分钟动态支撑阻力和趋势持续性；最终UP/DOWN由DeepSeek High分析，尚非已验证胜率模型";
+   detail.append(v);
+  }
+  const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});
+  for(const [name,val] of [
+    ["支持UP的证据",args.upCase],["支持DOWN的证据",args.downCase],
+    ["最终决定性依据",args.decisiveEvidence],["不确定性",args.uncertainty]]){
+    if(!val)continue;
+    const p=document.createElement("p");
+    p.textContent=name+"："+val;detail.append(p);
+  }
+  const review=s.decisionReview||{};
+  if(review.warnings?.length){
+   const p=document.createElement("p");
+   p.textContent="本轮检测到的证据冲突/数据限制："+review.warnings.slice(0,5).map(readableWarning).join("；");
+   detail.append(p);
+  }
+  $("dataQuality").textContent="点击到参考价采集耗时："+(s.clickToCaptureMs??"—")+"ms；参考行情快照延迟："+(s.openAgeMs??"—")+"ms；数据源：BTC 公开行情代理；"+
+    (s.expirySampleLagMs!=null?"到期采样延迟："+s.expirySampleLagMs+"ms；":"")+
+    "非事件合约官方开仓与结算价格。";
+ }else{
+  $("quickPhase").textContent="尚未开始";
+  $("quickDirection").textContent="尚未分析";
+  $("quickDirection").className="signal-direction yellow";
+  $("quickOpen").textContent="锁定参考价：—";
+  $("quickReason").textContent="点击上方按钮后，这里会自动显示模型方向和分析原因。";
+  $("quickTimestamp").textContent="模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。";
+  $("analysisDetail").replaceChildren();
+  $("phase").textContent="尚未开始";
+ }
+ const stats=d.stats||{};
+ $("total").textContent=stats.total??0;
+ $("decided").textContent=stats.validDirections??0;
+ $("settled").textContent=stats.proxySettled??0;
+ $("accuracy").textContent=stats.proxyAccuracyPct==null?"—":stats.proxyAccuracyPct.toFixed(2)+"%";
+ showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
+ updateClock();
+}
+async function refreshCollector(){
+ try{
+  const r=await fetch("api/stream-health",{cache:"no-store"});
+  if(!r.ok)throw Error("COLLECTOR_HTTP_"+r.status);
+  const d=await r.json();
+  const live=d.connected&&d.lastReceivedAt!=null&&Date.now()-d.lastReceivedAt<=5000;
+  $("collectorState").textContent=live?"持续接收中":d.connected?"连接中·无新事件":"已断线/重连中";
+  $("collectorState").className="status "+(live?"good":"yellow");
+  $("streamCount").textContent=(d.totalSinceProcessStart??0).toLocaleString("zh-CN");
+  $("streamLag").textContent=d.lastEventLatencyMs==null?"—":d.lastEventLatencyMs+" ms";
+  $("streamGaps").textContent=d.gapCount??0;
+  const w=d.windows||{};
+  $("streamCoverage").textContent=["60s","300s","600s"].filter(x=>w[x]?.complete).map(x=>({ "60s":"1分钟","300s":"5分钟","600s":"10分钟"})[x]).join(" / ")||"数据积累中";
+  $("collectorExplanation").textContent="不点击时也持续采集，独立保存聚合成交日志。"+
+   (d.lastError?"最近错误："+d.lastError+"。":"")+
+   " 已记录重连次数："+(d.reconnectCount??0)+"；底层成交ID跳号："+(d.underlyingTradeIdSkips??0)+"（不等于聚合事件丢失）。每轮只使用真正完整的窗口。";
+ }catch{
+  $("collectorState").textContent="采集服务不可用";$("collectorState").className="status bad";
+  $("collectorExplanation").textContent="后台采集服务暂时无法验证，不能宣称采集正常。";
+ }
+}
+async function refresh(){
+ try{
+  const [r,h]=await Promise.all([
+    fetch("api/status",{cache:"no-store"}),
+    fetch("api/history",{cache:"no-store"})
+  ]);
+  if(!r.ok||!h.ok)throw Error("HTTP "+r.status+"/"+h.status);
+  const d=await r.json(),log=await h.json();
+  display(d);
+  if(d.lastSession)void localizeLegacyLatest(d.lastSession);
+  if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
+    d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
+  const rows=$("records");rows.replaceChildren();
+  if(!log.records?.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=6;td.textContent="暂无手动预测记录";tr.append(td);rows.append(tr);}
+  for(const s of log.records||[]){
+   const tr=document.createElement("tr");
+   const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
+     s.proxyOutcome==="FLAT"?"持平":s.settlementStatus?"未核验":"待到期";
+   for(const v of [when(s.openedAt),price(s.openPrice),s.direction||"—",
+     price(s.closePrice),res,s.settlementStatus?statusText(s.settlementStatus):phaseText[s.status]||s.status]){
+     const td=document.createElement("td");td.textContent=v;tr.append(td);
+   }rows.append(tr);
+  }
+ }catch(e){$("engine").textContent="无法连接";$("message").textContent="读取失败："+String(e);}
+}
+async function startClick(){
+ if(inflight)return;
+ inflight=true;$("start").disabled=true;$("message").textContent="正在向阿里云请求真实行情并锁定参考价…";
+ $("quickPhase").textContent="正在启动";
+ $("quickDirection").textContent="正在锁定参考价…";
+ $("quickDirection").className="signal-direction yellow";
+ $("quickReason").textContent="准备行情及技术指标后，DeepSeek 会比较看涨与看跌的证据。";
+ $("quickOpen").textContent="锁定参考价：采集中";
+ if(!pendingRequestId){
+  const v=new Uint8Array(16);crypto.getRandomValues(v);
+  pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
+ }
+ try{
+  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",
+    headers:{"X-Event10-Action":"manual-open","X-Event10-Request-ID":pendingRequestId}});
+  const d=await r.json();
+  if(!r.ok||!d.ok)throw Error(d.error||"启动失败");
+  pendingRequestId=null;
+  $("message").textContent="已经锁定公开市场参考价，正在获取 DeepSeek 的 UP/DOWN 判断。";
+  await refresh();
+ }catch(e){
+  $("message").textContent="未成功开始："+String(e);
+  $("quickPhase").textContent="本次启动失败";
+  $("quickDirection").textContent="没有产生新方向";
+  $("quickDirection").className="signal-direction yellow";
+  $("quickReason").textContent="未成功开始："+String(e);
+ }
+ finally{inflight=false;await refresh();}
+}
+$("start").addEventListener("click",startClick);
+$("refresh").addEventListener("click",refresh);
+$("checkDataSources").addEventListener("click",async()=>{
+ const btn=$("checkDataSources");btn.disabled=true;
+ $("featureSummary").textContent="正在检查币安公开接口连通性和时间戳…";
+ try{
+  const r=await fetch("api/data-health",{cache:"no-store"});
+  const data=await r.json();
+  if(!r.ok||!data.ok)throw Error(data.error||"检查失败");
+  showSources(data.availability);
+ }catch(e){$("featureSummary").textContent="数据源检查失败："+String(e);}
+ finally{btn.disabled=false;}
+});
+refresh();refreshCollector();setInterval(refresh,4000);setInterval(refreshCollector,5000);setInterval(updateClock,1000);
+</script></body></html>

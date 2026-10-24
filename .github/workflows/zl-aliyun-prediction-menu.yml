@@ -1,0 +1,63 @@
+name: Alibaba SWAS isolated prediction menu
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-prediction-menu.yml'
+      - 'prediction-bot-v1/serve.py'
+      - 'prediction-bot-v1/aliyun_deploy.py'
+      - 'futures-bot-v1/dashboard.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-prediction-readonly-menu
+  cancel-in-progress: false
+jobs:
+  deploy-prediction-menu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test prediction/futures interface isolation
+        run: python -m unittest discover -s prediction-bot-v1 -p 'test_serve.py' -v
+      - name: Install Alibaba SWAS SDK
+        run: python -m pip install --disable-pip-version-check alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy independent prediction monitor using existing Alibaba secrets
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deploy.py
+      - name: Verify HTTPS protection and both independent pages
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64, json, os, urllib.request, urllib.error
+          BASE="https://47-237-188-69.sslip.io"
+          password=os.environ.get("ZL_PANEL_PASSWORD","")
+          assert password, "Panel password missing; cannot verify protected public site"
+          auth="Basic "+base64.b64encode(("zl:"+password).encode()).decode()
+          def get(path, authorized=False):
+              req=urllib.request.Request(BASE+path,
+                  headers=({"Authorization":auth} if authorized else {}),
+                  method="GET")
+              try:
+                  with urllib.request.urlopen(req,timeout=17) as r:
+                      return r.status,r.read(120000)
+              except urllib.error.HTTPError as e:
+                  return e.code,b""
+          assert get("/prediction/")[0]==401, "prediction page lacks authentication"
+          a,page=get("/prediction/",True)
+          assert a==200 and b"/dashboard/" in page and b"/prediction/" in page, "menu missing"
+          a,health=get("/prediction/healthz",True)
+          assert a==200 and json.loads(health)["tradeExecutionEnabled"] is False, "unexpected real trading"
+          a,futures=get("/dashboard/",True)
+          assert a==200 and b"/prediction/" in futures, "futures nav not refreshed"
+          a,futures_health=get("/healthz",True)
+          assert a==200 and json.loads(futures_health)["mode"]=="paper", "futures service changed"
+          print("PASS: authenticated dual-menu, separate readonly prediction and unchanged paper futures")
+          PY

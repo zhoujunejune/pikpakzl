@@ -58,6 +58,19 @@ caddy validate --config /etc/caddy/Caddyfile >/dev/null
 systemctl reload caddy
 install -o root -g root -m 0644 "$dir/new-nav.py" /opt/zl-futures-nav/nav_bridge.py
 systemctl restart zl-frontend-nav-bridge
+# systemd restart returning success does not imply that the Python HTTP
+# listener at port 13019 is already accepting connections.
+nav_up=0
+for attempt in $(seq 1 30);do
+ if curl -fsS --max-time 2 http://127.0.0.1:13019/healthz >/dev/null 2>&1;then nav_up=1;break;fi
+ sleep 0.5
+done
+if test "$nav_up" != 1;then
+ echo EVENT10_NAV_HTTP_NOT_READY=true
+ systemctl status zl-frontend-nav-bridge --no-pager -l || true
+ journalctl -u zl-frontend-nav-bridge -n 20 --no-pager -o cat || true
+ exit 43
+fi
 python3 - <<'PY'
 import urllib.request
 for uri,marker in (

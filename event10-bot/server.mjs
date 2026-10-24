@@ -48,6 +48,15 @@ export function serve(engine,{port=Number(process.env.EVENT10_PORT||13020),host=
     if(pathname==="/healthz")return send(200,{ok:true,service:"zl-event10-manual",tradeExecution:false});
     if(pathname==="/api/status")return send(200,engine.status());
     if(pathname==="/api/history")return send(200,{ok:true,records:engine.history()});
+    if(pathname==="/api/stream-health"){
+      try{
+        const r=await fetch("http://127.0.0.1:13021/api/health",{signal:AbortSignal.timeout(1800)});
+        if(!r.ok)throw Error("COLLECTOR_HTTP_"+r.status);
+        const body=await r.json();
+        if(body.source!=="BINANCE_USDM_AGGTRADE_100MS_PUBLIC_WEBSOCKET")throw Error("COLLECTOR_SOURCE_UNEXPECTED");
+        return send(200,body);
+      }catch{return send(503,{ok:false,connected:false,error:"TRADE_STREAM_COLLECTOR_UNAVAILABLE"});}
+    }
     if(pathname==="/api/data-health"){
       try{return send(200,await engine.probe());}
       catch(e){return send(503,{ok:false,error:"BINANCE_ENRICHMENT_HEALTH_UNAVAILABLE"});}

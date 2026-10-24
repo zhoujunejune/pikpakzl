@@ -75,7 +75,7 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
  assert.equal(engine.status().lastSession.featureAvailability.orderBook.error,"REGION_RESTRICTED_451");
  assert.equal(engine.status().lastSession.featureAvailability.continuousAggTrade.available,false);
  assert.equal(engine.status().lastSession.rollingTenMinutes.closed1mBars,10);
- assert.equal(engine.status().lastSession.decisionReviewVersion,"EVENT10_BALANCED_EVIDENCE_V3_20261024");
+ assert.equal(engine.status().lastSession.decisionReviewVersion,"EVENT10_PRICE_SCOPE_REVERSAL_V4_20261024");
  assert.equal(engine.status().lastSession.status,"PREDICTED");
  assert.equal((await engine.start(id)).id,id);
  await assert.rejects(engine.start("another-click-id-4444"),/ACTIVE/);
@@ -162,9 +162,12 @@ test("as-of continuous BTC trade window is accepted even if LIVE collector has l
  assert.equal(engine.status().lastSession.direction,"UP");
  assert.ok(promptInput.messages[1].content.includes("continuousAggTradeFlow"));
  const frozenPayload=JSON.parse(promptInput.messages[1].content);
- assert.equal(frozenPayload.decisionQualityChecklist.version,"EVENT10_BALANCED_EVIDENCE_V3_20261024");
+ assert.equal(frozenPayload.decisionQualityChecklist.version,"EVENT10_PRICE_SCOPE_REVERSAL_V4_20261024");
  assert.ok(promptInput.messages[0].content.includes("Evaluate an UP scenario AND a DOWN scenario"));
  assert.ok(promptInput.messages[0].content.includes("NEVER WAIT"));
+ assert.ok(promptInput.messages[0].content.includes("PRICE INTEGRITY:"));
+ assert.ok(promptInput.messages[0].content.includes("CHECK OVERSOLD REVERSALS:"));
+ assert.equal(frozenPayload.decisionQualityChecklist.priceScopes.cannotCompareCrossMarketPricesDirectly,true);
  assert.ok(promptInput.messages[0].content.includes("OUTPUT LANGUAGE MUST BE SIMPLIFIED CHINESE"));
  assert.equal(JSON.parse(promptInput.messages[1].content).explanationLanguage,"简体中文");
  assert.equal(frozenPayload.referencePrice,101000);

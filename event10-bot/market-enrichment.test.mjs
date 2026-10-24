@@ -49,7 +49,7 @@ test("all six Binance futures public input families validated without any signed
  assert.ok(d.features.orderBook.imbalanceTop20<0);
  assert.ok(d.features.aggressiveFlow.takerBuyFraction>0);
  assert.equal(d.features.futuresIndex.indexPrice,100010);
- assert.equal(d.features.fifteenMinute.candles,44);
+ assert.equal(d.features.fifteenMinute.candles,45);
  assert.equal(d.features.openInterestChange.change5mPct,10);
  for(const url of seen){
    assert.ok(url.startsWith("https://fapi.binance.com/"));

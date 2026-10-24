@@ -38,7 +38,7 @@ export class ContinuousTradeCollector {
   this.lastId=null;this.lastTradeId=null;this.startedAt=clock();
   this.connectedAt=null;this.lastConnectedAt=null;
   this.total=0;this.duplicate=0;this.invalid=0;this.gapCount=0;
-  this.missingAggregateIds=0;this.reconnectCount=0;this.backpressure=0;
+  this.missingAggregateIds=0;this.underlyingTradeIdSkips=0;this.reconnectCount=0;this.backpressure=0;
   this.disconnectedIntervals=[];
   this.ws=null;this.running=false;this.attempt=0;this.retryTimer=null;
   this.checkTimer=null;this.rollTimer=null;this.activeMinute=null;this.journal=null;
@@ -117,8 +117,12 @@ export class ContinuousTradeCollector {
     this.missingAggregateIds+=lost;
     this.addGap("AGGREGATE_ID_GAP",lost,receivedAt);
    }
+   // Futures aggTrade intentionally excludes non-market trades, including
+   // insurance-fund and ADL fills. Therefore underlying f/l IDs may skip even
+   // while the aggregate stream's own 'a' ID is perfectly contiguous.
+   // Count these skips as informational evidence, NOT lost WebSocket packets.
    if(t.firstTradeId!==null&&this.lastTradeId!==null&&t.firstTradeId>this.lastTradeId+1)
-      this.addGap("UNDERLYING_TRADE_ID_GAP",t.firstTradeId-this.lastTradeId-1,receivedAt);
+      this.underlyingTradeIdSkips+=t.firstTradeId-this.lastTradeId-1;
   }
   this.lastId=t.id;
   this.lastTradeId=t.lastTradeId;
@@ -168,7 +172,7 @@ export class ContinuousTradeCollector {
    largeTakerSellUsd:round(big.filter(t=>t.takerSide==="SELL").reduce((a,t)=>a+t.notional,0),2),
    lastStreamReceiveAgeMs:age,eventLatencyP95Ms:p95,
    source:STREAM_SOURCE,
-   caveat:"Full stream of 100ms aggregate events while connected, not raw individual fills. Gaps are not silently backfilled."};
+   caveat:"The Binance USD-M stream contains only eligible market aggregates. Underlying trade-ID skips from excluded fills are audited separately, not packet-loss. Aggregate-ID discontinuities and transport gaps invalidate windows."};
  }
  features(asOf=this.clock()){
   const current=this.clock();
@@ -183,6 +187,7 @@ export class ContinuousTradeCollector {
    lastEventLatencyMs:this.lastEventLatencyMs,
    samplesBuffered:this.samples.length,historyRecordingEnabled:!this.disableDisk,
    gapCount:this.gapCount,missingAggregateIds:this.missingAggregateIds,
+   underlyingTradeIdSkips:this.underlyingTradeIdSkips,
    reconnectCount:this.reconnectCount,invalidEvents:this.invalid,
    duplicateEvents:this.duplicate,backpressureEvents:this.backpressure,
    totalSinceProcessStart:this.total,

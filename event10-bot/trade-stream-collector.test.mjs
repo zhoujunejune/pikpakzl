@@ -104,3 +104,26 @@ test("as-of stream snapshot excludes later ticks and later gaps without hallucin
  assert.equal(c.features().windows["60s"].complete,false);
  assert.throws(()=>c.features(NOW+10000),/INVALID_HISTORICAL_ASOF/);
 });
+
+test("excluded underlying trade IDs do NOT falsely invalidate contiguous Binance aggregate events",()=>{
+ let now=NOW;const c=new ContinuousTradeCollector({clock:()=>now,disableDisk:true});
+ c.connected=true;c.connectedAt=NOW-700000;
+ for(let i=0;i<60;i++){
+  const t=NOW-59000+i*1000;
+  const v=JSON.parse(event(6000+i,t,i%2===0));
+  // Agg ID is perfectly contiguous while underlying IDs skip for
+  // Binance market-data categories excluded from public aggTrade.
+  v.f=8000+i+(i===0?0:6);v.l=v.f;
+  assert.equal(c.accept(JSON.stringify(v),t),true);
+ }
+ assert.equal(c.missingAggregateIds,0);
+ assert.equal(c.underlyingTradeIdSkips,6);
+ assert.equal(c.gapCount,0);
+ assert.equal(c.features().windows["60s"].complete,true);
+ // Real missing Binance aggregate IDs are still safety-critical.
+ const broken=JSON.parse(event(6100,NOW,false));
+ broken.f=8100;broken.l=8100;
+ c.accept(JSON.stringify(broken),NOW);
+ assert.equal(c.features().windows["60s"].complete,false);
+ assert.ok(c.missingAggregateIds>0);
+});

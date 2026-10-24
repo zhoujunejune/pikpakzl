@@ -120,6 +120,9 @@ const needsChineseText=s=>{
  return parts.some(t=>typeof t==="string"&&/[A-Za-z]{4,}/.test(t)&&!hasChinese(t));
 };
 const warningTitles={
+ BREAKOUT_VS_HIGHER_TREND:"3根1分钟K线确认突破，但与15分钟背景趋势冲突",
+ NO_PERSISTENT_SHORT_TREND:"最近3根已收盘1分钟K线方向未持续，不能把瞬间涨跌当趋势",
+ MISSING_VERIFIEDPRICESTRUCTURE:"1分钟K线价格结构数据不足，本轮不参考支撑阻力",
  OVERSOLD_REVERSAL_RISK:"15分钟RSI明显偏弱或超卖，不能机械认定继续下跌",
  OVERSOLD_SHORT_TERM_RECOVERY:"15分钟超卖但短周期出现转强迹象，必须认真评估反弹",
  OVERBOUGHT_PULLBACK_RISK:"15分钟RSI明显偏高，不能机械认定继续上涨",
@@ -242,7 +245,7 @@ function display(d){
   const detail=$("analysisDetail");detail.replaceChildren();
   if(s.decisionReviewVersion){
    const v=document.createElement("p");
-   v.textContent="分析逻辑：V5 精简版，仅使用短周期走势、15分钟趋势和RSI、ATR及经核验的连续量价数据（不属于自动训练）";
+   v.textContent="分析逻辑：V6 AI价格结构版，新增1分钟动态支撑阻力和趋势持续性；最终UP/DOWN由DeepSeek High分析，尚非已验证胜率模型";
    detail.append(v);
   }
   const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});

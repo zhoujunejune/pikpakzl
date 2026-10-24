@@ -157,13 +157,11 @@ function oiHistory(d,now){
  return {observedAt:a.at(-1).timestamp,change5mPct:round((last/first-1)*100,5),
    caveat:"Two five-minute bins of Binance USD-M contract OI; separate from latest live OI."};
 }
+// EVENT10 V5 requests ONLY two core REST data families.
+// The independent 600-second WebSocket tape remains available.
 const sections=[
  {name:"fifteenMinute",route:"/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=45",parse:fifteenMinuteKlines},
- {name:"orderBook",route:"/fapi/v1/depth?symbol=BTCUSDT&limit=20",parse:depth},
- {name:"aggressiveFlow",route:"/fapi/v1/aggTrades?symbol=BTCUSDT&limit=1000",parse:aggressiveTrades},
- {name:"futuresIndex",route:"/fapi/v1/premiumIndex?symbol=BTCUSDT",parse:premium},
- {name:"openInterest",route:"/fapi/v1/openInterest?symbol=BTCUSDT",parse:oi},
- {name:"openInterestChange",route:"/futures/data/openInterestHist?symbol=BTCUSDT&period=5m&limit=3",parse:oiHistory}
+ {name:"aggressiveFlow",route:"/fapi/v1/aggTrades?symbol=BTCUSDT&limit=1000",parse:aggressiveTrades}
 ];
 export const ENRICHMENT_NAMES=Object.freeze(sections.map(x=>x.name));
 export async function collectPublicFeatures({fetcher=fetch,now=Date.now,timeoutMs=2800}={}){
@@ -198,8 +196,8 @@ export async function collectPublicFeatures({fetcher=fetch,now=Date.now,timeoutM
    available:sources.filter(x=>x.ok).length,total:sources.length,
    features,availability,eventsContractIndexOfficial:false,
    caveats:[
-     "These are Binance USD-M futures reference features, not authenticated Event Contract opening/settlement quotes.",
-     "Orderbook and last-1000-trade aggregates are short sampled windows, not a long-run complete order-flow stream.",
-     "Missing/restricted inputs are omitted, not replaced by guesses."
+     "EVENT10 V5 calls only 15m candles and USD-M recent aggregates; 600s tape comes from the independent read-only WebSocket collector.",
+     "Futures prices are not identical to public reference or official Event Contract settlement prices.",
+     "Missing or restricted core data is not invented; unrelated indicators are not requested."
    ]};
 }

@@ -19,11 +19,14 @@ export function confirmedPriceStructure(closed1m,referencePrice,asOf,atr1m){
     !finite(referencePrice)||referencePrice<=0||
     !finite(atr1m)||atr1m<=0||!Number.isSafeInteger(asOf))
    return null;
- const rows=closed1m.slice().sort((a,b)=>a.t-b.t).slice(-100);
- if(rows.some((r,i)=>!Number.isSafeInteger(r.t)||r.t<=0||
+ // Price tick may precede the most recently closed candle by milliseconds.
+ // Drop any candle closing AFTER the locked tick; never let newer bars enter AI.
+ const rows=closed1m.filter(r=>Number.isSafeInteger(r?.t)&&r.t>0&&
+   r.t+60000<=asOf).sort((a,b)=>a.t-b.t).slice(-100);
+ if(rows.length<45||rows.some((r,i)=>
     (i>0&&r.t-rows[i-1].t!==60000)||
     ![r.c,r.h,r.l,r.v].every(finite)||
-    r.c<=0||r.h<r.l||r.v<0||r.t+60000>asOf)||
+    r.c<=0||r.h<r.l||r.v<0)||
     asOf-(rows.at(-1).t+60000)>120000)
    return null;
  const recentRange=rows.slice(-20).reduce((v,r)=>v+r.h-r.l,0)/20;

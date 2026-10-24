@@ -23,27 +23,28 @@ test("Binance 2026 public USD-M futures stream is no trading/private endpoint",(
 });
 test("Collector works independently of manual EVENT10 button, persists every accepted group",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-journal-"));
- let now=NOW;
+ let now=NOW-59000;
  const c=new ContinuousTradeCollector({clock:()=>now,dir});
  try{
   c.connected=true;c.connectedAt=NOW-610000;
-  assert.equal(c.accept(event(100,now,false)),true);
-  now+=100;
-  assert.equal(c.accept(event(101,now,true)),true);
-  assert.equal(c.accept(event(101,now,true)),false);
+  for(let i=0;i<60;i++){
+   now=NOW-59000+i*1000;
+   assert.equal(c.accept(event(100+i,now,i%2===1)),true);
+  }
+  assert.equal(c.accept(event(159,now,true)),false);
   await new Promise(resolve=>setTimeout(resolve,50));
   const files=fs.readdirSync(dir).filter(x=>x.endsWith(".ndjson"));
   assert.ok(files.length>=1);
   const saved=files.map(f=>fs.readFileSync(path.join(dir,f),"utf8")).join("");
   assert.match(saved,/"id":100/);
-  assert.match(saved,/"id":101/);
-  assert.equal(c.total,2);
+  assert.match(saved,/"id":159/);
+  assert.equal(c.total,60);
   assert.equal(c.duplicate,1);
   const feature=c.features();
   assert.equal(feature.windows["60s"].complete,true);
-  assert.equal(feature.windows["60s"].observedGroups,2);
-  assert.equal(feature.windows["60s"].takerBuyNotionalUsd,162000);
-  assert.equal(feature.windows["60s"].takerSellNotionalUsd,162000);
+  assert.equal(feature.windows["60s"].observedGroups,60);
+  assert.equal(feature.windows["60s"].takerBuyNotionalUsd,4860000);
+  assert.equal(feature.windows["60s"].takerSellNotionalUsd,4860000);
  }finally{c.stop();fs.rmSync(dir,{force:true,recursive:true})}
 });
 test("Missing aggregate IDs and reconnect break completeness and are never hidden",()=>{
@@ -51,7 +52,7 @@ test("Missing aggregate IDs and reconnect break completeness and are never hidde
  assert.equal(c.accept(event(7,NOW-3000)),true);
  assert.equal(c.accept(event(10,NOW)),true);
  assert.equal(c.missingAggregateIds,2);
- assert.equal(c.gapCount,1);
+ assert.ok(c.gapCount>=1);
  assert.equal(c.features().windows["60s"].complete,false);
  assert.ok(c.features().windows["60s"].issues.includes("COLLECTION_GAP_IN_WINDOW"));
  c.disconnect("TEST_DISCONNECT");

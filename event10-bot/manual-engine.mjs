@@ -225,6 +225,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     if(history.some(x=>clock()<x.expiresAt && ["ANALYZING","PREDICTED","FAILED"].includes(x.status)))
       throw Error("TEN_MINUTE_SESSION_ALREADY_ACTIVE");
     busyStart=true;
+    const clickReceivedAt=clock();
     try{
       // Collect optional public USD-M features BEFORE freezing the reference tick.
       // This avoids using future information after the claimed entry reference time.
@@ -247,7 +248,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         availability};
       // Signal and reference price are frozen from ONE verified tick near the click.
       if(clock()-receivedAt>7000)throw Error("CAPTURE_REQUEST_TOO_SLOW");
-      const session={id,clickReceivedAt:receivedAt,openedAt:snapshot.observedAt,
+      const session={id,clickReceivedAt,openedAt:snapshot.observedAt,
+        clickToCaptureMs:clock()-clickReceivedAt,
         expiresAt:snapshot.observedAt+HORIZON_MS,openPrice:snapshot.price,
         openAgeMs:snapshot.observedAgeMs,features:snapshot.indicators,
         rollingTenMinutes,enrichment:enriched,featureAvailability:availability,

@@ -58,3 +58,8 @@
 内存窗口60秒、300秒、600秒的主动买/卖名义金额、净额、大额成交组和事件时效供人工点击时 DeepSeek 使用。只有连通性、采样延迟和该窗口内的数据缺口检查全部通过时才传入模型；断线、重启或积累时间不足均记为不可用。模型调用、参考价和10分钟价格验证规则保持不变。采集器不自动产生预测信号、不提交交易订单，也不参与事件合约官方结算价计算。
 
 实时运行状态：GET /event10/api/stream-health（需现有前台认证）显示 connected、accepted events、missingAggregateIds、gapCount、reconnectCount、lastEventLatencyMs 以及各时长窗口是否完整。该功能只针对连续成交采集，未添加强平事件、盘口WebSocket或价格指数修改。
+
+
+## 聚合事件 vs 底层原始成交 ID 连续性修复
+
+币安 USD-M @aggTrade 的 'a' 是聚合成交 ID，用于排查真正的聚合事件漏收；'f/l' 是包含的底层成交 ID 范围。由于官方文档明确指出 aggTrade 不包含保险基金和 ADL 等非普通市场成交，这些底层成交 ID 合法地出现跳号。只要聚合事件 ID 本身连续，单纯 'f/l' 跳号就必须作为信息性 'underlyingTradeIdSkips' 记录，不能错误累计到 gapCount 或导致 DeepSeek 丢弃全部1/5/10分钟窗口。真实聚合 ID 跳号、断线、积压、启动重建仍会标记完整性故障。任何已保存的旧诊断继续保留原始证据，不伪造历史。

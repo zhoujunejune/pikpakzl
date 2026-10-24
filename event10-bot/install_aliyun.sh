@@ -12,11 +12,11 @@ curl -fsS --max-time 4 http://127.0.0.1:13021/api/health -o /tmp/zl-event10-stre
 curl -fsS --max-time 4 http://127.0.0.1:13020/api/status -o /tmp/zl-event10-session-before.json 2>/dev/null || true
 stream_old_sha="$(sha256sum /opt/zl-event10/trade-stream-collector.mjs 2>/dev/null | awk '{print $1}' || true)"
 install -d -m 0755 /opt/zl-event10
-for f in server.mjs manual-engine.mjs market-enrichment.mjs decision-review.mjs trade-stream-collector.mjs panel.html server.test.mjs market-enrichment.test.mjs decision-review.test.mjs trade-stream-collector.test.mjs ui-layout.test.mjs;do
+for f in server.mjs manual-engine.mjs market-enrichment.mjs decision-review.mjs chinese-display.mjs trade-stream-collector.mjs panel.html server.test.mjs market-enrichment.test.mjs decision-review.test.mjs trade-stream-collector.test.mjs ui-layout.test.mjs chinese-display.test.mjs;do
  curl -fsSL --retry 3 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/$f" -o "/opt/zl-event10/$f"
 done
 "$node" --check /opt/zl-event10/server.mjs
-"$node" --test /opt/zl-event10/server.test.mjs /opt/zl-event10/market-enrichment.test.mjs /opt/zl-event10/decision-review.test.mjs /opt/zl-event10/trade-stream-collector.test.mjs /opt/zl-event10/ui-layout.test.mjs
+"$node" --test /opt/zl-event10/server.test.mjs /opt/zl-event10/market-enrichment.test.mjs /opt/zl-event10/decision-review.test.mjs /opt/zl-event10/trade-stream-collector.test.mjs /opt/zl-event10/ui-layout.test.mjs /opt/zl-event10/chinese-display.test.mjs
 cat >/etc/systemd/system/zl-event10-deepseek.service <<'EOF'
 [Unit]
 Description=ZL Event Contract Ten Minute Read Only DeepSeek Signal
@@ -65,6 +65,8 @@ print('EVENT10_BACKEND_READY=true')
 print('EVENT10_PROVIDER_MODEL='+str(x['providerModel']))
 assert x.get('decisionReviewVersion')=='EVENT10_BALANCED_EVIDENCE_V3_20261024', 'EVENT10_NEW_PROMPT_VERSION_NOT_ACTIVE'
 print('EVENT10_BALANCED_DECISION_REVIEW_V3_ACTIVE=true')
+assert x.get('explanationLanguage')=='zh-CN', 'CHINESE_PROMPT_NOT_ACTIVE'
+print('EVENT10_CHINESE_EXPLANATIONS_ENABLED=true')
 PY
 # Verify the REAL served page now shows the current analysis result immediately under the manual button.
 curl -fsS --max-time 5 http://127.0.0.1:13020/ > /tmp/zl-event10-ui-deploy.html
@@ -76,6 +78,9 @@ required=('id="start"','id="immediatePrediction"','id="quickDirection"','id="qui
 assert all(x in p for x in required),'EVENT10_LIVE_ANALYSIS_PANEL_MISSING'
 assert p.index('id="start"')<p.index('id="immediatePrediction"')<p.index('完整分析详情（本轮 / 最近一轮）')<p.index('后台持续成交采集'),'EVENT10_LIVE_ANALYSIS_PANEL_WRONG_ORDER'
 print('EVENT10_LIVE_RESULT_UNDER_MANUAL_BUTTON=true')
+assert '正在翻译旧版分析理由为简体中文' in p
+assert 'translate-legacy-only' in p
+print('EVENT10_CHINESE_FRONTEND_AND_LEGACY_SUPPORT=true')
 PY
 rm -f /tmp/zl-event10-ui-deploy.html
 rm -f /tmp/zl-event10-status.json

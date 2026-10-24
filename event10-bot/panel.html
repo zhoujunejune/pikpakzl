@@ -68,6 +68,7 @@ th{color:#a9c6e7}
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
 <p class="sub" id="reason">点击按钮开始分析。</p>
+<div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
 <p id="featureSummary" class="sub">仅在点击或手动检查时读取额外行情；断线和 HTTP 451 将明确标记，不补假数据。</p>
 <div id="featureHealth" class="grid" aria-live="polite"></div>
@@ -159,10 +160,31 @@ function display(d){
     s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
   $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
   $("reason").textContent=s.error?"错误："+s.error:(s.reason||"正在等待模型给出方向");
+  const detail=$("analysisDetail");detail.replaceChildren();
+  if(s.decisionReviewVersion){
+   const v=document.createElement("p");
+   v.textContent="分析逻辑："+s.decisionReviewVersion+"（双向证据核对，不是自动训练的模型权重）";
+   detail.append(v);
+  }
+  const args=s.analysisArguments||{};
+  for(const [name,val] of [
+    ["支持UP的证据",args.upCase],["支持DOWN的证据",args.downCase],
+    ["最终决定性依据",args.decisiveEvidence],["不确定性",args.uncertainty]]){
+    if(!val)continue;
+    const p=document.createElement("p");
+    p.textContent=name+"："+val;detail.append(p);
+  }
+  const review=s.decisionReview||{};
+  if(review.warnings?.length){
+   const p=document.createElement("p");
+   p.textContent="本轮检测到的证据冲突/数据限制："+review.warnings.slice(0,5).join("；");
+   detail.append(p);
+  }
   $("dataQuality").textContent="点击到参考价采集耗时："+(s.clickToCaptureMs??"—")+"ms；参考行情快照延迟："+(s.openAgeMs??"—")+"ms；数据源：BTC 公开行情代理；"+
     (s.expirySampleLagMs!=null?"到期采样延迟："+s.expirySampleLagMs+"ms；":"")+
     "非事件合约官方开仓与结算价格。";
  }else{
+  $("analysisDetail").replaceChildren();
   $("phase").textContent="尚未开始";
  }
  const stats=d.stats||{};

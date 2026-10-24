@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {createEngine} from "./manual-engine.mjs";
+import {createChineseDisplay} from "./chinese-display.mjs";
 export {createEngine,HORIZON_MS,checkedTick,buildSnapshot,parseDirection,scoreProxy} from "./manual-engine.mjs";
 const ALLOWED_ORIGINS=new Set([
   "https://47-237-188-69.sslip.io",
@@ -13,6 +14,7 @@ export function serve(engine,{port=Number(process.env.EVENT10_PORT||13020),host=
   if(host!=="127.0.0.1")throw Error("LOOPBACK_ONLY");
   const dir=path.dirname(fileURLToPath(import.meta.url));
   const page=fs.readFileSync(path.join(dir,"panel.html"),"utf8");
+  const chineseDisplay=createChineseDisplay();
   const server=http.createServer(async(req,res)=>{
     let pathname;
     try{pathname=new URL(req.url,"http://localhost").pathname;}
@@ -42,11 +44,30 @@ export function serve(engine,{port=Number(process.env.EVENT10_PORT||13020),host=
         return send(status,{ok:false,error});
       }
     }
+    // Only translates the latest already-finished explanatory text, not a new forecast.
+    // Exact authenticated same-origin action; cannot translate arbitrary caller text.
+    if(req.method==="POST"&&pathname==="/api/localize-latest"){
+      if(!ALLOWED_ORIGINS.has(req.headers.origin)||
+          req.headers["x-event10-action"]!=="translate-legacy-only")
+        return send(403,{ok:false,error:"INVALID_ORIGIN_OR_ACTION"});
+      if(Number(req.headers["content-length"]||0)>0)
+        return send(413,{ok:false,error:"EMPTY_BODY_REQUIRED"});
+      try{
+        const latest=engine.status().lastSession;
+        return send(200,await chineseDisplay.translate(latest));
+      }catch(e){
+        return send(503,{ok:false,error:String(e?.message||e).slice(0,110)});
+      }
+    }
     if(req.method!=="GET")return send(405,{ok:false,error:"NO_EVENT_CONTRACT_ORDER_API"});
     if(pathname==="/"||pathname==="/event10/"||pathname==="/index.html")
       return send(200,page,true);
     if(pathname==="/healthz")return send(200,{ok:true,service:"zl-event10-manual",tradeExecution:false});
-    if(pathname==="/api/status")return send(200,engine.status());
+    if(pathname==="/api/status"){
+      const state=engine.status();
+      return send(200,{...state,lastSession:chineseDisplay.overlay(state.lastSession),
+        active:chineseDisplay.overlay(state.active)});
+    }
     if(pathname==="/api/history")return send(200,{ok:true,records:engine.history()});
     if(pathname==="/api/stream-health"){
       try{

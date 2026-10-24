@@ -36,6 +36,13 @@ for at,e in trade:
  r=e.get('round');d=e.get('direction')
  if isinstance(r,int) and d in ('UP','DOWN') and r<=at<r+300000:
   buys[r].append((at,d))
+entryQuotes=collections.defaultdict(list)
+for at,e in trade:
+ if e.get('event')!='fresh_quote_ready':continue
+ try:
+  roundMs=int(e['round']);price=float(e['chance'])
+  if 0<price<1 and roundMs<=at<roundMs+300000:entryQuotes[roundMs].append((at,price))
+ except (ValueError,TypeError,KeyError):pass
 stopchecks=collections.defaultdict(list)
 quoteTracks=collections.defaultdict(list)
 stoptriggers=collections.defaultdict(list)
@@ -118,6 +125,32 @@ print('STOP35_QUOTE_TRACK_META',json.dumps({'positionsWithChecks':len(quoteTrack
  'joinedCompleteEarlyQuotePaths':len(thresholdRows),'skipped':dict(trackSkip)}),flush=True)
 print('STOP35_QUOTE_TRACK_ROWS',json.dumps(sorted(thresholdRows,key=lambda q:q['r'])[-250:],
  separators=(',',':'),ensure_ascii=False),flush=True)
+
+# Read-only counterfactual using only observed pre-exit quotes. Buy quote price
+# is an approximate payout ratio, NOT verified actual fill price.
+priceRows=[]
+for tok,samples in quoteTracks.items():
+ grouped=collections.defaultdict(list)
+ for at,pnl in samples:grouped[at//300000*300000].append((at,pnl))
+ for rnd,snapshots in grouped.items():
+  if rnd+300000>now:continue
+  entries=[(at,d) for at,d in buys.get(rnd,[]) if at<rnd+300000]
+  if not entries or len(set(d for _,d in entries))!=1:continue
+  enter,side=min(entries)
+  sample=sorted((at,pnl) for at,pnl in snapshots if enter<=at<rnd+300000)
+  if not sample or sample[0][0]-enter>45000:continue
+  previous=[(at,price) for at,price in entryQuotes.get(rnd,[]) if at<=enter and enter-at<=10000]
+  if not previous:continue
+  qPrice=previous[-1][1]
+  hitQuotes={}
+  for threshold in (25,30,35,40,45,50,55,60,70,80,90):
+   hit=next((pnl for at,pnl in sample if pnl<=-threshold),None)
+   if hit is not None:hitQuotes[str(threshold)]=round(hit,2)
+  priceRows.append({'r':rnd,'d':side,'entryQ':round(qPrice,5),
+   'hits':hitQuotes,'observedMin':round(min(pnl for at,pnl in sample),2)})
+print('STOP35_PNL_META',json.dumps({'withPriorBuyQuote':len(priceRows),
+ 'allEarlyTracked':len(thresholdRows),'historicalQuoteEvents':sum(map(len,entryQuotes.values()))}))
+print('STOP35_PNL_PATH_ROWS',json.dumps(sorted(priceRows,key=lambda q:q['r'])[-250:],separators=(',',':')))
 
 print('STOP35_META',json.dumps(dict(reason),ensure_ascii=False),flush=True)
 print('STOP35_ROUND_ROWS',json.dumps(sorted(results,key=lambda x:x['r'])[-250:],

@@ -81,7 +81,7 @@ export class ContinuousTradeCollector {
   if(last){this.lastId=last.id;this.lastTradeId=last.lastTradeId;this.lastReceivedAt=last.receivedAt;
     this.lastTradeAt=last.tradeAt;}
   // A restart is an explicit coverage discontinuity until a full new window is observed.
-  this.gaps.push({at:this.clock(),reason:"COLLECTOR_RESTART",count:null});
+  if(last)this.gaps.push({at:this.clock(),reason:"COLLECTOR_RESTART",count:null});
  }
  rotateJournal(now){
   if(this.disableDisk)return;
@@ -151,6 +151,7 @@ export class ContinuousTradeCollector {
   if(age===null||age>5000||age<0)invalidReasons.push("TRADE_STREAM_STALE");
   if(this.gaps.some(g=>g.at>=now-windowMs))invalidReasons.push("COLLECTION_GAP_IN_WINDOW");
   if(!rows.length)invalidReasons.push("EMPTY_WINDOW");
+  else if(rows[0].receivedAt>now-windowMs+3000)invalidReasons.push("WINDOW_START_NOT_OBSERVED");
   const buy=rows.reduce((a,t)=>a+(t.takerSide==="BUY"?t.notional:0),0);
   const sell=rows.reduce((a,t)=>a+(t.takerSide==="SELL"?t.notional:0),0);
   const big=rows.filter(t=>t.notional>=100000);

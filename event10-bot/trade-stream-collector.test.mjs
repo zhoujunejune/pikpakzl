@@ -121,9 +121,9 @@ test("excluded underlying trade IDs do NOT falsely invalidate contiguous Binance
  assert.equal(c.gapCount,0);
  assert.equal(c.features().windows["60s"].complete,true);
  // Real missing Binance aggregate IDs are still safety-critical.
- const broken=JSON.parse(event(6100,NOW+1,false));
+ const broken=JSON.parse(event(6100,NOW,false));
  broken.f=8100;broken.l=8100;
- c.accept(JSON.stringify(broken),NOW+1);
+ c.accept(JSON.stringify(broken),NOW);
  assert.equal(c.features().windows["60s"].complete,false);
  assert.ok(c.missingAggregateIds>0);
 });

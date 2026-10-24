@@ -1,5 +1,5 @@
 // Source-grounded evidence review; no learned weights, no orders or direction override.
-export const REVIEW_VERSION="EVENT10_BALANCED_EVIDENCE_V3_20261024";
+export const REVIEW_VERSION="EVENT10_PRICE_SCOPE_REVERSAL_V4_20261024";
 const val=n=>typeof n==="number"&&Number.isFinite(n)?n:null;
 const sign=x=>x>0?"UP":x<0?"DOWN":"NEUTRAL";
 export function buildDecisionReview(session){
@@ -49,11 +49,30 @@ export function buildDecisionReview(session){
    warnings.push("HIGH_VOLUME_RANGE_HIGH: high volume at/above range high; test breakout failure, not automatic UP");
  if(vol!==null&&vol>=4&&loc!==null&&loc<=.05)
    warnings.push("HIGH_VOLUME_RANGE_LOW: high volume near range low; test downside continuation, not automatic DOWN");
- const price=val(session.openPrice),ema1=val(f.ema1m9),mm=val(f.momentum1m5Pct);
- if(flowDelta!==null&&flowDelta>0&&((mm!==null&&mm<0)||(ema1!==null&&price!==null&&price<ema1)))
-   warnings.push("POSSIBLE_BUY_ABSORPTION: taker buying dominates but price/momentum is weak; not proof of absorption");
- if(flowDelta!==null&&flowDelta<0&&((mm!==null&&mm>0)||(ema1!==null&&price!==null&&price>ema1)))
-   warnings.push("POSSIBLE_SELL_ABSORPTION: taker selling dominates but price holds/strengthens; not proof of absorption");
+ // Aggressive BTCUSDT USD-M futures prints must be paired with
+ // price movement from the SAME prints, never with the other proxy feed.
+ const perpMove=flow.verifiedPriceResponse===true?val(flow.futuresPriceMovePct):null;
+ if(flowDelta!==null&&perpMove!==null){
+   if(flowDelta>0&&perpMove<-.02)
+     warnings.push("POSSIBLE_BUY_ABSORPTION: futures taker buys dominate but SAME futures sample price declined; not proof of absorption");
+   if(flowDelta<0&&perpMove>.02)
+     warnings.push("POSSIBLE_SELL_ABSORPTION: futures taker sells dominate but SAME futures sample price rose; not proof of absorption");
+ }else if(flowDelta!==null){
+   warnings.push("FLOW_PRICE_RESPONSE_UNVERIFIED: no sufficient same-futures-price duration; do not infer absorption from the proxy reference price");
+ }
+ const rsi15=val(fifteen.rsi14);
+ const shortTurnUp=(val(f.momentum1m5Pct)??-1)>0||
+    (val(f.ema1m9)!==null&&val(f.ema1m21)!==null&&f.ema1m9>f.ema1m21);
+ const shortTurnDown=(val(f.momentum1m5Pct)??1)<0||
+    (val(f.ema1m9)!==null&&val(f.ema1m21)!==null&&f.ema1m9<f.ema1m21);
+ if(rsi15!==null&&rsi15<=30){
+   warnings.push("OVERSOLD_REVERSAL_RISK: 15m RSI indicates weak/oversold conditions; downside continuation is NOT automatic");
+   if(shortTurnUp)warnings.push("OVERSOLD_SHORT_TERM_RECOVERY: shorter horizon has positive signs despite weak 15m RSI; evaluate reversal against continuation explicitly");
+ }
+ if(rsi15!==null&&rsi15>=70){
+   warnings.push("OVERBOUGHT_PULLBACK_RISK: 15m RSI is elevated; upside continuation is NOT automatic");
+   if(shortTurnDown)warnings.push("OVERBOUGHT_SHORT_TERM_WEAKENING: short-horizon weakness contrasts with elevated 15m RSI; test pullback hypothesis");
+ }
  if(higherAligned!=="MIXED"&&flowDelta!==null&&((higherAligned==="UP"&&flowDelta<0)||(higherAligned==="DOWN"&&flowDelta>0)))
    warnings.push("HIGHER_TIMEFRAME_VS_FLOW_CONFLICT: distinguish reversal from countertrend aggressive trades");
  if(book!==null&&flowDelta!==null&&Math.abs(book)>.4&&((book<0&&flowDelta>0)||(book>0&&flowDelta<0)))
@@ -70,9 +89,14 @@ export function buildDecisionReview(session){
  if(!primaryFlow)warnings.push("NO_VERIFIED_CONTINUOUS_FLOW: REST sample cannot imply uninterrupted trading");
  const risk=warnings.filter(s=>/CONFLICT|ABSORPTION|MISSING_|NO_VERIFIED/.test(s)).length;
  return {version:REVIEW_VERSION,
-   purpose:"Both-sided evidence checklist; correlated indicators are not independent votes",
+   purpose:"Separate reference-price trend from USD-M futures tape. Stress-test oversold bounce AND continued selloff. No trained directional weights.",
    trend:trend.slice(0,8),independentChecks:checks.slice(0,6),
-   timeframeSummary:{m1:t1,m5:t5,m15:t15,higherAligned},
+   timeframeSummary:{m1:t1,m5:t5,m15:t15,higherAligned,rsi15m:rsi15},
+   priceScopes:{forecastReference:"BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX",
+     aggressiveTrades:"BINANCE_USDM_BTCUSDT_FUTURES_AGGTRADES",
+     futuresPriceResponseVerified:flow.verifiedPriceResponse===true,
+     futuresSamplePriceMovePct:perpMove,
+     cannotCompareCrossMarketPricesDirectly:true},
    warnings:warnings.slice(0,16),
    riskOfOverconfidentDecision:risk>=3?"HIGH":risk>=1?"ELEVATED":"UNASSESSED",
    policy:"Assess UP and DOWN independently. No deterministic direction override, no calibrated probabilities and no training on three outcomes."};

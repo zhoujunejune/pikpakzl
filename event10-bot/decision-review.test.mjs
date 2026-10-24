@@ -8,7 +8,7 @@ function base(){
   location1m20:.99,volumeRatio1m:8,
  },enrichment:{features:{
   fifteenMinute:{ema9:101,ema21:104,moveLast45mPct:-.2},
-  aggressiveFlow:{takerBuyFraction:.76,deltaNotionalUsd:2000000},
+  aggressiveFlow:{takerBuyFraction:.76,deltaNotionalUsd:2000000,verifiedPriceResponse:true,futuresPriceMovePct:-.09},
   orderBook:{imbalanceTop20:-.85},
   openInterestChange:{change5mPct:-.2}
  }},featureAvailability:{
@@ -33,7 +33,7 @@ test("mirror image bullish trend, heavy aggressive sells and rising price gets s
   momentum1m5Pct:.1,location1m20:.1,volumeRatio1m:2};
  s.openPrice=104;
  s.enrichment.features.fifteenMinute={ema9:105,ema21:102,moveLast45mPct:.11};
- s.enrichment.features.aggressiveFlow={takerBuyFraction:.20,deltaNotionalUsd:-2000000};
+ s.enrichment.features.aggressiveFlow={takerBuyFraction:.20,deltaNotionalUsd:-2000000,verifiedPriceResponse:true,futuresPriceMovePct:.11};
  s.enrichment.features.orderBook={imbalanceTop20:.88};
  const r=buildDecisionReview(s);
  assert.equal(r.timeframeSummary.higherAligned,"UP");
@@ -56,5 +56,37 @@ test("all inputs missing: quality review does not fabricate evidence",()=>{
   featureAvailability:{fifteenMinute:{available:false,error:"HTTP_451"}}});
  assert.equal(r.trend.length,0);
  assert.ok(r.warnings.some(x=>x.startsWith("MISSING_FIFTEENMINUTE")));
+ assert.equal("direction" in r,false);
+});
+
+test("different reference and futures prices NEVER prove absorption without same-market price response",()=>{
+ const s=base();
+ s.openPrice=90000;
+ s.features.ema1m9=100000;
+ s.enrichment.features.aggressiveFlow.verifiedPriceResponse=false;
+ s.enrichment.features.aggressiveFlow.futuresPriceMovePct=null;
+ const r=buildDecisionReview(s);
+ assert.equal(r.priceScopes.cannotCompareCrossMarketPricesDirectly,true);
+ assert.equal(r.priceScopes.futuresPriceResponseVerified,false);
+ assert.ok(!r.warnings.some(x=>x.startsWith("POSSIBLE_BUY_ABSORPTION")));
+ assert.ok(r.warnings.some(x=>x.startsWith("FLOW_PRICE_RESPONSE_UNVERIFIED")));
+});
+test("15m RSI oversold plus short price rebound is flagged, NEVER forces the UP direction",()=>{
+ const s=base();
+ s.enrichment.features.fifteenMinute.rsi14=22.5;
+ s.features.momentum1m5Pct=.14;
+ const r=buildDecisionReview(s);
+ assert.equal(r.timeframeSummary.rsi15m,22.5);
+ assert.ok(r.warnings.some(x=>x.startsWith("OVERSOLD_REVERSAL_RISK")));
+ assert.ok(r.warnings.some(x=>x.startsWith("OVERSOLD_SHORT_TERM_RECOVERY")));
+ assert.equal("direction" in r,false);
+});
+test("overbought deterioration is symmetric, no automatic DOWN signal",()=>{
+ const s=base();
+ s.enrichment.features.fifteenMinute.rsi14=78;
+ s.features.momentum1m5Pct=-.14;
+ const r=buildDecisionReview(s);
+ assert.ok(r.warnings.some(x=>x.startsWith("OVERBOUGHT_PULLBACK_RISK")));
+ assert.ok(r.warnings.some(x=>x.startsWith("OVERBOUGHT_SHORT_TERM_WEAKENING")));
  assert.equal("direction" in r,false);
 });

@@ -63,8 +63,8 @@ assert x['configured'] is True, 'EVENT10_DEEPSEEK_NOT_CONFIGURED'
 assert x['autoTradingEnabled'] is False and x['executionAvailable'] is False
 print('EVENT10_BACKEND_READY=true')
 print('EVENT10_PROVIDER_MODEL='+str(x['providerModel']))
-assert x.get('decisionReviewVersion')=='EVENT10_BALANCED_EVIDENCE_V3_20261024', 'EVENT10_NEW_PROMPT_VERSION_NOT_ACTIVE'
-print('EVENT10_BALANCED_DECISION_REVIEW_V3_ACTIVE=true')
+assert x.get('decisionReviewVersion')=='EVENT10_PRICE_SCOPE_REVERSAL_V4_20261024', 'EVENT10_NEW_PROMPT_VERSION_NOT_ACTIVE'
+print('EVENT10_PRICE_SCOPE_REVERSAL_REVIEW_V4_ACTIVE=true')
 assert x.get('explanationLanguage')=='zh-CN', 'CHINESE_PROMPT_NOT_ACTIVE'
 print('EVENT10_CHINESE_EXPLANATIONS_ENABLED=true')
 PY

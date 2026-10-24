@@ -10,12 +10,13 @@ test -x "$node"
 # has real 1m/5m/10m windows BEFORE replacing the collector process.
 curl -fsS --max-time 4 http://127.0.0.1:13021/api/health -o /tmp/zl-event10-stream-before.json 2>/dev/null || true
 curl -fsS --max-time 4 http://127.0.0.1:13020/api/status -o /tmp/zl-event10-session-before.json 2>/dev/null || true
+stream_old_sha="$(sha256sum /opt/zl-event10/trade-stream-collector.mjs 2>/dev/null | awk '{print $1}' || true)"
 install -d -m 0755 /opt/zl-event10
-for f in server.mjs manual-engine.mjs market-enrichment.mjs trade-stream-collector.mjs panel.html server.test.mjs market-enrichment.test.mjs trade-stream-collector.test.mjs;do
+for f in server.mjs manual-engine.mjs market-enrichment.mjs decision-review.mjs trade-stream-collector.mjs panel.html server.test.mjs market-enrichment.test.mjs decision-review.test.mjs trade-stream-collector.test.mjs;do
  curl -fsSL --retry 3 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/$f" -o "/opt/zl-event10/$f"
 done
 "$node" --check /opt/zl-event10/server.mjs
-"$node" --test /opt/zl-event10/server.test.mjs /opt/zl-event10/market-enrichment.test.mjs /opt/zl-event10/trade-stream-collector.test.mjs
+"$node" --test /opt/zl-event10/server.test.mjs /opt/zl-event10/market-enrichment.test.mjs /opt/zl-event10/decision-review.test.mjs /opt/zl-event10/trade-stream-collector.test.mjs
 cat >/etc/systemd/system/zl-event10-deepseek.service <<'EOF'
 [Unit]
 Description=ZL Event Contract Ten Minute Read Only DeepSeek Signal
@@ -62,6 +63,8 @@ assert x['configured'] is True, 'EVENT10_DEEPSEEK_NOT_CONFIGURED'
 assert x['autoTradingEnabled'] is False and x['executionAvailable'] is False
 print('EVENT10_BACKEND_READY=true')
 print('EVENT10_PROVIDER_MODEL='+str(x['providerModel']))
+assert x.get('decisionReviewVersion')=='EVENT10_BALANCED_EVIDENCE_V3_20261024', 'EVENT10_NEW_PROMPT_VERSION_NOT_ACTIVE'
+print('EVENT10_BALANCED_DECISION_REVIEW_V3_ACTIVE=true')
 PY
 rm -f /tmp/zl-event10-status.json
 # Public market input availability check. Does not place an order or call DeepSeek.
@@ -105,7 +108,13 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable zl-event10-trade-stream >/dev/null
-systemctl restart zl-event10-trade-stream
+stream_new_sha="$(sha256sum /opt/zl-event10/trade-stream-collector.mjs | awk '{print $1}')"
+if test -n "$stream_old_sha" && test "$stream_old_sha" = "$stream_new_sha" && systemctl is-active --quiet zl-event10-trade-stream;then
+ echo EVENT10_WS_OLD_PROCESS_PRESERVED=true
+else
+ systemctl restart zl-event10-trade-stream
+ echo EVENT10_WS_RESTARTED_COLLECTOR_CHANGED=true
+fi
 ready=0
 for i in $(seq 1 25);do
  if curl -fsS --max-time 2 http://127.0.0.1:13021/api/health -o /tmp/zl-event10-trade-stream.json 2>/dev/null;then

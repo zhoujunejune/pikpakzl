@@ -55,7 +55,7 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
  const file=stateFile();
  const engine=createEngine({clock:()=>now,env:{DEEPSEEK_API_KEY:"TEST_ONLY",EVENT10_STATE_FILE:file},
   fetcher:async(url,opts)=>{
-   if(url.startsWith("https://fapi.binance.com/"))return {ok:false,status:451};
+   if(url.startsWith("https://fapi.binance.com/")||url.includes("127.0.0.1:13021"))return {ok:false,status:451};
    if(url.includes("shadow-market-data")){market++;return json(fixture(now,now-1000,now>=NOW+600000?101050:101000));}
    api++;
    assert.equal(opts.method,"POST");
@@ -73,6 +73,7 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
  assert.equal(engine.status().lastSession.featureBundleVersion,"EVENT10_PUBLIC_USDM_V2");
  assert.equal(engine.status().lastSession.enrichment.available,0);
  assert.equal(engine.status().lastSession.featureAvailability.orderBook.error,"REGION_RESTRICTED_451");
+ assert.equal(engine.status().lastSession.featureAvailability.continuousAggTrade.available,false);
  assert.equal(engine.status().lastSession.rollingTenMinutes.closed1mBars,10);
  assert.equal(engine.status().lastSession.status,"PREDICTED");
  assert.equal((await engine.start(id)).id,id);
@@ -93,7 +94,7 @@ test("manual click freezes a price, retries WAIT, decides UP, and checks outcome
 test("model keeps returning WAIT: record failure, do not invent UP/DOWN",async()=>{
  let now=NOW;
  const engine=createEngine({clock:()=>now,env:{DEEPSEEK_API_KEY:"TEST_ONLY",EVENT10_STATE_FILE:stateFile()},
-  fetcher:async(url)=>url.startsWith("https://fapi.binance.com/")?{ok:false,status:451}:
+  fetcher:async(url)=>(url.startsWith("https://fapi.binance.com/")||url.includes("127.0.0.1:13021"))?{ok:false,status:451}:
     url.includes("shadow-market-data")?json(fixture(now)):
     json({choices:[{message:{content:'{"direction":"WAIT","reason":"weak"}'}}]})});
  await engine.start("id-for-model-fail-001");await flush();await flush();
@@ -104,7 +105,7 @@ test("model keeps returning WAIT: record failure, do not invent UP/DOWN",async()
 test("POST manual click is same-origin protected, GET never triggers analysis",async()=>{
  let now=NOW;
  const engine=createEngine({clock:()=>now,env:{DEEPSEEK_API_KEY:"TEST_ONLY",EVENT10_STATE_FILE:stateFile()},
-  fetcher:async(url)=>url.startsWith("https://fapi.binance.com/")?{ok:false,status:451}:
+  fetcher:async(url)=>(url.startsWith("https://fapi.binance.com/")||url.includes("127.0.0.1:13021"))?{ok:false,status:451}:
     url.includes("shadow-market-data")?json(fixture(now)):
     json({choices:[{message:{content:'{"direction":"DOWN","confidence":0.4}'}}]})});
  const server=serve(engine,{port:0});

@@ -66,6 +66,22 @@ for key in ('60s','300s','600s'):
     w=(stream.get('windows') or {}).get(key) or {}
     print('EVENT10_LIVE_WINDOW_'+key+'='+json.dumps({k:w.get(k) for k in ['complete','issues','observedGroups','eventLatencyP95Ms']},separators=(',',':')))
 print('EVENT10_AUDIT_RECORDS_FOUND='+str(len(hist)))
+recent=hist[:30]
+settled=[h for h in recent if isinstance(h.get('proxyHit'),bool)]
+total=len(settled); wins=sum(h.get('proxyHit') for h in settled)
+print('EVENT10_AUDIT_LAST30='+json.dumps({'count':len(recent),'settled':total,'hits':wins,'misses':total-wins,'hitPct':round(100*wins/total,2) if total else None},separators=(',',':')))
+versions={}
+for h in settled:
+ v=h.get('decisionReviewVersion') or 'UNVERSIONED'
+ d=versions.setdefault(v,{'count':0,'hits':0,'UP':0,'DOWN':0})
+ d['count']+=1;d['hits']+=int(h['proxyHit']);d[h.get('direction','UP') if h.get('direction') in ('UP','DOWN') else 'UP']+=1
+print('EVENT10_AUDIT_BY_VERSION='+json.dumps(versions,ensure_ascii=False,separators=(',',':')))
+streak=0
+for h in hist:
+ if h.get('proxyHit') is False:streak+=1
+ elif h.get('proxyHit') is True:break
+print('EVENT10_AUDIT_LATEST_LOSS_STREAK='+str(streak))
+
 for n,h in enumerate(hist[:15]):
     features=h.get('features') or {}
     enr=(h.get('enrichment') or {}).get('features') or {}

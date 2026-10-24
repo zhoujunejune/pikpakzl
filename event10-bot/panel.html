@@ -110,19 +110,33 @@ function updateClock(){
  let n=Math.max(0,Math.floor((active.expiresAt-Date.now())/1000));
  $("remaining").textContent=String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0");
 }
-const sectionNames={fifteenMinute:"15分钟K线",orderBook:"买卖盘口",aggressiveFlow:"主动成交订单流",futuresIndex:"指数价格/资金费率",openInterest:"实时持仓量",openInterestChange:"5分钟持仓变化"};
+const sectionNames={fifteenMinute:"15分钟K线",orderBook:"买卖盘口",aggressiveFlow:"主动成交订单流",futuresIndex:"指数价格/资金费率",openInterest:"实时持仓量",openInterestChange:"5分钟持仓变化",continuousAggTrade:"连续WebSocket成交历史"};
+const sourceErrorNames={
+ NEWER_THAN_REFERENCE_TICK:"采样时间晚于锁定参考价，已安全排除",
+ INCOMPLETE_OR_UNFRESH_STREAM_WINDOW:"所需历史窗口不完整或未通过时效检查",
+ COLLECTOR_UNAVAILABLE:"连续采集器未连接",
+ INSUFFICIENT_CONTINUOUS_UPTIME:"连接连续时间不足",
+ COLLECTION_GAP_IN_WINDOW:"采集窗口内存在断流或跳号",
+ TRADE_STREAM_STALE:"成交事件过期"
+};
 function showSources(coverage){
  const el=$("featureHealth");el.replaceChildren();
  const items=Object.entries(coverage||{});
  const ready=items.filter(([,v])=>v.available).length;
  $("featureSummary").textContent=items.length?
-  "经本次数据源检查，已获得 "+ready+"/"+items.length+" 项辅助数据。缺失项目不参与模型分析。":
+  "上次检查或预测时，获得 "+ready+"/"+items.length+" 项辅助数据。这是当时的记录，不代表接口现在仍不可用。":
   "尚未检查额外数据接口。首次点击预测时也会自动检查。";
  for(const [k,v] of items){
   const div=document.createElement("div");div.className="metric";
   const name=document.createElement("small");name.textContent=sectionNames[k]||k;
   const flag=document.createElement("strong");flag.style.fontSize="13px";
-  flag.textContent=v.available?"可用":"不可用："+String(v.error||"UNKNOWN");
+  flag.textContent=v.available?"可用":"未用于分析："+(sourceErrorNames[v.error]||String(v.error||"UNKNOWN"));
+  flag.title=v.error||"";
+  if(!v.available&&Array.isArray(v.reasons)&&v.reasons.length){
+   const more=document.createElement("small");
+   more.textContent=v.reasons.join("；").slice(0,260);
+   div.append(more);
+  }
   flag.className=v.available?"good":"yellow";div.append(name,flag);el.append(div);
  }
 }

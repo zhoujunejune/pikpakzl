@@ -144,12 +144,13 @@ export class ContinuousTradeCollector {
   if(!WINDOWS.includes(windowMs))throw Error("UNSUPPORTED_WINDOW");
   this.prune(now);
   const rows=this.samples.filter(t=>t.receivedAt>now-windowMs&&t.receivedAt<=now);
-  const age=this.lastReceivedAt===null?null:now-this.lastReceivedAt;
+  const lastInWindow=rows.at(-1)||null;
+  const age=lastInWindow===null?null:now-lastInWindow.receivedAt;
   const invalidReasons=[];
   if(!this.connected)invalidReasons.push("WEBSOCKET_DISCONNECTED");
   if(this.connectedAt===null||this.connectedAt>now-windowMs)invalidReasons.push("INSUFFICIENT_CONTINUOUS_UPTIME");
   if(age===null||age>5000||age<0)invalidReasons.push("TRADE_STREAM_STALE");
-  if(this.gaps.some(g=>g.at>=now-windowMs))invalidReasons.push("COLLECTION_GAP_IN_WINDOW");
+  if(this.gaps.some(g=>g.at>=now-windowMs&&g.at<=now))invalidReasons.push("COLLECTION_GAP_IN_WINDOW");
   if(!rows.length)invalidReasons.push("EMPTY_WINDOW");
   else if(rows[0].receivedAt>now-windowMs+3000)invalidReasons.push("WINDOW_START_NOT_OBSERVED");
   const buy=rows.reduce((a,t)=>a+(t.takerSide==="BUY"?t.notional:0),0);
@@ -169,12 +170,15 @@ export class ContinuousTradeCollector {
    source:STREAM_SOURCE,
    caveat:"Full stream of 100ms aggregate events while connected, not raw individual fills. Gaps are not silently backfilled."};
  }
- features(){
-  const now=this.clock();
+ features(asOf=this.clock()){
+  const current=this.clock();
+  if(!Number.isSafeInteger(asOf)||asOf>current+1000||asOf<current-600000)
+    throw Error("INVALID_HISTORICAL_ASOF");
+  const now=asOf;
   const windows={};
   for(const x of WINDOWS)windows[x/1000+"s"]=this.summarize(x,now);
   return {ok:true,source:STREAM_SOURCE,serverTime:now,
-   connected:this.connected,lastTradeAt:this.lastTradeAt,
+   connected:this.connected,asOf:now,lastTradeAt:this.lastTradeAt,
    lastReceivedAt:this.lastReceivedAt,lastAggregateId:this.lastId,
    lastEventLatencyMs:this.lastEventLatencyMs,
    samplesBuffered:this.samples.length,historyRecordingEnabled:!this.disableDisk,
@@ -267,7 +271,14 @@ export function serveCollector(c,{port=Number(process.env.EVENT10_STREAM_PORT||1
   };
   if(req.method!=="GET")return send(405,{ok:false,error:"READ_ONLY"});
   if(p==="/healthz"||p==="/api/health")return send(200,c.health());
-  if(p==="/api/features")return send(200,c.features());
+  if(p==="/api/features"){
+   try{
+    const request=new URL(req.url,"http://localhost");
+    const raw=request.searchParams.get("asof");
+    const asOf=raw===null?undefined:Number(raw);
+    return send(200,c.features(asOf));
+   }catch(e){return send(400,{ok:false,error:"INVALID_ASOF"});}
+  }
   return send(404,{ok:false,error:"NOT_FOUND"});
  });
  server.listen(port,host);return server;

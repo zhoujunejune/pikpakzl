@@ -81,3 +81,26 @@ test("Collector local API is GET-only and does not open event contract orders",a
   assert.equal((await fetch(base+"/api/order",{method:"POST"})).status,405);
  }finally{server.close();c.stop()}
 });
+
+test("as-of stream snapshot excludes later ticks and later gaps without hallucinating completeness",()=>{
+ let now=NOW;
+ const c=new ContinuousTradeCollector({clock:()=>now,disableDisk:true});
+ c.connected=true;c.connectedAt=NOW-700000;
+ for(let i=0;i<65;i++){
+  const t=NOW-63000+i*1000;
+  c.accept(event(5000+i,t,i%2===0),t);
+ }
+ const asof=NOW-1500;
+ const hist=c.features(asof);
+ assert.equal(hist.asOf,asof);
+ assert.equal(hist.windows["60s"].complete,true);
+ assert.equal(hist.windows["60s"].observedGroups,60);
+ // The current/latest packet is newer than the frozen price tick.
+ assert.ok(hist.lastReceivedAt>asof);
+ assert.equal(hist.windows["60s"].lastStreamReceiveAgeMs,500);
+ // A later gap must not retroactively invalidate the historical window.
+ c.addGap("FUTURE_NETWORK_DROP",null,NOW);
+ assert.equal(c.features(asof).windows["60s"].complete,true);
+ assert.equal(c.features().windows["60s"].complete,false);
+ assert.throws(()=>c.features(NOW+10000),/INVALID_HISTORICAL_ASOF/);
+});

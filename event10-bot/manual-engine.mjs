@@ -234,35 +234,64 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // Collect optional public USD-M features BEFORE freezing the reference tick.
       // This avoids using future information after the claimed entry reference time.
       const optional=await collectPublicFeatures({fetcher,now:clock});
-      // Independent background collector runs even when this model is not clicked.
-      let continuous=null,continuousError="COLLECTOR_UNAVAILABLE";
-      try{
-        const cr=await fetcher(streamUrl,{signal:AbortSignal.timeout(1800),headers:{Accept:"application/json"}});
-        if(!cr.ok)throw Error("COLLECTOR_HTTP_"+cr.status);
-        const cj=await cr.json();
-        if(cj?.ok===true&&cj?.source==="BINANCE_USDM_AGGTRADE_100MS_PUBLIC_WEBSOCKET")continuous=cj;
-        else throw Error("COLLECTOR_UNVERIFIED");
-      }catch(e){continuousError=String(e?.message||e).slice(0,80)}
+      // Freeze a trustworthy reference tick AFTER public REST snapshots.
+      // A tick lagging a just-observed order book can invalidate otherwise-real
+      // depth data. Retry the trusted existing feed briefly; NEVER change
+      // an exchange timestamp or use events newer than the reference tick.
       const receivedAt=clock();
-      const feed=await readFeed();
-      const snapshot=buildSnapshot(feed,clock());
+      let feed=await readFeed();
+      let snapshot=buildSnapshot(feed,clock());
+      const observedTimes=Object.values(optional.features)
+        .map(v=>v?.observedAt??v?.latestTradeAt??v?.latestClosedAt??null)
+        .filter(Number.isFinite);
+      const target=observedTimes.length?Math.max(...observedTimes):null;
+      if(target!==null&&target>snapshot.observedAt&&
+         target-snapshot.observedAt<=3500){
+        for(let attempt=0;attempt<6&&snapshot.observedAt<target;attempt++){
+          await new Promise(resolve=>setTimeout(resolve,350));
+          const retryFeed=await readFeed();
+          const newer=buildSnapshot(retryFeed,clock());
+          if(newer.observedAt>snapshot.observedAt){
+            feed=retryFeed;snapshot=newer;
+          }
+        }
+      }
       const rollingTenMinutes=tenMinuteWindow(feed,clock());
       const availability={...optional.availability};
+      // Query stream history AS OF the frozen reference tick. The live stream
+      // naturally runs ahead of a slightly delayed spot-price proxy tick.
+      // Compare historical windows instead of wrongly rejecting fresh live
+      // data for being a few milliseconds newer than that reference.
+      let continuous=null,continuousError="COLLECTOR_UNAVAILABLE";
+      try{
+        const cr=await fetcher(streamUrl+"?asof="+snapshot.observedAt,{
+          signal:AbortSignal.timeout(1800),headers:{Accept:"application/json"}});
+        if(!cr.ok)throw Error("COLLECTOR_HTTP_"+cr.status);
+        const cj=await cr.json();
+        if(cj?.ok===true&&cj?.source==="BINANCE_USDM_AGGTRADE_100MS_PUBLIC_WEBSOCKET"&&
+           cj.asOf===snapshot.observedAt)continuous=cj;
+        else throw Error("COLLECTOR_ASOF_NOT_VERIFIED");
+      }catch(e){continuousError=String(e?.message||e).slice(0,80)}
       let continuousTradeFlow=null;
       if(continuous){
         const windows={};
         for(const [name,w] of Object.entries(continuous.windows||{})){
-          if(w.complete===true&&continuous.lastReceivedAt<=snapshot.observedAt&&
-              w.to<=snapshot.observedAt&&snapshot.observedAt-continuous.lastReceivedAt<=5000)
+          if(w.complete===true&&w.to!==null&&w.to<=snapshot.observedAt&&
+              w.lastStreamReceiveAgeMs!==null&&w.lastStreamReceiveAgeMs<=5000)
             windows[name]=w;
         }
         if(Object.keys(windows).length){
-          continuousTradeFlow={source:continuous.source,
-            receivedAt:continuous.lastReceivedAt,windows,
-            missingAggregateIds:continuous.missingAggregateIds,
+          continuousTradeFlow={source:continuous.source,asOf:continuous.asOf,
+            windows,missingAggregateIds:continuous.missingAggregateIds,
             gapCount:continuous.gapCount,reconnectCount:continuous.reconnectCount};
           availability.continuousAggTrade={available:true,windows:Object.keys(windows)};
-        }else availability.continuousAggTrade={available:false,error:"INCOMPLETE_OR_UNFRESH_STREAM_WINDOW"};
+        }else{
+          const issues=Object.entries(continuous.windows||{})
+            .map(([name,w])=>name+":"+(w.issues||[]).join(","));
+          availability.continuousAggTrade={available:false,
+            error:"INCOMPLETE_OR_UNFRESH_STREAM_WINDOW",
+            reasons:issues.slice(0,3)};
+        }
       }else availability.continuousAggTrade={available:false,error:continuousError};
       const filtered={};
       for(const [section,value] of Object.entries(optional.features)){

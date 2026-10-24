@@ -214,7 +214,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
       enrichmentVersion:"EVENT10_PUBLIC_USDM_V2",
-      decisionReviewVersion:REVIEW_VERSION,
+      decisionReviewVersion:REVIEW_VERSION,explanationLanguage:"zh-CN",
       lastFeatureCoverage:h?.featureAvailability||null,lastDataProbe,
       active:h&&["ANALYZING","PREDICTED","FAILED"].includes(h.status)&&clock()<h.expiresAt?h:null,
       lastSession:h,stats:stats()};

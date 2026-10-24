@@ -120,6 +120,11 @@ const needsChineseText=s=>{
  return parts.some(t=>typeof t==="string"&&/[A-Za-z]{4,}/.test(t)&&!hasChinese(t));
 };
 const warningTitles={
+ OVERSOLD_REVERSAL_RISK:"15分钟RSI明显偏弱或超卖，不能机械认定继续下跌",
+ OVERSOLD_SHORT_TERM_RECOVERY:"15分钟超卖但短周期出现转强迹象，必须认真评估反弹",
+ OVERBOUGHT_PULLBACK_RISK:"15分钟RSI明显偏高，不能机械认定继续上涨",
+ OVERBOUGHT_SHORT_TERM_WEAKENING:"15分钟偏强但短周期走弱，评估回调风险",
+ FLOW_PRICE_RESPONSE_UNVERIFIED:"合约成交采样不足，无法验证同一市场量价关系，不推断吸收",
  HIGH_VOLUME_RANGE_HIGH:"异常放量且价格接近区间高点，警惕假突破和买单被吸收",
  HIGH_VOLUME_RANGE_LOW:"异常放量且价格接近区间低点，警惕下跌延续或恐慌反转",
  POSSIBLE_BUY_ABSORPTION:"主动买入较多但价格仍弱，存在买单被吸收的可能",
@@ -233,7 +238,7 @@ function display(d){
   const detail=$("analysisDetail");detail.replaceChildren();
   if(s.decisionReviewVersion){
    const v=document.createElement("p");
-   v.textContent="分析逻辑：多周期趋势、主动成交及盘口双向证据核对（V3；不是模型权重自动训练）";
+   v.textContent="分析逻辑：多周期趋势、主动成交及盘口双向证据核对（V4；价格口径与反转风险核验；不是模型权重自动训练）";
    detail.append(v);
   }
   const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});

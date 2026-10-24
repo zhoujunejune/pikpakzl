@@ -22,6 +22,12 @@ nav a.active{background:#285c9d;color:#fff}
 button{padding:13px 18px;border-radius:12px;background:#1673c1;color:white;border:1px solid #3a99e5;font:600 16px system-ui;cursor:pointer;min-height:50px}
 button:disabled{opacity:.43;cursor:not-allowed}button.secondary{background:#1f3450}
 .status{border:1px solid #49627e;border-radius:25px;padding:5px 12px;font-size:13px}
+.signal-panel{background:#10283f;border:1px solid #326391;border-radius:14px;margin-top:14px;padding:15px;overflow-wrap:anywhere}
+.signal-direction{display:block;font-size:30px;font-weight:800;line-height:1.25;letter-spacing:.025em}
+.signal-price{font-size:13px;color:#b8d1ec;font-variant-numeric:tabular-nums}
+.signal-reason{font-size:14px;line-height:1.7;margin:10px 0 0;color:#dce9f9;white-space:pre-wrap;overflow-wrap:anywhere}
+.signal-detail-title{font-size:12px;color:#a9c5e6;margin:12px 0 4px;font-weight:700}
+
 .tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
 th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #31445d}
 th{color:#a9c6e7}
@@ -41,20 +47,19 @@ th{color:#a9c6e7}
 <div class="row"><h2>手动启动新的一轮</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">锁定当前参考价并让 DeepSeek 分析</button>
 <div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时数据服务状态…</div>
+<div class="signal-panel" id="immediatePrediction" aria-live="polite" aria-atomic="false">
+ <div class="row"><strong>本轮 DeepSeek 分析结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
+ <div class="row" style="margin-top:10px">
+  <strong id="quickDirection" class="signal-direction">尚未分析</strong>
+  <span class="signal-price" id="quickOpen">锁定参考价：—</span>
+ </div>
+ <div id="quickReason" class="signal-reason">点击上方按钮后，这里会自动显示模型方向和分析原因。</div>
+ <p class="sub" id="quickTimestamp">模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。</p>
+</div>
 <p class="sub">只有你点击才会分析；不会按整点或每隔10分钟自动发信号。每次点击后，以服务器成功获取的最新有效 BTC 行情快照为开始时间，10分钟后核对同一数据源。</p>
 </section>
 <section class="card">
-<div class="row"><h2>后台持续成交采集（无需点击分析）</h2><span id="collectorState" class="status">检查中</span></div>
-<div class="grid">
-<div class="metric"><small>本进程已采集聚合成交</small><strong id="streamCount">—</strong></div>
-<div class="metric"><small>最近成交接收延迟</small><strong id="streamLag">—</strong></div>
-<div class="metric"><small>检测到的采集缺口</small><strong id="streamGaps">—</strong></div>
-<div class="metric"><small>连续数据覆盖</small><strong id="streamCoverage">—</strong></div>
-</div>
-<p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
-</section>
-<section class="card">
-<div class="row"><h2>当前 / 最近一次分析</h2><span class="status" id="phase">未开始</span></div>
+<div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
 <div class="metric"><small>锁定参考价（非官方开仓价）</small><strong id="openPrice">—</strong></div>
 <div class="metric"><small>DeepSeek 最终方向</small><strong id="direction">—</strong></div>
@@ -74,6 +79,16 @@ th{color:#a9c6e7}
 <div id="featureHealth" class="grid" aria-live="polite"></div>
 <p class="sub">检查按钮不会启动 DeepSeek 或创建预测轮次。15分钟合约K线与指数价属于衍生品公开行情，并非已验证的事件合约官方结算指数。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
+</section>
+<section class="card">
+<div class="row"><h2>后台持续成交采集（无需点击分析）</h2><span id="collectorState" class="status">检查中</span></div>
+<div class="grid">
+<div class="metric"><small>本进程已采集聚合成交</small><strong id="streamCount">—</strong></div>
+<div class="metric"><small>最近成交接收延迟</small><strong id="streamLag">—</strong></div>
+<div class="metric"><small>检测到的采集缺口</small><strong id="streamGaps">—</strong></div>
+<div class="metric"><small>连续数据覆盖</small><strong id="streamCoverage">—</strong></div>
+</div>
+<p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
 </section>
 <section class="card">
 <h2>独立统计（非官方结算）</h2>
@@ -149,6 +164,14 @@ function display(d){
  $("start").disabled=inflight||!d.configured||!!d.active||d.busyStart;
  if(s){
   $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
+  $("quickPhase").textContent=$("phase").textContent;
+  $("quickDirection").textContent=s.direction||(s.status==="ANALYZING"?"AI 正在分析…":s.status==="FAILED"?"分析失败":"等待结果");
+  $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
+  $("quickOpen").textContent="锁定参考价："+price(s.openPrice)+" USDT";
+  $("quickReason").textContent=s.status==="ANALYZING"?"已锁定参考价，DeepSeek 正在比较 UP 与 DOWN 两种方向…":
+    s.error?"分析失败："+s.error:(s.reason||"模型已给出方向；详细的双向证据请查看下方。");
+  $("quickTimestamp").textContent="开始："+when(s.openedAt)+" ｜ 参考到期："+when(s.expiresAt)+
+    " ｜ 仅供公开行情预测，不是事件合约官方开仓价或成交记录。";
   $("openPrice").textContent=price(s.openPrice);
   $("openedAt").textContent=when(s.openedAt);
   $("expiresAt").textContent=when(s.expiresAt);
@@ -184,6 +207,12 @@ function display(d){
     (s.expirySampleLagMs!=null?"到期采样延迟："+s.expirySampleLagMs+"ms；":"")+
     "非事件合约官方开仓与结算价格。";
  }else{
+  $("quickPhase").textContent="尚未开始";
+  $("quickDirection").textContent="尚未分析";
+  $("quickDirection").className="signal-direction yellow";
+  $("quickOpen").textContent="锁定参考价：—";
+  $("quickReason").textContent="点击上方按钮后，这里会自动显示模型方向和分析原因。";
+  $("quickTimestamp").textContent="模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。";
   $("analysisDetail").replaceChildren();
   $("phase").textContent="尚未开始";
  }
@@ -243,6 +272,11 @@ async function refresh(){
 async function startClick(){
  if(inflight)return;
  inflight=true;$("start").disabled=true;$("message").textContent="正在向阿里云请求真实行情并锁定参考价…";
+ $("quickPhase").textContent="正在启动";
+ $("quickDirection").textContent="正在锁定参考价…";
+ $("quickDirection").className="signal-direction yellow";
+ $("quickReason").textContent="准备行情及技术指标后，DeepSeek 会比较看涨与看跌的证据。";
+ $("quickOpen").textContent="锁定参考价：采集中";
  if(!pendingRequestId){
   const v=new Uint8Array(16);crypto.getRandomValues(v);
   pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
@@ -255,7 +289,13 @@ async function startClick(){
   pendingRequestId=null;
   $("message").textContent="已经锁定公开市场参考价，正在获取 DeepSeek 的 UP/DOWN 判断。";
   await refresh();
- }catch(e){$("message").textContent="未成功开始："+String(e);}
+ }catch(e){
+  $("message").textContent="未成功开始："+String(e);
+  $("quickPhase").textContent="本次启动失败";
+  $("quickDirection").textContent="没有产生新方向";
+  $("quickDirection").className="signal-direction yellow";
+  $("quickReason").textContent="未成功开始："+String(e);
+ }
  finally{inflight=false;await refresh();}
 }
 $("start").addEventListener("click",startClick);

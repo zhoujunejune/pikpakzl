@@ -118,6 +118,7 @@ function store(file,records){
 function prompt(session){
  const data=session.compactEvidence||compactEvidence(session);
  return {model:"deepseek-flash",response_format:{type:"json_object"},
+  thinking:{type:"enabled"},reasoning_effort:"high",
   messages:[
    {role:"system",content:[
      "你是BTC未来600秒方向分析器，只分析输入里的四组经过校验的核心证据。",
@@ -181,6 +182,9 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
       enrichmentVersion:"EVENT10_COMPACT_SOURCES_V5",
       decisionReviewVersion:REVIEW_VERSION,explanationLanguage:"zh-CN",
+      thinkingMode:"enabled",reasoningEffort:"high",
+      lastReasoningObserved:h?.reasoningObserved??null,
+      lastReasoningTokenCount:h?.reasoningTokenCount??null,
       lastFeatureCoverage:h?.featureAvailability||null,lastDataProbe,
       active:h&&["ANALYZING","PREDICTED","FAILED"].includes(h.status)&&clock()<h.expiresAt?h:null,
       lastSession:h,stats:stats()};
@@ -206,7 +210,14 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         if(!r.ok)throw Error("DEEPSEEK_HTTP_"+r.status);
         const body=await r.json();
         if(body?.choices?.[0]?.finish_reason==="length")throw Error("AI_RESPONSE_TRUNCATED");
-        const parsed=parseDirection(body?.choices?.[0]?.message?.content);
+        const reply=body?.choices?.[0]?.message;
+        const parsed=parseDirection(reply?.content);
+        // Only persist whether the provider supplied reasoning metadata;
+        // never store or expose any private reasoning_content text.
+        session.reasoningObserved=typeof reply?.reasoning_content==="string"&&
+          reply.reasoning_content.trim().length>0;
+        const tokens=body?.usage?.completion_tokens_details?.reasoning_tokens;
+        session.reasoningTokenCount=Number.isSafeInteger(tokens)&&tokens>=0?tokens:null;
         session.direction=parsed.direction;
         session.confidence=parsed.confidence;
         session.reason=parsed.reason;
@@ -319,6 +330,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         decisionReviewVersion:REVIEW_VERSION,decisionReview:null,compactEvidence:null,analysisArguments:null,
         source:SOURCE,status:"ANALYZING",direction:null,
         model,attempts:0,confidence:null,reason:null,modelFinishedAt:null,
+        thinkingRequested:true,reasoningEffort:"high",
+        reasoningObserved:null,reasoningTokenCount:null,
         closePrice:null,closeObservedAt:null,expirySampleLagMs:null,
         proxyOutcome:null,proxyHit:null,returnPct:null,
         officialEventOutcome:null,officialEventHit:null,

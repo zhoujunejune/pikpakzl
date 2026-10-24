@@ -67,6 +67,52 @@ assert x.get('decisionReviewVersion')=='EVENT10_COMPACT_EVIDENCE_V5_20261024', '
 print('EVENT10_COMPACT_EVIDENCE_V5_ACTIVE=true')
 assert x.get('explanationLanguage')=='zh-CN', 'CHINESE_PROMPT_NOT_ACTIVE'
 print('EVENT10_CHINESE_EXPLANATIONS_ENABLED=true')
+assert x.get('thinkingMode')=='enabled', 'EVENT10_THINKING_NOT_EXPLICITLY_ENABLED'
+assert x.get('reasoningEffort')=='high', 'EVENT10_REASONING_NOT_HIGH'
+assert x.get('lastReasoningObserved') in (None,True,False)
+print('EVENT10_EXPLICIT_THINKING_ENABLED=true')
+print('EVENT10_EXPLICIT_REASONING_EFFORT=high')
+print('EVENT10_LAST_REAL_FORECAST_THINKING_CONFIRMED='+str(x.get('lastReasoningObserved')))
+
+PY
+# One independent, non-trading and non-forecast provider capability check.
+# Does NOT create any EVENT10 session and does NOT reveal reasoning text or API key.
+python3 - <<'PY'
+import json,shlex,urllib.request,urllib.error
+from pathlib import Path
+cfg={}
+for raw in Path('/etc/zl-prediction/deepseek5.env').read_text().splitlines():
+ line=raw.strip()
+ if line.startswith('export '):line=line[7:].strip()
+ if not line or line.startswith('#') or '=' not in line:continue
+ name,value=line.split('=',1)
+ if name not in ('DEEPSEEK_API_KEY','DEEPSEEK_API_URL','EVENT10_DEEPSEEK_MODEL','DEEPSEEK_MODEL'):continue
+ try:
+  vals=shlex.split(value,comments=False)
+  if len(vals)==1:cfg[name]=vals[0]
+ except ValueError:pass
+key=cfg.get('DEEPSEEK_API_KEY','')
+if not key:
+ print('EVENT10_PROVIDER_THINKING_SMOKE=UNCONFIRMED_MISSING_KEY')
+else:
+ reqbody={'model':cfg.get('EVENT10_DEEPSEEK_MODEL') or cfg.get('DEEPSEEK_MODEL') or 'deepseek-flash',
+  'thinking':{'type':'enabled'},'reasoning_effort':'high',
+  'response_format':{'type':'json_object'},'max_tokens':4096,
+  'messages':[{'role':'user','content':'只返回一个JSON对象，字段ok为true。'}]}
+ url=cfg.get('DEEPSEEK_API_URL') or 'https://api.deepseek.com/chat/completions'
+ try:
+  req=urllib.request.Request(url,data=json.dumps(reqbody,ensure_ascii=False).encode('utf8'),
+   headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},method='POST')
+  with urllib.request.urlopen(req,timeout=30) as rsp:
+   data=json.load(rsp)
+  msg=(((data.get('choices') or [{}])[0]).get('message') or {})
+  got=bool(isinstance(msg.get('reasoning_content'),str) and msg['reasoning_content'].strip())
+  print('EVENT10_PROVIDER_THINKING_SMOKE='+('CONFIRMED' if got else 'UNCONFIRMED'))
+  print('EVENT10_PROVIDER_THINKING_SMOKE_FINAL_CONTENT='+str(bool(msg.get('content'))))
+ except urllib.error.HTTPError as exc:
+  print('EVENT10_PROVIDER_THINKING_SMOKE=HTTP_'+str(exc.code))
+ except Exception as exc:
+  print('EVENT10_PROVIDER_THINKING_SMOKE=UNCONFIRMED_'+type(exc).__name__)
 PY
 # Verify the REAL served page now shows the current analysis result immediately under the manual button.
 curl -fsS --max-time 5 http://127.0.0.1:13020/ > /tmp/zl-event10-ui-deploy.html

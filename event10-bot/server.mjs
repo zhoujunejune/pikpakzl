@@ -48,6 +48,10 @@ export function serve(engine,{port=Number(process.env.EVENT10_PORT||13020),host=
     if(pathname==="/healthz")return send(200,{ok:true,service:"zl-event10-manual",tradeExecution:false});
     if(pathname==="/api/status")return send(200,engine.status());
     if(pathname==="/api/history")return send(200,{ok:true,records:engine.history()});
+    if(pathname==="/api/data-health"){
+      try{return send(200,await engine.probe());}
+      catch(e){return send(503,{ok:false,error:"BINANCE_ENRICHMENT_HEALTH_UNAVAILABLE"});}
+    }
     return send(404,{ok:false,error:"NOT_FOUND"});
   });
   server.listen(port,host);

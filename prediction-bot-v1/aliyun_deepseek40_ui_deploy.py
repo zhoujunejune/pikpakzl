@@ -58,12 +58,12 @@ assert source.count("if (req.method === 'GET' && url.pathname === '/api/round-st
 patched=source.replace("import {injectAi40Dashboard} from './ai40-dashboard-inject.mjs';",
  "import {injectAi40Dashboard,statsFromFiles} from './ai40-dashboard-inject.mjs';",1)
 anchor="if (req.method === 'GET' && url.pathname === '/api/round-stats') return proxyStats(res);"
-route="""if (req.method === 'GET' && url.pathname === '/api/ai40-round-stats') {
+route=\x27\x27\x27if (req.method === 'GET' && url.pathname === '/api/ai40-round-stats') {
     const data=statsFromFiles();
     res.writeHead(data.ok?200:503, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
     return res.end(JSON.stringify(data));
   }
-  """
+  \x27\x27\x27
 patched=patched.replace(anchor,route+anchor,1)
 assert patched.count('statsFromFiles')==2
 Path(sys.argv[2]).write_text(patched)

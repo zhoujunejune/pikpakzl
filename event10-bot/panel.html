@@ -51,9 +51,11 @@ th{color:#a9c6e7}
  <div class="row"><strong>本轮 DeepSeek 分析结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
  <div class="row" style="margin-top:10px">
   <strong id="quickDirection" class="signal-direction">尚未分析</strong>
+  <strong id="quickConfidence" class="signal-price">主观置信度：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">点击上方按钮后，这里会自动显示模型方向和分析原因。</div>
+ <p class="sub">置信度来自 DeepSeek 对本轮方向的主观判断，不等于真实胜率或盈利概率。</p>
  <p class="sub" id="quickTimestamp">模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。</p>
 </div>
 <p class="sub">只有你点击才会分析；不会按整点或每隔10分钟自动发信号。每次点击后，以服务器成功获取的最新有效 BTC 行情快照为开始时间，10分钟后核对同一数据源。</p>
@@ -70,6 +72,7 @@ th{color:#a9c6e7}
 <div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>计划参考结束时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>模型判断耗时</small><strong id="latency">—</strong></div>
+<div class="metric"><small>DeepSeek 主观置信度</small><strong id="confidence">—</strong></div>
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
 <p class="sub" id="reason">点击按钮开始分析。</p>
@@ -103,8 +106,8 @@ th{color:#a9c6e7}
 <section class="card">
 <div class="row"><h2>后台历史记录</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
 <div class="tablewrap"><table><thead><tr>
-<th>开始时间</th><th>参考价</th><th>AI方向</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
-</tr></thead><tbody id="records"><tr><td colspan="6">读取中…</td></tr></tbody></table></div>
+<th>开始时间</th><th>参考价</th><th>AI方向</th><th>AI主观置信度</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
+</tr></thead><tbody id="records"><tr><td colspan="7">读取中…</td></tr></tbody></table></div>
 <p class="sub">历史记录存储在阿里云独立文件中。用于技术验证，不对应币安实际订单；官方事件合约胜率暂无可信的自动回填渠道。</p>
 </section>
 </main>
@@ -165,6 +168,11 @@ async function localizeLegacyLatest(s){
 
 const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{hour12:false}):"—";
 const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
+// Only display the actual confidence saved in this forecast's model response.
+// Never infer from outcome, history, signal direction or another round.
+const displayConfidence=s=>s&&(s.direction==="UP"||s.direction==="DOWN")&&
+  typeof s.confidence==="number"&&Number.isFinite(s.confidence)&&
+  s.confidence>=0&&s.confidence<=1?(s.confidence*100).toFixed(1)+"%":"—";
 const phaseText={ANALYZING:"DeepSeek 正在分析",PREDICTED:"方向已确定，等待核对",FAILED:"AI分析失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
  if(v==="PUBLIC_MARKET_PROXY_ONLY")return "代理行情已核对";
@@ -223,6 +231,7 @@ function display(d){
   $("quickPhase").textContent=$("phase").textContent;
   $("quickDirection").textContent=s.direction||(s.status==="ANALYZING"?"AI 正在分析…":s.status==="FAILED"?"分析失败":"等待结果");
   $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
+  $("quickConfidence").textContent="主观置信度："+displayConfidence(s);
   $("quickOpen").textContent="锁定参考价："+price(s.openPrice)+" USDT";
   const waitChinese=needsChineseText(s);
   const explanation=s.displayChinese?.reason||s.reason;
@@ -235,6 +244,7 @@ function display(d){
   $("openedAt").textContent=when(s.openedAt);
   $("expiresAt").textContent=when(s.expiresAt);
   $("direction").textContent=s.direction|| (s.status==="ANALYZING"?"分析中":"无有效方向");
+  $("confidence").textContent=displayConfidence(s);
   directionStyle($("direction"),s.direction);
   $("latency").textContent=Number.isFinite(s.modelLatencyMs)?(s.modelLatencyMs/1000).toFixed(1)+"秒":"—";
   $("closePrice").textContent=price(s.closePrice);
@@ -245,7 +255,7 @@ function display(d){
   const detail=$("analysisDetail");detail.replaceChildren();
   if(s.decisionReviewVersion){
    const v=document.createElement("p");
-   v.textContent="分析逻辑：V6.1 改进反转、假突破和多空证据冲突判断；最终UP/DOWN仍由DeepSeek High独立分析，不保证胜率";
+   v.textContent="分析逻辑：V6 AI价格结构版，新增1分钟动态支撑阻力和趋势持续性；最终UP/DOWN由DeepSeek High分析，尚非已验证胜率模型";
    detail.append(v);
   }
   const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});
@@ -269,6 +279,8 @@ function display(d){
   $("quickPhase").textContent="尚未开始";
   $("quickDirection").textContent="尚未分析";
   $("quickDirection").className="signal-direction yellow";
+  $("quickConfidence").textContent="主观置信度：—";
+  $("confidence").textContent="—";
   $("quickOpen").textContent="锁定参考价：—";
   $("quickReason").textContent="点击上方按钮后，这里会自动显示模型方向和分析原因。";
   $("quickTimestamp").textContent="模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。";
@@ -317,12 +329,12 @@ async function refresh(){
   if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
     d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
   const rows=$("records");rows.replaceChildren();
-  if(!log.records?.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=6;td.textContent="暂无手动预测记录";tr.append(td);rows.append(tr);}
+  if(!log.records?.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=7;td.textContent="暂无手动预测记录";tr.append(td);rows.append(tr);}
   for(const s of log.records||[]){
    const tr=document.createElement("tr");
    const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
      s.proxyOutcome==="FLAT"?"持平":s.settlementStatus?"未核验":"待到期";
-   for(const v of [when(s.openedAt),price(s.openPrice),s.direction||"—",
+   for(const v of [when(s.openedAt),price(s.openPrice),s.direction||"—",displayConfidence(s),
      price(s.closePrice),res,s.settlementStatus?statusText(s.settlementStatus):phaseText[s.status]||s.status]){
      const td=document.createElement("td");td.textContent=v;tr.append(td);
    }rows.append(tr);
@@ -335,6 +347,7 @@ async function startClick(){
  $("quickPhase").textContent="正在启动";
  $("quickDirection").textContent="正在锁定参考价…";
  $("quickDirection").className="signal-direction yellow";
+ $("quickConfidence").textContent="主观置信度：—";
  $("quickReason").textContent="准备行情及技术指标后，DeepSeek 会比较看涨与看跌的证据。";
  $("quickOpen").textContent="锁定参考价：采集中";
  if(!pendingRequestId){
@@ -354,6 +367,7 @@ async function startClick(){
   $("quickPhase").textContent="本次启动失败";
   $("quickDirection").textContent="没有产生新方向";
   $("quickDirection").className="signal-direction yellow";
+  $("quickConfidence").textContent="主观置信度：—";
   $("quickReason").textContent="未成功开始："+String(e);
  }
  finally{inflight=false;await refresh();}

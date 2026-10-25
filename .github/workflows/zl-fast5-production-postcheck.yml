@@ -76,7 +76,13 @@ jobs:
           if(s?.latest?.round===Math.floor(Date.now()/300000)*300000 && s.latest?.lockedAt
              && Date.now()<s.round+20000 && !c.ok)throw Error('LIVE_FAST5_LOCK_REJECTED_'+c.reason);
           console.log('FAST5_LEGACY_AND_NOLOCK_VALIDATOR_REJECTED=true');
-          console.log('FAST5_LIVE_VALIDATOR',JSON.stringify({locked:!!s.latest,eligible:c.ok,reason:c.reason||null}));
+          const asOf=s?.latest?.lockedAt+500;
+          if(s.latest?.round===s.round&&Number.isSafeInteger(asOf)&&asOf<s.round+20000){
+            const lockTimeResult=validateFast5ProductionLive(s,asOf);
+            if(!lockTimeResult.ok)throw Error('FAST5_REAL_LOCK_REJECTED_AT_SOURCE_TIME_'+lockTimeResult.reason);
+            console.log('FAST5_VERIFIED_REAL_SIGNAL_ACCEPTED_AT_LOCK_TIME='+lockTimeResult.direction);
+          }
+          console.log('FAST5_LIVE_VALIDATOR',JSON.stringify({locked:!!s.latest,eligibleNow:c.ok,reasonNow:c.reason||null}));
           NODE
           """
           client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))

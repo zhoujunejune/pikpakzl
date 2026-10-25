@@ -43,6 +43,15 @@ jobs:
           for k in ['DeepSeek','renderDeepSeekRoundStats','/deepseek/api/history','/deepseek/api/status','rsMeta','ai40','45秒','40秒','25秒','15秒','5秒']:
            print('PANEL_HTML_MARKER',k,page.count(k))
           print('PANEL_LIVE_HTML_BYTES',len(page))
+          for k in ['DeepSeek','5秒','锁定','预测','统计','开始跟随']:
+           found=list(re.finditer(re.escape(k),page))
+           for m in found[:3]:
+            print('PANEL_HTML_SNIPPET',k,repr(page[max(0,m.start()-260):m.end()+250].replace('\\n',' ')[:540]))
+          print('PANEL_HTML_IDS',re.findall(r'id=[\\\"\\\']([a-zA-Z0-9_-]+)[\\\"\\\']',page)[:90])
+          print('PANEL_SCRIPT_SRCS',re.findall(r'<script[^>]+src=[\\\"\\\']([^\\\"\\\']+)',page)[:35])
+          for i,line in enumerate(src.splitlines(),1):
+           if i<=250: print('PANEL_CODE',i,line[:250])
+          
           for port,route in [(13029,'/api/status'),(13029,'/api/history?limit=1'),(13001,'/api/status')]:
            with urllib.request.urlopen(f'http://127.0.0.1:{port}{route}',timeout=8) as x:data=json.load(x)
            if port==13029 and route=='/api/status':

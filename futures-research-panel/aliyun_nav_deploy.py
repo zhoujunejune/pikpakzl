@@ -178,6 +178,21 @@ for i,h in enumerate(v6[:12]):
       'priceStructure':{k:(h.get('priceStructure') or {}).get(k) for k in ('nearestSupport','nearestResistance','lastThreeClosedBarsTrend','confirmedThreeBarBreakout')},
       'reason':str(h.get('reason') or '')[:190]}
  print('EVENT10_V6_ROUND_'+str(i+1)+'='+json.dumps(row,ensure_ascii=False,separators=(',',':')))
+v6_latest_settled=[h for h in v6 if isinstance(h.get('proxyHit'),bool)]
+print('EVENT10_V6_LATEST5_SETTLED='+json.dumps(summarise(v6_latest_settled[:5]),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_V6_LATEST10_SETTLED='+json.dumps(summarise(v6_latest_settled[:10]),ensure_ascii=False,separators=(',',':')))
+streak=0
+for item in v6_latest_settled:
+ if item.get('proxyHit') is False:streak+=1
+ else:break
+print('EVENT10_V6_CURRENT_LOSS_STREAK='+str(streak))
+print('EVENT10_V6_DIAGNOSTIC='+json.dumps({
+ 'structureCaptured':sum(1 for h in v6 if (h.get('priceStructure') or {}).get('source')=='SAME_PUBLIC_REFERENCE_CLOSED_1M_CANDLES'),
+ 'reasoningConfirmed':sum(1 for h in v6 if h.get('reasoningObserved') is True),
+ 'completeFlow600':sum(1 for h in v6 if (h.get('continuousTradeFlow') or {}).get('windows',{}).get('600s',{}).get('complete') is True),
+ 'smallOutcomeChangeUnder001Pct':sum(1 for h in v6_latest_settled if isinstance(h.get('returnPct'),(int,float)) and abs(h['returnPct'])<0.01),
+ 'finishedFailures':sum(1 for h in v6 if h.get('status')=='FAILED')
+},ensure_ascii=False,separators=(',',':')))
 print('EVENT10_AUDIT_NO_PRODUCTION_WRITES=true')
 PYAUDIT
 """

@@ -1,0 +1,90 @@
+name: DeepSeek45 current production exact read-only inspection
+on:
+  push:
+    branches: [feat/deepseek45-prewarm120-ai-gate-20261025]
+    paths: [.github/workflows/zl-deepseek45-live-inspect.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-deepseek45-live-inspect
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect current exact live application before changes - no writes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          from pathlib import Path
+          import json,hashlib,urllib.request,subprocess
+          def get(port,url):
+           try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}{url}',timeout=5) as x:return json.load(x)
+           except Exception as e:return {'error':type(e).__name__}
+          for port,url in [(13029,'/api/status'),(13029,'/api/history?limit=5'),(13001,'/api/status'),(13001,'/api/order-signal-model'),(13003,'/api/shadow-market-data')]:
+           o=get(port,url)
+           if port==13029 and url=='/api/status':
+            out={k:o.get(k) for k in ['ok','model','providerModel','round','decisionWindowEndMs','maxCallsPerRound','prewarmStartMs','preRoundMaxCalls','currentRoundMaxCalls','lastApiLatencyMs','decisionRule','reasoning','featuresVersion','learning','noSignalAfterDeadline','realOrderEnabled']}
+           elif port==13029:out={'ok':o.get('ok'),'error':o.get('error'),'summary':o.get('summary'),'records':len(o.get('records',[]))}
+           elif port==13001 and url=='/api/status':out={'enabled':o.get('enabled'),'orderSignalModel':o.get('orderSignalModel')}
+           elif port==13001:out={'model':o.get('model')}
+           else:
+            v=o.get('latest') or {};out={'ok':o.get('ok'),'eventMs':v.get('eventMs'),'marketFeedConnected':v.get('marketFeedConnected')}
+           print('LIVE_PROBE',port,url,json.dumps(out,ensure_ascii=False,separators=(',',':'))[:1600])
+          root=Path('/opt/zl-prediction-live')
+          for unit in ['zl-prediction-deepseek5','zl-prediction-trade','zl-prediction-v3','zl-deepseek-shadow15-online','zl-futures-bot-paper']:
+           cmd=subprocess.run(['systemctl','show',unit,'-p','ExecStart','-p','ActiveState'],capture_output=True,text=True)
+           s=cmd.stdout.replace('DEEPSEEK_API_KEY','[REDACTED_KEY_NAME]')
+           print('LIVE_UNIT',unit,s[:390].replace('\n',' | '))
+          files=[
+           root/'deepseek5/deepseek-5m-engine.mjs',
+           root/'deepseek5/deepseek-adaptive15-core.mjs',
+           root/'deepseek5/deepseek-adaptive15-runner.mjs',
+           root/'deepseek5/deepseek-adaptive15-production-adapter.mjs',
+           root/'deepseek5/deepseek-5m-learner.mjs',
+           root/'src/railway-diagnostic/production-signal-choice.mjs',
+           root/'src/railway-diagnostic/wrapper.mjs',
+           root/'src/railway-diagnostic/panel-stats-shell.mjs']
+          needles=['DEADLINE_MS','SIGNAL_DEADLINE_MS','MAX_AI_CALLS_PER_ROUND','maxCallsPerRound','LIVE_REVIEW_MIN_INTERVAL_MS','case 5','+5000','+25000','+15000','decisionDeadline','deadline','DEEPSEEK_5M_V1','expiryAt','ts<round','ORDER_DEADLINE','validateDeepSeekProductionLive','deepseek-adaptive15','deepseek-5m-engine','return provider.history','/api/history']
+          for f in files:
+           if not f.exists():
+            print('LIVE_FILE',f.name,'MISSING');continue
+           data=f.read_bytes();lines=data.decode('utf8','replace').splitlines()
+           print('LIVE_FILE',f.name,'sha256',hashlib.sha256(data).hexdigest(),'nlines',len(lines))
+           matches=[f'{i+1}:{s[:195]}' for i,s in enumerate(lines) if any(n in s for n in needles)]
+           for line in matches[:35]:print('LIVE_SOURCE',f.name,line)
+          print('LIVE_INSPECTION_DONE=true')
+          INNER
+          """
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+            access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+            region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          invoke=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-deepseek45-exact-source-readonly',
+            type='RunShellScript',working_user='root',command_content=script,timeout=95)).body.invoke_id
+          for _ in range(48):
+           time.sleep(2)
+           res=client.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+           if res and str(res.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            raw=base64.b64decode(res.output or '',validate=True).decode('utf8','replace')
+            print('LIVE_INSPECTION_EXIT',res.exit_code,'STATUS',res.invocation_status)
+            print(raw[-28000:])
+            if int(res.exit_code)!=0:raise RuntimeError('LIVE_INSPECT_FAILED')
+            break
+          else:raise RuntimeError('LIVE_INSPECT_TIMEOUT')
+          OUTER

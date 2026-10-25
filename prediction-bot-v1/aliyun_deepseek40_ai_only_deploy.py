@@ -66,9 +66,9 @@ def one(txt,old,replacement):
  return txt.replace(old,replacement,1)
 p=(trade/'production-signal-choice.mjs').read_text()
 p=one(p,"entry?.modelVersion!=='DEEPSEEK_5M_V1')",
- """entry?.modelVersion!=='DEEPSEEK_5M_V1'||
+ '''entry?.modelVersion!=='DEEPSEEK_5M_V1'||
     lock.aiVerified!==true||lock.analysisPhase!=='current'||
-    lock.decisionMethod!=='DEEPSEEK_PREWARM120_LIVE40_AI_ONLY')""")
+    lock.decisionMethod!=='DEEPSEEK_PREWARM120_LIVE40_AI_ONLY')''')
 p=one(p,"ts<round||ts>=round+25000||now>=round+25000||marketAt<round||marketAt>ts||",
       "ts<round+15000||ts>=round+40000||now>=round+45000||marketAt<round||marketAt>ts||")
 (new/'production-signal-choice.mjs').write_text(p)

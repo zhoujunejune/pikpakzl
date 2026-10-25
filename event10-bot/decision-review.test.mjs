@@ -11,7 +11,7 @@ function caseStudy(){
   }},continuousTradeFlow:{windows:{"600s":{windowSeconds:600,complete:true,observedGroups:2100,
    buyFraction:.35,netTakerNotionalUsd:-7000000}}}};
 }
-test("V6.1 captures reversal risks and same-futures response, without forcing UP or DOWN",()=>{
+test("V6 captures reversal risks and same-futures response, without forcing UP or DOWN",()=>{
  const d=buildDecisionReview(caseStudy());
  assert.equal(d.version,REVIEW_VERSION);
  assert.ok(d.warnings.some(x=>x.startsWith("OVERSOLD_REVERSAL_RISK")));

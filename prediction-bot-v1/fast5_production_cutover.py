@@ -156,7 +156,7 @@ def patch_wrapper(s):
  return s
 def patch_panel(s):
  if 'FAST5_SPOT_MOMENTUM_V1' in s:raise RuntimeError('PANEL_ALREADY_FAST5')
- if 'DEEPSEEK_5M_V1' not in s:raise RuntimeError('PANEL_MODEL_MISSING')
+ if 'DEEPSEEK_5M_V1' not in s:return s # current panel contains no hardcoded model; API selector is authoritative
  return s.replace('DEEPSEEK_5M_V1','FAST5_SPOT_MOMENTUM_V1').replace('DeepSeek 5分钟生产信号','FAST5 本地实时行情信号')
 PATCHERS=dict(zip(FIELDS,[patch_choice,patch_direction,patch_trade,patch_wrapper,patch_panel]))
 def main():

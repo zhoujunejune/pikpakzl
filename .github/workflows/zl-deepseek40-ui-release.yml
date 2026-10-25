@@ -61,7 +61,17 @@ jobs:
           page=content.decode('utf8','replace')
           assert st==200 and 'id="zlDeepSeek40Card"' in page
           assert '/deepseek/api/status' in page
-          assert 'id="roundResultsOnlyCard"' in page
+          assert 'id="roundResultsOnlyCard"' not in page
+          assert 'zlAi40OldToggle' not in page
+          assert '/api/deepseek-round-results?limit=' not in page
+          st,raw=get('/api/ai40-round-stats')
+          stats=json.loads(raw)
+          assert st==200 and stats.get('ok') is True
+          assert stats.get('schema')=='DEEPSEEK_AI40_INDEPENDENT_FORWARD_V1'
+          assert stats.get('cutoverRound')==1792902300000
+          assert stats.get('summary',{}).get('rounds',0)>=7
+          print('AI40_PUBLIC_OLD_5S_REMOVED=true')
+          print('AI40_PUBLIC_NEW_VERSION_STATS='+json.dumps(stats['summary'],ensure_ascii=False))
           st,raw=get('/deepseek/api/status')
           ai=json.loads(raw)
           assert st==200 and ai.get('decisionRule')=='PREWARM120_NEW_ROUND15_LIVE_DEEPSEEK_ONLY40S'

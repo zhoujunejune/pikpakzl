@@ -41,7 +41,7 @@ jobs:
            print('FAST5_PREFLIGHT_STATUS',key,json.dumps(safe))
           root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
           needles={
-           'production-signal-choice.mjs':['export const SELECTIVE8_MODEL','export const ORDER_SIGNAL_MODELS','export function validateDeepSeekProductionLive','export function validateSelective8','DEEPSEEK_PREWARM120_LIVE40_AI_ONLY'],
+           'production-signal-choice.mjs':['export const SELECTIVE8_MODEL','export const ORDER_SIGNAL_MODELS','export function validateDeepSeekProductionLive','export function validateSelective8','DEEPSEEK_PREWARM120_LIVE40_AI_ONLY','const initial=','effectiveAfterRound:null','if(saved.model','let raw=await redis.get'],
            'index.mjs':['const SELECTIVE8_LOCAL_URL','validateDeepSeekProductionLive','async function getSignal','if(choice.model!==SELECTIVE8_MODEL)return null','if(choice.model===SELECTIVE8_MODEL)','productionSignalSourceMode'],
            'wrapper.mjs':['const SELECTIVE30_ORDER_DEADLINE_MS','const DEEPSEEK15_ORDER_SUBMIT_DEADLINE_MS','function orderSubmitDeadlineForModel','const ORDER_SUBMIT_DEADLINE_MS'],
            'order-direction-policy.mjs':['ORDER_DIRECTION_POLICY','PRIMARY_SOURCE','ORDER_SOURCES='],

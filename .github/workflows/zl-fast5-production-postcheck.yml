@@ -1,0 +1,94 @@
+name: Verify live Alibaba FAST5 production selector and deepseek shutdown read only
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-production-postcheck.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Verify actual trade router model, event feed, non-AI sidecar and disabled legacy LLM
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          cmd=r"""#!/bin/bash
+          set -e
+          python3 - <<'INNER'
+          import urllib.request,json,time,subprocess
+          def get(port,route):
+           with urllib.request.urlopen(f'http://127.0.0.1:{port}{route}',timeout=7) as r:return json.load(r)
+          t=get(13001,'/api/status')
+          choice=get(13001,'/api/order-signal-model')
+          modes=get(13001,'/api/direction-mode')
+          f=get(13046,'/api/status')
+          feed=get(13003,'/api/shadow-market-data')
+          now=int(time.time()*1000)
+          expected='FAST5_SPOT_MOMENTUM_V1'
+          assert t.get('ok') and t.get('enabled') is False and t.get('orderSignalModel')==expected
+          assert choice.get('ready') and choice.get('model')==expected and [m.get('id') for m in choice.get('models',[])]==[expected]
+          assert modes.get('ready') and list(modes.get('modes',{}))==[expected]
+          assert f.get('ok') and f.get('model')==expected and f.get('readOnly') is True
+          assert f.get('requiresDeepSeek') is False and f.get('orders') is False and f.get('productionIntegration') is False
+          assert f.get('lastError') is None and f.get('lastFetchAt') and now-f['lastFetchAt']<5000
+          assert feed.get('ok') and feed.get('readOnly') and feed.get('latest',{}).get('marketFeedConnected') is True
+          assert now-feed['latest']['eventMs']<5000
+          for unit in ['zl-prediction-trade','zl-prediction-v2','zl-prediction-v3','zl-futures-bot-paper','zl-prediction-fast5']:
+           assert subprocess.run(['systemctl','is-active','--quiet',unit]).returncode==0,unit
+          deepseek_active=subprocess.run(['systemctl','is-active','zl-prediction-deepseek5'],capture_output=True,text=True).stdout.strip()
+          deepseek_enabled=subprocess.run(['systemctl','is-enabled','zl-prediction-deepseek5'],capture_output=True,text=True).stdout.strip()
+          assert deepseek_active!='active' and deepseek_enabled=='disabled'
+          print('FAST5_POSTCHECK',json.dumps({
+           'liveSelection':choice['model'],'directionSources':list(modes['modes'].keys()),
+           'followEnabled':t['enabled'],'producerModel':f['model'],
+           'producerPollingAttempts':f.get('fetchAttempts'),
+           'lastMarketFetchAgeMs':now-f['lastFetchAt'],
+           'marketTickAgeMs':now-feed['latest']['eventMs'],
+           'round':f.get('round'),'lockedDirection':(f.get('latest') or {}).get('direction'),
+           'observedTickSamples':f.get('observedSamples'),
+           'deepseekActive':deepseek_active,'deepseekEnabled':deepseek_enabled
+          },ensure_ascii=False))
+          print('FAST5_ONLY_PRODUCTION_PROVEN=true')
+          INNER
+          /opt/zl-prediction-node/bin/node --input-type=module - <<'NODE'
+          import {validateFast5ProductionLive} from '/opt/zl-prediction-live/src/railway-diagnostic/production-signal-choice.mjs';
+          const good={ok:true,model:'FAST5_SPOT_MOMENTUM_V1',readOnly:true,
+            requiresDeepSeek:false,orders:false,productionIntegration:false,
+            marketSource:'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',lastError:null,
+            round:Math.floor(Date.now()/300000)*300000,
+            latest:null};
+          if(validateFast5ProductionLive({...good,model:'DEEPSEEK_5M_V1'}).ok)throw Error('LEGACY_PROVIDER_ACCEPTED');
+          if(validateFast5ProductionLive(good).ok)throw Error('MISSING_LOCK_ACCEPTED');
+          const r=await fetch('http://127.0.0.1:13046/api/status');
+          const s=await r.json();
+          const c=validateFast5ProductionLive(s);
+          if(s?.latest?.round===Math.floor(Date.now()/300000)*300000 && s.latest?.lockedAt
+             && Date.now()<s.round+20000 && !c.ok)throw Error('LIVE_FAST5_LOCK_REJECTED_'+c.reason);
+          console.log('FAST5_LEGACY_AND_NOLOCK_VALIDATOR_REJECTED=true');
+          console.log('FAST5_LIVE_VALIDATOR',JSON.stringify({locked:!!s.latest,eligible:c.ok,reason:c.reason||null}));
+          NODE
+          """
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          id=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='fast5-readonly-postrelease-production-verification',type='RunShellScript',working_user='root',command_content=cmd,timeout=110)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           res=client.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=id)).body.invocation_result
+           if res and str(res.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST5_POSTCHECK_REMOTE',res.invocation_status,'EXIT',res.exit_code)
+            out=base64.b64decode(res.output or '',validate=True).decode('utf8','replace')
+            print(out[-12000:])
+            if res.invocation_status!='Success' or int(res.exit_code)!=0:raise RuntimeError('FAST5_POSTCHECK_FAILED')
+            break
+          else:raise RuntimeError('FAST5_POSTCHECK_TIMEOUT')
+          OUTER

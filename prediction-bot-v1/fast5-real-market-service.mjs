@@ -28,7 +28,7 @@ export function createFast5Service({clock=()=>Date.now(),fetcher=fetch,
  }
  function status(){
   const s=calc.status();
-  return {...s,service:'FAST5_BTCUSDT_LOCAL_CALCULATOR',
+  return {...s,readOnly:true,service:'FAST5_BTCUSDT_LOCAL_CALCULATOR',
    marketSource:'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',
    readiness:'READ_ONLY_NOT_SELECTED_FOR_LIVE_ORDERS',
    lastFetchAt,lastError,lastRequestMs,fetchAttempts:attempts,

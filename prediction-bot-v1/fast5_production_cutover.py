@@ -89,7 +89,8 @@ def patch_direction(s):
             "export const ORDER_MODE_REDIS_KEY='trade-control:direction-mode:v5:fast5';")
  start=s.index('export async function hydrateDirectionSettings(){')
  end=s.index('// Refresh from the shared Redis authority',start)
- assert 'DEEPSEEK_5M_V1' in s[start:end]
+ if 'let raw=await db.get(ORDER_MODE_REDIS_KEY);' not in s[start:end] or 'return applyDirectionSettings(JSON.parse(raw));' not in s[start:end]:
+  raise RuntimeError('UNRECOGNIZED_DIRECTION_HYDRATION')
  replacement="""export async function hydrateDirectionSettings(){
  try{
   const db=await client();

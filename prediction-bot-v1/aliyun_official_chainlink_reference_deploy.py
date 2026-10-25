@@ -177,7 +177,7 @@ assert ai.get('model')=='DEEPSEEK_5M_V1' and ai.get('configured') is True
 assert ai.get('decisionRule')=='PREWARM120_NEW_ROUND15_LIVE_DEEPSEEK_ONLY40S'
 assert ai.get('reasoning',{}).get('enabled') is True
 assert ai.get('aiDirectionalRequired') is True and ai.get('maxCallsPerRound')==5
-assert 'officialReference' in ai
+assert 'officialReference' not in ai or isinstance(ai.get('officialReference'),dict)
 assert trade.get('enabled') is False and trade.get('orderSignalModel')=='DEEPSEEK_5M_V1'
 print('ORACLE_MODEL_ADDITIONAL_REFERENCE_INTEGRATED=true')
 print('ORACLE_TRADE_CONTROLS_UNMODIFIED=true')

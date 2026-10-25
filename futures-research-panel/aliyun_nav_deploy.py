@@ -230,6 +230,30 @@ for i,h in enumerate(v61[:16]):
  'warn':(h.get('decisionReview') or {}).get('warnings',[])[:3],
  'reason':str(h.get('reason') or '')[:130]}
  print('EVENT10_V61_ROUND_'+str(i+1)+'='+json.dumps(row,ensure_ascii=False,separators=(',',':')))
+for idx,h in enumerate(hist[:6],1):
+ ev=h.get('compactEvidence') or {}
+ availability=h.get('featureAvailability') or {}
+ def section(name):
+  x=ev.get(name)
+  return 'PRESENT' if isinstance(x,dict) and len(x)>0 else 'MISSING'
+ flow=h.get('continuousTradeFlow') or {}
+ ws=(flow.get('windows') or {}).get('600s') or {}
+ ps=h.get('priceStructure') or {}
+ row={'n':idx,'openedUTC':tm(h.get('openedAt')),'version':h.get('decisionReviewVersion'),
+      'state':h.get('status'),'direction':h.get('direction'),
+      'clickToCaptureMs':h.get('clickToCaptureMs'),
+      'modelLatencyMs':h.get('modelLatencyMs'),
+      'captureToModelFinishMs':(h['modelFinishedAt']-h['openedAt']) if isinstance(h.get('modelFinishedAt'),int) and isinstance(h.get('openedAt'),int) else None,
+      'attempts':h.get('attempts'),'thinkingRequested':h.get('thinkingRequested'),
+      'reasoningObserved':h.get('reasoningObserved'),
+      'reasoningTokenCount':h.get('reasoningTokenCount'),
+      'evidence':{k:section(k) for k in ('shortPriceTrend','priceStructure','fifteenMinuteContext','continuousFlow10m','shortFuturesPriceResponse')},
+      'actualEvidenceVersion':ev.get('version'),
+      'validSnapshotAtReference':isinstance(ps.get('lastClosedCandleAt'),int) and isinstance(h.get('openedAt'),int) and ps.get('lastClosedCandleAt')<=h.get('openedAt'),
+      'stream600Complete':ws.get('complete'),'stream600Groups':ws.get('observedGroups'),
+      'availability':{k:('YES' if v.get('available') else v.get('error')) for k,v in availability.items() if isinstance(v,dict)},
+      'outcome':h.get('proxyOutcome'),'hit':h.get('proxyHit')}
+ print('EVENT10_EVIDENCE_PROOF_'+str(idx)+'='+json.dumps(row,ensure_ascii=False,separators=(',',':')))
 print('EVENT10_AUDIT_NO_PRODUCTION_WRITES=true')
 PYAUDIT
 """

@@ -193,6 +193,43 @@ print('EVENT10_V6_DIAGNOSTIC='+json.dumps({
  'smallOutcomeChangeUnder001Pct':sum(1 for h in v6_latest_settled if isinstance(h.get('returnPct'),(int,float)) and abs(h['returnPct'])<0.01),
  'finishedFailures':sum(1 for h in v6 if h.get('status')=='FAILED')
 },ensure_ascii=False,separators=(',',':')))
+v61=[h for h in hist if h.get('decisionReviewVersion')=='EVENT10_AI_PRICE_STRUCTURE_V6R1_20261025']
+done61=[h for h in v61 if isinstance(h.get('proxyHit'),bool)]
+def fmt_group(group):
+ d=summarise(group)
+ return dict((k,d[k]) for k in ('records','settled','hits','misses','accuracyPct','pending','up','down','reasoningConfirmed'))
+print('EVENT10_V61_AUDIT='+json.dumps(fmt_group(v61),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_V61_LAST5_SETTLED='+json.dumps(fmt_group(done61[:5]),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_V61_LAST10_SETTLED='+json.dumps(fmt_group(done61[:10]),ensure_ascii=False,separators=(',',':')))
+for direction in ('UP','DOWN'):
+ subset=[h for h in done61 if h.get('direction')==direction]
+ print('EVENT10_V61_'+direction+'='+json.dumps(fmt_group(subset),separators=(',',':')))
+streak61=0
+for h in done61:
+ if h['proxyHit'] is False:streak61+=1
+ else:break
+print('EVENT10_V61_LOSS_STREAK='+str(streak61))
+print('EVENT10_V61_DATA_QUALITY='+json.dumps({
+ 'model':stat.get('providerModel'),'activePrompt':stat.get('decisionReviewVersion'),
+ 'thinking':stat.get('thinkingMode'),'effort':stat.get('reasoningEffort'),
+ 'structureCaptured':sum(1 for h in v61 if (h.get('priceStructure') or {}).get('source')=='SAME_PUBLIC_REFERENCE_CLOSED_1M_CANDLES'),
+ 'flow600Complete':sum(1 for h in v61 if (h.get('continuousTradeFlow') or {}).get('windows',{}).get('600s',{}).get('complete') is True),
+ 'reasoningObserved':sum(1 for h in v61 if h.get('reasoningObserved') is True),
+ 'failed':sum(1 for h in v61 if h.get('status')=='FAILED'),
+ 'tinyCloseLess001Pct':sum(1 for h in done61 if isinstance(h.get('returnPct'),(int,float)) and abs(h['returnPct'])<0.01),
+ 'latencyMs':[h.get('modelLatencyMs') for h in v61 if isinstance(h.get('modelLatencyMs'),(int,float))][-10:],
+ 'lastError':stat.get('lastError')
+ },ensure_ascii=False,separators=(',',':')))
+for i,h in enumerate(v61[:16]):
+ row={'n':i+1,'atUTC':tm(h.get('openedAt')),'direction':h.get('direction'),
+ 'status':h.get('status'),'hit':h.get('proxyHit'),'actual':h.get('proxyOutcome'),
+ 'returnPct':h.get('returnPct'),'open':h.get('openPrice'),'close':h.get('closePrice'),
+ 'reasoning':h.get('reasoningObserved'),'latencyMs':h.get('modelLatencyMs'),
+ 'priceStructure':{k:(h.get('priceStructure') or {}).get(k) for k in
+  ('nearestSupport','nearestResistance','confirmedThreeBarBreakout','lastThreeClosedBarsTrend')},
+ 'warn':(h.get('decisionReview') or {}).get('warnings',[])[:3],
+ 'reason':str(h.get('reason') or '')[:130]}
+ print('EVENT10_V61_ROUND_'+str(i+1)+'='+json.dumps(row,ensure_ascii=False,separators=(',',':')))
 print('EVENT10_AUDIT_NO_PRODUCTION_WRITES=true')
 PYAUDIT
 """

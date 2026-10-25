@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
       - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
-      - name: Guarded isolated loopback read-only official ref, model restarts only while follow OFF
+      - name: Guarded isolated reference (dynamic service identity), model restart only while follow OFF
         env:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}

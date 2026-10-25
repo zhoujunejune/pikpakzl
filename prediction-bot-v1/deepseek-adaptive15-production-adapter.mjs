@@ -138,7 +138,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    Number.isSafeInteger(saved.latest?.lockedAt)&&saved.latest.lockedAt>=r&&
    saved.latest.lockedAt>=r+15000&&saved.latest.lockedAt<r+40000&&saved.generatedAt<r+40000&&
    saved.latest.aiVerified===true&&saved.latest.decisionMethod==='DEEPSEEK_PREWARM120_LIVE40_AI_ONLY';
-  const available=lockedThisRound&&now<r+40000;
+  const available=lockedThisRound&&now<r+45000; // immutable AI lock before +40s; order retrieval until +45s
   const activeWindow=shadow.window?.targetRound===r?shadow.window:null;
   const terminalWait=!lockedThisRound&&
    (now>=r+40000||activeWindow?.status==='WAIT');

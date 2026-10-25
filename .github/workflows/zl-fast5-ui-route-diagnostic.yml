@@ -47,6 +47,13 @@ jobs:
             print('FAST5_UI_INJECT_SNIPPET',m.group(0)[:850] if m else 'none')
           with urllib.request.urlopen('http://127.0.0.1:13001/',timeout=6) as r:page=r.read(1500000).decode('utf8','replace')
           print('FAST5_PAGE_KEYS',{k:page.count(k) for k in ['zlDeepSeek40Card','roundResultsOnlyCard','roundStatsCard','signalPolicyCard','id="zlAi40Main"','DeepSeek 40秒方案']})
+          p=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs')
+          source=p.read_text()
+          for needle in ["'/api/ai40-round-stats'", "function injectStats(html)", "http.createServer", 'fetch(', "const server", "url.pathname === '/api/round-stats'"]:
+           pos=source.find(needle)
+           print('FAST5_PANEL_CONTEXT',needle,'position',pos,'source',repr(source[max(0,pos-300):pos+650]) if pos>=0 else None)
+          config=p.parent.joinpath('panel-stats-shell.mjs')
+          print('FAST5_CADDY_ROUTES',[line.strip() for line in s.splitlines() if any(q in line for q in ['handle_path /deepseek/','handle_path /llm/','reverse_proxy 127.0.0.1','handle /prediction'])][:22])
           print('FAST5_UI_DIAG_DONE=true')
           INNER
           """

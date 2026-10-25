@@ -69,6 +69,9 @@ jobs:
           print('REFERENCE_MATCH_COUNT',len(matches),'MISMATCH',sum(x['differentDirection'] for x in matches))
           print('REFERENCE_MATCH_LAST15',json.dumps(matches[-15:],ensure_ascii=False)[:9000])
           print('REFERENCE_DIRECTION_MISMATCH_ALL',json.dumps([x for x in matches if x['differentDirection']],ensure_ascii=False)[:2200])
+          for mr in (x for x in matches if x['differentDirection']):
+           r=next((z for z in off.get('records',[]) if z.get('roundStartMs')==mr['round']),{})
+           print('REFERENCE_OFFICIAL_TIE_RULE',json.dumps({k:r.get(k) for k in ['roundStartMs','productionActual','officialDirection','actual','resultRule','resolutionEvidence','productionResult','predictionMarketTopicId']},ensure_ascii=False))
           if matches:
            print('REFERENCE_MATCH_SUMMARY',json.dumps({
             'medianOpenGapBps':round(statistics.median(abs(x['startGapBps']) for x in matches),4),

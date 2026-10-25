@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {extractFeatures} from './deepseek-5m-features.mjs';
+import {quantSecondOpinion} from './zero-train-quant-companion.mjs';
 import {COLLECT_MS,DEADLINE_MS,roundOf,makeWindow,marketTick,collect,
  analysisRequest,decodeAnalysis,registerAnalysis,finalize,closeExpiredWindow,windowStatus}
  from './deepseek-adaptive15-core.mjs';
@@ -32,6 +33,7 @@ export function createAdaptiveRunner({
  let inFlight=false,feedBusy=false,feedNext=0,aiLatencyMs=null,aiTokens=null;
  let missed=0,skipped=0,lastCompleted=null,lastCountedRound=null;
  let officialReference=null,refBusy=false,lastRefTryAt=0,lastRefError=null;
+ let lastQuantSecondOpinion=null;
  // Official reference is supplemental only: never blocks model calls or creates a direction.
  async function refreshOfficialReference(round){
   const now=clock();
@@ -88,6 +90,12 @@ export function createAdaptiveRunner({
    aiEnabled:enabled,configured:enabled&&Boolean(key),inFlight,aiLatencyMs,aiTokens,
    lastMarketAt:lastFeedAt,lastError,missedRounds:missed,skippedRounds:skipped,
    lastCompleted,window:current?windowStatus(current,now):null,
+   quantSecondOpinion:lastQuantSecondOpinion?.roundStartMs===roundOf(now)?{
+    available:lastQuantSecondOpinion.available===true,
+    model:lastQuantSecondOpinion.model,
+    bias:lastQuantSecondOpinion.bias,
+    type:lastQuantSecondOpinion.type,
+    observedAt:lastQuantSecondOpinion.observedAt}: {available:false},
    officialReference:officialReference?.roundStartMs===roundOf(now)?{
     available:true,priceFeedProvider:officialReference.priceFeedProvider,
     officialStartPrice:officialReference.officialStartPrice,
@@ -126,6 +134,12 @@ export function createAdaptiveRunner({
       officialReference.officialPriceObservedAt<=now){
     features.officialReference={...officialReference};
    }
+   // Synchronous, zero-I/O auxiliary statistic; cannot delay the model API or submit orders.
+   // It is a numerical opinion only, not a trained LightGBM or calibrated probability.
+   const quant=quantSecondOpinion(raw,now,
+      pass==='current'?features.officialReference||null:null);
+   lastQuantSecondOpinion=quant;
+   features.quantSecondOpinion=quant;
    const feedback=typeof getHistoricalFeedback==='function'?
      getHistoricalFeedback(features):{};
    payload=analysisRequest(w,pass,now,features,feedback);

@@ -16,5 +16,5 @@ jobs:
       - name: Local-only regression and causal checks
         run: |
           node --check prediction-bot-v1/fast5-real-market-calculator.mjs
-          node --test prediction-bot-v1/fast5-real-market-calculator.test.mjs
-          node --test prediction-bot-v1/production-signal-choice.test.mjs || test ! -f prediction-bot-v1/production-signal-choice.test.mjs
+          node --check prediction-bot-v1/fast5-real-market-service.mjs
+          node --test prediction-bot-v1/fast5-real-market-calculator.test.mjs prediction-bot-v1/fast5-real-market-service.test.mjs

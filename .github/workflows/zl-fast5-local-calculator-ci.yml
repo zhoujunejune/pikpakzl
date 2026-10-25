@@ -17,4 +17,6 @@ jobs:
         run: |
           node --check prediction-bot-v1/fast5-real-market-calculator.mjs
           node --check prediction-bot-v1/fast5-real-market-service.mjs
-          node --test prediction-bot-v1/fast5-real-market-calculator.test.mjs prediction-bot-v1/fast5-real-market-service.test.mjs
+          node --check prediction-bot-v1/fast5-dashboard-inject.mjs
+          node --test prediction-bot-v1/fast5-real-market-calculator.test.mjs prediction-bot-v1/fast5-real-market-service.test.mjs prediction-bot-v1/fast5-dashboard-inject.test.mjs
+          python3 -m py_compile prediction-bot-v1/fast5_ui_repair.py

@@ -1,0 +1,83 @@
+name: Probe open-round Binance Prediction CHAINLINK reference before decision
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-official-live-reference-probe.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only signed GET recent market list and current topic; no orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import os,subprocess,urllib.request,urllib.parse,urllib.error,time,hmac,hashlib,json
+          from datetime import datetime,timezone
+          pid=int(subprocess.check_output(['systemctl','show','-p','MainPID','--value','zl-prediction-trade.service'],text=True).strip())
+          env={}
+          for s in open(f'/proc/{pid}/environ','rb').read().split(b'\0'):
+           if b'=' in s:
+            k,v=s.split(b'=',1);env[k.decode(errors='replace')]=v.decode(errors='replace')
+          key=env.get('BINANCE_PREDICTION_API_KEY')
+          secret=env.get('BINANCE_PREDICTION_API_SECRET')
+          assert key and secret,'READONLY_SIGNED_CONFIG_MISSING'
+          def api(path,params):
+           q=urllib.parse.urlencode({**params,'timestamp':str(int(time.time()*1000)),'recvWindow':'5000'})
+           sig=hmac.new(secret.encode(),q.encode(),hashlib.sha256).hexdigest()
+           req=urllib.request.Request('https://api.binance.com'+path+'?'+q+'&signature='+sig,headers={'X-MBX-APIKEY':key,'Accept':'application/json'})
+           try:
+            with urllib.request.urlopen(req,timeout=12) as resp:j=json.load(resp)
+            if isinstance(j,dict) and 'code' in j and int(j['code'])<0:raise RuntimeError('BINANCE_NEGATIVE_CODE_'+str(j['code']))
+            return j.get('data',j) if isinstance(j,dict) else j
+           except urllib.error.HTTPError as e:
+            print('LIVE_BINANCE_API_HTTP_STATUS',e.code,path)
+            return {'error':'HTTP_'+str(e.code)}
+          m=api('/sapi/v1/w3w/wallet/prediction/market/list',{'l1Category':'crypto','l2Category':'up-down','sortBy':'CREATED_TIME','orderBy':'DESC','offset':0,'limit':100})
+          rows=m.get('marketTopics',[]) if isinstance(m,dict) else []
+          now=int(time.time()*1000);r=(now//300000)*300000
+          btc=[]
+          for t in rows:
+           if str(t.get('symbol','')).upper()!='BTCUSDT':continue
+           try:
+            s=int(t.get('startDate'));e=int(t.get('endDate'))
+           except:continue
+           if 240000<=e-s<=360000 and abs(s-r)<900000:btc.append((abs(s-r),t))
+          btc.sort(key=lambda x:x[0])
+          print('LIVE_TOPIC_PROBE_TIME',datetime.now(timezone.utc).isoformat(),'CURRENT_ROUND',r,'BTC_CANDIDATES',len(btc))
+          print('LIVE_TOPIC_CANDIDATE_ROWS',json.dumps([{'marketTopicId':t.get('marketTopicId'),'startDate':t.get('startDate'),'endDate':t.get('endDate'),'symbol':t.get('symbol'),'variantKeys':sorted((t.get('variantData') or {}).keys()),'openPrice':(t.get('variantData') or {}).get('startPrice')} for _,t in btc[:5]],ensure_ascii=False))
+          for _,t in btc[:3]:
+           d=api('/sapi/v1/w3w/wallet/prediction/market/detail',{'marketTopicId':t.get('marketTopicId')})
+           if not isinstance(d,dict) or d.get('error'):continue
+           v=d.get('variantData') or {}
+           print('LIVE_TOPIC_DETAIL',json.dumps({'id':d.get('marketTopicId'),'status':d.get('status'),'startDate':d.get('startDate'),'endDate':d.get('endDate'),'symbol':d.get('symbol'),'variantKeys':sorted(v.keys()),'startPrice':v.get('startPrice'),'endPrice':v.get('endPrice'),'priceFeedProvider':v.get('priceFeedProvider'),'priceFeedId':v.get('priceFeedId'),'priceFeedSymbol':v.get('priceFeedSymbol'),'quote':{k:val for k,val in v.items() if any(a in k.lower() for a in ['current','latest','price']) and k not in ['startPrice','endPrice'] and isinstance(val,(str,int,float)) and len(str(val))<45}},ensure_ascii=False))
+          print('LIVE_TOPIC_PROBE_COMPLETE=true')
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-current-official-price-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=130)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           z=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if z and str(z.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            data=base64.b64decode(z.output or '',validate=True).decode('utf8','replace')
+            print('LIVE_PROBE_REMOTE',z.invocation_status,z.exit_code)
+            print(data[-10500:])
+            if int(z.exit_code)!=0:raise RuntimeError('LIVE_PROBE_FAILED')
+            break
+          else:raise RuntimeError('LIVE_PROBE_TIMEOUT')
+          OUTER

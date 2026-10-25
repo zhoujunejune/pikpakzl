@@ -80,9 +80,9 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
     'Choose indicators, historical examples and analytic methods independently based on their relevance; none is mandatory.',
     'You may revise earlier opinions when new credible evidence supports doing so; do not reverse without evidence.',
-    'Only choose UP or DOWN if fresh, current-round evidence supports a plausible directional advantage. If the evidence is mixed or the model cannot justify its judgment, choose WAIT and do not trade.',
-    'WAIT is a valid final decision for weak evidence, missing reference price, stale data, no statistically defensible advantage or analysis uncertainty. A subjective confidence score is never a calibrated probability.',
-    'The final trade signal must be based on a genuine analysis of the new round after its first 15 seconds. Prior-round UP/DOWN is preparation only and never authorizes a current-round trade.',
+    'For the CURRENT round, rank UP and DOWN using verified live opening price, tick trend, volatility and the most pertinent causal indicators. If one direction has meaningfully stronger support, make that best-effort UP/DOWN call even when prediction confidence is modest. Do not demand statistical proof from only 15–40 seconds of observations.',
+    'Do not default to WAIT just because short-term BTC outcomes are uncertain. WAIT is appropriate when live data are stale or unusable, the new-round open is missing, directional evidence is genuinely indistinguishable or mutually contradictory, or there is no honest basis for preferring either side. Never invent a directional edge to increase trade volume.',
+    'Any actionable UP/DOWN requires a fresh genuine DeepSeek review after new-round +15 seconds; a prior-round direction never authorizes a trade. In your JSON reason explain which observed evidence favored the chosen direction over the opposite side, and in risk disclose that accuracy is not verified.',
     'Never invent market data or future prices. If the supplied market data cannot be interpreted, do not manufacture an analysis.',
     'Return compact JSON {"direction":"UP","confidence":0.51,"continueAnalysis":false,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}. Choose continueAnalysis=true only if more fresh market observations could improve the decision before the deadline.',
     'Confidence is SUBJECTIVE, not a calibrated win probability; a directional prediction is NOT an instruction to trade or proof of positive expected value.'
@@ -96,6 +96,7 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     indicators:features,
     priorModelAnalysis:latest,
     verifiedHistoricalExperience:feedbackSafe,
+    preferActionableDirectionalRanking:pass==='current',
     requireDirectionalForecast:false,
     technicalFailureMustNotBeGuessed:true
    })}

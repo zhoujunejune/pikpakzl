@@ -245,7 +245,7 @@ function display(d){
   const detail=$("analysisDetail");detail.replaceChildren();
   if(s.decisionReviewVersion){
    const v=document.createElement("p");
-   v.textContent="分析逻辑：V6 AI价格结构版，新增1分钟动态支撑阻力和趋势持续性；最终UP/DOWN由DeepSeek High分析，尚非已验证胜率模型";
+   v.textContent="分析逻辑：V6.1 改进反转、假突破和多空证据冲突判断；最终UP/DOWN仍由DeepSeek High独立分析，不保证胜率";
    detail.append(v);
   }
   const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});

@@ -24,7 +24,7 @@ function sample(){
    "600s":{complete:true,buyFraction:.34,netTakerNotionalUsd:-600000,observedGroups:1000}
   }}};
 }
-test("DeepSeek V6 receives five curated evidence groups, no duplicated indicators",()=>{
+test("DeepSeek V6.1 still receives only five curated evidence groups, no duplicated indicators",()=>{
  const c=compactEvidence(sample()),str=JSON.stringify(c);
  assert.equal(c.version,COMPACT_VERSION);
  assert.deepEqual(Object.keys(c),["version","forecastTarget","shortPriceTrend","priceStructure","fifteenMinuteContext",

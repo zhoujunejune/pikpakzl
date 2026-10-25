@@ -1,6 +1,6 @@
 // Intentionally minimal evidence fed to EVENT10 DeepSeek.
 // Raw data and prior round history remain preserved for audit only.
-export const COMPACT_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6_20261024";
+export const COMPACT_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6R1_20261025";
 const finite=n=>typeof n==="number"&&Number.isFinite(n);
 const n=v=>finite(v)?v:null;
 export function compactEvidence(session){

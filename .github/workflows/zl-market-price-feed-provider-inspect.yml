@@ -1,0 +1,86 @@
+name: Read only audit Chainlink priceFeedProvider on Alibaba AI40 input
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-market-price-feed-provider-inspect.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect live market JSON metadata and settlement evidence, never write
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,urllib.request,subprocess,os
+          def get(port,route):
+           try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}{route}',timeout=9) as u:return json.load(u)
+           except Exception as e:return {'_error':type(e).__name__}
+          m=get(13003,'/api/shadow-market-data')
+          o=get(13002,'/api/round-stats')
+          a=get(13029,'/api/status')
+          print('FEED_AUDIT_MARKET_OK',m.get('ok'),'SYMBOL',m.get('symbol'),'READONLY',m.get('readOnly'))
+          print('FEED_AUDIT_TOP_KEYS',json.dumps(sorted(m.keys()),ensure_ascii=False))
+          print('FEED_AUDIT_LATEST_KEYS',json.dumps(sorted((m.get('latest') or {}).keys()),ensure_ascii=False))
+          print('FEED_AUDIT_CANDLES_KEYS',json.dumps(sorted((m.get('candles') or {}).keys()),ensure_ascii=False))
+          present=[]
+          def walk(x,p='',depth=0):
+           if depth>6 or len(present)>70:return
+           if isinstance(x,dict):
+            for k,v in x.items():
+             t=(p+'.' if p else '')+str(k)
+             if any(term in str(k).lower() for term in ['chainlink','pricefeed','oracle','settlementprice','indexprice','markprice','referenceprice','source']):
+              desc={'path':t,'type':type(v).__name__}
+              if isinstance(v,(str,int,float,bool)) and len(str(v))<130 and not any(t in str(k).lower() for t in ['key','token','secret','auth']):desc['value']=v
+              present.append(desc)
+             if isinstance(v,dict):walk(v,t,depth+1)
+           if isinstance(x,list) and x and isinstance(x[0],dict):walk(x[0],p+'[0]',depth+1)
+          walk(m)
+          print('FEED_AUDIT_MARKET_PROVIDER_FIELDS',json.dumps(present,ensure_ascii=False))
+          print('FEED_AUDIT_LATEST',json.dumps({k:(m.get('latest') or {}).get(k) for k in ['eventMs','roundStartMs','lastPrice','roundOpenPrice','marketFeedConnected','priceFeedProvider','chainlinkPrice','oraclePrice','settlementPrice','priceSource','source']},ensure_ascii=False))
+          print('FEED_AUDIT_OFFICIAL_TOP_KEYS',json.dumps(sorted(o.keys()),ensure_ascii=False))
+          print('FEED_AUDIT_OFFICIAL_SOURCE',o.get('settlementSource'),'OK',o.get('ok'))
+          records=o.get('records') or []
+          print('FEED_AUDIT_OFFICIAL_REC_COUNT',len(records))
+          if records:
+           sample=next((z for z in reversed(records) if isinstance(z,dict) and z.get('productionSettledAt')),records[0])
+           print('FEED_AUDIT_OFFICIAL_ROW_KEYS',json.dumps(sorted(sample.keys()),ensure_ascii=False))
+           vals={k:sample.get(k) for k in ['roundStartMs','productionActual','priceFeedProvider','chainlinkPrice','oraclePrice','settlementPrice','officialSettlementAudit','resolutionEvidence'] if k in sample}
+           for k,v in vals.items():
+            if isinstance(v,dict):vals[k]={'_keys':sorted(v.keys())}
+            elif isinstance(v,list):vals[k]={'_len':len(v)}
+            elif isinstance(v,str) and len(v)>130:vals[k]=v[:130]
+           print('FEED_AUDIT_OFFICIAL_ROW_RELEVANT',json.dumps(vals,ensure_ascii=False))
+           present.clear();walk(sample)
+           print('FEED_AUDIT_OFFICIAL_PROVIDER_FIELDS',json.dumps(present,ensure_ascii=False))
+          print('FEED_AUDIT_AI_ACTIVE',json.dumps({k:a.get(k) for k in ['model','providerModel','decisionRule','featureReady','round']}))
+          print('FEED_AUDIT_READ_ONLY_COMPLETE=true')
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-chainlink-price-feed-audit-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=120)).body.invoke_id
+          for _ in range(63):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            out=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            print('FEED_AUDIT_REMOTE_STATUS',r.invocation_status,'EXIT',r.exit_code);print(out[-16000:])
+            if int(r.exit_code)!=0:raise RuntimeError('FEED_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('FEED_AUDIT_TIMED_OUT')
+          OUTER

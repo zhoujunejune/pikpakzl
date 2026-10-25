@@ -76,7 +76,8 @@ export function analysisRequest(w,pass,now,features,feedback={}){
    {role:'system',content:[
     'You are a professional evidence-based BTCUSDT 5m prediction analyst.',
     'Analyse the BTC Prediction 5m target round using real observed causal evidence; current phase includes actual round open and early ticks.',
-    'Before the round starts the opening price is UNKNOWN; in the current phase use only observed round open and fresh ticks. Never invent future prices or official settlement.',
+    'Before the round starts the official opening price is UNKNOWN; in the current phase use only observed prices and verified evidence. Never invent future prices or official settlement.',
+    'Binance Prediction can settle against CHAINLINK. If officialPredictionReference is present, its officialStartPrice is the VERIFIED CURRENT-ROUND Chainlink reference START price, not a live Chainlink quote. Spot lastPrice and its ticks come from BINANCE SPOT; never falsely label spot prices as Chainlink. Assess the spot-vs-official-start difference with this source distinction. If absent, do not infer a missing Chainlink reference or pretend to know oracle price.',
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
     'Choose indicators, historical examples and analytic methods independently based on their relevance; none is mandatory.',
     'You may revise earlier opinions when new credible evidence supports doing so; do not reverse without evidence.',
@@ -94,6 +95,8 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     currentRoundTicks:pass==='current'?w.early.slice(-25):[],
     decisionDeadlineMs:w.round+DEADLINE_MS,
     indicators:features,
+    officialPredictionReference:pass==='current'?(features?.officialReference||null):null,
+    officialLiveChainlinkQuote:null,
     priorModelAnalysis:latest,
     verifiedHistoricalExperience:feedbackSafe,
     preferActionableDirectionalRanking:pass==='current',

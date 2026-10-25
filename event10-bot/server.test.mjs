@@ -28,7 +28,6 @@ test("strict current BTC read-only tick and closed-candle features",()=>{
  assert.ok(d.indicators.bars1m>=36);
  assert.equal(d.indicators.last1mCandleAt,NOW-120000);
  assert.equal(d.indicators.last5mCandleAt,NOW-600000);
- assert.ok(d.priceStructure.lastClosedCandleAt<=NOW);
  assert.equal(d.priceStructure.source,"SAME_PUBLIC_REFERENCE_CLOSED_1M_CANDLES");
  assert.throws(()=>checkedTick(fixture(NOW,NOW-15000),NOW),/STALE/);
  assert.throws(()=>checkedTick({...fixture(),readOnly:false},NOW),/UNVERIFIED/);

@@ -61,8 +61,7 @@ function atr(rows,n=14){
 }
 export function buildSnapshot(data, now) {
   const price=checkedTick(data,now);
-  // All direction features must predate the frozen trusted reference tick.
-  // The feed can contain a candle that closed after that tick.
+  // Restrict all indicators to candles that CLOSED before the locked reference tick.
   const one=candles(data,"1m",60000,price.observedAt);
   const five=candles(data,"5m",300000,price.observedAt);
   if(one.length<36||five.length<36)throw Error("NOT_ENOUGH_VERIFIED_CLOSED_CANDLES");
@@ -127,33 +126,19 @@ function prompt(session){
      "你是BTC未来600秒方向分析器，只分析输入里的五组经过校验的核心证据。",
      "预测目标是同一公开参考价格在600秒后高于(UP)或低于(DOWN)当前参考价。",
      "每次有效响应必须二选一 UP/DOWN，不返回 WAIT；如果调用失败就显式失败，不编造。",
-     "决策原则：预测接下来600秒，不是概述过去行情。仅用采样时间不晚于锁定参考价的数据。",
-     "步骤1：先根据短周期1m/5m和最近10分钟价格动量判别趋势/震荡背景，并把变化幅度与ATR相比较。",
-     "动量幅度接近零或远低于ATR时视为弱证据，不能以微小涨跌强行确认未来趋势。",
+     "步骤1：看短周期1m/5m价格动量、最近10分钟走势和ATR波动幅度。",
      "步骤1a：查看同一参考行情1分钟闭合K线提取的最近支撑区、阻力区、距离ATR、",
      "过去五根的上涨下跌次数与最近三根方向持续性，辨别区间反弹与趋势突破。",
      "支撑阻力只是历史价位聚类，并非未来必反弹或必回落。",
-     "价格靠近阻力不必选DOWN、靠近支撑不必选UP；只区分尚未突破/已经有效突破/突破后回落。",
      "步骤2：看15分钟的趋势方向和RSI，只作为背景，超卖不必然UP，超买不必然DOWN。",
-     "步骤3：看唯一一组完整600秒连续主动成交方向，但600秒净买或净卖不等于未来600秒仍同向。",
-     "步骤3a：检查同市场短期成交量价：卖压强而价格不跌是可能吸收，卖压强且下跌是卖方推进；",
-     "买压强而价格不涨是可能吸收，买压强且上涨是买方推进；均须考虑最新短周期价格是否确认。",
-     "不同长度的买卖统计窗口若相反，优先识别近期是否出现转向，不能单纯把金额大的那边判为未来方向。",
+     "步骤3：看唯一一组完整600秒连续主动成交方向；不要重复计票其他嵌套窗口。",
      "步骤4：若有合格的短期样本，比较同一BTCUSDT永续合约、同一采样窗口内的",
      "主动买卖压力和成交价格变动；没校验成功就不做吸收或破位结论。",
      "不同市场的绝对价格不能互相相减；期货成交价不是参考指数价。",
      "成交量不等于未来方向。时间周期和买卖压力冲突时比较上涨和下跌两种假设。",
      "支撑阻力、短期动量和持续性基于同一组1分钟K线，不能当成三票独立信号。",
-     "三根K线突破以统一的先前价格区间为基准；即使三根收盘价均处于区间外，也可能逐根回落。",
-     "若三根突破方向与最近三根连续收盘方向相反，先认为突破后的推进不足而非数据自相矛盾。",
-     "若参考价已回到突破区间内，必须识别假突破风险；没有价格站稳证据不得把突破直接判成后续趋势。",
+     "若3根闭合K线确认突破，但参考价回落到区间内，必须评估假突破风险。",
      "若短期方向没有持续性，不得把单根K线涨跌夸大为确定趋势。",
-     "决策前分别写清UP与DOWN的最强证据和最强反证，不要把RSI、EMA、价格动量重复计票。",
-     "重点审查反向假设：当前判断若错，最可能是阻力未突破、支撑未跌破、卖压衰竭或买压衰竭？",
-     "如果最新价格结构与主动成交或大周期趋势相反，不预设任一方胜出，要比较证据新鲜度、价格响应与期限。",
-     "可以在证据冲突时降低主观confidence，但必须仍给一个更可能的UP或DOWN，不能返回WAIT。",
-     "每个reason说明真正起作用的一条或两条核心原因，并点出一条可能令判断错误的反向因素。",
-     "不要从历史胜率推断新轮次必然成功，不要因为上一轮输了就自动反选方向。",
      "任何来源缺失都要明确表达不确定性，不能推断缺失数据。",
      "禁用重复的MACD、多个EMA数值、订单簿、资金费率和持仓变化解释。",
      "只输出JSON：direction(UP或DOWN)、confidence(0..1主观判断，不是胜率)、",
@@ -167,8 +152,7 @@ function prompt(session){
      outputLanguage:"zh-CN",explanationLanguage:"简体中文",
      referencePrice:session.openPrice,
      capturedAt:session.openedAt,expiresAt:session.expiresAt,
-     compactEvidence:data,
-     dataQualityWarnings:(session.decisionReview?.warnings||[]).slice(0,6)
+     compactEvidence:data
    })}
   ]};
 }
@@ -204,7 +188,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       manualStartEnabled:!!key,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
-      enrichmentVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6R1",
+      enrichmentVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6",
       decisionReviewVersion:REVIEW_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"enabled",reasoningEffort:"high",
       lastReasoningObserved:h?.reasoningObserved??null,
@@ -294,7 +278,6 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
           }
         }
       }
-      // Prevent newest candle data from leaking past the reference tick.
       const rollingTenMinutes=tenMinuteWindow(feed,snapshot.observedAt);
       const availability={...optional.availability};
       // Query stream history AS OF the frozen reference tick. The live stream
@@ -351,7 +334,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         openAgeMs:snapshot.observedAgeMs,priceStructure:snapshot.priceStructure,features:snapshot.indicators,
         rollingTenMinutes,enrichment:enriched,continuousTradeFlow,featureAvailability:availability,
         sourceWarnings:optional.caveats,
-        featureBundleVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6R1",
+        featureBundleVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6",
         decisionReviewVersion:REVIEW_VERSION,decisionReview:null,compactEvidence:null,analysisArguments:null,
         source:SOURCE,status:"ANALYZING",direction:null,
         model,attempts:0,confidence:null,reason:null,modelFinishedAt:null,

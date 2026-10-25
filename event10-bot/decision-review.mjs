@@ -31,7 +31,7 @@ export function buildDecisionReview(session){
   warnings.push("MISSING_"+item.toUpperCase()+": unavailable or insufficient verified observations");
  return {
   version:REVIEW_VERSION,
-  purpose:"V6R1 preserves five curated evidence sections; consider failed-breakout and price-flow conflicts without automatic directional flips or double counting.",
+  purpose:"V6 five curated sections: confirmed reference-market dynamic price zones and short persistence augment prior V5 inputs. Correlated signals must not be double counted.",
   warnings,
   missingVerifiedSections:d.limitations.missingVerifiedSections,
   riskOfOverconfidentDecision:warnings.length>=3?"HIGH":warnings.length>0?"ELEVATED":"UNASSESSED",

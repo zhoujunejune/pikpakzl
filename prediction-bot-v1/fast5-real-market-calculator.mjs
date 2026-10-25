@@ -38,7 +38,7 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   const eventAt=live.eventMs,price=live.lastPrice,spotOpen=live.roundOpenPrice;
   if(market?.ok!==true||market?.readOnly!==true||market?.symbol!=='BTCUSDT'||
      live.marketFeedConnected!==true||live.roundStartMs!==round||
-     !Number.isSafeInteger(eventAt)||eventAt>at+250||at-eventAt>1200||
+     !Number.isSafeInteger(eventAt)||eventAt<round||eventAt>at+250||at-eventAt>1200||
      !finite(price)||price<=0||!finite(spotOpen)||spotOpen<=0){
    latestError='STALE_OR_UNTRUSTED_MARKET';return {ok:false,reason:latestError,signal:null};
   }

@@ -157,6 +157,27 @@ for i,h in enumerate(hist[:12]):
     'reason':str(h.get('reason') or '')[:100]
  }
  print('EVENT10_LATEST_'+str(i+1)+'='+json.dumps(row,ensure_ascii=False,separators=(',',':')))
+v6=[h for h in hist if h.get('decisionReviewVersion')=='EVENT10_AI_PRICE_STRUCTURE_V6_20261024']
+v6settled=[h for h in v6 if isinstance(h.get('proxyHit'),bool)]
+print('EVENT10_AUDIT_V6_ONLY='+json.dumps(summarise(v6),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_AUDIT_V6_LAST5='+json.dumps(summarise(v6[:5]),ensure_ascii=False,separators=(',',':')))
+print('EVENT10_AUDIT_V6_LAST10='+json.dumps(summarise(v6[:10]),ensure_ascii=False,separators=(',',':')))
+for direction in ('UP','DOWN'):
+ group=[h for h in v6settled if h.get('direction')==direction]
+ print('EVENT10_AUDIT_V6_'+direction+'='+json.dumps(summarise(group),ensure_ascii=False,separators=(',',':')))
+pending=[{'startUTC':tm(h.get('openedAt')),'status':h.get('status'),'direction':h.get('direction')} for h in v6 if not isinstance(h.get('proxyHit'),bool)]
+print('EVENT10_AUDIT_V6_PENDING='+json.dumps(pending[:5],ensure_ascii=False,separators=(',',':')))
+for i,h in enumerate(v6[:12]):
+ row={'seq':i+1,'startUTC':tm(h.get('openedAt')),'expiresUTC':tm(h.get('expiresAt')),
+      'status':h.get('status'),'direction':h.get('direction'),'confidence':h.get('confidence'),
+      'proxyOutcome':h.get('proxyOutcome'),'proxyHit':h.get('proxyHit'),
+      'openPrice':h.get('openPrice'),'closePrice':h.get('closePrice'),
+      'returnPct':h.get('returnPct'),'settlementStatus':h.get('settlementStatus'),
+      'reasoningObserved':h.get('reasoningObserved'),'modelLatencyMs':h.get('modelLatencyMs'),
+      'reviewWarnings':(h.get('decisionReview') or {}).get('warnings',[])[:4],
+      'priceStructure':{k:(h.get('priceStructure') or {}).get(k) for k in ('nearestSupport','nearestResistance','lastThreeClosedBarsTrend','confirmedThreeBarBreakout')},
+      'reason':str(h.get('reason') or '')[:190]}
+ print('EVENT10_V6_ROUND_'+str(i+1)+'='+json.dumps(row,ensure_ascii=False,separators=(',',':')))
 print('EVENT10_AUDIT_NO_PRODUCTION_WRITES=true')
 PYAUDIT
 """

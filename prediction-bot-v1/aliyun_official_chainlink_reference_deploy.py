@@ -15,16 +15,16 @@ app=/opt/zl-prediction-live/deepseek5
 node=/opt/zl-prediction-node/bin/node
 core="$app/deepseek-adaptive15-core.mjs"
 runner="$app/deepseek-adaptive15-runner.mjs"
-helper="$app/official-prediction-reference.mjs"
+side_dir=/opt/zl-prediction-official-reference
+helper="$side_dir/official-prediction-reference.mjs"
 unit=/etc/systemd/system/zl-prediction-official-reference.service
 for u in zl-prediction-deepseek5 zl-prediction-trade zl-prediction-v2 zl-prediction-v3 zl-futures-bot-paper;do
  test "$(systemctl is-active "$u")" = active || { echo "ORACLE_ABORT_INACTIVE_SERVICE=$u";exit 11; }
 done
 test -x "$node" && test -f "$core" && test -f "$runner"
-test ! -e "$helper" && test ! -e "$unit" || { echo 'ORACLE_ALREADY_PRESENT_ABORT=true';exit 13; }
+test ! -e "$helper" && test ! -e "$unit" && test ! -e "$side_dir" || { echo 'ORACLE_ALREADY_PRESENT_ABORT=true';exit 13; }
 test -f /var/lib/zl-exchange-api/prediction/binance.env
-id -u nobody >/dev/null
-getent group nogroup >/dev/null
+test "$(stat -c %a /opt)" = 755 || { echo 'ORACLE_OPT_BASE_PERMISSIONS_UNEXPECTED=true';exit 12; }
 python3 - <<'PY'
 import urllib.request,json
 def get(port,route):
@@ -82,6 +82,7 @@ rollback(){
  systemctl stop zl-prediction-official-reference.service || true
  systemctl disable zl-prediction-official-reference.service || true
  rm -f "$unit" "$helper"
+ rmdir "$side_dir" 2>/dev/null || true
  systemctl daemon-reload || true
  echo 'ORACLE_ROLLBACK_ATTEMPTED=true'
 }
@@ -95,7 +96,7 @@ python3 - "$app" "$work" <<'PY'
 from pathlib import Path
 import sys,os,tempfile
 app,work=map(Path,sys.argv[1:])
-for name in ['official-prediction-reference.mjs','deepseek-adaptive15-core.mjs','deepseek-adaptive15-runner.mjs']:
+for name in ['deepseek-adaptive15-core.mjs','deepseek-adaptive15-runner.mjs']:
  dst=app/name
  ref=(app/'deepseek-adaptive15-core.mjs').stat()
  st=dst.stat() if dst.exists() else ref
@@ -108,6 +109,11 @@ for name in ['official-prediction-reference.mjs','deepseek-adaptive15-core.mjs',
  finally:
   if os.path.exists(tmp):os.unlink(tmp)
 PY
+# The isolated reference program lives in a root-owned, world-readable code-only
+# directory because the production model directory is deliberately 0750.
+# A dynamically allocated systemd user can load code without access to trading code.
+install -d -m 0755 -o root -g root "$side_dir"
+install -m 0644 -o root -g root "$work/official-prediction-reference.mjs" "$helper"
 # Separate loopback-only read-only service: no order API and no changes to live trade service.
 cat > "$unit" <<'UNIT'
 [Unit]
@@ -116,13 +122,12 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
-WorkingDirectory=/opt/zl-prediction-live/deepseek5
+DynamicUser=yes
+WorkingDirectory=/
 Environment=OFFICIAL_REFERENCE_PORT=13044
 EnvironmentFile=-/etc/zl-prediction/trading.env
 EnvironmentFile=-/var/lib/zl-exchange-api/prediction/binance.env
-ExecStart=/opt/zl-prediction-node/bin/node /opt/zl-prediction-live/deepseek5/official-prediction-reference.mjs
+ExecStart=/opt/zl-prediction-node/bin/node /opt/zl-prediction-official-reference/official-prediction-reference.mjs
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

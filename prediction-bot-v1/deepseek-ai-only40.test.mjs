@@ -71,12 +71,15 @@ test('forged evidence, early model response and late decision are rejected',()=>
  assert.equal(late.terminal.direction,'WAIT');
  assert.equal(late.terminal.reason,'DEADLINE_40S_EXPIRED');
 });
-test('model prompt explicitly permits WAIT when there is no predictive edge',()=>{
+test('model compares directions and permits WAIT only when evidence cannot support a choice',()=>{
  const w=windowAt(16);
  const a=analysisRequest(w,'current',R+16000,{}, {samples:200});
  const str=JSON.stringify(a.messages);
- assert.match(str,/Only choose UP or DOWN if fresh/);
- assert.match(str,/WAIT is a valid final decision/);
+ assert.match(str,/rank UP and DOWN using verified live opening price/);
+ assert.match(str,/Do not default to WAIT/);
+ assert.match(str,/Never invent a directional edge/);
+ assert.match(str,/explain which observed evidence favored the chosen direction/);
+ assert.match(JSON.stringify(a.messages[1]),/preferActionableDirectionalRanking/);
  assert.equal(a.reasoning_effort,'high');
  assert.equal(a.thinking.type,'enabled');
 });

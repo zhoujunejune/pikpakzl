@@ -61,7 +61,7 @@ function atr(rows,n=14){
 }
 export function buildSnapshot(data, now) {
   const price=checkedTick(data,now);
-  // Restrict all indicators to candles that CLOSED before the locked reference tick.
+  // Only use closed candles at or before the frozen reference tick.
   const one=candles(data,"1m",60000,price.observedAt);
   const five=candles(data,"5m",300000,price.observedAt);
   if(one.length<36||five.length<36)throw Error("NOT_ENOUGH_VERIFIED_CLOSED_CANDLES");

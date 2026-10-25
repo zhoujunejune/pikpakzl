@@ -209,14 +209,14 @@ WantedBy=multi-user.target
 """)
    os.chmod(UNIT,0o644)
    run('systemctl','daemon-reload')
-   run('systemctl','enable','--now','zl-prediction-fast5.service')
    sideStarted=True
+   run('systemctl','enable','--now','zl-prediction-fast5.service')
    ready=False
    for i in range(30):
     time.sleep(.5)
     try:
      z=get(13046,'/api/status')
-     if z.get('model')==MODEL and z.get('readOnly') is True and z.get('requiresDeepSeek') is False and z.get('fetchAttempts',0)>=2 and z.get('lastError') is None and z.get('lastObservationAt') is not None:
+     if z.get('model')==MODEL and z.get('readOnly') is True and z.get('requiresDeepSeek') is False and z.get('fetchAttempts',0)>=2 and z.get('lastError') is None and z.get('lastFetchAt') is not None:
       ready=True;break
     except Exception:pass
    if not ready:raise RuntimeError('FAST5_SERVICE_FEED_NOT_READY')

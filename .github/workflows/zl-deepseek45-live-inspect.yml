@@ -67,6 +67,23 @@ jobs:
            print('LIVE_FILE',f.name,'sha256',hashlib.sha256(data).hexdigest(),'nlines',len(lines))
            matches=[f'{i+1}:{s[:195]}' for i,s in enumerate(lines) if any(n in s for n in needles)]
            for line in matches[:35]:print('LIVE_SOURCE',f.name,line)
+          print('LIVE_EXACT_CODE_BEGIN')
+          from pathlib import Path
+          root=Path('/opt/zl-prediction-live')
+          for f,ranges in [
+            (root/'deepseek5/deepseek-adaptive15-production-adapter.mjs',[(1,206)]),
+            (root/'deepseek5/deepseek-adaptive15-runner.mjs',[(135,211)]),
+            (root/'src/railway-diagnostic/production-signal-choice.mjs',[(280,303)]),
+            (root/'src/railway-diagnostic/wrapper.mjs',[(15,47)])
+          ]:
+           if not f.exists():continue
+           lines=f.read_text(errors='replace').splitlines()
+           for lo,hi in ranges:
+            for i in range(lo-1,min(hi,len(lines))):
+             l=lines[i]
+             if len(l)>400:l=l[:400]
+             print('LIVE_CODE',f.name,f'{i+1}:',l)
+          print('LIVE_EXACT_CODE_END')
           print('LIVE_INSPECTION_DONE=true')
           INNER
           """

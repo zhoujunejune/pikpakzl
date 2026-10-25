@@ -175,6 +175,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    analysisReviewDirection:shadow.window?.revisedAnalysis??null,
     analysisCurrentDirection:shadow.window?.currentAnalysis??null,
     officialReference:shadow.officialReference??{available:false},
+     quantSecondOpinion:shadow.quantSecondOpinion??{available:false},
    analysisModelCalls:shadow.window?.modelCalls??0,
    analysisPreviousRoundSnapshots:shadow.window?.priorSamples??0,
    analysisEarlySnapshots:shadow.window?.earlySamples??0,

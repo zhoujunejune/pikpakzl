@@ -48,3 +48,34 @@ test("all visible analysis fields are served from Chinese display, not old Engli
  assert.match(page,/最终决定性依据/);
  assert.match(page,/不确定性/);
 });
+
+test("the saved DeepSeek confidence appears for current signal and every historic row; missing stays blank",()=>{
+ assert.ok(page.includes('id="quickConfidence"'));
+ assert.ok(page.includes('id="confidence"'));
+ assert.match(page,/const displayConfidence=s=>/);
+ assert.match(page,/s\.confidence\*100/);
+ assert.match(page,/typeof s\.confidence==="number"/);
+ assert.match(page,/s\.confidence>=0&&s\.confidence<=1/);
+ assert.match(page,/\$\("quickConfidence"\)\.textContent="主观置信度："\+displayConfidence\(s\)/);
+ assert.match(page,/\$\("confidence"\)\.textContent=displayConfidence\(s\)/);
+ assert.match(page,/s\.direction\|\|"—",displayConfidence\(s\)/);
+ assert.match(page,/td\.colSpan=7/);
+ assert.match(page,/AI主观置信度/);
+ assert.match(page,/不等于真实胜率或盈利概率/);
+ // Execute the exact formatting expression without calling model APIs.
+ const expression=page.match(/const displayConfidence=s=>[\s\S]*?;"?\s*\/\//);
+ // Anchor instead to the known following declaration; that is robust to comments.
+ const start=page.indexOf("const displayConfidence=s=>");
+ const end=page.indexOf("const phaseText=",start);
+ assert.ok(start>0&&end>start);
+ const segment=page.slice(start,end);
+ const fn=new Function(segment+"\nreturn displayConfidence;")();
+ assert.equal(fn({direction:"UP",confidence:0.643}),"64.3%");
+ assert.equal(fn({direction:"DOWN",confidence:0}),"0.0%");
+ assert.equal(fn({direction:"DOWN",confidence:1}),"100.0%");
+ assert.equal(fn({direction:"UP",confidence:null}),"—");
+ assert.equal(fn({direction:"UP",confidence:0.5}),"50.0%");
+ assert.equal(fn({direction:null,confidence:0.9}),"—");
+ assert.equal(fn({direction:"UP",confidence:1.5}),"—");
+ assert.equal(fn({direction:"UP",confidence:"0.65"}),"—");
+});

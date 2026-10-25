@@ -39,8 +39,13 @@ def patch_choice(s):
  s=replace1(s,"export const MODEL_CHOICE_KEY='trade-control:order-signal-choice:v1';",
             "export const MODEL_CHOICE_KEY='trade-control:order-signal-choice:v2:fast5';")
  s=replace1(s,"name:'DeepSeek 5分钟生产信号'","name:'FAST5 本地实时行情信号'")
- s=replace1(s,"const initial=JSON.stringify({model:BASE_MODEL,revision:crypto.randomUUID(),",
-            "const initial=JSON.stringify({model:SELECTIVE8_MODEL,revision:crypto.randomUUID(),")
+ # Production already initializes the sole selected model using SELECTIVE8_MODEL.
+ # Permit the older BASE_MODEL variant only as a guarded migration input.
+ if "const initial=JSON.stringify({model:BASE_MODEL,revision:crypto.randomUUID()," in s:
+  s=replace1(s,"const initial=JSON.stringify({model:BASE_MODEL,revision:crypto.randomUUID(),",
+             "const initial=JSON.stringify({model:SELECTIVE8_MODEL,revision:crypto.randomUUID(),")
+ elif "const initial=JSON.stringify({model:SELECTIVE8_MODEL,revision:crypto.randomUUID()," not in s:
+  raise RuntimeError('UNKNOWN_INITIAL_MODEL_FORMAT')
  s=replace1(s,"updatedAt:new Date().toISOString(),effectiveAfterRound:null});",
             "updatedAt:new Date().toISOString(),effectiveAfterRound:roundOf(Date.now())});")
  if 'export function validateFast5ProductionLive(' in s:raise RuntimeError('FAST5_VALIDATOR_ALREADY_PRESENT')

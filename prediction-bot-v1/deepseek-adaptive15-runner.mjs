@@ -1,5 +1,5 @@
 // Isolated adaptive DeepSeek runner, no Binance order API or order submission.
-// DeepSeek chooses its own amount of analysis; strict hard +25-second boundary.
+// 120s prior pre-analysis; current-round reasoning after +15s; strict +40s AI boundary.
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -13,9 +13,9 @@ const API='https://api.deepseek.com/chat/completions';
 const desc=e=>String(e?.message||e||'UNKNOWN').slice(0,120);
 // Two pre-round passes, up to four evidence-spaced live passes. These are
 // maximums, not quotas. Successful judgments lock immediately.
-export const MAX_AI_CALLS_PER_ROUND=6;
+export const MAX_AI_CALLS_PER_ROUND=5;
 export const MAX_PRE_ROUND_CALLS=2;
-export const MAX_LIVE_CALLS=4;
+export const MAX_LIVE_CALLS=3;
 export const LIVE_REVIEW_MIN_INTERVAL_MS=6000;
 const liveCalls=w=>w.modelCalls-w.attemptedPasses.length;
 export function createAdaptiveRunner({
@@ -40,7 +40,7 @@ export function createAdaptiveRunner({
    }
    lastCountedRound=current.round;
    skipped++;
-   if(current.terminal.reason==='DEADLINE_25S_EXPIRED')missed++;
+   if(current.terminal.reason==='DEADLINE_40S_EXPIRED')missed++;
    lastCompleted={round:current.round,result:'WAIT',direction:'WAIT',
     reason:current.terminal.reason,detail:current.terminal.detail,
     completedAt:current.terminal.at,signalGenerated:false,orders:false};
@@ -79,7 +79,7 @@ export function createAdaptiveRunner({
   const remaining=w.round-now;
   if((pass==='initial'&&(remaining>75000||remaining<34000))||
     (pass==='review'&&(remaining>30000||remaining<4000))||
-    (pass==='current'&&(remaining>0||remaining< -(DEADLINE_MS-650))))return;
+    (pass==='current'&&(remaining> -15000||remaining< -(DEADLINE_MS-650))))return;
   // A fresh market observation and meaningful elapsed time must separate
   // live calls; never spend tokens re-analysing the same tick every 400ms.
   if(pass==='current'&&(w.lastLiveRequestAt!=null&&
@@ -148,7 +148,7 @@ export function createAdaptiveRunner({
       void analyze(w,'initial',raw,now);
      else if(remaining<=30000&&remaining>=4000&&!w.passes.some(x=>x.pass==='review'))
       void analyze(w,'review',raw,now);
-    } else if(now>=w.round&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
+    } else if(now>=w.round+15000&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
      // Only DeepSeek decides whether another review improves the evidence.
      // Never hold a finished judgment until an arbitrary 8s/15s milestone.
      const latestCurrent=w.passes.filter(x=>x.pass==='current').at(-1);

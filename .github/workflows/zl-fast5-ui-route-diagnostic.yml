@@ -1,0 +1,64 @@
+name: Inspect protected prediction Caddy routing and live FAST5 UI injector
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-ui-route-diagnostic.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only actual Caddy and frontend script identifiers
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,base64,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,urllib.request,re,hashlib
+          p=pathlib.Path('/etc/caddy/Caddyfile')
+          s=p.read_text()
+          domain='prediction.47-237-188-69.sslip.io {'
+          i=s.find(domain)
+          print('FAST5_CADDY_FOUND',i!=-1)
+          if i>=0:
+           print('FAST5_CADDY_BLOCK',s[i:s.find('\n}',i)+2][:6200])
+          root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          for filename in ['ai40-dashboard-inject.mjs','panel-stats-shell.mjs']:
+           f=root/filename
+           if not f.exists():print('FAST5_UI_FILE_MISSING',filename);continue
+           body=f.read_text()
+           print('FAST5_UI_FILE',filename,len(body),hashlib.sha256(body.encode()).hexdigest()[:20])
+           for pattern in ['injectAi40Dashboard','statsFromFiles','zlDeepSeek40Card','/api/ai40-round-stats','/deepseek/api/status','function injectStats','<section class="c" id="zlDeepSeek40Card"','DeepSeek 40秒方案']:
+            print('FAST5_UI_MATCH',filename,pattern,body.count(pattern))
+           if filename=='panel-stats-shell.mjs':
+            m=re.search(r'function injectStats\(html\)[\s\S]{0,1000}',body)
+            print('FAST5_UI_INJECT_SNIPPET',m.group(0)[:850] if m else 'none')
+          with urllib.request.urlopen('http://127.0.0.1:13001/',timeout=6) as r:page=r.read(1500000).decode('utf8','replace')
+          print('FAST5_PAGE_KEYS',{k:page.count(k) for k in ['zlDeepSeek40Card','roundResultsOnlyCard','roundStatsCard','signalPolicyCard','id="zlAi40Main"','DeepSeek 40秒方案']})
+          print('FAST5_UI_DIAG_DONE=true')
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          id=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-panel-route-readonly-audit',type='RunShellScript',working_user='root',command_content=script,timeout=90)).body.invoke_id
+          for _ in range(58):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=id)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST5_UI_DIAG_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-13000:])
+            if int(r.exit_code)!=0:raise RuntimeError('UI_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('UI_AUDIT_TIMEOUT')
+          OUTER

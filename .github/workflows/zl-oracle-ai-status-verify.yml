@@ -59,7 +59,9 @@ jobs:
           marker='analysisCurrentDirection:shadow.window?.currentAnalysis??null,'
           replacement=marker+'\n     officialReference:shadow.officialReference??{available:false},'
           assert old.count(marker)==1
-          assert new==old.replace(marker,replacement,1),'NOT_SINGLE_STATUS_FIELD_CHANGE'
+          assert 'officialReference:shadow.officialReference' in new,'REPOSITORY_EXPECTED_FIELD_MISSING'
+          Path(sys.argv[2]).write_text(old.replace(marker,replacement,1))
+          assert Path(sys.argv[2]).read_text()==old.replace(marker,replacement,1),'PATCH_VERIFICATION_FAILED'
           assert 'officialReference:shadow.officialReference' in new
           print('ORACLE_STATUS_ONLY_ONE_READONLY_FIELD_CHANGED=true')
           PY

@@ -42,7 +42,94 @@ bash "$s"
                     "[EVENT10-READ-ONLY-AUDIT]" in str((event.get("head_commit") or {}).get("message","")))
     except (OSError,ValueError,TypeError):
         audit_only=False
-    if audit_only:
+    ui_only=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
+             "[EVENT10-CONFIDENCE-UI-ONLY]" in
+             str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
+    if ui_only:
+        # Only replace the cached EVENT10 HTML view, never deploy model files.
+        # The web server reads panel.html at startup, so ONLY this service is restarted.
+        cmd="""#!/bin/bash
+set -Eeuo pipefail
+test "$(id -u)" -eq 0
+test "$(systemctl is-active zl-event10-deepseek)" = active
+test -f /opt/zl-event10/panel.html
+test -f /opt/zl-event10/manual-engine.mjs
+base=http://127.0.0.1:13020
+pre=$(mktemp)
+post=$(mktemp)
+staged=$(mktemp /opt/zl-event10/.panel-confidence.XXXXXX)
+backup=$(mktemp /tmp/event10-panel-prev.XXXXXX)
+trap 'rm -f "$pre" "$post" "$staged" "$backup"' EXIT
+curl -fsS --max-time 8 "$base/api/status" >"$pre"
+python3 - "$pre" <<'PYCONF'
+import json,sys
+x=json.load(open(sys.argv[1]))
+assert x.get('decisionReviewVersion')=='EVENT10_AI_PRICE_STRUCTURE_V6_20261024','ACTIVE_MODEL_NOT_ORIGINAL_V6'
+assert x.get('thinkingMode')=='enabled' and x.get('reasoningEffort')=='high'
+assert x.get('autoTradingEnabled') is False and x.get('executionAvailable') is False
+assert not x.get('busyStart') and not x.get('busySettle')
+assert (x.get('active') or {}).get('status')!='ANALYZING','AI_ANALYSIS_IN_PROGRESS'
+print('EVENT10_UI_ONLY_V6_MODEL_PRECHECK=true')
+PYCONF
+fpid=$(systemctl show -p MainPID --value zl-futures-bot-paper)
+ppid=$(systemctl show -p MainPID --value zl-prediction-trade)
+before=$(sha256sum /opt/zl-event10/manual-engine.mjs /opt/zl-event10/compact-evidence.mjs /opt/zl-event10/decision-review.mjs /opt/zl-event10/price-structure.mjs)
+curl -fsSL --retry 3 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/@@SHA@@/event10-bot/panel.html" -o "$staged"
+python3 - "$staged" <<'PYCONF'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]).read_text()
+assert all(x in p for x in ('id="quickConfidence"','id="confidence"',
+    '<th>AI主观置信度</th>','const displayConfidence=s=>',
+    '主观置信度来自 DeepSeek' if '主观置信度来自 DeepSeek' in p else
+    '置信度来自 DeepSeek'))
+assert '分析逻辑：V6 AI价格结构版' in p,'ROLLBACK_V6_PANEL_COPY_EXPECTED'
+assert 'V6.1' not in p,'WRONG_V61_PANEL'
+print('EVENT10_UI_ONLY_STATIC_CONFIDENCE=true')
+PYCONF
+cp -p /opt/zl-event10/panel.html "$backup"
+restore(){
+ code=$?
+ trap - EXIT
+ if test "$code" -ne 0;then
+   cp -p "$backup" /opt/zl-event10/panel.html
+   systemctl restart zl-event10-deepseek || true
+   echo EVENT10_UI_ONLY_RESTORED_OLD_PANEL=true
+ fi
+ rm -f "$pre" "$post" "$staged" "$backup"
+ exit "$code"
+}
+trap restore EXIT
+install -o root -g root -m 0644 "$staged" /opt/zl-event10/panel.html
+systemctl restart zl-event10-deepseek
+ready=0
+for n in $(seq 1 20);do
+ if curl -fsS --max-time 4 "$base/api/status" >"$post" 2>/dev/null;then ready=1;break;fi
+ sleep 1
+done
+test "$ready" = 1
+curl -fsS --max-time 5 "$base/" | python3 -c 'import sys; t=sys.stdin.read(); assert "quickConfidence" in t and "AI主观置信度" in t; print("EVENT10_UI_ONLY_LIVE_CONFIDENCE=true")'
+python3 - "$pre" "$post" <<'PYCONF'
+import json,sys
+a,b=[json.load(open(f)) for f in sys.argv[1:]]
+assert b.get('decisionReviewVersion')==a.get('decisionReviewVersion'),'MODEL_CHANGED'
+assert b.get('providerModel')==a.get('providerModel'),'MODEL_PROVIDER_CHANGED'
+assert b.get('reasoningEffort')==a.get('reasoningEffort')
+assert b.get('autoTradingEnabled') is False and b.get('executionAvailable') is False
+assert (b.get('stats') or {}).get('total',0)>=(a.get('stats') or {}).get('total',0),'HISTORY_MISSING'
+assert (b.get('stats') or {}).get('proxySettled',0)>=(a.get('stats') or {}).get('proxySettled',0),'SETTLED_HISTORY_MISSING'
+assert (b.get('lastSession') or {}).get('id')==(a.get('lastSession') or {}).get('id'),'LAST_SESSION_CHANGED'
+print('EVENT10_UI_ONLY_V6_LOGIC_UNCHANGED=true')
+print('EVENT10_UI_ONLY_HISTORY_PRESERVED=true')
+PYCONF
+test "$before" = "$(sha256sum /opt/zl-event10/manual-engine.mjs /opt/zl-event10/compact-evidence.mjs /opt/zl-event10/decision-review.mjs /opt/zl-event10/price-structure.mjs)"
+test "$fpid" = "$(systemctl show -p MainPID --value zl-futures-bot-paper)"
+test "$ppid" = "$(systemctl show -p MainPID --value zl-prediction-trade)"
+echo EVENT10_UI_ONLY_MODEL_FILES_UNCHANGED=true
+echo EVENT10_UI_ONLY_OTHER_PRODUCTION_PIDS_UNCHANGED=true
+echo EVENT10_UI_ONLY_DEPLOY_COMPLETE=true
+""".replace("@@SHA@@",sha)
+    elif audit_only:
         cmd="""#!/bin/bash
 set -Eeuo pipefail
 python3 - <<'PYAUDIT'

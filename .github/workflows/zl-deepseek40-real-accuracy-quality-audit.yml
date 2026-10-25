@@ -67,6 +67,23 @@ jobs:
             else:key='AGREES_EARLY' if (bs>0)==(p['direction']=='UP') else 'CONFLICTS_EARLY'
             if key==relation:items.append(p)
            print('ACCURACY_EARLY_RELATION',relation,json.dumps(aggregate(items)))
+          # Newest official outcomes only; older versions are NOT representative of today.
+          if done:
+           max_round=max(int(p['round']) for p in done)
+           latest=[p for p in done if int(p['round'])>max_round-86400000]
+           for a,b in bins:
+            cohort=[p for p in latest if a<=int(p.get('signalLatencyMs') or -1)<b]
+            print('ACCURACY_RECENT_LOCK_BIN',json.dumps({'startMs':a,'endMs':b,**aggregate(cohort)}))
+           latest_pairs=[(p,qmap[p['round']]) for p in latest if p['round'] in qmap]
+           for relation in ['AGREES_EARLY','CONFLICTS_EARLY','EARLY_UNKNOWN']:
+            subset=[]
+            for p,q in latest_pairs:
+             bs=(q.get('decisionContext') or {}).get('fromOpenBps')
+             key='EARLY_UNKNOWN' if not isinstance(bs,(int,float)) or bs==0 else 'AGREES_EARLY' if (bs>0)==(p['direction']=='UP') else 'CONFLICTS_EARLY'
+             if key==relation:subset.append(p)
+            print('ACCURACY_RECENT_EARLY_RELATION',relation,json.dumps(aggregate(subset)))
+           for regime in ['TREND_UP','TREND_DOWN','MIXED','UNKNOWN']:
+            print('ACCURACY_RECENT_REGIME',regime,json.dumps(aggregate([p for p in latest if p.get('featureRegime')==regime])))
           by_calls=collections.Counter()
           for p in done:by_calls[str(p.get('attemptCount'))]+=1
           print('ACCURACY_MODEL_CALL_COUNTS',dict(by_calls))

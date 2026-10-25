@@ -1,0 +1,116 @@
+name: Inspect actual price reference paths and 5m parity (read-only)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-chainlink-reference-route-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Find live read-only official reference API, compare observed round candles
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,urllib.request,pathlib,statistics,subprocess
+          def get(port,route):
+           with urllib.request.urlopen(f'http://127.0.0.1:{port}{route}',timeout=8) as r:return json.load(r)
+          off=get(13002,'/api/round-stats')
+          m=get(13003,'/api/shadow-market-data')
+          st=get(13001,'/api/status')
+          print('REFERENCE_TRADE_STATUS_KEYS',sorted(st.keys()))
+          print('REFERENCE_LATEST_FEED_KEYS',sorted((m.get('latest') or {}).keys()))
+          for i in ['1m','5m']:
+           section=(m.get('candles') or {}).get(i)
+           print('REFERENCE_CANDLES_SCHEMA',i,type(section).__name__,sorted(section.keys()) if isinstance(section,dict) else '')
+           if isinstance(section,dict):
+            for key,val in section.items():
+             if isinstance(val,list):
+              print('REFERENCE_CANDLES_LIST',i,key,'count',len(val),
+                'first',json.dumps(val[0] if val else None,ensure_ascii=False)[:500],
+                'last',json.dumps(val[-1] if val else None,ensure_ascii=False)[:500])
+          src=(m.get('candles') or {}).get('5m')
+          rows=src if isinstance(src,list) else next((src.get(n) for n in ['rows','items','candles','data'] if isinstance(src.get(n),list)),[]) if isinstance(src,dict) else []
+          cm={}
+          for x in rows:
+           try:
+            t=int(x.get('startMs') or x.get('openTime') or 0)
+            if t:cm[t]=x
+           except:pass
+          matches=[]
+          for rec in off.get('records') or []:
+           t=int(rec.get('roundStartMs') or 0);ref=rec.get('officialSettlementAudit') or {}
+           try:
+            a=float(ref['variantStartPrice']);b=float(ref['variantEndPrice'])
+            s=cm.get(t)
+            if not s:continue
+            xo=float(s['open']);xc=float(s['close'])
+            if not(a>0 and b>0 and xo>0 and xc>0):continue
+            sd='UP' if xc>xo else 'DOWN' if xc<xo else 'FLAT'
+            od='UP' if b>a else 'DOWN' if b<a else 'FLAT'
+            matches.append({'round':t,'spotOpen':xo,'officialStart':a,'spotClose':xc,'officialEnd':b,
+             'startGapBps':round((xo/a-1)*10000,4),'endGapBps':round((xc/b-1)*10000,4),
+             'spotDirection':sd,'oracleDirection':od,'differentDirection':sd!=od,'isClosed':s.get('closed')})
+           except:continue
+          print('REFERENCE_MATCH_COUNT',len(matches),'MISMATCH',sum(x['differentDirection'] for x in matches))
+          print('REFERENCE_MATCH_LAST15',json.dumps(matches[-15:],ensure_ascii=False)[:9000])
+          if matches:
+           print('REFERENCE_MATCH_SUMMARY',json.dumps({
+            'medianOpenGapBps':round(statistics.median(abs(x['startGapBps']) for x in matches),4),
+            'medianEndGapBps':round(statistics.median(abs(x['endGapBps']) for x in matches),4),
+            'maxOpenGapBps':round(max(abs(x['startGapBps']) for x in matches),4),
+            'maxEndGapBps':round(max(abs(x['endGapBps']) for x in matches),4)}))
+          for f,intervals in [
+           ('/opt/zl-prediction-live/src/railway-diagnostic/index.mjs',[(814,871)]),
+           ('/opt/zl-prediction-live/src/railway-diagnostic/trade-control-fixed.mjs',[(1342,1402)]),
+           ('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs',[(175,231)]),
+           ('/opt/zl-prediction-live/src/fast-signal-engine/index.mjs',[(695,777)])]:
+           p=pathlib.Path(f)
+           if not p.exists():continue
+           lines=p.read_text(errors='replace').splitlines()
+           for start,end in intervals:
+            safe=[]
+            for i in range(start-1,min(end,len(lines))):
+             s=lines[i]
+             if any(x in s.lower() for x in ['secret','api_key','token','privatekey','authorization','password','signature','apikey']):continue
+             safe.append(f'{i+1}: '+s[:180])
+            print('REFERENCE_SOURCE_CONTEXT',f.split('/')[-2:] ,json.dumps(safe,ensure_ascii=False)[:6200])
+          for unit in ['zl-prediction-deepseek5.service','zl-prediction-trade.service','zl-prediction-v2.service']:
+           try:
+            pid=int(subprocess.check_output(['systemctl','show','-p','MainPID','--value',unit],text=True,timeout=5).strip())
+            names=[]
+            if pid>1:
+             for s in open(f'/proc/{pid}/environ','rb').read().split(b'\0'):
+              k=s.split(b'=',1)[0].decode('utf8','replace')
+              if 'BINANCE' in k and ('KEY' in k or 'SECRET' in k or 'BASE' in k):names.append(k)
+            print('REFERENCE_SERVICE_CRED_KEY_NAMES',unit,sorted(names))
+           except:pass
+          print('REFERENCE_READONLY_DONE=true')
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-prediction-reference-paths-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=135)).body.invoke_id
+          for _ in range(70):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            out=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            print('REFERENCE_REMOTE',r.invocation_status,'EXIT',r.exit_code);print(out[-30000:])
+            if int(r.exit_code)!=0:raise RuntimeError('REFERENCE_FAILED')
+            break
+          else:raise RuntimeError('REFERENCE_TIMED_OUT')
+          OUTER

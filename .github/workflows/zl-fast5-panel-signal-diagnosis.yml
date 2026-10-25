@@ -1,0 +1,82 @@
+name: Diagnose FAST5 signal and old DeepSeek panel read only
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-panel-signal-diagnosis.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Live read-only signal diagnosis on existing Alibaba host
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sh=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,time,urllib.request,urllib.error,subprocess,re,pathlib
+          def get(p,r):
+           try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{p}{r}',timeout=6) as z:
+             return json.load(z)
+           except Exception as e:return {'error':type(e).__name__,'status':getattr(e,'code',None)}
+          now=int(time.time()*1000);rd=now//300000*300000
+          for label,p,r in [
+           ('trade',13001,'/api/status'),('selector',13001,'/api/order-signal-model'),
+           ('directions',13001,'/api/direction-mode'),('fast',13046,'/api/status'),
+           ('signal',13046,'/api/signal'),('deepseek',13029,'/api/status'),
+           ('feed',13003,'/api/shadow-market-data'),
+           ('panelroot',13001,'/api/ai40-status'),
+           ('panelalt',13001,'/api/deepseek-status')]:
+           obj=get(p,r)
+           if label=='feed': 
+            obj={'ok':obj.get('ok'),'generatedAtMs':obj.get('generatedAtMs'),'latest':obj.get('latest'),
+            'integrity':obj.get('integrity'),'oneMinuteCandles':len(((obj.get('candles') or {}).get('1m') or {}).get('rows') or [])}
+           elif label=='trade':
+            obj={k:obj.get(k) for k in ['ok','enabled','mode','orderSignalModel','signal','lastOrder','pendingAction','lastError']}
+           elif label=='selector':obj={k:obj.get(k) for k in ['ok','ready','model','effectiveAfterRound','models']}
+           elif label=='directions':obj={k:obj.get(k) for k in ['ok','ready','modes']}
+           elif label in ('fast','signal'):obj={k:obj.get(k) for k in ['ok','service','model','round','lastFetchAt','lastError','lastRequestMs','fetchAttempts','locked','latest','observedSamples','lastObservationAt']}
+           elif label=='deepseek':obj={k:obj.get(k) for k in ['ok','model','error','configured']}
+           print('FAST5_DIAG',label,json.dumps(obj,ensure_ascii=False,default=str)[:2200])
+          print('FAST5_DIAG_NOW',now,'round',rd,'elapsed',now-rd)
+          for name in ['zl-prediction-trade','zl-prediction-fast5','zl-prediction-deepseek5']:
+           p=subprocess.run(['systemctl','is-active',name],capture_output=True,text=True)
+           print('FAST5_SERVICE',name,p.stdout.strip())
+          logs=subprocess.run(['journalctl','-u','zl-prediction-fast5','--since','-30 min','--no-pager','-n','70','-o','cat'],capture_output=True,text=True)
+          print('FAST5_JOURNAL',logs.stdout[-3500:])
+          root=pathlib.Path('/opt/zl-prediction-live')
+          for f in ['/opt/zl-prediction-live/src/railway-diagnostic/wrapper.mjs',
+                    '/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs',
+                    '/opt/zl-prediction-live/src/railway-diagnostic/index.mjs']:
+           p=pathlib.Path(f);txt=p.read_text()
+           for term in ['DeepSeek 40秒方案','无法验证当前AI分析状态','本轮DeepSeek调用','新版本独立统计暂不可用','5分钟预测']:
+            print('FAST5_UI_MARKER',p.name,term,txt.count(term))
+          print('FAST5_DIAG_DONE=true')
+          INNER
+          """
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          id=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-ui-and-signal-audit',type='RunShellScript',working_user='root',command_content=sh,timeout=105)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           r=client.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=id)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            out=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            print('FAST5_DIAG_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            print(out[-17000:])
+            if r.invocation_status!='Success' or int(r.exit_code)!=0:raise RuntimeError('AUDIT_FAILED')
+            break
+          else:raise RuntimeError('AUDIT_TIMEOUT')
+          OUTER

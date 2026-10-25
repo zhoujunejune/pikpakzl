@@ -2,7 +2,7 @@ name: FAST5 no-DeepSeek production signal cutover
 on:
   push:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
-    paths: [.github/workflows/zl-fast5-production-cutover.yml]
+    paths: [.github/workflows/zl-fast5-production-cutover.yml, prediction-bot-v1/fast5_production_cutover.py]
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

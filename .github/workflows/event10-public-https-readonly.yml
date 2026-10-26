@@ -1,0 +1,46 @@
+name: EVENT10 public HTTPS read-only latency
+on:
+  push:
+    branches: [audit/event10-live-page-latency-20261026]
+    paths: [.github/workflows/event10-public-https-readonly.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Measure authenticated HTTPS API round trips without logging any payload or secret
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,time,json,base64,urllib.request
+          password=os.environ.get('ZL_PANEL_PASSWORD')
+          if not password:raise RuntimeError('PUBLIC_PANEL_PASSWORD_UNAVAILABLE')
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode('ascii')
+          base='https://prediction.47-237-188-69.sslip.io/event10/'
+          out={}
+          for p in ('','api/status','api/history','api/stream-health'):
+              arr=[]
+              for i in range(3):
+                  req=urllib.request.Request(base+p,headers={
+                    'Authorization':auth,'Cache-Control':'no-cache','Accept-Encoding':'gzip'})
+                  start=time.perf_counter()
+                  try:
+                      with urllib.request.urlopen(req,timeout=18) as r:
+                          first=r.read(1)
+                          ttfb=(time.perf_counter()-start)*1000
+                          rest=r.read(1500000)
+                          arr.append({'http':r.status,'firstByteMs':round(ttfb),
+                              'totalMs':round((time.perf_counter()-start)*1000),
+                              'transferredBytes':len(first)+len(rest),
+                              'encoding':r.headers.get('Content-Encoding')})
+                  except Exception as e:
+                      arr.append({'errorType':type(e).__name__})
+              out[p or 'page']=arr
+          print('EVENT10_PUBLIC_HTTPS_READONLY='+json.dumps(out,separators=(',',':')))
+          PY

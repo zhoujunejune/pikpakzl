@@ -3,7 +3,7 @@
 const OLD_CARD='<section class="c" id="roundResultsOnlyCard" style="margin:14px 0">';
 const CARD=[
 '<section class="c" id="zlFast5Card" style="margin:14px 0">',
-'<div class="k">5分钟预测 · FAST5 本地实时行情模型</div>',
+'<div class="k">5分钟预测 · FAST5 V5 15分钟波动分层</div>',
 '<div class="big" id="zlF5Main" style="margin:9px 0;min-height:2.6em;font-variant-numeric:tabular-nums">读取FAST5生产信号中...</div>',
 '<div class="muted" id="zlF5Timeline" style="min-height:3.1em;font-variant-numeric:tabular-nums">上一轮倒数120秒预分析 → 本轮0.1～5秒锁定 → 超过5秒未锁定则WAIT</div>',
 '<div class="grid" style="margin:12px 0">',
@@ -31,7 +31,7 @@ const CARD=[
 '<div class="kv"><div class="k">FAST5已结算</div><div class="v" id="zlF5StatSettled">--</div></div>',
 '<div class="kv"><div class="k">FAST5命中 / 失败</div><div class="v" id="zlF5StatWL">--</div></div>',
 '</div>',
-'<div class="muted" id="zlF5StatsNote">FAST5独立账本按5分钟轮次时间对齐币安官方结果，旧模型数据不混入。</div>',
+'<div class="muted" id="zlF5StatsNote">V5版本独立统计，从版本切换后重新累计；旧V4原始记录已归档。</div>',
 '<div class="k" style="margin-top:16px">FAST5逐轮信号与官方结算</div>',
 '<div class="muted" style="margin-top:5px">以下明细在框内上下滑动查看，整页高度保持固定；实时胜率在上方。</div>',
 '<div id="zlF5HistoryScroll" tabindex="0" role="region" aria-label="FAST5历史轮次，可在区域内上下滚动" style="height:300px;max-height:300px;min-height:300px;overflow-y:auto;overflow-x:auto;overscroll-behavior:contain;overflow-anchor:none;scrollbar-gutter:stable;margin-top:9px;border:1px solid #344155;border-radius:9px;position:relative">',
@@ -115,7 +115,7 @@ async function load(){
   else if(elapsed<100)status='开轮准备中 · 等待100毫秒';
   else status='开轮0.1～5秒内确认方向中';
   put('zlF5Main',status);
-  put('zlF5Model','FAST5 · 无DeepSeek');
+  put('zlF5Model','FAST5 · 波动分层V5 · 无DeepSeek');
   put('zlF5Lock',signal?label(signal.direction)+' / 第'+(lock/1000).toFixed(2)+'秒':'未锁定');
   put('zlF5Age',age==null?'--':age+' ms'+(age>4000?'（数据延迟）':''));
   put('zlF5Follow',t.enabled===true?'开启':t.enabled===false?'关闭':'未知');
@@ -129,6 +129,15 @@ async function load(){
       ' · 信号不是成交回报 · '+(t.amount==null?'下单金额未配置':'每轮金额已配置'));
   put('zlF5Error',s.lastError?'行情故障：'+String(s.lastError).slice(0,120):
       age!=null&&age>4000?'行情服务异常：最近行情读取超过4秒':'生产行情服务正常');
+  if(signal&&signal.regime){
+   var directionModes=t.directionModes?.FAST5_SPOT_MOMENTUM_V1;
+   var map=directionModes?.[signal.direction]||'UNKNOWN';
+   put('zlF5Meta','行情分层：'+(signal.regime==='SMALL'?'小波动≤5bps':'中大波动>5bps')+
+    ' · 15分钟净波动'+Number(signal.regimeMagnitudeBps).toFixed(2)+'bps'+
+    ' · 原始 '+label(signal.originalDirection)+' → V5 '+label(signal.direction)+
+    ' · 下单映射 '+(map==='INVERSE'?'反向':map==='FORWARD'?'正向':'不可用')+
+    ' · 锁定不代表成交');
+  }
   renderTradeTilesSnapshot(s,t,now,round,signal);
  }catch(err){
   put('zlF5Main','FAST5生产状态暂无法读取');

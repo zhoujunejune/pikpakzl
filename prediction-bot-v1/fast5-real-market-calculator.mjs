@@ -1,9 +1,9 @@
-// FAST5 / PREWARM120-5S V4. Compute during the previous 120 s; accept
+// FAST5 / SMALL-ONLY V6. Compute during the previous 120 s; accept
 // a provenance-verified current-round or prewarm-only direction before +5 s.
 // Validated 120-second prewarm can lock without a fresh current-round spot tick.
 // It is explicitly tagged PREWARM_ONLY; execution still needs a real exchange quote.
 export const FAST_MODEL_ID='FAST5_SPOT_MOMENTUM_V1';
-export const STRATEGY_VERSION='FAST5_REGIME_FLIP_GT5BPS_15M_V5';
+export const STRATEGY_VERSION='FAST5_SMALL_ONLY_LE5BPS_15M_V6';
 export const ROUND_MS=300000,PREWARM_MS=120000;
 export const EARLIEST_SIGNAL_MS=100,SIGNAL_END_MS=5000;
 const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
@@ -50,6 +50,7 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
  let activeRound=null,locked=null,latestError=null;
  let lastObservationAt=null,lastValidMarketAt=null;
  let priceTicks=[],prewarm=null,provisionalDirection=null,provisionalReason=null;
+ let filteredOut=false,regimeSnapshot=null;
  function rememberTick(market,at){
   const x=market?.latest||{},event=x.eventMs;
   if(market?.ok!==true||market?.readOnly!==true||market?.symbol!=='BTCUSDT'||
@@ -81,6 +82,7 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   if(activeRound!==round){
    activeRound=round;locked=null;latestError=null;
    prewarm=null;provisionalDirection=null;provisionalReason=null;
+   filteredOut=false;regimeSnapshot=null;
   }
   // During the last 120 seconds of this round, already collect and
   // calculate context for the following round.
@@ -89,6 +91,11 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
    if(upcoming)prewarm=upcoming;
   }
   if(locked)return {ok:true,locked:true,signal:locked};
+  if(filteredOut){
+   latestError='REGIME_GT5_BPS_WAIT';
+   provisionalDirection=null;provisionalReason='REGIME_FILTER_WAIT';
+   return {ok:true,locked:false,reason:latestError,signal:null};
+  }
   // A strict, permanent per-round WAIT after +5s when no valid lock exists.
   // Preserve prewarm collection for the next round, but never reopen
   // this round's locking window or show a prewarm UP/DOWN as a live signal.
@@ -105,8 +112,17 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   if(prior)prewarm=prior;
   const momentum=prewarm?.momentumBps;
   const regime=classifyPreRoundRegime(market,round);
+  if(regime)regimeSnapshot=regime;
   if(!regime){
    latestError='NO_VERIFIED_15M_CLOSED_REGIME';
+   return {ok:true,locked:false,reason:latestError,signal:null};
+  }
+  // Reject mid/high 15m net-price movement BEFORE calculating any live
+  // direction. Once filtered, the round stays WAIT even if later ticks change.
+  // A verified SMALL regime is the only condition that permits an UP/DOWN lock.
+  if(regime.regime!=='SMALL'){
+   filteredOut=true;latestError='REGIME_GT5_BPS_WAIT';
+   provisionalDirection=null;provisionalReason='REGIME_FILTER_WAIT';
    return {ok:true,locked:false,reason:latestError,signal:null};
   }
   if(!prewarm){
@@ -139,8 +155,8 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   const sourceReason=prewarmOnly?'PREWARM120_ONLY_VERIFIED_PRIOR_DATA':
     trendSign===0?'PREWARM120_TIEBREAK':'CURRENT_OPEN_PRICE_DELTA';
   const originalDirection=direction(trendSign||priorSign);
-  const invertByRegime=regime.regime!=='SMALL';
-  const dir=invertByRegime?(originalDirection==='UP'?'DOWN':'UP'):originalDirection;
+  const invertByRegime=false;
+  const dir=originalDirection;
   if(elapsed>=SIGNAL_END_MS){
    latestError='OPEN_5S_DEADLINE_MISSED';
    return {ok:true,locked:false,reason:latestError,
@@ -168,7 +184,7 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
    requiresDeepSeek:false,analysisCalls:0,samples:1,
    confidence:null,confidenceIsCalibrated:false,
    officialOracleLiveQuoteUsed:false,
-   note:'REGIME RULE: previous 15 fully closed 1m candles only; <=5bps unchanged, >5bps flips model signal. Order-direction configuration is a separate mapping and might reverse again. No proven profitability.'
+   note:'SMALL_ONLY_V6: verified preceding 15 closed 1m candles <=5bps net movement. >5bps is WAIT; separate order mapping unchanged. No proven trading profitability.'
   };
   latestError=null;
   return {ok:true,locked:true,signal:locked};
@@ -176,6 +192,8 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
  function status(){
   return {ok:true,model:FAST_MODEL_ID,strategyVersion:STRATEGY_VERSION,
    round:activeRound,locked:!!locked,latest:locked,latestError,
+   filteredOut,regime:regimeSnapshot?.regime??null,
+   regimeMagnitudeBps:regimeSnapshot?.magnitudeBps??null,
    prewarmReady:!!prewarm,prewarm,provisionalDirection,provisionalReason,
    observedSamples:priceTicks.filter(x=>x.at>=activeRound&&x.at<activeRound+ROUND_MS).length,
    prewarmTickCount:priceTicks.filter(x=>activeRound!=null&&x.at>=activeRound-120000&&x.at<activeRound).length,

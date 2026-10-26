@@ -316,30 +316,62 @@ async function refreshCollector(){
   $("collectorExplanation").textContent="后台采集服务暂时无法验证，不能宣称采集正常。";
  }
 }
-async function refresh(){
+// Do not download the large full evidence ledger for a seven-column table.
+let pageRefreshPending=false,historyRefreshPending=false,historyRefreshQueued=false;
+let lastHistoryFingerprint="",lastSessionHistoryKey="";
+async function refreshHistory(){
+ if(document.hidden)return;
+ if(historyRefreshPending){historyRefreshQueued=true;return;}
+ historyRefreshPending=true;
  try{
-  const [r,h]=await Promise.all([
-    fetch("api/status",{cache:"no-store"}),
-    fetch("api/history",{cache:"no-store"})
-  ]);
-  if(!r.ok||!h.ok)throw Error("HTTP "+r.status+"/"+h.status);
-  const d=await r.json(),log=await h.json();
-  display(d);
-  if(d.lastSession)void localizeLegacyLatest(d.lastSession);
-  if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
-    d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
-  const rows=$("records");rows.replaceChildren();
-  if(!log.records?.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=7;td.textContent="暂无手动预测记录";tr.append(td);rows.append(tr);}
-  for(const s of log.records||[]){
+  const response=await fetch("api/history-lite",{cache:"no-store"});
+  if(!response.ok)throw Error("HISTORY_HTTP_"+response.status);
+  const log=await response.json();
+  if(!log.ok||!Array.isArray(log.records))throw Error("HISTORY_INVALID");
+  const fingerprint=JSON.stringify(log.records);
+  if(fingerprint===lastHistoryFingerprint)return;
+  const rows=$("records");
+  const fragment=document.createDocumentFragment();
+  if(!log.records.length){
+   const tr=document.createElement("tr"),td=document.createElement("td");
+   td.colSpan=7;td.textContent="暂无手动预测记录";tr.append(td);fragment.append(tr);
+  }
+  for(const s of log.records){
    const tr=document.createElement("tr");
    const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
      s.proxyOutcome==="FLAT"?"持平":s.settlementStatus?"未核验":"待到期";
    for(const v of [when(s.openedAt),price(s.openPrice),s.direction||"—",displayConfidence(s),
      price(s.closePrice),res,s.settlementStatus?statusText(s.settlementStatus):phaseText[s.status]||s.status]){
      const td=document.createElement("td");td.textContent=v;tr.append(td);
-   }rows.append(tr);
+   }
+   fragment.append(tr);
   }
+  rows.replaceChildren(fragment);
+  lastHistoryFingerprint=fingerprint;
+ }catch(e){
+  // Leave already rendered records intact during temporary network failures.
+  if(!lastHistoryFingerprint) $("message").textContent="历史数据读取失败："+String(e);
+ }finally{
+  historyRefreshPending=false;
+  if(historyRefreshQueued){historyRefreshQueued=false;void refreshHistory();}
+ }
+}
+async function refresh(){
+ if(pageRefreshPending||document.hidden)return;
+ pageRefreshPending=true;
+ try{
+  const response=await fetch("api/status",{cache:"no-store"});
+  if(!response.ok)throw Error("HTTP "+response.status);
+  const d=await response.json();
+  display(d);
+  if(d.lastSession)void localizeLegacyLatest(d.lastSession);
+  if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
+    d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
+  const s=d.lastSession;
+  const key=s?JSON.stringify([s.id,s.status,s.direction,s.proxyHit,s.closePrice,s.settlementStatus,s.modelFinishedAt]):"none";
+  if(key!==lastSessionHistoryKey){lastSessionHistoryKey=key;void refreshHistory();}
  }catch(e){$("engine").textContent="无法连接";$("message").textContent="读取失败："+String(e);}
+ finally{pageRefreshPending=false;}
 }
 async function startClick(){
  if(inflight)return;
@@ -370,7 +402,7 @@ async function startClick(){
   $("quickConfidence").textContent="主观置信度：—";
   $("quickReason").textContent="未成功开始："+String(e);
  }
- finally{inflight=false;await refresh();}
+ finally{inflight=false;await refresh();await refreshHistory();}
 }
 $("start").addEventListener("click",startClick);
 $("refresh").addEventListener("click",refresh);
@@ -385,5 +417,12 @@ $("checkDataSources").addEventListener("click",async()=>{
  }catch(e){$("featureSummary").textContent="数据源检查失败："+String(e);}
  finally{btn.disabled=false;}
 });
-refresh();refreshCollector();setInterval(refresh,4000);setInterval(refreshCollector,5000);setInterval(updateClock,1000);
+refresh();refreshHistory();refreshCollector();
+setInterval(refresh,4000);
+setInterval(refreshHistory,30000);
+setInterval(refreshCollector,5000);
+setInterval(updateClock,1000);
+document.addEventListener("visibilitychange",()=>{
+ if(!document.hidden){void refresh();void refreshHistory();void refreshCollector();}
+});
 </script></body></html>

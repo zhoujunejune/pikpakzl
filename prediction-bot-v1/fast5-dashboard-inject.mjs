@@ -14,6 +14,15 @@ const CARD=[
 '</div>',
 '<div class="muted" id="zlF5Reason">核对行情数据...</div>',
 '<div class="muted" id="zlF5Meta" style="margin-top:10px">FAST5自行计算行情，不调用DeepSeek。信号出现不等于订单提交或成交。</div>',
+'<div class="k" style="margin-top:16px">FAST5 下单方向开关</div>',
+'<div class="muted" style="margin-top:5px">只改变最终下单方向，不翻转FAST5原始信号、官方结算和胜率统计。设置成功后下一轮生效。</div>',
+'<div style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0">',
+'<button type="button" id="zlF5Forward" disabled style="padding:11px 15px;min-width:112px;border:1px solid #75849a;border-radius:9px;background:#243047;color:#fff">正向下单</button>',
+'<button type="button" id="zlF5Inverse" disabled style="padding:11px 15px;min-width:112px;border:1px solid #75849a;border-radius:9px;background:#243047;color:#fff">反向下单</button>',
+'</div>',
+'<div class="muted" id="zlF5DirState">下单方向配置读取中...</div>',
+'<div class="muted" id="zlF5DirExample" style="margin-top:7px">正向：UP买UP，DOWN买DOWN；反向：UP买DOWN，DOWN买UP。</div>',
+'<div class="muted" id="zlF5DirMessage" role="status" aria-live="polite" style="margin-top:8px"></div>',
 '<div class="k" style="margin-top:16px">FAST5 独立统计面板</div>',
 '<div class="big" id="zlF5StatAccuracy" style="margin:8px 0">正在核对官方结算...</div>',
 '<div class="grid" style="margin:12px 0">',
@@ -126,6 +135,66 @@ async function loadStats(){
   put('zlF5StatsNote','统计接口异常：'+String(e.message||e).slice(0,120));
  }
 }
+var f5Direction={revision:null,busy:false,mode:null,effectiveAfterRound:null};
+var FAST5_ID='FAST5_SPOT_MOMENTUM_V1';
+function paintF5Direction(){
+ var a=el('zlF5Forward'),b=el('zlF5Inverse');if(!a||!b)return;
+ a.disabled=b.disabled=f5Direction.busy||!f5Direction.revision;
+ a.style.borderColor=f5Direction.mode==='FORWARD'?'#8accff':'#75849a';
+ b.style.borderColor=f5Direction.mode==='INVERSE'?'#8accff':'#75849a';
+ a.style.fontWeight=f5Direction.mode==='FORWARD'?'700':'400';
+ b.style.fontWeight=f5Direction.mode==='INVERSE'?'700':'400';
+ var round=Math.floor(Date.now()/300000)*300000;
+ var pending=f5Direction.effectiveAfterRound!=null&&round<=f5Direction.effectiveAfterRound;
+ put('zlF5DirState',f5Direction.busy?'正在保存，暂不允许重复提交':
+   f5Direction.mode==='FORWARD'?'已配置：正向下单'+(pending?'（下一轮开始生效）':''):
+   f5Direction.mode==='INVERSE'?'已配置：反向下单'+(pending?'（下一轮开始生效）':''):
+   f5Direction.revision?'UP/DOWN分方向配置不一致或关闭，未选择统一正反向':'方向设置尚未就绪');
+}
+async function loadF5Direction(){
+ if(f5Direction.busy)return;
+ try{
+  var r=await json('/api/direction-mode');
+  if(r.ok!==true||!r.revision||!r.modes||!r.modes[FAST5_ID])
+   throw Error('FAST5_ORDER_DIRECTION_NOT_READY');
+  var d=r.modes[FAST5_ID];
+  f5Direction.revision=r.revision;
+  f5Direction.mode=(d.UP===d.DOWN&&['FORWARD','INVERSE'].includes(d.UP))?d.UP:null;
+  f5Direction.effectiveAfterRound=r.effectiveAfterRound;
+  put('zlF5DirMessage',f5Direction.mode?'本轮原始信号不改变；最终交易方向根据所选设置映射。':
+    '当前 UP='+String(d.UP)+'，DOWN='+String(d.DOWN)+'；选择正向或反向可同时统一两侧。');
+ }catch(e){
+  f5Direction.revision=null;f5Direction.mode=null;
+  put('zlF5DirMessage','方向接口读取失败，开关已禁用：'+String(e.message||e).slice(0,95));
+ }
+ paintF5Direction();
+}
+async function saveF5Direction(mode){
+ if(f5Direction.busy||!f5Direction.revision||!['FORWARD','INVERSE'].includes(mode))return;
+ if(mode===f5Direction.mode){
+  put('zlF5DirMessage','当前已经是所选模式，无需重复保存。');return;
+ }
+ f5Direction.busy=true;paintF5Direction();
+ try{
+  var response=await fetch('/api/fast5-direction-mode',{
+   method:'POST',credentials:'same-origin',cache:'no-store',
+   headers:{'content-type':'application/json'},
+   body:JSON.stringify({mode:mode,expectedRevision:f5Direction.revision})
+  });
+  var data=await response.json();
+  if(!response.ok||data.ok!==true||!data.revision)throw Error(data.error||'保存未成功');
+  f5Direction.revision=data.revision;
+  f5Direction.effectiveAfterRound=data.effectiveAfterRound;
+  f5Direction.mode=mode;
+  put('zlF5DirMessage','保存成功：'+(mode==='INVERSE'?'UP买DOWN、DOWN买UP':'UP买UP、DOWN买DOWN')+'；从下一轮开始，已锁定信号不变。');
+ }catch(e){
+  f5Direction.revision=null;f5Direction.mode=null;
+  put('zlF5DirMessage','保存失败，未确认方向变更：'+String(e.message||e).slice(0,95));
+ }finally{f5Direction.busy=false;paintF5Direction()}
+}
+if(el('zlF5Forward'))el('zlF5Forward').addEventListener('click',function(){void saveF5Direction('FORWARD')});
+if(el('zlF5Inverse'))el('zlF5Inverse').addEventListener('click',function(){void saveF5Direction('INVERSE')});
+void loadF5Direction();setInterval(loadF5Direction,15000);
 void loadStats();setInterval(loadStats,30000);
 void load();setInterval(load,350);
 })();</script>`;

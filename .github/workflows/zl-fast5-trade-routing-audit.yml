@@ -1,0 +1,72 @@
+name: Inspect FAST5 production trade signal routing and logs read-only
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-trade-routing-audit.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect live trade getSignal route, validator and safe redacted logs
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,re,json,urllib.request,subprocess
+          root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          s=(root/'index.mjs').read_text();wrap=(root/'wrapper.mjs').read_text()
+          for name,pattern in [('getSignal',r'async function getSignal\b'),('FAST5_CHOICE',r'choice\.model===FAST5_MODEL'),('FAST5_ID',r'FAST5_SPOT_MOMENTUM_V1'),('prepareAuto',r'async function maybePrepare'),('statusAPI',r"url\.pathname === '/api/status'"),('getSignalOverride',r'function getSignal\b')]:
+           m=re.search(pattern,s)
+           if m:
+            print('TRADE_SOURCE_TRACE',json.dumps({'name':name,'at':m.start(),
+               'snippet':s[max(0,m.start()-400):m.start()+2800]},ensure_ascii=False)[:5800])
+          for name,src,token in [
+           ('trade-index',s,'validateFast5ProductionLive'),
+           ('trade-index',s,'const FAST5_LOCAL_URL'),
+           ('trade-index',s,'getSignal('),
+           ('wrapper',wrap,'async function submitPendingOrder'),
+           ('wrapper',wrap,'const AUTO_CONFIRM_ENABLED')]:
+           a=src.find(token)
+           print('TRADE_SOURCE_FIND',json.dumps({'file':name,'needle':token,'count':src.count(token),
+             'snippet':src[max(0,a-300):a+1900] if a>=0 else ''},ensure_ascii=False)[:3800])
+          p=root/'production-signal-choice.mjs'
+          if p.exists():
+           txt=p.read_text()
+           a=txt.find('export function validateFast5ProductionLive')
+           print('TRADE_VALIDATOR',json.dumps({'pos':a,'source':txt[a:a+3600] if a>=0 else ''},ensure_ascii=False))
+          for unit in ('zl-prediction-trade','zl-prediction-fast5'):
+           logs=subprocess.run(['journalctl','-u',unit,'-n','100','--no-pager','-o','cat'],capture_output=True,text=True,timeout=7).stdout
+           filtered=[]
+           for line in logs.splitlines():
+            if any(k.lower() in line.lower() for k in ['fast5','signal','prepare','reject','invalid','disabled','source','model']):
+             if any(k.lower() in line.lower() for k in ['secret','token','api_key','password','authorization','credential','wallet','payment']):continue
+             filtered.append(line[:550])
+           print('TRADE_LOG_EVENTS',json.dumps({'unit':unit,'lines':filtered[-14:]},ensure_ascii=False)[:8500])
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-trade-signal-route-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=90)).body.invoke_id
+          for _ in range(55):
+           time.sleep(2)
+           a=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if a and str(a.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST5_TRADE_ROUTE_READONLY',a.invocation_status,'EXIT',a.exit_code)
+            print(base64.b64decode(a.output or '',validate=True).decode('utf8','replace')[-20500:])
+            if int(a.exit_code)!=0:raise RuntimeError('FAILED_READONLY_INSPECT')
+            break
+          else:raise RuntimeError('INSPECT_TIMEOUT')
+          OUTER

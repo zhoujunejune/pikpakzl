@@ -49,6 +49,36 @@ async function json(url){
  if(!r.ok)throw Error('HTTP '+r.status+' '+url);
  return await r.json();
 }
+// Read-only snapshot of the FAST5 locked decision in the legacy trading tiles.
+// The trade backend intentionally returns null after its 20s submit window;
+// this display must not turn a past lock into an executable order.
+function renderTradeTilesSnapshot(state,trade,now,round,signal){
+ if(!el('round')||!el('status')||!el('direction')||!el('orderDirection'))return;
+ if(trade.signal&&trade.signal.status==='LOCKED')return;
+ if(state.round!==round)return;
+ var elapsed=now-round,cutoff=Math.min(round+20000,Number(signal?.lockedAt||0)+16000);
+ var expired=elapsed>=20000||(signal&&now>=cutoff);
+ var modes=trade.directionModes?.FAST5_SPOT_MOMENTUM_V1;
+ var mode=signal&&modes?.[signal.direction];
+ var opposite=signal?.direction==='UP'?'DOWN':'UP';
+ var mapped=mode==='INVERSE'?opposite:mode==='FORWARD'?signal?.direction:null;
+ var clock=new Date(round).toLocaleTimeString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'});
+ put('round',clock+'（本轮）');
+ if(signal&&['UP','DOWN'].includes(signal.direction)){
+  put('direction',label(signal.direction)+' · 已锁定');
+  put('score',Number.isFinite(signal.scoreBps)?Math.abs(signal.scoreBps).toFixed(2)+' bps':'--');
+  put('status',expired?'已锁定 · 下单窗口结束（不可补单）':
+   trade.enabled===false?'已锁定 · 跟随关闭':'已锁定 · 交易路由尚未确认（不可假定已下单）');
+  put('orderDirection',mapped?
+    label(mapped)+'（'+(mode==='INVERSE'?'反向':'正向')+'参考；未提交）':
+    '方向关闭或配置未就绪（不可下单）');
+ }else{
+  put('status',elapsed>=5000?'WAIT · 5秒内未锁定，不下单':'等待FAST5锁定');
+  put('direction','无已锁定信号');
+  put('orderDirection','无下单信号');
+  put('score','--');
+ }
+}
 async function load(){
  try{
   var values=await Promise.all([json('/api/fast5-live-status'),json('/api/status')]);
@@ -81,9 +111,10 @@ async function load(){
     :'轮次切换中，等待行情同步');
   put('zlF5Meta','生产信号：'+String(t.orderSignalModel)+
       ' · 独立交易开关：'+(t.enabled===true?'开启':'关闭')+
-      ' · 信号不是成交回报');
+      ' · 信号不是成交回报 · '+(t.amount==null?'下单金额未配置':'每轮金额已配置'));
   put('zlF5Error',s.lastError?'行情故障：'+String(s.lastError).slice(0,120):
       age!=null&&age>4000?'行情服务异常：最近行情读取超过4秒':'生产行情服务正常');
+  renderTradeTilesSnapshot(s,t,now,round,signal);
  }catch(err){
   put('zlF5Main','FAST5生产状态暂无法读取');
   put('zlF5Error','状态接口异常：'+String(err.message||err).slice(0,130));

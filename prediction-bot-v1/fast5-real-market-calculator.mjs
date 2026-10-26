@@ -3,7 +3,7 @@
 // Validated 120-second prewarm can lock without a fresh current-round spot tick.
 // It is explicitly tagged PREWARM_ONLY; execution still needs a real exchange quote.
 export const FAST_MODEL_ID='FAST5_SPOT_MOMENTUM_V1';
-export const STRATEGY_VERSION='FAST5_PREWARM120_5S_V4';
+export const STRATEGY_VERSION='FAST5_REGIME_FLIP_GT5BPS_15M_V5';
 export const ROUND_MS=300000,PREWARM_MS=120000;
 export const EARLIEST_SIGNAL_MS=100,SIGNAL_END_MS=5000;
 const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
@@ -12,6 +12,26 @@ const bps=(p,ref)=>10000*Math.log(p/ref);
 const fix=x=>Number(x.toFixed(5));
 const sign=x=>x>0?1:x<0?-1:0;
 const direction=s=>s<0?'DOWN':'UP';
+export const REGIME_VERSION='REGIME_PREV15_CLOSED_1M_NET_BPS_V1';
+export function classifyPreRoundRegime(market,round){
+ const rows=market?.candles?.['1m']?.rows;
+ if(!Array.isArray(rows))return null;
+ const map=new Map(rows.map(x=>[x?.startMs,x]));
+ const bars=[];
+ for(let i=15;i>=1;i--){
+  const start=round-i*60000,b=map.get(start);
+  if(!b||b.closed!==true||b.endMs!==start+59999||
+     !finite(b.open)||b.open<=0||!finite(b.close)||b.close<=0)
+    return null;
+  bars.push(b);
+ }
+ const netBps=fix(bps(bars[14].close,bars[0].open));
+ const magnitudeBps=Math.abs(netBps);
+ return {regimeVersion:REGIME_VERSION,
+  regime:magnitudeBps<=5?'SMALL':magnitudeBps<12?'MEDIUM':'LARGE',
+  magnitudeBps,netBps,lookbackMinutes:15,bars:15,
+  firstStartMs:round-900000,lastEndMs:round-1};
+}
 
 // Complete 1m candles in the preceding 120 seconds, including proper
 // time alignment. Never read the candle currently forming.
@@ -84,6 +104,11 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   const prior=getPrewarm(market,round);
   if(prior)prewarm=prior;
   const momentum=prewarm?.momentumBps;
+  const regime=classifyPreRoundRegime(market,round);
+  if(!regime){
+   latestError='NO_VERIFIED_15M_CLOSED_REGIME';
+   return {ok:true,locked:false,reason:latestError,signal:null};
+  }
   if(!prewarm){
    latestError='NO_VERIFIED_PREVIOUS_120S_DATA';
    return {ok:true,locked:false,reason:latestError,signal:null};
@@ -113,7 +138,9 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   const delta=currentOk?fix(bps(price,open)):0,trendSign=sign(delta);
   const sourceReason=prewarmOnly?'PREWARM120_ONLY_VERIFIED_PRIOR_DATA':
     trendSign===0?'PREWARM120_TIEBREAK':'CURRENT_OPEN_PRICE_DELTA';
-  const dir=direction(trendSign||priorSign);
+  const originalDirection=direction(trendSign||priorSign);
+  const invertByRegime=regime.regime!=='SMALL';
+  const dir=invertByRegime?(originalDirection==='UP'?'DOWN':'UP'):originalDirection;
   if(elapsed>=SIGNAL_END_MS){
    latestError='OPEN_5S_DEADLINE_MISSED';
    return {ok:true,locked:false,reason:latestError,
@@ -122,6 +149,10 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   locked={
    ok:true,model:FAST_MODEL_ID,strategyVersion:STRATEGY_VERSION,
    round,direction:dir,status:'LOCKED',lockedAt:at,marketAt:event,
+   originalDirection,invertByRegime,regime:regime.regime,
+   regimeVersion:regime.regimeVersion,
+   regimeNetBps:regime.netBps,regimeMagnitudeBps:regime.magnitudeBps,
+   regimeLookbackMinutes:regime.lookbackMinutes,
    readOnly:true,orders:false,productionIntegration:false,
    source:'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',
    decisionMethod:prewarmOnly?'PREWARM120_PRIOR_TICK_DIRECTION_1S':
@@ -137,7 +168,7 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
    requiresDeepSeek:false,analysisCalls:0,samples:1,
    confidence:null,confidenceIsCalibrated:false,
    officialOracleLiveQuoteUsed:false,
-   note:prewarmOnly?'PREWARM_ONLY: no verified current-round spot price; direction is prior 120s momentum, not the opening price and not a proven edge.':'Opening spot price compared with current BTC spot, not Binance Prediction settlement oracle.'
+   note:'REGIME RULE: previous 15 fully closed 1m candles only; <=5bps unchanged, >5bps flips model signal. Order-direction configuration is a separate mapping and might reverse again. No proven profitability.'
   };
   latestError=null;
   return {ok:true,locked:true,signal:locked};

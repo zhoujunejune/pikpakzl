@@ -7,7 +7,7 @@ import os,json,sqlite3,threading,time,urllib.request,logging
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse
 MODEL='FAST5_SPOT_MOMENTUM_V1'
-VERSION='FAST5_REGIME_FLIP_GT5BPS_15M_V5'
+VERSION='FAST5_SMALL_ONLY_LE5BPS_15M_V6'
 ROUND_MS=300000
 DB=os.environ.get('FAST5_STATS_DB','/var/lib/zl-prediction/fast5-stats/rounds.sqlite3')
 PORT=int(os.environ.get('FAST5_STATS_PORT','13047'))
@@ -60,7 +60,7 @@ class Journal:
   x=get('http://127.0.0.1:13046/api/status')
   now=ms();round_=now//ROUND_MS*ROUND_MS;elapsed=now-round_
   if x.get('ok') is not True or x.get('model')!=MODEL or x.get('strategyVersion')!=VERSION:
-   raise RuntimeError('FAST5_MODEL_NOT_V4')
+   raise RuntimeError('FAST5_MODEL_NOT_V6')
   if x.get('round')!=round_:
    # Between raw source round transitions; do not label WAIT.
    return
@@ -82,12 +82,13 @@ class Journal:
   elif elapsed>=5000 and round_ in self.seen_rounds:
    # Only mark WAIT when observed current round in its decision window and
    # FAST5 itself says unlocked. Never infer WAIT from old official rows.
-   if x.get('locked') is False and row is None and x.get('latestError')=='OPEN_5S_DEADLINE_MISSED':
+   if (x.get('locked') is False and row is None and
+       x.get('latestError') in ('OPEN_5S_DEADLINE_MISSED','REGIME_GT5_BPS_WAIT')):
     with self.lock:
      self.db.execute("""INSERT OR IGNORE INTO rounds
       (round,model,version,decision,locked_at,first_seen_at,decision_reason)
       VALUES (?,?,?,?,?,?,?)""",
-      (round_,MODEL,VERSION,'WAIT',None,now,'OPEN_5S_DEADLINE_MISSED'))
+      (round_,MODEL,VERSION,'WAIT',None,now,x.get('latestError')))
      self.db.commit()
     self.seen_rounds.discard(round_)
   self.seen_rounds={r for r in self.seen_rounds if r>=round_-ROUND_MS}

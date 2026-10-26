@@ -23,13 +23,14 @@ test('no duplicate panel injection',()=>{
 });
 test('never claims winrate or fills stats with DeepSeek records',()=>{
  const out=injectFast5Dashboard(html);
- assert.match(out,/官方接口目前未包含FAST5逐轮信号账本/);
+ assert.match(out,/FAST5独立账本按5分钟轮次时间对齐币安官方结果/);
  assert.match(out,/FAST5 独立统计面板/);
  assert.match(out,/zlF5StatAccuracy/);
  assert.match(out,/zlF5OfficialRows/);
- assert.match(out,/官方结算（仅供核对，不代表FAST5胜率）/);
+ assert.match(out,/FAST5逐轮信号与官方结算/);
  assert.ok(!out.includes('57.27%'));
- assert.ok(out.includes('/api/round-stats'));
+ assert.ok(out.includes('/api/fast5-round-stats'));
+ assert.ok(!out.includes('未关联FAST5'));
  assert.match(out,/信号不是成交回报/);
  assert.match(out,/交易窗口已过/);
 });

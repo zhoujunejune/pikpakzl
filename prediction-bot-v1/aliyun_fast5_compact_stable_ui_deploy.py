@@ -95,7 +95,7 @@ def main():
           d.get('revision')==directions.get('revision') and
           d.get('modes')==directions.get('modes') and
           s.get('schema')=='FAST5_INDEPENDENT_OFFICIAL_ROUND_LEDGER_V1' and
-          s.get('persisted') is True):
+          s.get('persisted') is True)):
       verified=True;break
     except Exception:pass
    if not verified:raise RuntimeError('FAST5_STABLE_UI_LIVE_VALIDATION_FAILED')

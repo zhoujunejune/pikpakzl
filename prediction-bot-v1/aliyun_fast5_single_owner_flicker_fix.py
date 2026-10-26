@@ -26,7 +26,7 @@ def replace_atomic(path,data):
   os.replace(p,path)
  finally:
   if os.path.exists(p):os.unlink(p)
-def verify_runtime():
+def verify_runtime(expected_enabled):
  html=read('/').decode('utf8','replace')
  js=read('/panel-client.js?v=10').decode('utf8','replace')
  trade=get('/api/status');fast=get('/api/fast5-live-status')
@@ -39,7 +39,7 @@ def verify_runtime():
   'height:300px;max-height:300px' in html and
   stats.get('schema')=='FAST5_INDEPENDENT_OFFICIAL_ROUND_LEDGER_V1' and
   stats.get('persisted') is True and
-  trade.get('enabled') is False and
+  trade.get('enabled') is expected_enabled and
   trade.get('orderSignalModel')==MODEL and
   fast.get('strategyVersion')==VERSION)
 def main():
@@ -48,8 +48,9 @@ def main():
  sha=sys.argv[1]
  if not WRAPPER.is_file():raise RuntimeError('WRAPPER_MISSING')
  state=get('/api/status');fast=get('/api/fast5-live-status')
- if state.get('enabled') is not False:
-  raise RuntimeError('AUTO_FOLLOW_ACTIVE_UI_RESTART_BLOCKED')
+ enabled=state.get('enabled')
+ if enabled is not True and enabled is not False:
+  raise RuntimeError('AUTO_FOLLOW_STATE_UNAVAILABLE')
  if (state.get('pendingAction') or {}).get('state') in (
   'READY','QUOTING','SUBMITTING','SUBMITTED_PENDING_CONFIRMATION','SUBMISSION_UNKNOWN'):
   raise RuntimeError('PENDING_ORDER_UI_RESTART_BLOCKED')
@@ -58,7 +59,7 @@ def main():
  old=WRAPPER.read_text()
  if 'panel-client.js?v=9' not in old and 'panel-client.js?v=10' not in old:
   raise RuntimeError('UNEXPECTED_CLIENT_SCRIPT_VERSION')
- if GUARD in old and '/panel-client.js?v=10' in old and verify_runtime():
+ if GUARD in old and '/panel-client.js?v=10' in old and verify_runtime(enabled):
   print('FAST5_SINGLE_OWNER_ALREADY_LIVE=true',flush=True);return
  with tempfile.TemporaryDirectory(prefix='fast5-single-owner-') as td:
   new=pathlib.Path(td)/'wrapper.mjs'
@@ -81,15 +82,32 @@ def main():
   saved=backup/'wrapper.mjs'
   shutil.copy2(WRAPPER,saved)
   try:
-   if get('/api/status').get('enabled') is not False:
-    raise RuntimeError('AUTO_FOLLOW_ENABLED_DURING_STAGING')
+   # Do not interrupt the first 20s order window or any pending order.
+   # When auto-follow is ON, execute only in an idle 70s-180s interval,
+   # with at least two minutes until the next round begins.
+   started=time.monotonic()
+   while True:
+    active=get('/api/status')
+    if active.get('enabled') is not enabled:
+     raise RuntimeError('AUTO_FOLLOW_STATE_CHANGED_DURING_STAGING')
+    pending=active.get('pendingAction')
+    if pending is not None:
+     raise RuntimeError('PENDING_ORDER_UI_RESTART_BLOCKED')
+    current_ms=int(time.time()*1000)
+    into=current_ms%300000
+    if enabled is False or (70000<=into<=180000):
+     break
+    if time.monotonic()-started>215:
+     raise RuntimeError('NO_SAFE_ROUND_MAINTENANCE_WINDOW')
+    time.sleep(4)
+   print('FAST5_UI_MAINTENANCE_ELAPSED_MS='+str(into),flush=True)
    replace_atomic(WRAPPER,new.read_bytes())
    run('systemctl','restart',UNIT,timeout=95)
    good=False
    for _ in range(35):
     time.sleep(1)
     try:
-     if verify_runtime():
+     if verify_runtime(enabled):
       good=True;break
     except Exception:pass
    if not good:raise RuntimeError('BROWSER_SCRIPT_OR_SERVER_VERIFICATION_FAILED')
@@ -101,7 +119,7 @@ def main():
    print('FAST5_BROWSER_CLIENT_SCRIPT_V10=true',flush=True)
    print('FAST5_STATS_300PX_SCROLL_PRESERVED=true',flush=True)
    print('FAST5_NO_TRADE_LOGIC_MODIFIED=true',flush=True)
-   print('FAST5_AUTO_FOLLOW_REMAINS_OFF=true',flush=True)
+   print('FAST5_AUTO_FOLLOW_UNCHANGED='+str(enabled).lower(),flush=True)
    print('FAST5_BACKUP='+str(saved),flush=True)
   except BaseException:
    shutil.copy2(saved,WRAPPER)

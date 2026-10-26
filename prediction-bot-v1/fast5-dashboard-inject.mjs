@@ -81,12 +81,22 @@ function renderTradeTilesSnapshot(state,trade,now,round,signal){
   put('score','--');
  }
 }
+// Reuse the trading widget's 2s status poll when fresh. This changes UI only.
+function getFast5TradeStatus(){
+ var sharedStatus=window.__zlFast5TradeStatus;
+ if(sharedStatus&&sharedStatus.data&&sharedStatus.data.ok===true&&
+    Number.isFinite(sharedStatus.checkedAt)&&
+    Date.now()-sharedStatus.checkedAt>=0&&Date.now()-sharedStatus.checkedAt<=3000){
+  return Promise.resolve(sharedStatus.data);
+ }
+ return json('/api/status');
+}
 var liveLoadPending=false;
 async function load(){
  if(liveLoadPending||document.hidden)return;
  liveLoadPending=true;
  try{
-  var values=await Promise.all([json('/api/fast5-live-status'),json('/api/status')]);
+  var values=await Promise.all([json('/api/fast5-live-status'),getFast5TradeStatus()]);
   var s=values[0],t=values[1];
   if(s.ok!==true||s.model!=='FAST5_SPOT_MOMENTUM_V1'||
      t.ok!==true||t.orderSignalModel!=='FAST5_SPOT_MOMENTUM_V1')

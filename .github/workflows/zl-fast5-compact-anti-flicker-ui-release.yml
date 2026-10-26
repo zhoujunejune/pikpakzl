@@ -1,0 +1,118 @@
+name: Fix FAST5 statistics long page and mobile display flicker
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths:
+      - .github/workflows/zl-fast5-compact-anti-flicker-ui-release.yml
+      - prediction-bot-v1/aliyun_fast5_compact_stable_ui_deploy.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate existing read-only FAST5 UI and guarded deploy script
+        run: |
+          node --check prediction-bot-v1/fast5-dashboard-inject.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --test prediction-bot-v1/fast5-dashboard-inject.test.mjs prediction-bot-v1/fast5-trade-tiles-readonly.test.mjs prediction-bot-v1/fast5-direction-ui.test.mjs prediction-bot-v1/fast5-compact-stable-ui.test.mjs
+          python -m py_compile prediction-bot-v1/aliyun_fast5_compact_stable_ui_deploy.py
+  deploy:
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Run guarded frontend-only patch through existing Alibaba Cloud Assistant
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feat/deepseek40-45s-ai-only-prod-20261025'
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/aliyun_fast5_compact_stable_ui_deploy.py" -o "$tmp/repair.py"
+          python3 -m py_compile "$tmp/repair.py"
+          python3 "$tmp/repair.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-compact-anti-flicker-ui',type='RunShellScript',working_user='root',command_content=script,timeout=200)).body.invoke_id
+          for _ in range(108):
+           time.sleep(2)
+           x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
+           if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            try: out=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
+            except Exception: out='REMOTE_OUTPUT_DECODE_FAILED'
+            print('FAST5_STABLE_UI_REMOTE',x.invocation_status,'EXIT',x.exit_code)
+            print(out[-6000:])
+            if x.invocation_status!='Success' or int(x.exit_code)!=0:raise RuntimeError('FAST5_STABLE_UI_DEPLOY_FAILED')
+            break
+          else:raise RuntimeError('FAST5_STABLE_UI_DEPLOY_TIMEOUT')
+          OUTER
+  verify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check real authenticated FAST5 frontend and no retired DeepSeek panel
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,json
+          root='https://prediction.47-237-188-69.sslip.io'
+          pw=os.environ['ZL_PANEL_PASSWORD']
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          def get(p):
+           req=urllib.request.Request(root+p,headers={'Authorization':auth,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(req,timeout=18) as r:return r.status,r.read(350000)
+          status,body=get('/')
+          html=body.decode('utf8','replace')
+          assert status==200 and 'id="zlFast5Card"' in html
+          assert 'FAST5 独立统计面板' in html
+          assert 'zlF5OfficialRows' in html
+          assert '/api/fast5-round-stats' in html
+          assert 'renderTradeTilesSnapshot' in html
+          assert 'id="zlF5HistoryScroll"' in html
+          assert 'height:300px;max-height:300px' in html
+          assert 'setInterval(load,1800)' in html
+          assert '/panel-client.js?v=9' in html
+          assert 'id="zlDeepSeek40Card"' not in html
+          assert '/api/fast5-live-status' in html
+          status,body=get('/api/fast5-live-status')
+          s=json.loads(body)
+          assert status==200 and s.get('ok') and s.get('model')=='FAST5_SPOT_MOMENTUM_V1'
+          status,body=get('/api/status')
+          trade=json.loads(body)
+          assert status==200 and trade.get('orderSignalModel')=='FAST5_SPOT_MOMENTUM_V1'
+          assert trade.get('enabled') is False
+          assert s.get('strategyVersion')=='FAST5_PREWARM120_5S_V4'
+          status,client=get('/panel-client.js?v=9')
+          assert status==200 and b'if(n&&n.innerHTML!==v)' in client
+          status,raw=get('/api/fast5-round-stats')
+          official=json.loads(raw)
+          assert status==200 and official.get('schema')=='FAST5_INDEPENDENT_OFFICIAL_ROUND_LEDGER_V1'
+          print('FAST5_STABLE_UI_PUBLIC_FIXED=true')
+          print('FAST5_STABLE_UI_REAL_MARKET_STATE_AVAILABLE=true')
+          print('FAST5_STABLE_UI_RETIRED_DEEPSEEK_HIDDEN=true')
+          print('FAST5_STABLE_UI_AUTO_FOLLOW_UNCHANGED_OFF=true')
+          PY

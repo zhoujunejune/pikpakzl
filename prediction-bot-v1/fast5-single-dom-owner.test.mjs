@@ -29,7 +29,7 @@ function simulate(model,signal=null){
    this.readyState=4;
    this.responseText=JSON.stringify({ok:true,
     enabled:false,autoConfirmEnabled:true,orderSignalModel:model,
-    signal,orderSignal:null,amount:'1',balance:{ok:false,error:'NO_ACCOUNT'},
+    signal,orderSignal:signal?'UP':null,amount:'1',balance:{ok:false,error:'NO_ACCOUNT'},
     pendingAction:null,lastOrder:null});
    this.onreadystatechange();
   }
@@ -54,8 +54,16 @@ test('other strategy still renders latest trade API signal including empty state
  for(const id of ['round','status','direction','orderDirection','score'])assert.equal(v.get(id),'-');
  assert.equal(v.get('amountView'),'1');
 });
+test('during a legitimate live trade the trading client owns the locked tiles',()=>{
+ const v=simulate('FAST5_SPOT_MOMENTUM_V1',{round:1793017800000,status:'LOCKED',direction:'UP',score:7.2});
+ assert.equal(v.get('round'),'1793017800000');
+ assert.equal(v.get('status'),'LOCKED');
+ assert.equal(v.get('direction'),'UP');
+ assert.equal(v.get('orderDirection'),'UP');
+ assert.equal(v.get('score'),'7.20');
+});
 test('single owner prevents competing client writers, and uses cache-busted script',()=>{
- assert.match(wrapper,/if\(j.orderSignalModel!=='FAST5_SPOT_MOMENTUM_V1'\)/);
+ assert.match(wrapper,/if\(j.orderSignalModel!=='FAST5_SPOT_MOMENTUM_V1'\|\|\(s.status==='LOCKED'&&s.round!=null\)\)/);
  assert.match(wrapper,/\/panel-client.js\?v=10/);
  assert.doesNotMatch(wrapper,/\/panel-client.js\?v=9/);
 });

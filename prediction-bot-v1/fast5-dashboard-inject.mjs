@@ -44,7 +44,7 @@ async function load(){
   var tradingWindow=signal&&elapsed<20000&&now>=signal.lockedAt&&
     now-signal.lockedAt<16000;
   var status;
-  if(signal)status=label(signal.direction)+(tradingWindow?' · 本轮已锁定':' · 已锁定，交易窗口已过');
+  if(signal)status=label(signal.direction)+(signal.prewarmOnly?' · 已锁定（上轮120秒趋势信号）':tradingWindow?' · 本轮实时开盘锁定':' · 已锁定，交易窗口已过');
   else if(s.provisionalDirection)status=label(s.provisionalDirection)+' · 上轮120秒预判（非实盘信号）';
   else if(elapsed<100)status='准备开轮方向，等待第0.1秒';
   else if(elapsed<=1000)status='0.1～1秒确认本轮开盘报价中';
@@ -55,7 +55,7 @@ async function load(){
   put('zlF5Age',age==null?'--':age+' ms'+(age>4000?'（数据延迟）':''));
   put('zlF5Follow',t.enabled===true?'开启':t.enabled===false?'关闭':'未知');
   put('zlF5Timeline','本轮已过'+(elapsed/1000).toFixed(2)+'秒 · 上轮120秒预分析 · 本轮0.1～1秒确认 · 20秒订单截止');
-  put('zlF5Reason',signal?'真实BTC价格趋势锁定；'+
+  put('zlF5Reason',signal?(signal.prewarmOnly?'上轮120秒真实数据锁定；尚未获得本轮开盘价确认。':'本轮实时开盘价格锁定；')+
       (tradingWindow?'交易路由还须检查自动跟随及方向开关':'仅展示本轮信号历史，不可据此补单')
     :valid?'尚未获得可执行的本轮开盘报价：'+String(s.latestError||'等待真实行情')
     :'轮次切换中，等待行情同步');

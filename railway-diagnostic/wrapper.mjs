@@ -845,7 +845,7 @@ const clientJs = String.raw`(function(){
 
 const scriptPattern=/<script>[\s\S]*?<\/script>/;
 if(!scriptPattern.test(source)) throw new Error('INLINE_SCRIPT_NOT_FOUND');
-source=source.replace(scriptPattern,'<script src="/panel-client.js?v=8" defer></script>');
+source=source.replace(scriptPattern,'<script src="/panel-client.js?v=9" defer></script>');
 source=source.replace('加载中...','V8 页面已加载，等待状态...');
 
 const marker="  if (req.method === 'GET' && url.pathname === '/healthz') {";

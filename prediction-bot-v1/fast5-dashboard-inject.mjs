@@ -5,7 +5,7 @@ const CARD=[
 '<section class="c" id="zlFast5Card" style="margin:14px 0">',
 '<div class="k">5分钟预测 · FAST5 本地实时行情模型</div>',
 '<div class="big" id="zlF5Main" style="margin:9px 0">读取FAST5生产信号中...</div>',
-'<div class="muted" id="zlF5Timeline">本轮第4秒起计算 → 第12秒停止寻找信号 → 第20秒结束交易提交窗口</div>',
+'<div class="muted" id="zlF5Timeline">上一轮倒数120秒预分析 → 本轮0.1～1秒确认方向 → 不追过期信号</div>',
 '<div class="grid" style="margin:12px 0">',
 '<div class="kv"><div class="k">当前生产模型</div><div class="v" id="zlF5Model">--</div></div>',
 '<div class="kv"><div class="k">最新信号 / 锁定时刻</div><div class="v" id="zlF5Lock">--</div></div>',
@@ -45,18 +45,19 @@ async function load(){
     now-signal.lockedAt<16000;
   var status;
   if(signal)status=label(signal.direction)+(tradingWindow?' · 本轮已锁定':' · 已锁定，交易窗口已过');
-  else if(elapsed<4000)status='收集真实行情中';
-  else if(elapsed<12000)status='计算中 · 等待满足方向条件';
-  else status='本轮WAIT · 未形成符合条件的信号';
+  else if(s.provisionalDirection)status=label(s.provisionalDirection)+' · 上轮120秒预判（非实盘信号）';
+  else if(elapsed<100)status='准备开轮方向，等待第0.1秒';
+  else if(elapsed<=1000)status='0.1～1秒确认本轮开盘报价中';
+  else status='本轮WAIT · 未取得可核验的开盘方向';
   put('zlF5Main',status);
   put('zlF5Model','FAST5 · 无DeepSeek');
   put('zlF5Lock',signal?label(signal.direction)+' / 第'+(lock/1000).toFixed(2)+'秒':'未锁定');
   put('zlF5Age',age==null?'--':age+' ms'+(age>4000?'（数据延迟）':''));
   put('zlF5Follow',t.enabled===true?'开启':t.enabled===false?'关闭':'未知');
-  put('zlF5Timeline','本轮已过'+(elapsed/1000).toFixed(1)+'秒 · 4～12秒形成信号 · 第20秒提交截止');
+  put('zlF5Timeline','本轮已过'+(elapsed/1000).toFixed(2)+'秒 · 上轮120秒预分析 · 本轮0.1～1秒确认 · 20秒订单截止');
   put('zlF5Reason',signal?'真实BTC价格趋势锁定；'+
       (tradingWindow?'交易路由还须检查自动跟随及方向开关':'仅展示本轮信号历史，不可据此补单')
-    :valid?'尚无有效方向：'+String(s.latestError||'等待新鲜连续价格动量')
+    :valid?'尚未获得可执行的本轮开盘报价：'+String(s.latestError||'等待真实行情')
     :'轮次切换中，等待行情同步');
   put('zlF5Meta','生产信号：'+String(t.orderSignalModel)+
       ' · 独立交易开关：'+(t.enabled===true?'开启':'关闭')+
@@ -68,7 +69,7 @@ async function load(){
   put('zlF5Error','状态接口异常：'+String(err.message||err).slice(0,130));
  }
 }
-void load();setInterval(load,1400);
+void load();setInterval(load,350);
 })();</script>`;
 export function injectFast5Dashboard(html){
  if(typeof html!=='string'||!html.includes('</body>'))return html;

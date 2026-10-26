@@ -81,6 +81,7 @@ def main():
   backup.mkdir(parents=True,exist_ok=False)
   saved=backup/'wrapper.mjs'
   shutil.copy2(WRAPPER,saved)
+  modified=False
   try:
    # Do not interrupt the first 20s order window or any pending order.
    # When auto-follow is ON, execute only in an idle 70s-180s interval,
@@ -101,6 +102,7 @@ def main():
      raise RuntimeError('NO_SAFE_ROUND_MAINTENANCE_WINDOW')
     time.sleep(4)
    print('FAST5_UI_MAINTENANCE_ELAPSED_MS='+str(into),flush=True)
+   modified=True
    replace_atomic(WRAPPER,new.read_bytes())
    run('systemctl','restart',UNIT,timeout=95)
    good=False
@@ -122,9 +124,12 @@ def main():
    print('FAST5_AUTO_FOLLOW_UNCHANGED='+str(enabled).lower(),flush=True)
    print('FAST5_BACKUP='+str(saved),flush=True)
   except BaseException:
-   shutil.copy2(saved,WRAPPER)
-   subprocess.run(['systemctl','restart',UNIT],timeout=90)
-   print('FAST5_SINGLE_OWNER_ROLLBACK_ATTEMPTED=true',flush=True)
+   if modified:
+    shutil.copy2(saved,WRAPPER)
+    subprocess.run(['systemctl','restart',UNIT],timeout=90)
+    print('FAST5_SINGLE_OWNER_ROLLBACK_ATTEMPTED=true',flush=True)
+   else:
+    print('FAST5_SINGLE_OWNER_SAFETY_ABORT_WITHOUT_RESTART=true',flush=True)
    raise
 if __name__=='__main__':
  try:main()

@@ -1,11 +1,11 @@
-// FAST5 / PREWARM120-OPEN1 V2. Compute in the final 120 s of the prior 5m
-// round. Direction is available at 0.1-1 s when a fresh opening tick arrives.
+// FAST5 / PREWARM120-5S V4. Compute during the previous 120 s; accept
+// a provenance-verified current-round or prewarm-only direction before +5 s.
 // Validated 120-second prewarm can lock without a fresh current-round spot tick.
 // It is explicitly tagged PREWARM_ONLY; execution still needs a real exchange quote.
 export const FAST_MODEL_ID='FAST5_SPOT_MOMENTUM_V1';
-export const STRATEGY_VERSION='FAST5_PREWARM120_OPEN1_V3';
+export const STRATEGY_VERSION='FAST5_PREWARM120_5S_V4';
 export const ROUND_MS=300000,PREWARM_MS=120000;
-export const EARLIEST_SIGNAL_MS=100,SIGNAL_END_MS=1000;
+export const EARLIEST_SIGNAL_MS=100,SIGNAL_END_MS=5000;
 const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const bps=(p,ref)=>10000*Math.log(p/ref);
@@ -69,6 +69,14 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
    if(upcoming)prewarm=upcoming;
   }
   if(locked)return {ok:true,locked:true,signal:locked};
+  // A strict, permanent per-round WAIT after +5s when no valid lock exists.
+  // Preserve prewarm collection for the next round, but never reopen
+  // this round's locking window or show a prewarm UP/DOWN as a live signal.
+  if(elapsed>=SIGNAL_END_MS){
+   latestError='OPEN_5S_DEADLINE_MISSED';
+   provisionalDirection=null;provisionalReason='ROUND_WAIT_AFTER_5S';
+   return {ok:true,locked:false,reason:latestError,signal:null};
+  }
   if(elapsed<EARLIEST_SIGNAL_MS)return {ok:true,locked:false,
     reason:'BEFORE_100MS_DECISION',signal:null};
   // At the boundary the last 120s belong to the *preceding* round.
@@ -106,8 +114,8 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   const sourceReason=prewarmOnly?'PREWARM120_ONLY_VERIFIED_PRIOR_DATA':
     trendSign===0?'PREWARM120_TIEBREAK':'CURRENT_OPEN_PRICE_DELTA';
   const dir=direction(trendSign||priorSign);
-  if(elapsed>SIGNAL_END_MS){
-   latestError='OPEN_1S_DEADLINE_MISSED';
+  if(elapsed>=SIGNAL_END_MS){
+   latestError='OPEN_5S_DEADLINE_MISSED';
    return {ok:true,locked:false,reason:latestError,
      provisionalDirection:dir,signal:null};
   }

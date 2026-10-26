@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Single-owner FAST5 trading-tile flicker hotfix. UI only.
-Replaces wrapper.mjs while preserving independent FAST5 stats and read-only
+Replaces wrapper.mjs and fast5-dashboard-inject.mjs while preserving independent FAST5 stats and read-only
 historical tiles, without changing trade engine or submitting an order.
 """
 import os,sys,re,json,pathlib,tempfile,urllib.request,subprocess,shutil,time
 from datetime import datetime,timezone
 ROOT=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
 WRAPPER=ROOT/'wrapper.mjs'
+DASHBOARD=ROOT/'fast5-dashboard-inject.mjs'
 UNIT='zl-prediction-trade.service'
 NODE='/opt/zl-prediction-node/bin/node'
 MODEL='FAST5_SPOT_MOMENTUM_V1'
@@ -34,6 +35,8 @@ def verify_runtime(expected_enabled):
  return (
   '/panel-client.js?v=10' in html and
   GUARD in js and 'function refresh()' in js and
+  'window.__zlFast5TradeStatus' in js and
+  'function getFast5TradeStatus()' in html and
   'renderTradeTilesSnapshot' in html and
   'id="zlF5HistoryScroll"' in html and
   'height:300px;max-height:300px' in html and
@@ -46,7 +49,7 @@ def main():
  if os.geteuid()!=0 or len(sys.argv)!=2 or not re.fullmatch('[a-f0-9]{40}',sys.argv[1]):
   raise RuntimeError('ROOT_AND_PINNED_SHA_REQUIRED')
  sha=sys.argv[1]
- if not WRAPPER.is_file():raise RuntimeError('WRAPPER_MISSING')
+ if not WRAPPER.is_file() or not DASHBOARD.is_file():raise RuntimeError('UI_SOURCES_MISSING')
  state=get('/api/status');fast=get('/api/fast5-live-status')
  enabled=state.get('enabled')
  if enabled is not True and enabled is not False:
@@ -66,6 +69,15 @@ def main():
   url='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/railway-diagnostic/wrapper.mjs'
   with urllib.request.urlopen(url,timeout=35) as r:new.write_bytes(r.read())
   run(NODE,'--check',str(new))
+  new_dashboard=pathlib.Path(td)/'fast5-dashboard-inject.mjs'
+  url_dashboard='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/prediction-bot-v1/fast5-dashboard-inject.mjs'
+  with urllib.request.urlopen(url_dashboard,timeout=35) as r:new_dashboard.write_bytes(r.read())
+  run(NODE,'--check',str(new_dashboard))
+  incoming_dashboard=new_dashboard.read_text()
+  for term in ('function getFast5TradeStatus()', 'window.__zlFast5TradeStatus',
+               "Promise.all([json('/api/fast5-live-status'),getFast5TradeStatus()])",
+               'id="zlF5HistoryScroll"', 'setInterval(load,1800)'):
+   if term not in incoming_dashboard:raise RuntimeError('STAGED_DASHBOARD_MISSING_'+term[:40])
   incoming=new.read_text()
   for term in (GUARD,'/panel-client.js?v=10',
       "if(refreshPending||document.hidden)return",
@@ -81,6 +93,8 @@ def main():
   backup.mkdir(parents=True,exist_ok=False)
   saved=backup/'wrapper.mjs'
   shutil.copy2(WRAPPER,saved)
+  saved_dashboard=backup/'fast5-dashboard-inject.mjs'
+  shutil.copy2(DASHBOARD,saved_dashboard)
   modified=False
   try:
    # Do not interrupt the first 20s order window or any pending order.
@@ -104,6 +118,7 @@ def main():
    print('FAST5_UI_MAINTENANCE_ELAPSED_MS='+str(into),flush=True)
    modified=True
    replace_atomic(WRAPPER,new.read_bytes())
+   replace_atomic(DASHBOARD,new_dashboard.read_bytes())
    run('systemctl','restart',UNIT,timeout=95)
    good=False
    for _ in range(35):
@@ -115,6 +130,7 @@ def main():
    if not good:raise RuntimeError('BROWSER_SCRIPT_OR_SERVER_VERIFICATION_FAILED')
    if run('systemctl','is-active',UNIT).stdout.strip()!='active':
     raise RuntimeError('TRADE_SERVICE_INACTIVE')
+   print('FAST5_SHARED_STATUS_CACHE_LIVE=true',flush=True)
    print('FAST5_SINGLE_DOM_OWNER_FIX_LIVE=true',flush=True)
    print('FAST5_EXPIRED_LOCK_NO_LONGER_OVERWRITTEN_WITH_DASH=true',flush=True)
    print('FAST5_LIVE_LOCK_ORDER_TILE_PATH_PRESERVED=true',flush=True)
@@ -126,6 +142,7 @@ def main():
   except BaseException:
    if modified:
     shutil.copy2(saved,WRAPPER)
+    shutil.copy2(saved_dashboard,DASHBOARD)
     subprocess.run(['systemctl','restart',UNIT],timeout=90)
     print('FAST5_SINGLE_OWNER_ROLLBACK_ATTEMPTED=true',flush=True)
    else:

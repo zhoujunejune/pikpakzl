@@ -67,3 +67,9 @@ test('single owner prevents competing client writers, and uses cache-busted scri
  assert.match(wrapper,/\/panel-client.js\?v=10/);
  assert.doesNotMatch(wrapper,/\/panel-client.js\?v=9/);
 });
+
+test('trade widget publishes only a FAST5 display snapshot',()=>{
+ assert.match(wrapper,/window\.__zlFast5TradeStatus=j\.orderSignalModel==='FAST5_SPOT_MOMENTUM_V1'/);
+ assert.match(wrapper,/checkedAt:Date\.now\(\),data:/);
+ assert.match(wrapper,/directionModes:j\.directionModes/);
+});

@@ -696,6 +696,11 @@ const clientJs = String.raw`(function(){
         text('walletMeta',(j&&j.error)||'无法连接 /api/status');
         return;
       }
+      // Share a minimal read-only snapshot with the FAST5 card, not execution logic.
+      window.__zlFast5TradeStatus=j.orderSignalModel==='FAST5_SPOT_MOMENTUM_V1'?
+        {checkedAt:Date.now(),data:{ok:j.ok,orderSignalModel:j.orderSignalModel,
+          enabled:j.enabled,amount:j.amount,signal:j.signal,
+          directionModes:j.directionModes}}:null;
       autoMode=!!j.autoConfirmEnabled;
       html('switch',j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>');
       text('modeView',autoMode?'AUTO_CONFIRM':'MANUAL_CONFIRM');

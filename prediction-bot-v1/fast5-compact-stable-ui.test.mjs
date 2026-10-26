@@ -39,3 +39,12 @@ test('legacy trading widget does not keep resetting unchanged DOM or run overlap
  assert.match(s,/setInterval\(refresh,2000\)/);
  assert.match(s,/submitPendingOrder/);
 });
+
+test('FAST5 dashboard shares a fresh read-only status with stale fallback',()=>{
+ const s=injectFast5Dashboard(html);
+ assert.match(s,/function getFast5TradeStatus\(\)/);
+ assert.match(s,/window\.__zlFast5TradeStatus/);
+ assert.match(s,/sharedStatus\.checkedAt<=3000/);
+ assert.match(s,/return json\('\/api\/status'\)/);
+ assert.match(s,/Promise\.all\(\[json\('\/api\/fast5-live-status'\),getFast5TradeStatus\(\)\]\)/);
+});

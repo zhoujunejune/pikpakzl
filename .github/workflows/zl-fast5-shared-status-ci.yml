@@ -1,0 +1,31 @@
+name: FAST5 shared status cache isolated validation
+on:
+  push:
+    branches: [fix/fast5-shared-status-20261026]
+    paths:
+      - .github/workflows/zl-fast5-shared-status-ci.yml
+      - prediction-bot-v1/fast5-dashboard-inject.mjs
+      - railway-diagnostic/wrapper.mjs
+      - prediction-bot-v1/aliyun_fast5_single_owner_flicker_fix.py
+      - prediction-bot-v1/fast5-compact-stable-ui.test.mjs
+      - prediction-bot-v1/fast5-single-dom-owner.test.mjs
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check UI-only syntax and offline regression
+        run: |
+          node --check prediction-bot-v1/fast5-dashboard-inject.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          python -m py_compile prediction-bot-v1/aliyun_fast5_single_owner_flicker_fix.py
+          node --test prediction-bot-v1/fast5-dashboard-inject.test.mjs prediction-bot-v1/fast5-trade-tiles-readonly.test.mjs prediction-bot-v1/fast5-direction-ui.test.mjs prediction-bot-v1/fast5-compact-stable-ui.test.mjs prediction-bot-v1/fast5-single-dom-owner.test.mjs

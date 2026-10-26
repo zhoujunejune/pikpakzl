@@ -1,0 +1,35 @@
+name: EVENT10 compact history and mobile rendering CI (no deploy)
+on:
+  push:
+    branches: [fix/event10-page-performance-20261026]
+    paths:
+      - .github/workflows/event10-perf-ci.yml
+      - event10-bot/**
+permissions: {contents: read}
+jobs:
+  isolated-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate syntax and isolated manual 10m model tests
+        run: |
+          node --check event10-bot/server.mjs
+          node --test event10-bot/server.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/compact-evidence.test.mjs event10-bot/price-structure.test.mjs event10-bot/trade-stream-collector.test.mjs event10-bot/ui-layout.test.mjs event10-bot/chinese-display.test.mjs event10-bot/page-performance.test.mjs
+      - name: Verify only display APIs and no exchange orders
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('event10-bot/server.mjs').read_text()
+          assert 'NO_EVENT_CONTRACT_ORDER_API' in s
+          assert 'pathname==="/api/history-lite"' in s
+          assert 'pathname==="/api/history"' in s
+          page=Path('event10-bot/panel.html').read_text()
+          assert 'api/history-lite' in page
+          assert 'setInterval(refreshHistory,30000)' in page
+          assert 'setInterval(refresh,4000)' in page
+          assert 'id="quickConfidence"' in page
+          print('EVENT10_UI_ONLY_HISTORY_PROJECTION_VALID=true')
+          PY

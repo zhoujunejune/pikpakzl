@@ -211,3 +211,27 @@ test("as-of continuous BTC trade window is accepted even if LIVE collector has l
  assert.ok(frozenPayload.compactEvidence.priceStructure.lastClosedCandleAt<=frozenPayload.capturedAt);
  assert.equal("proxyHit" in frozenPayload,false);
 });
+
+test("compact history endpoint omits heavy evidence without touching full history",async()=>{
+ const original=[{id:"history-001",openedAt:NOW,openPrice:100000,
+   direction:"UP",confidence:0.63,closePrice:100100,proxyHit:true,
+   proxyOutcome:"UP",settlementStatus:"PUBLIC_MARKET_PROXY_ONLY",
+   status:"COMPLETE",compactEvidence:{giant:Array(2000).fill("market")} }];
+ const engine={history:()=>original,status:()=>({lastSession:null})};
+ const server=serve(engine,{port:0});
+ await new Promise(resolve=>server.once("listening",resolve));
+ const url="http://127.0.0.1:"+server.address().port;
+ try{
+  const old=await(await fetch(url+"/api/history")).json();
+  const lite=await(await fetch(url+"/api/history-lite")).json();
+  assert.equal(old.records.length,lite.records.length);
+  assert.ok(old.records[0].compactEvidence);
+  assert.equal(lite.records[0].compactEvidence,undefined);
+  assert.deepEqual(lite.records[0],{
+   id:"history-001",openedAt:NOW,openPrice:100000,direction:"UP",
+   confidence:0.63,closePrice:100100,proxyHit:true,proxyOutcome:"UP",
+   settlementStatus:"PUBLIC_MARKET_PROXY_ONLY",status:"COMPLETE"});
+  assert.ok(JSON.stringify(lite).length<JSON.stringify(old).length/30);
+  assert.equal(original[0].compactEvidence.giant.length,2000);
+ }finally{await new Promise(resolve=>server.close(resolve));}
+});

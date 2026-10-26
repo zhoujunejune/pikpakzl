@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {injectFast5Dashboard} from './fast5-dashboard-inject.mjs';
+const html='<!doctype html><html><body><section class="c" id="roundResultsOnlyCard" style="margin:14px 0">old</section><div id="round"></div></body></html>';
+test('statistics rows are confined to fixed 300px internal scroll region',()=>{
+ const s=injectFast5Dashboard(html);
+ assert.match(s,/id="zlF5HistoryScroll"/);
+ assert.match(s,/height:300px;max-height:300px;min-height:300px/);
+ assert.match(s,/overflow-y:auto/);
+ assert.match(s,/overscroll-behavior:contain/);
+ assert.match(s,/tabindex="0" role="region"/);
+ assert.match(s,/position:sticky/);
+ assert.match(s,/FAST5有效信号/);
+ assert.match(s,/FAST5命中率/);
+ assert.match(s,/rows=result.rows.slice\(0,200\)/);
+});
+test('statistics refreshes only after data change; preserves nested scrollTop',()=>{
+ const s=injectFast5Dashboard(html);
+ assert.match(s,/if\(fingerprint!==statsRowsFingerprint\)/);
+ assert.match(s,/statsRowsFingerprint=fingerprint/);
+ assert.match(s,/var previousScroll=scroll\?scroll.scrollTop:0/);
+ assert.match(s,/scroll.scrollTop=previousScroll/);
+ assert.match(s,/if\(x&&x.textContent!==next\)/);
+ assert.match(s,/setInterval\(load,1800\)/);
+ assert.doesNotMatch(s,/setInterval\(load,350\)/);
+ assert.match(s,/statsLoadPending/);
+ assert.match(s,/liveLoadPending/);
+ assert.match(s,/visibilitychange/);
+});
+test('legacy trading widget does not keep resetting unchanged DOM or run overlapping polls',()=>{
+ const s=fs.readFileSync(new URL('../railway-diagnostic/wrapper.mjs',import.meta.url),'utf8');
+ assert.match(s,/if\(n&&n.textContent!==next\) n.textContent=next/);
+ assert.match(s,/if\(n&&n.innerHTML!==v\) n.innerHTML=v/);
+ assert.match(s,/if\(refreshPending\|\|document.hidden\)return/);
+ assert.match(s,/x.timeout=8000/);
+ assert.match(s,/x.ontimeout=/);
+ assert.match(s,/visibilitychange/);
+ assert.match(s,/setInterval\(refresh,2000\)/);
+ assert.match(s,/submitPendingOrder/);
+});

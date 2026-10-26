@@ -16,6 +16,7 @@ jobs:
         with: {node-version: '22'}
       - name: Validate syntax and isolated manual 10m model tests
         run: |
+          python3 -m py_compile event10-bot/aliyun_perf_ui_only.py
           node --check event10-bot/server.mjs
           node --test event10-bot/server.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/compact-evidence.test.mjs event10-bot/price-structure.test.mjs event10-bot/trade-stream-collector.test.mjs event10-bot/ui-layout.test.mjs event10-bot/chinese-display.test.mjs event10-bot/page-performance.test.mjs
       - name: Verify only display APIs and no exchange orders

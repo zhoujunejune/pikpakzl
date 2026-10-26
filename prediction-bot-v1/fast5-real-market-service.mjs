@@ -61,7 +61,7 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
  const server=serveFast5(service);
  server.on('error',e=>{console.error('FAST5_LISTEN_FAILED_'+trim(e));process.exitCode=1;});
  void service.poll();
- const timer=setInterval(()=>void service.poll(),300);
+ const timer=setInterval(()=>void service.poll(),100);
  timer.unref?.();
  console.log('FAST5_SIGNAL_LOCAL_RUNNING deepseek=false order_write=false');
 }

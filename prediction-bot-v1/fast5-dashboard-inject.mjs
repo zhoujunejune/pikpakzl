@@ -14,8 +14,19 @@ const CARD=[
 '</div>',
 '<div class="muted" id="zlF5Reason">核对行情数据...</div>',
 '<div class="muted" id="zlF5Meta" style="margin-top:10px">FAST5自行计算行情，不调用DeepSeek。信号出现不等于订单提交或成交。</div>',
-'<div class="k" style="margin-top:16px">FAST5 独立统计</div>',
-'<div class="muted">新模型尚未建立经币安官方结算核验的完整历史胜率；不使用旧DeepSeek的命中率代替。</div>',
+'<div class="k" style="margin-top:16px">FAST5 独立统计面板</div>',
+'<div class="big" id="zlF5StatAccuracy" style="margin:8px 0">正在核对官方结算...</div>',
+'<div class="grid" style="margin:12px 0">',
+'<div class="kv"><div class="k">FAST5有效信号</div><div class="v" id="zlF5StatSignals">--</div></div>',
+'<div class="kv"><div class="k">FAST5等待 / 未锁定</div><div class="v" id="zlF5StatWait">--</div></div>',
+'<div class="kv"><div class="k">FAST5已结算</div><div class="v" id="zlF5StatSettled">--</div></div>',
+'<div class="kv"><div class="k">FAST5命中 / 失败</div><div class="v" id="zlF5StatWL">--</div></div>',
+'</div>',
+'<div class="muted" id="zlF5StatsNote">仅使用FAST5自身预先锁定的信号和币安官方结算核对。旧模型数据不混入。</div>',
+'<div class="k" style="margin-top:16px">最近官方结算（仅供核对，不代表FAST5胜率）</div>',
+'<div style="overflow-x:auto;margin-top:9px"><table style="width:100%;font-size:13px;border-collapse:collapse">',
+'<thead><tr><th>轮次</th><th>官方结果</th><th>FAST5匹配</th></tr></thead>',
+'<tbody id="zlF5OfficialRows"><tr><td colspan="3">正在读取...</td></tr></tbody></table></div>',
 '<div class="muted" id="zlF5Error" style="margin-top:8px"></div>',
 '</section>'
 ].join('');
@@ -69,6 +80,59 @@ async function load(){
   put('zlF5Error','状态接口异常：'+String(err.message||err).slice(0,130));
  }
 }
+function htmlTime(ts){
+ try{return new Date(ts).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+ catch{return '--'}
+}
+async function loadStats(){
+ try{
+  var result=await json('/api/round-stats');
+  if(result.ok!==true||!Array.isArray(result.records))throw Error('OFFICIAL_SETTLEMENT_UNAVAILABLE');
+  var rows=result.records;
+  var own=rows.filter(function(x){return x&&[
+   x.productionModel,x.productionModelVersion,x.productionSource
+  ].includes('FAST5_SPOT_MOMENTUM_V1')&&['UP','DOWN'].includes(x.productionPrediction)});
+  var wins=own.filter(function(x){return ['UP','DOWN'].includes(x.productionActual)&&
+   x.settledAt!=null&&x.officialSettlementAudit&&
+   x.productionActual===x.productionPrediction});
+  var settled=own.filter(function(x){return ['UP','DOWN'].includes(x.productionActual)&&
+   x.settledAt!=null&&x.officialSettlementAudit});
+  put('zlF5StatSignals',own.length?own.length:'--');
+  put('zlF5StatWait','--');
+  put('zlF5StatSettled',settled.length?settled.length:'--');
+  put('zlF5StatWL',settled.length?wins.length+' / '+(settled.length-wins.length):'--');
+  put('zlF5StatAccuracy',settled.length?
+   'FAST5可核验命中率 '+(100*wins.length/settled.length).toFixed(2)+'%':
+   'FAST5胜率：暂无独立可核验样本');
+  put('zlF5StatsNote',own.length?
+   '仅为接口返回窗口内的FAST5独立记录，不与旧模型合并。':
+   '官方接口目前未包含FAST5逐轮信号账本；数据缺失显示--，不冒用其他模型的胜率。');
+  var body=el('zlF5OfficialRows');
+  if(body){
+   body.replaceChildren();
+   var official=rows.filter(function(x){return x&&
+    Number.isSafeInteger(x.roundStartMs)&&
+    ['UP','DOWN'].includes(x.productionActual)&&
+    x.officialSettlementAudit&&x.settledAt!=null}).slice(0,15);
+   if(!official.length){
+    var empty=document.createElement('tr'),td=document.createElement('td');
+    td.colSpan=3;td.textContent='暂无可核对的官方结算';empty.appendChild(td);body.appendChild(empty);
+   }
+   official.forEach(function(x){
+    var tr=document.createElement('tr');
+    [htmlTime(x.roundStartMs),label(x.productionActual),
+     own.some(function(y){return y.roundStartMs===x.roundStartMs})?'已有FAST5记录':'未关联FAST5']
+     .forEach(function(value){var td=document.createElement('td');td.textContent=value;
+      td.style.padding='8px 6px';td.style.borderBottom='1px solid #344155';tr.appendChild(td)});
+    body.appendChild(tr);
+   });
+  }
+ }catch(e){
+  put('zlF5StatAccuracy','官方结算接口暂不可用');
+  put('zlF5StatsNote','读取失败：'+String(e.message||e).slice(0,120));
+ }
+}
+void loadStats();setInterval(loadStats,30000);
 void load();setInterval(load,350);
 })();</script>`;
 export function injectFast5Dashboard(html){

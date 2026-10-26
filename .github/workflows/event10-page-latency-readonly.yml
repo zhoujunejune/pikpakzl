@@ -1,0 +1,92 @@
+name: EVENT10 existing Alibaba page latency READ ONLY
+on:
+  push:
+    branches: [audit/event10-live-page-latency-20261026]
+    paths: [.github/workflows/event10-page-latency-readonly.yml]
+permissions:
+  contents: read
+jobs:
+  inspect-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Measure existing EVENT10 local endpoints, resources, and UI poll markers only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64,json
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script="""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,urllib.request,time,os,hashlib,subprocess
+          from pathlib import Path
+          base='http://127.0.0.1:13020'
+          paths=['/','/healthz','/api/status','/api/history','/api/stream-health']
+          result={}
+          for p in paths:
+              samples=[];codes=[];sizes=[];body=b''
+              for _ in range(5):
+                  started=time.monotonic()
+                  try:
+                      with urllib.request.urlopen(base+p,timeout=5) as r:
+                          body=r.read(1500000);code=r.status
+                  except Exception as exc:
+                      code=getattr(exc,'code',0)
+                      body=b''
+                  samples.append(round((time.monotonic()-started)*1000,1))
+                  codes.append(code);sizes.append(len(body))
+              result[p]={'samplesMs':samples,'httpCodes':codes,'bytes':max(sizes)}
+              if p=='/':
+                  html=body.decode('utf8','replace')
+                  result[p]['sha256Short']=hashlib.sha256(body).hexdigest()[:12]
+                  result[p]['uiPollingMarkers']={
+                     'refresh4s':'setInterval(refresh,4000)' in html,
+                     'collector5s':'setInterval(refreshCollector,5000)' in html,
+                     'recordsReplaceChildren':'rows.replaceChildren()' in html}
+              if p=='/api/history' and body:
+                  try:result[p]['recordCount']=len(json.loads(body).get('records',[]))
+                  except Exception:pass
+          mem={}
+          for l in Path('/proc/meminfo').read_text().splitlines():
+              if l.startswith(('MemTotal:','MemAvailable:','SwapTotal:','SwapFree:')):
+                  k,v=l.split(':',1);mem[k]=int(v.strip().split()[0])//1024
+          units={}
+          for u in ('zl-event10-deepseek.service','zl-event10-trade-stream.service','caddy.service'):
+              r=subprocess.run(['systemctl','is-active',u],capture_output=True,text=True,timeout=3)
+              units[u]=r.stdout.strip()[:25]
+          print('EVENT10_PAGE_READONLY_METRICS='+json.dumps({
+            'measuredUtc':int(time.time()),'routes':result,'memMiB':mem,
+            'systemLoad1m':round(os.getloadavg()[0],2),'units':units},separators=(',',':')))
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+             access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+             region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='event10-latency-readonly',
+            type='RunShellScript',working_user='root',command_content=script,timeout=85)).body.invoke_id
+          done=False
+          for _ in range(42):
+              time.sleep(2)
+              result=c.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+                invoke_id=ident)).body.invocation_result
+              if result and str(result.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+                  raw=base64.b64decode(result.output or '').decode('utf-8','replace')
+                  for line in raw.splitlines():
+                      if line.startswith('EVENT10_PAGE_READONLY_METRICS='):
+                          print(line);done=True
+                  if str(result.invocation_status)!='Success' or int(result.exit_code)!=0 or not done:
+                      raise RuntimeError('EVENT10_READONLY_MEASUREMENT_FAILED')
+                  break
+          if not done:raise RuntimeError('EVENT10_MEASUREMENT_TIMED_OUT')
+          OUTER

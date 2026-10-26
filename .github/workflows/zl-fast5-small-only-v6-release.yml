@@ -1,0 +1,109 @@
+name: FAST5 V6 small-volatility-only signal and independent WAIT statistics
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths:
+      - .github/workflows/zl-fast5-small-only-v6-release.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify small <=5bps signals and all >5bps WAIT; validated UI and safe deploy
+        run: |
+          node --check prediction-bot-v1/fast5-real-market-calculator.mjs
+          node --check prediction-bot-v1/fast5-real-market-service.mjs
+          node --check prediction-bot-v1/fast5-dashboard-inject.mjs
+          python -m py_compile prediction-bot-v1/fast5_small_only_v6_guarded_deploy.py
+          node --test prediction-bot-v1/fast5-small-only-v6.test.mjs prediction-bot-v1/fast5-dashboard-inject.test.mjs prediction-bot-v1/fast5-direction-ui.test.mjs
+          python -m py_compile prediction-bot-v1/fast5_independent_stats_service.py
+          node --check prediction-bot-v1/fast5-real-market-service.mjs
+          python prediction-bot-v1/fast5_independent_stats_service_test.py
+  release:
+    needs: [regression]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Guarded Alibaba production change (no orders, follow remains off)
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feat/deepseek40-45s-ai-only-prod-20261025'
+          sh="""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/fast5_small_only_v6_guarded_deploy.py" -o "$tmp/release.py"
+          python3 -m py_compile "$tmp/release.py"
+          python3 "$tmp/release.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-small-only-v6-stats-reset',type='RunShellScript',working_user='root',command_content=sh,timeout=235)).body.invoke_id
+          for _ in range(118):
+           time.sleep(2)
+           x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
+           if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST5_V6_CLOUD_STATUS',x.invocation_status,'EXIT',x.exit_code)
+            try:print(base64.b64decode(x.output or '',validate=True).decode('utf8','replace')[-13000:])
+            except Exception:print('REMOTE_OUTPUT_UNAVAILABLE')
+            if x.invocation_status!='Success' or int(x.exit_code)!=0:
+             raise RuntimeError('FAST5_V6_REMOTE_DEPLOY_FAILED')
+            break
+          else:raise RuntimeError('FAST5_V6_REMOTE_TIMEOUT')
+          OUTER
+  verification:
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Verify live model, public page and user-controlled trading switch
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,json
+          origin='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(p):
+           req=urllib.request.Request(origin+p,headers={'Authorization':auth,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(req,timeout=17) as resp:return resp.status,resp.read(300000)
+          status,buf=get('/api/fast5-live-status')
+          s=json.loads(buf);assert status==200 and s.get('ok')
+          assert s.get('model')=='FAST5_SPOT_MOMENTUM_V1'
+          assert s.get('strategyVersion')=='FAST5_SMALL_ONLY_LE5BPS_15M_V6'
+          status,buf=get('/api/status');t=json.loads(buf)
+          assert status==200 and t.get('orderSignalModel')=='FAST5_SPOT_MOMENTUM_V1'
+          assert t.get('enabled') is False
+          status,raw=get('/api/fast5-round-stats')
+          st=json.loads(raw)
+          assert status==200 and st.get('ok') and st.get('persisted')
+          assert st.get('strategyVersion')=='FAST5_SMALL_ONLY_LE5BPS_15M_V6'
+          assert st.get('schema')=='FAST5_INDEPENDENT_OFFICIAL_ROUND_LEDGER_V1'
+          assert st.get('summary',{}).get('total',999)<=1
+          status,body=get('/')
+          page=body.decode('utf8','replace')
+          assert status==200 and '小幅波动专用V6' in page
+          assert 'id="zlF5HistoryScroll"' in page
+          print('FAST5_V6_PUBLIC_MODEL_AND_CLEAN_STATS=true')
+          print('FAST5_V6_TRADING_FOLLOW_UNCHANGED_OFF=true')
+          PY

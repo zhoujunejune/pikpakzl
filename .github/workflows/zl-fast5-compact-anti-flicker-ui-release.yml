@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/zl-fast5-compact-anti-flicker-ui-release.yml
       - prediction-bot-v1/aliyun_fast5_compact_stable_ui_deploy.py
+      - prediction-bot-v1/aliyun_fast5_compact_stable_ui_deploy.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

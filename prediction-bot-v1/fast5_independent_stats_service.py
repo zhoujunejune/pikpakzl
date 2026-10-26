@@ -17,7 +17,7 @@ def get(url):
   if r.status!=200:raise RuntimeError('HTTP_'+str(r.status))
   return json.loads(r.read(5000000))
 def connect():
- db=sqlite3.connect(DB,timeout=4)
+ db=sqlite3.connect(DB,timeout=4,check_same_thread=False)
  db.row_factory=sqlite3.Row
  db.execute('PRAGMA busy_timeout=4000')
  db.execute('PRAGMA journal_mode=WAL')
@@ -53,7 +53,7 @@ def official(r):
      audit['detailPayloadSha256'])
 class Journal:
  def __init__(self,db):
-  self.db=db;self.started_at=ms()
+  self.db=db;self.started_at=ms();self.lock=threading.RLock()
   self.seen_rounds=set();self.last_signal_error=None
   self.last_official_error=None;self.last_poll_at=None
  def snapshot(self):
@@ -66,10 +66,11 @@ class Journal:
    return
   if elapsed<5000:self.seen_rounds.add(round_)
   row=x.get('latest')
-  if isinstance(row,dict) and row.get('round')==round_ and row.get('model')==MODEL and
+  if (isinstance(row,dict) and row.get('round')==round_ and row.get('model')==MODEL and
     row.get('strategyVersion')==VERSION and row.get('status')=='LOCKED' and
     row.get('direction') in ('UP','DOWN') and isint(row.get('lockedAt')) and
-    round_+100<=row['lockedAt']<round_+5000:
+    round_+100<=row['lockedAt']<round_+5000):
+   with self.lock:
    self.db.execute("""INSERT OR IGNORE INTO rounds
     (round,model,version,decision,locked_at,market_at,source,prewarm_only,decision_reason,first_seen_at)
     VALUES (?,?,?,?,?,?,?,?,?,?)""",(round_,MODEL,VERSION,row['direction'],row['lockedAt'],

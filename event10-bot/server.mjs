@@ -69,6 +69,16 @@ export function serve(engine,{port=Number(process.env.EVENT10_PORT||13020),host=
         active:chineseDisplay.overlay(state.active)});
     }
     if(pathname==="/api/history")return send(200,{ok:true,records:engine.history()});
+    // Compact table projection only; retain the full historical API unchanged.
+    if(pathname==="/api/history-lite"){
+      const records=engine.history().map(s=>({
+        id:s.id,openedAt:s.openedAt,openPrice:s.openPrice,
+        direction:s.direction,confidence:s.confidence,closePrice:s.closePrice,
+        proxyHit:s.proxyHit,proxyOutcome:s.proxyOutcome,
+        settlementStatus:s.settlementStatus,status:s.status
+      }));
+      return send(200,{ok:true,records});
+    }
     if(pathname==="/api/stream-health"){
       try{
         const r=await fetch("http://127.0.0.1:13021/api/health",{signal:AbortSignal.timeout(1800)});

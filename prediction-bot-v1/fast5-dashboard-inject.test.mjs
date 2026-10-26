@@ -9,7 +9,7 @@ const html='<!doctype html><html><body><section class="c" id="roundResultsOnlyCa
 test('replaces retired DeepSeek status with FAST5 while keeping trade controls',()=>{
  const out=injectFast5Dashboard(html);
  assert.ok(out.includes('id="zlFast5Card"'));
- assert.ok(out.includes('FAST5 本地实时行情模型'));
+ assert.ok(out.includes('FAST5 V5 15分钟波动分层'));
  assert.ok(out.includes('/api/fast5-live-status'));
  assert.ok(out.includes('id="tradeInputsCard"'));
  assert.ok(out.includes('keepControls'));
@@ -23,7 +23,7 @@ test('no duplicate panel injection',()=>{
 });
 test('never claims winrate or fills stats with DeepSeek records',()=>{
  const out=injectFast5Dashboard(html);
- assert.match(out,/FAST5独立账本按5分钟轮次时间对齐币安官方结果/);
+ assert.match(out,/V5版本独立统计，从版本切换后重新累计/);
  assert.match(out,/FAST5 独立统计面板/);
  assert.match(out,/zlF5StatAccuracy/);
  assert.match(out,/zlF5OfficialRows/);

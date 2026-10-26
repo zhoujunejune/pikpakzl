@@ -5,7 +5,7 @@ const CARD=[
 '<section class="c" id="zlFast5Card" style="margin:14px 0">',
 '<div class="k">5分钟预测 · FAST5 本地实时行情模型</div>',
 '<div class="big" id="zlF5Main" style="margin:9px 0">读取FAST5生产信号中...</div>',
-'<div class="muted" id="zlF5Timeline">上一轮倒数120秒预分析 → 本轮0.1～1秒确认方向 → 不追过期信号</div>',
+'<div class="muted" id="zlF5Timeline">上一轮倒数120秒预分析 → 本轮0.1～5秒锁定 → 超过5秒未锁定则WAIT</div>',
 '<div class="grid" style="margin:12px 0">',
 '<div class="kv"><div class="k">当前生产模型</div><div class="v" id="zlF5Model">--</div></div>',
 '<div class="kv"><div class="k">最新信号 / 锁定时刻</div><div class="v" id="zlF5Lock">--</div></div>',
@@ -45,19 +45,19 @@ async function load(){
     now-signal.lockedAt<16000;
   var status;
   if(signal)status=label(signal.direction)+(signal.prewarmOnly?' · 已锁定（上轮120秒趋势信号）':tradingWindow?' · 本轮实时开盘锁定':' · 已锁定，交易窗口已过');
-  else if(s.provisionalDirection)status=label(s.provisionalDirection)+' · 上轮120秒预判（非实盘信号）';
-  else if(elapsed<100)status='准备开轮方向，等待第0.1秒';
-  else if(elapsed<=1000)status='0.1～1秒确认本轮开盘报价中';
-  else status='本轮WAIT · 未取得可核验的开盘方向';
+  else if(elapsed>=5000)status='WAIT · 本轮5秒内未锁定，停止出信号';
+  else if(s.provisionalDirection)status=label(s.provisionalDirection)+' · 上轮120秒候选（仍在5秒锁定窗口）';
+  else if(elapsed<100)status='开轮准备中 · 等待100毫秒';
+  else status='开轮0.1～5秒内确认方向中';
   put('zlF5Main',status);
   put('zlF5Model','FAST5 · 无DeepSeek');
   put('zlF5Lock',signal?label(signal.direction)+' / 第'+(lock/1000).toFixed(2)+'秒':'未锁定');
   put('zlF5Age',age==null?'--':age+' ms'+(age>4000?'（数据延迟）':''));
   put('zlF5Follow',t.enabled===true?'开启':t.enabled===false?'关闭':'未知');
-  put('zlF5Timeline','本轮已过'+(elapsed/1000).toFixed(2)+'秒 · 上轮120秒预分析 · 本轮0.1～1秒确认 · 20秒订单截止');
+  put('zlF5Timeline','本轮已过'+(elapsed/1000).toFixed(2)+'秒 · 上轮120秒预分析 · 本轮0.1～5秒锁定 · 超时WAIT · 已锁定订单仍须完成执行校验');
   put('zlF5Reason',signal?(signal.prewarmOnly?'上轮120秒真实数据锁定；尚未获得本轮开盘价确认。':'本轮实时开盘价格锁定；')+
       (tradingWindow?'交易路由还须检查自动跟随及方向开关':'仅展示本轮信号历史，不可据此补单')
-    :valid?'尚未获得可执行的本轮开盘报价：'+String(s.latestError||'等待真实行情')
+    :valid?(elapsed>=5000?'5秒内未形成有效锁定方向，本轮WAIT，不补单。原因：':'锁定窗口内等待有效方向，原因：')+String(s.latestError||'等待真实行情')
     :'轮次切换中，等待行情同步');
   put('zlF5Meta','生产信号：'+String(t.orderSignalModel)+
       ' · 独立交易开关：'+(t.enabled===true?'开启':'关闭')+

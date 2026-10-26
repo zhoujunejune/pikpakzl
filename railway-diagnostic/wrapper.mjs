@@ -664,13 +664,15 @@ const clientJs = String.raw`(function(){
   'use strict';
   var currentPending = null;
   var autoMode = false;
+  var refreshPending = false;
   function el(id){ return document.getElementById(id); }
-  function text(id,v){ var n=el(id); if(n) n.textContent=String(v); }
-  function html(id,v){ var n=el(id); if(n) n.innerHTML=v; }
+  function text(id,v){ var n=el(id),next=String(v); if(n&&n.textContent!==next) n.textContent=next; }
+  function html(id,v){ var n=el(id); if(n&&n.innerHTML!==v) n.innerHTML=v; }
 
   function request(method,url,body,cb){
     var x=new XMLHttpRequest();
     x.open(method,url,true);
+    x.timeout=8000;
     x.setRequestHeader('Cache-Control','no-cache');
     if(method!=='GET') x.setRequestHeader('Content-Type','application/json');
     x.onreadystatechange=function(){
@@ -680,11 +682,15 @@ const clientJs = String.raw`(function(){
       cb(x.status,j);
     };
     x.onerror=function(){ cb(0,{error:'网络请求失败'}); };
+    x.ontimeout=function(){ cb(0,{error:'请求超时'}); };
     x.send(body?JSON.stringify(body):null);
   }
 
   function refresh(){
+    if(refreshPending||document.hidden)return;
+    refreshPending=true;
     request('GET','/api/status?ts='+Date.now(),null,function(code,j){
+      refreshPending=false;
       if(code!==200){
         html('switch','<span class="bad">● 状态读取失败</span>');
         text('walletMeta',(j&&j.error)||'无法连接 /api/status');
@@ -832,6 +838,7 @@ const clientJs = String.raw`(function(){
     html('switch','<span class="warn">● V8 正在读取状态...</span>');
     refresh();
     setInterval(refresh,2000);
+    document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh()});
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot); else boot();
 })();`;

@@ -85,7 +85,7 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   const live=market?.latest||{};
   const event=live.eventMs,price=live.lastPrice,open=live.roundOpenPrice;
   const currentOk=rawValid&&live.roundStartMs===round&&
-    Number.isSafeInteger(event)&&event>=round&&event<=at+250&&
+    Number.isSafeInteger(event)&&event>=round&&event<=at&&
     at-event<=500&&finite(price)&&price>0&&finite(open)&&open>0;
   if(!currentOk){
    latestError='NO_FRESH_CURRENT_ROUND_OPEN_TICK';

@@ -7,7 +7,7 @@ import os,json,sqlite3,threading,time,urllib.request,logging
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse
 MODEL='FAST5_SPOT_MOMENTUM_V1'
-VERSION='FAST5_PREWARM120_5S_V4'
+VERSION='FAST5_REGIME_FLIP_GT5BPS_15M_V5'
 ROUND_MS=300000
 DB=os.environ.get('FAST5_STATS_DB','/var/lib/zl-prediction/fast5-stats/rounds.sqlite3')
 PORT=int(os.environ.get('FAST5_STATS_PORT','13047'))

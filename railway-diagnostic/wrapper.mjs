@@ -705,7 +705,7 @@ const clientJs = String.raw`(function(){
       // including after the trade API intentionally clears expired signals.
       // Never clear them to "-" from this legacy 2s poll in FAST5 mode.
       // Non-FAST5 trading retains the original server-driven rendering.
-      if(j.orderSignalModel!=='FAST5_SPOT_MOMENTUM_V1'){
+      if(j.orderSignalModel!=='FAST5_SPOT_MOMENTUM_V1'||(s.status==='LOCKED'&&s.round!=null)){
         text('round',s.round==null?'-':s.round);
         text('status',s.status==null?'-':s.status);
         text('direction',s.direction==null?'-':s.direction);

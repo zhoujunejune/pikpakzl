@@ -700,11 +700,18 @@ const clientJs = String.raw`(function(){
       html('switch',j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>');
       text('modeView',autoMode?'AUTO_CONFIRM':'MANUAL_CONFIRM');
       var s=j.signal||{};
-      text('round',s.round==null?'-':s.round);
-      text('status',s.status==null?'-':s.status);
-      text('direction',s.direction==null?'-':s.direction);
-      text('orderDirection',j.orderSignal==null?'-':j.orderSignal);
-      text('score',s.score==null?'-':Number(s.score).toFixed(2));
+      // A single DOM owner fixes the mobile flicker: FAST5's independent
+      // snapshot updater owns these five read-only tiles throughout the round,
+      // including after the trade API intentionally clears expired signals.
+      // Never clear them to "-" from this legacy 2s poll in FAST5 mode.
+      // Non-FAST5 trading retains the original server-driven rendering.
+      if(j.orderSignalModel!=='FAST5_SPOT_MOMENTUM_V1'){
+        text('round',s.round==null?'-':s.round);
+        text('status',s.status==null?'-':s.status);
+        text('direction',s.direction==null?'-':s.direction);
+        text('orderDirection',j.orderSignal==null?'-':j.orderSignal);
+        text('score',s.score==null?'-':Number(s.score).toFixed(2));
+      }
       text('amountView',j.amount==null?'-':j.amount);
       var amount=el('amount');
       if(amount&&document.activeElement!==amount&&j.amount!=null) amount.value=j.amount;
@@ -845,7 +852,7 @@ const clientJs = String.raw`(function(){
 
 const scriptPattern=/<script>[\s\S]*?<\/script>/;
 if(!scriptPattern.test(source)) throw new Error('INLINE_SCRIPT_NOT_FOUND');
-source=source.replace(scriptPattern,'<script src="/panel-client.js?v=9" defer></script>');
+source=source.replace(scriptPattern,'<script src="/panel-client.js?v=10" defer></script>');
 source=source.replace('加载中...','V8 页面已加载，等待状态...');
 
 const marker="  if (req.method === 'GET' && url.pathname === '/healthz') {";

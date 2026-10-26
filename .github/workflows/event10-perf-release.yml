@@ -1,0 +1,110 @@
+name: Deploy EVENT10 lightweight history and UI only (guarded)
+on:
+  push:
+    branches: [feature/event10-confidence-ui-only-20261026]
+    paths: [.github/workflows/event10-perf-release.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-event10-frontend-only
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate frontend, backward compatibility and protected deployment script
+        run: |
+          node --check event10-bot/server.mjs
+          python3 -m py_compile event10-bot/aliyun_perf_ui_only.py
+          node --test event10-bot/server.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/compact-evidence.test.mjs event10-bot/price-structure.test.mjs event10-bot/trade-stream-collector.test.mjs event10-bot/ui-layout.test.mjs event10-bot/chinese-display.test.mjs event10-bot/page-performance.test.mjs
+  deploy:
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Update EVENT10 HTTP service only through existing Alibaba Cloud Assistant
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feature/event10-confidence-ui-only-20261026'
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/event10-bot/aliyun_perf_ui_only.py" -o "$tmp/repair.py"
+          python3 -m py_compile "$tmp/repair.py"
+          python3 "$tmp/repair.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+            access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+            region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='event10-perf-ui-only',
+            type='RunShellScript',working_user='root',command_content=script,timeout=180)).body.invoke_id
+          complete=False
+          for _ in range(90):
+              time.sleep(2)
+              r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+                invoke_id=ident)).body.invocation_result
+              if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):continue
+              output=base64.b64decode(r.output or '').decode('utf8','replace')
+              for line in output.splitlines():
+                  if line.startswith('EVENT10_PERF_'):print(line,flush=True)
+                  if line=='EVENT10_PERF_DEPLOY_SUCCEEDED=true':complete=True
+              if str(r.invocation_status)!='Success' or int(r.exit_code)!=0 or not complete:
+                  raise RuntimeError('EVENT10_PERF_REMOTE_DEPLOY_FAILED_'+str(r.invocation_status))
+              break
+          if not complete:raise RuntimeError('EVENT10_PERF_DEPLOY_TIMEOUT')
+          OUTER
+  verify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify authenticated public EVENT10 page, lightweight history and unchanged V6
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request
+          pw=os.environ.get('ZL_PANEL_PASSWORD')
+          if not pw:raise RuntimeError('PANEL_AUTH_MISSING')
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          root='https://prediction.47-237-188-69.sslip.io/event10/'
+          def get(p):
+              req=urllib.request.Request(root+p,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=20) as r:
+                  assert r.status==200
+                  return r.read(2000000)
+          page=get('').decode('utf8')
+          state=json.loads(get('api/status'))
+          lite=json.loads(get('api/history-lite'))
+          full=json.loads(get('api/history'))
+          assert all(t in page for t in ('api/history-lite','setInterval(refreshHistory,30000)','id="quickConfidence"'))
+          assert state['configured'] is True and state['decisionReviewVersion']=='EVENT10_AI_PRICE_STRUCTURE_V6_20261024'
+          assert state['executionAvailable'] is False and state['autoTradingEnabled'] is False
+          assert lite['ok'] and full['ok']
+          assert len(lite['records'])==len(full['records'])
+          assert len(json.dumps(lite))<len(json.dumps(full))
+          assert all('compactEvidence' not in r for r in lite['records'])
+          print('EVENT10_PERF_PUBLIC_PAGE_HTTPS_200=true')
+          print('EVENT10_PERF_PUBLIC_SLIM_HISTORY_OK=true')
+          print('EVENT10_PERF_PUBLIC_HISTORY_PRESERVED='+str(len(full['records'])))
+          print('EVENT10_PERF_PUBLIC_V6_UNCHANGED=true')
+          print('EVENT10_PERF_PUBLIC_NO_ORDER_API=true')
+          PY

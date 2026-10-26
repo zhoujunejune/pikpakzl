@@ -71,55 +71,59 @@ class Journal:
     row.get('direction') in ('UP','DOWN') and isint(row.get('lockedAt')) and
     round_+100<=row['lockedAt']<round_+5000):
    with self.lock:
-   self.db.execute("""INSERT OR IGNORE INTO rounds
+    self.db.execute("""INSERT OR IGNORE INTO rounds
     (round,model,version,decision,locked_at,market_at,source,prewarm_only,decision_reason,first_seen_at)
     VALUES (?,?,?,?,?,?,?,?,?,?)""",(round_,MODEL,VERSION,row['direction'],row['lockedAt'],
     row.get('marketAt') if isint(row.get('marketAt')) else None,
     row.get('source'),int(row.get('prewarmOnly') is True),
     row.get('signalReason'),now))
-   self.db.commit()
+    self.db.commit()
    self.seen_rounds.discard(round_)
   elif elapsed>=5000 and round_ in self.seen_rounds:
    # Only mark WAIT when observed current round in its decision window and
    # FAST5 itself says unlocked. Never infer WAIT from old official rows.
    if x.get('locked') is False and row is None and x.get('latestError')=='OPEN_5S_DEADLINE_MISSED':
-    self.db.execute("""INSERT OR IGNORE INTO rounds
+    with self.lock:
+     self.db.execute("""INSERT OR IGNORE INTO rounds
       (round,model,version,decision,locked_at,first_seen_at,decision_reason)
       VALUES (?,?,?,?,?,?,?)""",
       (round_,MODEL,VERSION,'WAIT',None,now,'OPEN_5S_DEADLINE_MISSED'))
-    self.db.commit();self.seen_rounds.discard(round_)
+     self.db.commit()
+    self.seen_rounds.discard(round_)
   self.seen_rounds={r for r in self.seen_rounds if r>=round_-ROUND_MS}
  def settle(self):
   result=get('http://127.0.0.1:13001/api/round-stats')
   if result.get('ok') is not True or not isinstance(result.get('records'),list):
    raise RuntimeError('OFFICIAL_RECORDS_UNAVAILABLE')
   matches=0
-  for item in result['records']:
-   v=official(item)
-   if v is None:continue
-   round_,actual,settled_at,topic,digest=v
-   existing=self.db.execute('SELECT official_result,official_digest FROM rounds WHERE round=?',(round_,)).fetchone()
-   if existing is None:continue
-   if existing['official_result'] is not None and (
-    existing['official_result']!=actual or existing['official_digest']!=digest):
-    self.last_official_error='OFFICIAL_SETTLEMENT_CONFLICT_'+str(round_);continue
-   self.db.execute("""UPDATE rounds SET official_result=?,settled_at=?,official_topic=?,
-      official_digest=?,matched_at=? WHERE round=? AND official_result IS NULL""",
-      (actual,settled_at,topic,digest,ms(),round_))
-   matches+=1
-  self.db.commit()
+  with self.lock:
+   for item in result['records']:
+    v=official(item)
+    if v is None:continue
+    round_,actual,settled_at,topic,digest=v
+    existing=self.db.execute('SELECT official_result,official_digest FROM rounds WHERE round=?',(round_,)).fetchone()
+    if existing is None:continue
+    if existing['official_result'] is not None and (
+     existing['official_result']!=actual or existing['official_digest']!=digest):
+     self.last_official_error='OFFICIAL_SETTLEMENT_CONFLICT_'+str(round_);continue
+    self.db.execute("""UPDATE rounds SET official_result=?,settled_at=?,official_topic=?,
+       official_digest=?,matched_at=? WHERE round=? AND official_result IS NULL""",
+       (actual,settled_at,topic,digest,ms(),round_))
+    matches+=1
+   self.db.commit()
  def data(self):
-  rows=self.db.execute("""SELECT round,version,decision,locked_at,market_at,source,
-    prewarm_only,decision_reason,official_result,settled_at,official_topic
-    FROM rounds ORDER BY round DESC LIMIT 200""").fetchall()
-  sum_=self.db.execute("""SELECT COUNT(*) AS total,
-    SUM(CASE WHEN decision IN ('UP','DOWN') THEN 1 ELSE 0 END) AS signals,
-    SUM(CASE WHEN decision='WAIT' THEN 1 ELSE 0 END) AS waits,
-    SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result IS NOT NULL THEN 1 ELSE 0 END) AS settled,
-    SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result=decision THEN 1 ELSE 0 END) AS wins,
-    SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result IS NOT NULL AND official_result!=decision THEN 1 ELSE 0 END) AS losses,
-    SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result IS NULL THEN 1 ELSE 0 END) AS pending
-    FROM rounds""").fetchone()
+  with self.lock:
+   rows=self.db.execute("""SELECT round,version,decision,locked_at,market_at,source,
+     prewarm_only,decision_reason,official_result,settled_at,official_topic
+     FROM rounds ORDER BY round DESC LIMIT 200""").fetchall()
+   sum_=self.db.execute("""SELECT COUNT(*) AS total,
+     SUM(CASE WHEN decision IN ('UP','DOWN') THEN 1 ELSE 0 END) AS signals,
+     SUM(CASE WHEN decision='WAIT' THEN 1 ELSE 0 END) AS waits,
+     SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result IS NOT NULL THEN 1 ELSE 0 END) AS settled,
+     SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result=decision THEN 1 ELSE 0 END) AS wins,
+     SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result IS NOT NULL AND official_result!=decision THEN 1 ELSE 0 END) AS losses,
+     SUM(CASE WHEN decision IN ('UP','DOWN') AND official_result IS NULL THEN 1 ELSE 0 END) AS pending
+     FROM rounds""").fetchone()
   a={k:int(sum_[k] or 0) for k in sum_.keys()}
   a['accuracyPct']=round(100*a['wins']/a['settled'],2) if a['settled'] else None
   a['coveragePct']=round(100*a['signals']/a['total'],2) if a['total'] else None

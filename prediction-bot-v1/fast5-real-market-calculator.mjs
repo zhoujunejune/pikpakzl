@@ -1,8 +1,9 @@
 // FAST5 / PREWARM120-OPEN1 V2. Compute in the final 120 s of the prior 5m
 // round. Direction is available at 0.1-1 s when a fresh opening tick arrives.
-// Prewarm-only forecasts are DISPLAY ONLY; never fabricate an executable tick.
+// Validated 120-second prewarm can lock without a fresh current-round spot tick.
+// It is explicitly tagged PREWARM_ONLY; execution still needs a real exchange quote.
 export const FAST_MODEL_ID='FAST5_SPOT_MOMENTUM_V1';
-export const STRATEGY_VERSION='FAST5_PREWARM120_OPEN1_V2';
+export const STRATEGY_VERSION='FAST5_PREWARM120_OPEN1_V3';
 export const ROUND_MS=300000,PREWARM_MS=120000;
 export const EARLIEST_SIGNAL_MS=100,SIGNAL_END_MS=1000;
 const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
@@ -87,13 +88,23 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
   const currentOk=rawValid&&live.roundStartMs===round&&
     Number.isSafeInteger(event)&&event>=round&&event<=at&&
     at-event<=500&&finite(price)&&price>0&&finite(open)&&open>0;
-  if(!currentOk){
-   latestError='NO_FRESH_CURRENT_ROUND_OPEN_TICK';
+  // The collector can publish the current round marker before its first fresh tick.
+  // Accept this authentic prior tick only as a PREWARM_ONLY source, never
+  // mislabel it as a current-round opening-price comparison.
+  const prewarmOnly=!currentOk&&market?.ok===true&&market?.readOnly===true&&
+    market?.symbol==='BTCUSDT'&&live.marketFeedConnected===true&&
+    live.roundStartMs===round&&Number.isSafeInteger(event)&&
+    event>=round-3000&&event<=at+250&&at-event<=3000&&
+    finite(price)&&price>0&&prewarm.spanMs>=105000&&
+    Number.isSafeInteger(prewarm.samples)&&prewarm.samples>=2;
+  if(!currentOk&&!prewarmOnly){
+   latestError='NO_RECENT_MARKET_OR_120S_PREWARM';
    return {ok:true,locked:false,reason:latestError,
      provisionalDirection,signal:null};
   }
-  const delta=fix(bps(price,open)),trendSign=sign(delta);
-  const sourceReason=trendSign===0?'PREWARM120_TIEBREAK':'CURRENT_OPEN_PRICE_DELTA';
+  const delta=currentOk?fix(bps(price,open)):0,trendSign=sign(delta);
+  const sourceReason=prewarmOnly?'PREWARM120_ONLY_VERIFIED_PRIOR_DATA':
+    trendSign===0?'PREWARM120_TIEBREAK':'CURRENT_OPEN_PRICE_DELTA';
   const dir=direction(trendSign||priorSign);
   if(elapsed>SIGNAL_END_MS){
    latestError='OPEN_1S_DEADLINE_MISSED';
@@ -105,16 +116,20 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
    round,direction:dir,status:'LOCKED',lockedAt:at,marketAt:event,
    readOnly:true,orders:false,productionIntegration:false,
    source:'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',
-   decisionMethod:'PREWARM120_REAL_TICKS_OR_CLOSED_1M_PLUS_ROUND_OPEN_1S',
+   decisionMethod:prewarmOnly?'PREWARM120_PRIOR_TICK_DIRECTION_1S':
+    'PREWARM120_REAL_TICKS_OR_CLOSED_1M_PLUS_ROUND_OPEN_1S',
    prewarmSource:prewarm.source,prewarmMomentumBps:momentum,
    prewarmSamples:prewarm.samples,prewarmSpanMs:prewarm.spanMs,
-   roundOpenPrice:open,openingObservedPrice:price,
-   fromSpotOpenBps:delta,scoreBps:fix(Math.abs(delta)>0?delta:momentum),
+   roundOpenPrice:currentOk?open:null,openingObservedPrice:currentOk?price:null,
+   currentRoundQuoteVerified:currentOk,prewarmOnly,
+   fromSpotOpenBps:currentOk?delta:null,
+   fromPriorTickAgeMs:prewarmOnly?at-event:null,
+   scoreBps:fix(Math.abs(delta)>0?delta:momentum),
    signalReason:sourceReason,weakTie:delta===0&&priorSign===0,
    requiresDeepSeek:false,analysisCalls:0,samples:1,
    confidence:null,confidenceIsCalibrated:false,
    officialOracleLiveQuoteUsed:false,
-   note:'This is Binance spot market analysis, not a Chainlink-settled probability; early direction has unverified accuracy.'
+   note:prewarmOnly?'PREWARM_ONLY: no verified current-round spot price; direction is prior 120s momentum, not the opening price and not a proven edge.':'Opening spot price compared with current BTC spot, not Binance Prediction settlement oracle.'
   };
   latestError=null;
   return {ok:true,locked:true,signal:locked};

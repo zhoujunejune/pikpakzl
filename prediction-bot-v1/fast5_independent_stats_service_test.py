@@ -56,6 +56,20 @@ class Stats(unittest.TestCase):
    self.j.settle()
   a=self.j.data()['summary']
   self.assertEqual(a['settled'],0)
+ def test_v6_filtered_large_regime_wait_is_saved_once_and_excluded_from_winrate(self):
+  with patch.object(m,'ms',return_value=R+300):
+   with patch.object(m,'get',return_value=signal(R+300)):
+    self.j.snapshot()
+  blocked=signal(R+5300)
+  blocked['latestError']='REGIME_GT5_BPS_WAIT'
+  with patch.object(m,'ms',return_value=R+5300):
+   with patch.object(m,'get',return_value=blocked):
+    self.j.snapshot();self.j.snapshot()
+  result=self.j.data()
+  self.assertEqual(result['summary']['waits'],1)
+  self.assertEqual(result['summary']['signals'],0)
+  self.assertEqual(result['summary']['settled'],0)
+  self.assertEqual(result['rows'][0]['decision_reason'],'REGIME_GT5_BPS_WAIT')
  def test_unobserved_round_not_falsely_labeled_wait(self):
   with patch.object(m,'ms',return_value=R+160000),patch.object(m,'get',return_value=signal(R+160000)):
    self.j.snapshot()

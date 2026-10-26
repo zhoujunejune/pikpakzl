@@ -1,4 +1,4 @@
-name: Repair FAST5 live prediction panel without changing trading
+name: Restore FAST5 independent stats card without changing trading
 on:
   push:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
@@ -23,7 +23,7 @@ jobs:
         run: |
           node --check prediction-bot-v1/fast5-dashboard-inject.mjs
           node --test prediction-bot-v1/fast5-dashboard-inject.test.mjs
-          python -m py_compile prediction-bot-v1/fast5_ui_repair.py
+          python -m py_compile prediction-bot-v1/aliyun_fast5_stats_ui_restore.py
   deploy:
     needs: [test]
     runs-on: ubuntu-latest
@@ -48,23 +48,23 @@ jobs:
           set -Eeuo pipefail
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
-          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/fast5_ui_repair.py" -o "$tmp/repair.py"
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/aliyun_fast5_stats_ui_restore.py" -o "$tmp/repair.py"
           python3 -m py_compile "$tmp/repair.py"
           python3 "$tmp/repair.py" COMMIT_SHA
           """.replace('COMMIT_SHA',sha)
           c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
-          ident=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-readonly-ui-repair',type='RunShellScript',working_user='root',command_content=script,timeout=200)).body.invoke_id
+          ident=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-stats-readonly-ui-restore',type='RunShellScript',working_user='root',command_content=script,timeout=200)).body.invoke_id
           for _ in range(108):
            time.sleep(2)
            x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
            if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
             try: out=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
             except Exception: out='REMOTE_OUTPUT_DECODE_FAILED'
-            print('FAST5_UI_REMOTE',x.invocation_status,'EXIT',x.exit_code)
+            print('FAST5_STATS_REMOTE',x.invocation_status,'EXIT',x.exit_code)
             print(out[-6000:])
-            if x.invocation_status!='Success' or int(x.exit_code)!=0:raise RuntimeError('FAST5_UI_DEPLOY_FAILED')
+            if x.invocation_status!='Success' or int(x.exit_code)!=0:raise RuntimeError('FAST5_STATS_DEPLOY_FAILED')
             break
-          else:raise RuntimeError('FAST5_UI_DEPLOY_TIMEOUT')
+          else:raise RuntimeError('FAST5_STATS_DEPLOY_TIMEOUT')
           OUTER
   verify:
     needs: [deploy]
@@ -86,6 +86,9 @@ jobs:
           status,body=get('/')
           html=body.decode('utf8','replace')
           assert status==200 and 'id="zlFast5Card"' in html
+          assert 'FAST5 独立统计面板' in html
+          assert 'zlF5OfficialRows' in html
+          assert '/api/round-stats' in html
           assert 'id="zlDeepSeek40Card"' not in html
           assert '/api/fast5-live-status' in html
           status,body=get('/api/fast5-live-status')
@@ -95,8 +98,12 @@ jobs:
           trade=json.loads(body)
           assert status==200 and trade.get('orderSignalModel')=='FAST5_SPOT_MOMENTUM_V1'
           assert trade.get('enabled') is False
-          print('FAST5_UI_PUBLIC_FIXED=true')
-          print('FAST5_UI_REAL_MARKET_STATE_AVAILABLE=true')
-          print('FAST5_UI_RETIRED_DEEPSEEK_HIDDEN=true')
-          print('FAST5_UI_AUTO_FOLLOW_UNCHANGED_OFF=true')
+          assert s.get('strategyVersion')=='FAST5_PREWARM120_5S_V4'
+          status,raw=get('/api/round-stats')
+          official=json.loads(raw)
+          assert status==200 and official.get('ok') is True and isinstance(official.get('records'),list)
+          print('FAST5_STATS_PUBLIC_FIXED=true')
+          print('FAST5_STATS_REAL_MARKET_STATE_AVAILABLE=true')
+          print('FAST5_STATS_RETIRED_DEEPSEEK_HIDDEN=true')
+          print('FAST5_STATS_AUTO_FOLLOW_UNCHANGED_OFF=true')
           PY

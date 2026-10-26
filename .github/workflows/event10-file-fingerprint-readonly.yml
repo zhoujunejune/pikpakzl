@@ -1,0 +1,72 @@
+name: EVENT10 deployed file compatibility fingerprint READ ONLY
+on:
+  push:
+    branches: [audit/event10-live-page-latency-20261026]
+    paths: [.github/workflows/event10-file-fingerprint-readonly.yml]
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Compare local running sources with pinned commit and check active analysis
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'RUNNER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          cmd="""#!/bin/bash
+          set -eu
+          python3 - <<'REMOTE'
+          import json,hashlib,urllib.request,subprocess
+          from pathlib import Path
+          sha='beeb39f0b1b1af5c9a5e069d6be2624e173bf5a0'
+          out={}
+          for name in ('panel.html','server.mjs','manual-engine.mjs'):
+              file=Path('/opt/zl-event10')/name
+              data=file.read_bytes() if file.exists() else b''
+              info={'liveBytes':len(data),'liveSha256':hashlib.sha256(data).hexdigest()[:16]}
+              try:
+                  url='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/event10-bot/'+name
+                  with urllib.request.urlopen(url,timeout=13) as r:reference=r.read()
+                  info['pinnedBytes']=len(reference)
+                  info['matchesPinned']=reference==data
+              except Exception as e:info['referenceError']=type(e).__name__
+              info['sourceMarkers']={k:k in data.decode('utf-8','replace') for k in
+               ('setInterval(refresh,4000)','rows.replaceChildren()','/api/history','/api/history-lite','AI主观置信度')}
+              out[name]=info
+          try:
+              with urllib.request.urlopen('http://127.0.0.1:13020/api/status',timeout=5) as r:state=json.load(r)
+              out['runtime']={k:state.get(k) for k in ('configured','busyStart','busySettle','thinkingMode','reasoningEffort','decisionReviewVersion','providerModel')}
+              out['runtime']['active']=bool(state.get('active'))
+              out['runtime']['lastStatus']=(state.get('lastSession') or {}).get('status')
+          except Exception as e:out['runtimeError']=type(e).__name__
+          print('EVENT10_LIVE_FILES='+json.dumps(out,ensure_ascii=False,separators=(',',':')))
+          REMOTE
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+           access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+           region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+           instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+           name='event10-file-baseline-readonly',type='RunShellScript',
+           working_user='root',command_content=cmd,timeout=80)).body.invoke_id
+          done=False
+          for _ in range(40):
+              time.sleep(2)
+              r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+              if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):continue
+              output=base64.b64decode(r.output or '').decode('utf8','replace')
+              for line in output.splitlines():
+                  if line.startswith('EVENT10_LIVE_FILES='):print(line);done=True
+              if str(r.invocation_status)!='Success' or int(r.exit_code)!=0 or not done:raise RuntimeError('EVENT10_BASELINE_FAIL')
+              break
+          if not done:raise RuntimeError('EVENT10_BASELINE_TIMEOUT')
+          RUNNER

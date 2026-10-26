@@ -104,7 +104,7 @@ def main():
       "REGIME_VERSION" not in c or "classifyPreRoundRegime" not in c):
    raise RuntimeError('INCORRECT_V6_CLASSIFIER')
   if (NEW not in w or 'FAST5_INDEPENDENT_OFFICIAL_ROUND_LEDGER_V1' not in w or
-      'FAST5独立账本' not in u or 'regimeMagnitudeBps' not in u or
+      'V6仅统计' not in u or 'regimeMagnitudeBps' not in u or
       '/api/fast5-round-stats' not in u):
    raise RuntimeError('V6_UI_OR_LEDGER_WRONG')
   # Recheck before any filesystem mutation.
@@ -154,7 +154,7 @@ def main():
        l.get('summary',{}).get('total',999)<=1 and
        all(x.get('version')==NEW for x in l.get('rows',[])) and
        d.get('revision')==revision and (d.get('modes') or {}).get(MODEL)==old_modes and
-       '波动分层V5' in page and 'id="zlF5HistoryScroll"' in page and
+       '小幅波动专用V6' in page and 'id="zlF5HistoryScroll"' in page and
        '/api/fast5-round-stats' in page and l.get('health',{}).get('signalError') is None):
       valid=True;break
     except Exception:pass
@@ -164,7 +164,7 @@ def main():
      raise RuntimeError('SERVICE_NOT_ACTIVE_AFTER_DEPLOY_'+unit)
    print('V6_DEPLOY_SUCCESS=true',flush=True)
    print('V6_PRODUCTION_STRATEGY='+NEW,flush=True)
-   print('V6_15M_REGIME_RULE=SMALL_LE_5_BPS_KEEP_OTHER_FLIP',flush=True)
+   print('V6_15M_REGIME_RULE=SMALL_LE_5_BPS_SIGNAL_GT5_WAIT',flush=True)
    print('V6_DIRECTION_UNCHANGED='+json.dumps(old_modes),flush=True)
    print('V6_STATS_PREVIOUS='+json.dumps(oldstats.get('summary',{})),flush=True)
    print('V6_STATS_RESTARTED='+json.dumps(l.get('summary',{})),flush=True)

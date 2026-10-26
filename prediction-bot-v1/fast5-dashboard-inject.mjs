@@ -22,10 +22,10 @@ const CARD=[
 '<div class="kv"><div class="k">FAST5已结算</div><div class="v" id="zlF5StatSettled">--</div></div>',
 '<div class="kv"><div class="k">FAST5命中 / 失败</div><div class="v" id="zlF5StatWL">--</div></div>',
 '</div>',
-'<div class="muted" id="zlF5StatsNote">仅使用FAST5自身预先锁定的信号和币安官方结算核对。旧模型数据不混入。</div>',
-'<div class="k" style="margin-top:16px">最近官方结算（仅供核对，不代表FAST5胜率）</div>',
+'<div class="muted" id="zlF5StatsNote">FAST5独立账本按5分钟轮次时间对齐币安官方结果，旧模型数据不混入。</div>',
+'<div class="k" style="margin-top:16px">FAST5逐轮信号与官方结算</div>',
 '<div style="overflow-x:auto;margin-top:9px"><table style="width:100%;font-size:13px;border-collapse:collapse">',
-'<thead><tr><th>轮次</th><th>官方结果</th><th>FAST5匹配</th></tr></thead>',
+'<thead><tr><th>轮次</th><th>FAST5信号</th><th>官方结果</th><th>判定</th></tr></thead>',
 '<tbody id="zlF5OfficialRows"><tr><td colspan="3">正在读取...</td></tr></tbody></table></div>',
 '<div class="muted" id="zlF5Error" style="margin-top:8px"></div>',
 '</section>'
@@ -86,50 +86,44 @@ function htmlTime(ts){
 }
 async function loadStats(){
  try{
-  var result=await json('/api/round-stats');
-  if(result.ok!==true||!Array.isArray(result.records))throw Error('OFFICIAL_SETTLEMENT_UNAVAILABLE');
-  var rows=result.records;
-  var own=rows.filter(function(x){return x&&[
-   x.productionModel,x.productionModelVersion,x.productionSource
-  ].includes('FAST5_SPOT_MOMENTUM_V1')&&['UP','DOWN'].includes(x.productionPrediction)});
-  var wins=own.filter(function(x){return ['UP','DOWN'].includes(x.productionActual)&&
-   x.settledAt!=null&&x.officialSettlementAudit&&
-   x.productionActual===x.productionPrediction});
-  var settled=own.filter(function(x){return ['UP','DOWN'].includes(x.productionActual)&&
-   x.settledAt!=null&&x.officialSettlementAudit});
-  put('zlF5StatSignals',own.length?own.length:'--');
-  put('zlF5StatWait','--');
-  put('zlF5StatSettled',settled.length?settled.length:'--');
-  put('zlF5StatWL',settled.length?wins.length+' / '+(settled.length-wins.length):'--');
-  put('zlF5StatAccuracy',settled.length?
-   'FAST5可核验命中率 '+(100*wins.length/settled.length).toFixed(2)+'%':
-   'FAST5胜率：暂无独立可核验样本');
-  put('zlF5StatsNote',own.length?
-   '仅为接口返回窗口内的FAST5独立记录，不与旧模型合并。':
-   '官方接口目前未包含FAST5逐轮信号账本；数据缺失显示--，不冒用其他模型的胜率。');
+  var result=await json('/api/fast5-round-stats');
+  if(result.ok!==true||result.model!=='FAST5_SPOT_MOMENTUM_V1'||
+     result.schema!=='FAST5_INDEPENDENT_OFFICIAL_ROUND_LEDGER_V1'||
+     !Array.isArray(result.rows)||!result.summary)throw Error('FAST5_INDEPENDENT_LEDGER_UNAVAILABLE');
+  var a=result.summary;
+  put('zlF5StatSignals',a.signals);
+  put('zlF5StatWait',a.waits);
+  put('zlF5StatSettled',a.settled);
+  put('zlF5StatWL',a.wins+' / '+a.losses);
+  put('zlF5StatAccuracy',a.settled>0?
+    'FAST5命中率 '+Number(a.accuracyPct).toFixed(2)+'%':
+    'FAST5胜率：等待首批独立官方结算');
+  put('zlF5StatsNote','自独立账本启用后累计 · 已记录 '+a.total+
+    '轮 · 尚待结算 '+a.pending+' · 仅对已锁定UP/DOWN与官方结算匹配；WAIT不计入胜率。');
   var body=el('zlF5OfficialRows');
   if(body){
    body.replaceChildren();
-   var official=rows.filter(function(x){return x&&
-    Number.isSafeInteger(x.roundStartMs)&&
-    ['UP','DOWN'].includes(x.productionActual)&&
-    x.officialSettlementAudit&&x.settledAt!=null}).slice(0,15);
-   if(!official.length){
-    var empty=document.createElement('tr'),td=document.createElement('td');
-    td.colSpan=3;td.textContent='暂无可核对的官方结算';empty.appendChild(td);body.appendChild(empty);
+   if(!result.rows.length){
+    var blank=document.createElement('tr'),cell=document.createElement('td');
+    cell.colSpan=4;cell.textContent='FAST5独立账本已启用，等待首个完整轮次';
+    blank.appendChild(cell);body.appendChild(blank);
    }
-   official.forEach(function(x){
-    var tr=document.createElement('tr');
-    [htmlTime(x.roundStartMs),label(x.productionActual),
-     own.some(function(y){return y.roundStartMs===x.roundStartMs})?'已有FAST5记录':'未关联FAST5']
-     .forEach(function(value){var td=document.createElement('td');td.textContent=value;
-      td.style.padding='8px 6px';td.style.borderBottom='1px solid #344155';tr.appendChild(td)});
+   result.rows.slice(0,30).forEach(function(x){
+    var tr=document.createElement('tr'),outcome=x.official_result;
+    var verdict=x.decision==='WAIT'?'WAIT（不计胜率）':
+     !['UP','DOWN'].includes(outcome)?'待官方结算':
+     x.decision===outcome?'命中':'未命中';
+    [htmlTime(x.round),x.decision==='WAIT'?'WAIT':label(x.decision),
+     ['UP','DOWN'].includes(outcome)?label(outcome):'待结算',verdict]
+    .forEach(function(value){var td=document.createElement('td');td.textContent=value;
+     td.style.padding='8px 5px';td.style.borderBottom='1px solid #344155';
+     tr.appendChild(td)});
     body.appendChild(tr);
    });
   }
  }catch(e){
-  put('zlF5StatAccuracy','官方结算接口暂不可用');
-  put('zlF5StatsNote','读取失败：'+String(e.message||e).slice(0,120));
+  put('zlF5StatAccuracy','FAST5独立统计服务不可用');
+  put('zlF5StatsNote','统计接口异常：'+String(e.message||e).slice(0,120));
  }
 }
 void loadStats();setInterval(loadStats,30000);

@@ -1,0 +1,137 @@
+name: Audit FAST5 trend vs range winrate from settled real rounds (read only)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-trend-regime-winrate-audit-20261026.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Analyze actual FAST5 original signals against official settlements and historical BTC spot trend
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import urllib.request,collections,json,statistics,math,time,datetime
+          def read(port,p):
+           with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,p),timeout=12) as r:return json.load(r)
+          f=read(13047,'/api/round-stats')
+          market=read(13003,'/api/shadow-market-data')
+          official=read(13001,'/api/round-stats')
+          trade=read(13001,'/api/direction-mode')
+          allrows=f.get('rows') or []
+          settled=[x for x in allrows if x.get('decision') in ('UP','DOWN') and x.get('official_result') in ('UP','DOWN')]
+          print('REGIME_META',json.dumps({
+             'generatedAt':f.get('generatedAt'),'model':f.get('model'),
+             'version':f.get('strategyVersion'),'stats':f.get('summary'),
+             'ledgerRowsReturned':len(allrows),'settledRowsReturned':len(settled),
+             'firstRound':min((x['round'] for x in settled),default=None),
+             'lastRound':max((x['round'] for x in settled),default=None),
+             'directionConfig':(trade.get('modes') or {}).get('FAST5_SPOT_MOMENTUM_V1'),
+             'latestStatsHealth':f.get('health')},ensure_ascii=False))
+          rows=((market.get('candles') or {}).get('1m') or {}).get('rows') or []
+          print('REGIME_MARKET_META',json.dumps({
+            'marketOk':market.get('ok'),'symbol':market.get('symbol'),
+            'num1m':len(rows),'firstBar':{k:rows[0].get(k) for k in ('startMs','endMs','open','close','closed')} if rows else None,
+            'lastBar':{k:rows[-1].get(k) for k in ('startMs','endMs','open','close','closed')} if rows else None},ensure_ascii=False,default=str))
+          candles={}
+          for c in rows:
+           try:
+            t=int(c.get('startMs'));op=float(c.get('open'));cl=float(c.get('close'))
+            if op>0 and cl>0 and c.get('closed') is True and (c.get('endMs')==t+59999 or c.get('endMs') is None):
+             candles[t]=(op,cl)
+           except Exception:pass
+          allactual={}
+          for rec in official.get('records') or []:
+           t=rec.get('roundStartMs')
+           audit=rec.get('officialSettlementAudit')
+           if(type(t) is int and t%300000==0 and rec.get('productionActual') in ('UP','DOWN')
+              and type(rec.get('settledAt')) is int and isinstance(audit,dict)
+              and audit.get('topicStartDate')==t and audit.get('topicEndDate')==t+300000):
+            allactual[t]=rec['productionActual']
+          print('REGIME_OFFICIAL_META',json.dumps({
+            'records':len(official.get('records') or []),'verifiedRoundOutcomes':len(allactual),
+            'earliest':min(allactual,default=None),'latest':max(allactual,default=None)},ensure_ascii=False))
+          def classify15(t):
+           seq=[candles.get(t-i*60000) for i in range(15,0,-1)]
+           if any(x is None for x in seq):return None
+           prices=[seq[0][0]]+[x[1] for x in seq]
+           logmove=[math.log(prices[i]/prices[i-1]) for i in range(1,len(prices))]
+           net=sum(logmove);rough=sum(abs(v) for v in logmove)
+           efficiency=abs(net)/rough if rough>0 else 0
+           change=10000*net
+           if abs(change)>=12 and efficiency>=0.60:regime='STRONG_TREND'
+           elif abs(change)<=5 or efficiency<=0.35:regime='CHOP'
+           else:regime='MIXED'
+           return (regime,change,efficiency)
+          def pastStreak(t):
+           seq=[allactual.get(t-i*300000) for i in (4,3,2,1)]
+           if any(v is None for v in seq):return None
+           if len(set(seq[1:]))==1:return 'PREV3_SAME'
+           reversals=sum(a!=b for a,b in zip(seq,seq[1:]))
+           if reversals>=2:return 'PREV4_ALTERNATING'
+           return 'PREV4_MIXED'
+          def rates(group):
+           n=len(group)
+           wins=sum(x['decision']==x['official_result'] for x in group)
+           return {'n':n,'wins':wins,'losses':n-wins,'winRatePct':round(wins/n*100,2) if n else None,
+             'reversePct':round((n-wins)/n*100,2) if n else None}
+          print('REGIME_BASELINE',json.dumps(rates(settled)))
+          byreg=collections.defaultdict(list);bystreak=collections.defaultdict(list)
+          bydir=collections.defaultdict(list);bysign=collections.defaultdict(list)
+          byer=collections.defaultdict(list);byabs=collections.defaultdict(list)
+          aligned=[];missing=[]
+          for x in settled:
+           t=x['round'];pred=x['decision'];hit=pred==x['official_result']
+           bydir[pred].append(x)
+           r=classify15(t)
+           if r is None:missing.append(t)
+           else:
+            group,change,er=r
+            byreg[group].append(x)
+            byer['EFF_HIGH_60+' if er>=.6 else 'EFF_LOW_35-' if er<=.35 else 'EFF_MID'].append(x)
+            byabs['MOVE_HIGH_12bps+' if abs(change)>=12 else 'MOVE_LOW_5bps-' if abs(change)<=5 else 'MOVE_MID'].append(x)
+            bysign['UP_15MIN' if change>0 else 'DOWN_15MIN' if change<0 else 'FLAT_15MIN'].append(x)
+            aligned.append({'r':t,'signal':pred,'actual':x['official_result'],'hit':int(hit),
+              'regime':group,'trend15bps':round(change,2),'eff15':round(er,3),
+              'prewarmOnly':x.get('prewarm_only'),'lockLagMs':x.get('locked_at')-t if type(x.get('locked_at')) is int else None})
+           st=pastStreak(t)
+           if st:bystreak[st].append(x)
+          for name,groups in [('REGIME_15M',byreg),('REGIME_STREAK',bystreak),('REGIME_DIRECTION',bydir),
+                              ('REGIME_EFFICIENCY',byer),('REGIME_MOVE_SIZE',byabs),('REGIME_15M_SIGN',bysign)]:
+           print(name,json.dumps({k:rates(v) for k,v in sorted(groups.items())},ensure_ascii=False))
+          print('REGIME_MATCH_COUNT',json.dumps({'matched15m':len(aligned),'missing15m':len(missing),
+            'missingFirst':missing[:6],'past4Coverage':sum(len(z) for z in bystreak.values())},ensure_ascii=False))
+          # A complete, compact exact summary from the latest 100 aligned rounds
+          print('REGIME_ROUND_DETAIL',json.dumps(aligned[-100:],ensure_ascii=False,separators=(',',':')))
+          INNER
+          """
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          iid=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-trend-regime-actual-rounds-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=135)).body.invoke_id
+          for _ in range(83):
+           time.sleep(2)
+           result=client.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=iid)).body.invocation_result
+           if result and str(result.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('REGIME_AUDIT_REMOTE',result.invocation_status,'EXIT',result.exit_code)
+            try:
+             content=base64.b64decode(result.output or '',validate=True).decode('utf8','replace')
+             print(content[-27000:])
+            except Exception as exc:print('REGIME_AUDIT_OUTPUT_ERROR',str(exc)[:200])
+            if int(result.exit_code)!=0:raise RuntimeError('FAST5_TREND_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('FAST5_TREND_AUDIT_TIMEOUT')
+          OUTER

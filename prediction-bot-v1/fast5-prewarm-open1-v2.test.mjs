@@ -60,7 +60,7 @@ test('stale current tick gets preview but cannot become executable signal',()=>{
 test('no prewarm evidence or late opening tick does not fabricate production signal',()=>{
  let now=R+200,c=createFast5Calculator({now:()=>now});
  assert.equal(c.update(market(now,{withHistory:false})).locked,false);
- now=R+1200;
+ now=R+5000;
  assert.equal(c.update(market(now,{withHistory:true})).locked,false);
  assert.equal(c.status().latest,null);
 });

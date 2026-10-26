@@ -4,25 +4,25 @@ const OLD_CARD='<section class="c" id="roundResultsOnlyCard" style="margin:14px 
 const CARD=[
 '<section class="c" id="zlFast5Card" style="margin:14px 0">',
 '<div class="k">5分钟预测 · FAST5 本地实时行情模型</div>',
-'<div class="big" id="zlF5Main" style="margin:9px 0">读取FAST5生产信号中...</div>',
-'<div class="muted" id="zlF5Timeline">上一轮倒数120秒预分析 → 本轮0.1～5秒锁定 → 超过5秒未锁定则WAIT</div>',
+'<div class="big" id="zlF5Main" style="margin:9px 0;min-height:2.6em;font-variant-numeric:tabular-nums">读取FAST5生产信号中...</div>',
+'<div class="muted" id="zlF5Timeline" style="min-height:3.1em;font-variant-numeric:tabular-nums">上一轮倒数120秒预分析 → 本轮0.1～5秒锁定 → 超过5秒未锁定则WAIT</div>',
 '<div class="grid" style="margin:12px 0">',
 '<div class="kv"><div class="k">当前生产模型</div><div class="v" id="zlF5Model">--</div></div>',
 '<div class="kv"><div class="k">最新信号 / 锁定时刻</div><div class="v" id="zlF5Lock">--</div></div>',
 '<div class="kv"><div class="k">实时行情更新延迟</div><div class="v" id="zlF5Age">--</div></div>',
 '<div class="kv"><div class="k">实盘自动跟随</div><div class="v" id="zlF5Follow">--</div></div>',
 '</div>',
-'<div class="muted" id="zlF5Reason">核对行情数据...</div>',
-'<div class="muted" id="zlF5Meta" style="margin-top:10px">FAST5自行计算行情，不调用DeepSeek。信号出现不等于订单提交或成交。</div>',
+'<div class="muted" id="zlF5Reason" style="min-height:2.8em">核对行情数据...</div>',
+'<div class="muted" id="zlF5Meta" style="margin-top:10px;min-height:2.6em">FAST5自行计算行情，不调用DeepSeek。信号出现不等于订单提交或成交。</div>',
 '<div class="k" style="margin-top:16px">FAST5 下单方向开关</div>',
 '<div class="muted" style="margin-top:5px">只改变最终下单方向，不翻转FAST5原始信号、官方结算和胜率统计。设置成功后下一轮生效。</div>',
 '<div style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0">',
 '<button type="button" id="zlF5Forward" disabled style="padding:11px 15px;min-width:112px;border:1px solid #75849a;border-radius:9px;background:#243047;color:#fff">正向下单</button>',
 '<button type="button" id="zlF5Inverse" disabled style="padding:11px 15px;min-width:112px;border:1px solid #75849a;border-radius:9px;background:#243047;color:#fff">反向下单</button>',
 '</div>',
-'<div class="muted" id="zlF5DirState">下单方向配置读取中...</div>',
+'<div class="muted" id="zlF5DirState" style="min-height:2.3em">下单方向配置读取中...</div>',
 '<div class="muted" id="zlF5DirExample" style="margin-top:7px">正向：UP买UP，DOWN买DOWN；反向：UP买DOWN，DOWN买UP。</div>',
-'<div class="muted" id="zlF5DirMessage" role="status" aria-live="polite" style="margin-top:8px"></div>',
+'<div class="muted" id="zlF5DirMessage" role="status" aria-live="polite" style="margin-top:8px;min-height:2.6em"></div>',
 '<div class="k" style="margin-top:16px">FAST5 独立统计面板</div>',
 '<div class="big" id="zlF5StatAccuracy" style="margin:8px 0">正在核对官方结算...</div>',
 '<div class="grid" style="margin:12px 0">',
@@ -33,16 +33,18 @@ const CARD=[
 '</div>',
 '<div class="muted" id="zlF5StatsNote">FAST5独立账本按5分钟轮次时间对齐币安官方结果，旧模型数据不混入。</div>',
 '<div class="k" style="margin-top:16px">FAST5逐轮信号与官方结算</div>',
-'<div style="overflow-x:auto;margin-top:9px"><table style="width:100%;font-size:13px;border-collapse:collapse">',
-'<thead><tr><th>轮次</th><th>FAST5信号</th><th>官方结果</th><th>判定</th></tr></thead>',
-'<tbody id="zlF5OfficialRows"><tr><td colspan="3">正在读取...</td></tr></tbody></table></div>',
+'<div class="muted" style="margin-top:5px">以下明细在框内上下滑动查看，整页高度保持固定；实时胜率在上方。</div>',
+'<div id="zlF5HistoryScroll" tabindex="0" role="region" aria-label="FAST5历史轮次，可在区域内上下滚动" style="height:300px;max-height:300px;min-height:300px;overflow-y:auto;overflow-x:auto;overscroll-behavior:contain;overflow-anchor:none;scrollbar-gutter:stable;margin-top:9px;border:1px solid #344155;border-radius:9px;position:relative">',
+'<table id="zlF5HistoryTable" style="width:100%;min-width:300px;table-layout:fixed;font-size:12px;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums">',
+'<thead style="position:sticky;top:0;z-index:2;background:#182033"><tr><th style="width:27%;padding:9px 4px">轮次</th><th style="width:25%;padding:9px 4px">FAST5信号</th><th style="width:25%;padding:9px 4px">官方结果</th><th style="width:23%;padding:9px 4px">判定</th></tr></thead>',
+'<tbody id="zlF5OfficialRows"><tr><td colspan="4">正在读取...</td></tr></tbody></table></div>',
 '<div class="muted" id="zlF5Error" style="margin-top:8px"></div>',
 '</section>'
 ].join('');
 const SCRIPT=`<script>(function(){
 'use strict';
 var el=function(id){return document.getElementById(id)};
-var put=function(id,v){var x=el(id);if(x)x.textContent=String(v)};
+var put=function(id,v){var x=el(id),next=String(v);if(x&&x.textContent!==next)x.textContent=next};
 var label=function(x){return x==='UP'?'UP（涨）':x==='DOWN'?'DOWN（跌）':'--'};
 async function json(url){
  var r=await fetch(url+'?t='+Date.now(),{cache:'no-store'});
@@ -79,7 +81,10 @@ function renderTradeTilesSnapshot(state,trade,now,round,signal){
   put('score','--');
  }
 }
+var liveLoadPending=false;
 async function load(){
+ if(liveLoadPending||document.hidden)return;
+ liveLoadPending=true;
  try{
   var values=await Promise.all([json('/api/fast5-live-status'),json('/api/status')]);
   var s=values[0],t=values[1];
@@ -118,13 +123,16 @@ async function load(){
  }catch(err){
   put('zlF5Main','FAST5生产状态暂无法读取');
   put('zlF5Error','状态接口异常：'+String(err.message||err).slice(0,130));
- }
+ }finally{liveLoadPending=false}
 }
 function htmlTime(ts){
  try{return new Date(ts).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
  catch{return '--'}
 }
+var statsLoadPending=false,statsRowsFingerprint='';
 async function loadStats(){
+ if(statsLoadPending||document.hidden)return;
+ statsLoadPending=true;
  try{
   var result=await json('/api/fast5-round-stats');
   if(result.ok!==true||result.model!=='FAST5_SPOT_MOMENTUM_V1'||
@@ -140,31 +148,46 @@ async function loadStats(){
     'FAST5胜率：等待首批独立官方结算');
   put('zlF5StatsNote','自独立账本启用后累计 · 已记录 '+a.total+
     '轮 · 尚待结算 '+a.pending+' · 仅对已锁定UP/DOWN与官方结算匹配；WAIT不计入胜率。');
-  var body=el('zlF5OfficialRows');
+  var body=el('zlF5OfficialRows'),scroll=el('zlF5HistoryScroll');
   if(body){
-   body.replaceChildren();
-   if(!result.rows.length){
-    var blank=document.createElement('tr'),cell=document.createElement('td');
-    cell.colSpan=4;cell.textContent='FAST5独立账本已启用，等待首个完整轮次';
-    blank.appendChild(cell);body.appendChild(blank);
+   // A changed result is rendered at most once. Avoid clearing and rebuilding
+   // the table every 30 seconds; that previously jumped mobile scroll positions.
+   var rows=result.rows.slice(0,200);
+   var fingerprint=JSON.stringify(rows.map(function(x){
+    return [x.round,x.decision,x.official_result,x.settled_at];
+   }));
+   if(fingerprint!==statsRowsFingerprint){
+    var previousScroll=scroll?scroll.scrollTop:0;
+    var fragments=document.createDocumentFragment();
+    if(!rows.length){
+     var blank=document.createElement('tr'),cell=document.createElement('td');
+     cell.colSpan=4;cell.textContent='FAST5独立账本已启用，等待首个完整轮次';
+     blank.appendChild(cell);fragments.appendChild(blank);
+    }
+    rows.forEach(function(x){
+     var tr=document.createElement('tr'),outcome=x.official_result;
+     var verdict=x.decision==='WAIT'?'WAIT':
+      !['UP','DOWN'].includes(outcome)?'待结算':
+      x.decision===outcome?'命中':'未命中';
+     [htmlTime(x.round),x.decision==='WAIT'?'WAIT':label(x.decision),
+      ['UP','DOWN'].includes(outcome)?label(outcome):'待结算',verdict]
+     .forEach(function(value){
+      var td=document.createElement('td');td.textContent=value;
+      td.style.padding='9px 3px';td.style.borderBottom='1px solid #344155';
+      td.style.overflowWrap='anywhere';td.style.verticalAlign='middle';
+      tr.appendChild(td);
+     });
+     fragments.appendChild(tr);
+    });
+    body.replaceChildren(fragments);
+    statsRowsFingerprint=fingerprint;
+    if(scroll)scroll.scrollTop=previousScroll;
    }
-   result.rows.slice(0,30).forEach(function(x){
-    var tr=document.createElement('tr'),outcome=x.official_result;
-    var verdict=x.decision==='WAIT'?'WAIT（不计胜率）':
-     !['UP','DOWN'].includes(outcome)?'待官方结算':
-     x.decision===outcome?'命中':'未命中';
-    [htmlTime(x.round),x.decision==='WAIT'?'WAIT':label(x.decision),
-     ['UP','DOWN'].includes(outcome)?label(outcome):'待结算',verdict]
-    .forEach(function(value){var td=document.createElement('td');td.textContent=value;
-     td.style.padding='8px 5px';td.style.borderBottom='1px solid #344155';
-     tr.appendChild(td)});
-    body.appendChild(tr);
-   });
   }
  }catch(e){
   put('zlF5StatAccuracy','FAST5独立统计服务不可用');
   put('zlF5StatsNote','统计接口异常：'+String(e.message||e).slice(0,120));
- }
+ }finally{statsLoadPending=false}
 }
 var f5Direction={revision:null,busy:false,mode:null,effectiveAfterRound:null};
 var FAST5_ID='FAST5_SPOT_MOMENTUM_V1';
@@ -227,7 +250,8 @@ if(el('zlF5Forward'))el('zlF5Forward').addEventListener('click',function(){void 
 if(el('zlF5Inverse'))el('zlF5Inverse').addEventListener('click',function(){void saveF5Direction('INVERSE')});
 void loadF5Direction();setInterval(loadF5Direction,15000);
 void loadStats();setInterval(loadStats,30000);
-void load();setInterval(load,350);
+void load();setInterval(load,1800);
+document.addEventListener('visibilitychange',function(){if(!document.hidden){void load();void loadStats()}});
 })();</script>`;
 export function injectFast5Dashboard(html){
  if(typeof html!=='string'||!html.includes('</body>'))return html;

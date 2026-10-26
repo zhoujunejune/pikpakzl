@@ -2,7 +2,9 @@ name: FAST5 V5 regime-conditioned signal and clean independent statistics
 on:
   push:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
-    paths: [.github/workflows/zl-fast5-regime-v5-release.yml]
+    paths:
+      - .github/workflows/zl-fast5-regime-v5-release.yml
+      - prediction-bot-v1/fast5-dashboard-inject.test.mjs
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

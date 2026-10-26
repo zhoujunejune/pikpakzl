@@ -45,8 +45,8 @@ test('older than 3000ms market event cannot become real locked signal',()=>{
  const r=c.update(feed(now,{lag:3900}));
  assert.equal(r.locked,false);assert.equal(c.status().latest,null);
 });
-test('expired 1s prediction never locks late, even with previous 120s candles',()=>{
- let now=R+1100,c=createFast5Calculator({now:()=>now});
+test('expired 5s prediction never locks late, even with previous 120s candles',()=>{
+ let now=R+5000,c=createFast5Calculator({now:()=>now});
  const r=c.update(feed(now,{lag:900}));
  assert.equal(r.locked,false);
 });

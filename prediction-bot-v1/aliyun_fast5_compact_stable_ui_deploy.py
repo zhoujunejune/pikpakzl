@@ -46,9 +46,13 @@ def main():
  if stats.get('schema')!='FAST5_INDEPENDENT_OFFICIAL_ROUND_LEDGER_V1':
   raise RuntimeError('FAST5_STATS_LEDGER_NOT_READY')
  originals={p:p.read_bytes() for p in FILES}
- if ('id="zlF5HistoryScroll"' in originals[ROOT/'fast5-dashboard-inject.mjs'].decode() or
-      "var refreshPending = false" in originals[ROOT/'wrapper.mjs'].decode()):
-  raise RuntimeError('FAST5_STABLE_UI_ALREADY_DEPLOYED_OR_MIXED_VERSION')
+ # Existing frontend assets may have been updated independently.
+ # Always stage both pinned versions, backup both originals, verify and roll back
+ # as one unit. A partial prior update is not a reason to leave the UI broken.
+ if 'zlFast5Card' not in originals[ROOT/'fast5-dashboard-inject.mjs'].decode():
+  raise RuntimeError('FAST5_CURRENT_UI_BASELINE_UNKNOWN')
+ if 'panel-client.js' not in originals[ROOT/'wrapper.mjs'].decode():
+  raise RuntimeError('TRADE_WRAPPER_BASELINE_UNKNOWN')
  with tempfile.TemporaryDirectory(prefix='fast5-stable-ui-release-') as td:
   stage=pathlib.Path(td);downloads={}
   for dest,path in FILES.items():

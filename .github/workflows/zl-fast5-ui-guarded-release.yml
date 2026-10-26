@@ -4,6 +4,7 @@ on:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
     paths:
       - .github/workflows/zl-fast5-ui-guarded-release.yml
+      - prediction-bot-v1/aliyun_fast5_stats_ui_restore.py
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

@@ -37,7 +37,7 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
     return false;
   if(event>(priceTicks.at(-1)?.at||0)){
     priceTicks.push({at:event,price:x.lastPrice});
-    priceTicks=priceTicks.filter(y=>y.at>=at-125000).slice(-1000);
+    priceTicks=priceTicks.filter(y=>y.at>=at-125000).slice(-1800);
   }
   lastObservationAt=event;lastValidMarketAt=at;return true;
  }

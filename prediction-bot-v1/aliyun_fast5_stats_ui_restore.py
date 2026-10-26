@@ -31,7 +31,7 @@ def main():
  current=UI.read_text()
  if 'FAST5 独立统计面板' in current:
   print('F5_STATS_ALREADY_RESTORED=true',flush=True);return
- if 'FAST5 独立统计' not in current or 'zlF5Card' not in current:
+ if 'FAST5 独立统计' not in current or 'zlFast5Card' not in current:
   raise RuntimeError('FRONTEND_BASELINE_DRIFT')
  with tempfile.TemporaryDirectory(prefix='f5-stats-panel-') as work:
   dest=pathlib.Path(work)/UI.name

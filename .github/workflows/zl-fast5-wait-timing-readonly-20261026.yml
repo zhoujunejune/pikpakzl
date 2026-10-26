@@ -1,0 +1,71 @@
+name: Diagnose live FAST5 WAIT and measured timing (read-only)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-wait-timing-readonly-20261026.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only diagnosis on Alibaba SWAS - no strategy or order writes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sh=r"""#!/bin/bash
+          set -euo pipefail
+          python3 - <<'INNER'
+          import urllib.request, time, json
+          def api(port,path):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,path),timeout=5) as r:
+             return json.load(r)
+           except Exception as e:return {'fetchError':type(e).__name__,'status':getattr(e,'code',None)}
+          for i in range(3):
+           now=int(time.time()*1000);round_ms=now//300000*300000
+           s=api(13046,'/api/status');t=api(13001,'/api/status');m=api(13003,'/api/shadow-market-data')
+           sig=s.get('latest') or {}
+           live=m.get('latest') or {}
+           print('FAST5_SAMPLE',json.dumps({
+             'timeMs':now,'roundStartMs':round_ms,'elapsedSec':round((now-round_ms)/1000,3),
+             'model':s.get('model'),'enabled':t.get('enabled'),'selected':t.get('orderSignalModel'),
+             'signalLocked':s.get('locked'),'direction':sig.get('direction'),
+             'lockAfterSec':round((sig.get('lockedAt',now)-round_ms)/1000,3) if isinstance(sig.get('lockedAt'),int) else None,
+             'latestError':s.get('latestError'),'feedError':s.get('lastError'),
+             'fetchLatencyMs':s.get('lastRequestMs'),'fetchAgeMs':now-s['lastFetchAt'] if isinstance(s.get('lastFetchAt'),int) else None,
+             'observedSamples':s.get('observedSamples'),'lastObservationAgeMs':now-s['lastObservationAt'] if isinstance(s.get('lastObservationAt'),int) else None,
+             'feedOk':m.get('ok'),'feedConnected':live.get('marketFeedConnected'),
+             'feedEventAgeMs':now-live['eventMs'] if isinstance(live.get('eventMs'),int) else None,
+             'feedRoundMatches':live.get('roundStartMs')==round_ms,
+             'bars1mCount':len((m.get('candles') or {}).get('1m',{}).get('rows',[])),
+             'lastRequestAttempts':s.get('fetchAttempts')
+           },ensure_ascii=False,separators=(',',':')))
+           if i<2:time.sleep(2)
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-wait-latency-readonly',type='RunShellScript',working_user='root',command_content=sh,timeout=75)).body.invoke_id
+          for _ in range(55):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST5_REMOTE_STATUS',r.invocation_status,'EXIT',r.exit_code)
+            try:out=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            except Exception:out='OUTPUT_DECODING_FAILED'
+            for line in out.splitlines():
+             if line.startswith('FAST5_SAMPLE'):print(line)
+            if int(r.exit_code)!=0:raise RuntimeError('READONLY_DIAG_FAILED')
+            break
+          else:raise RuntimeError('READONLY_DIAG_TIMEOUT')
+          OUTER

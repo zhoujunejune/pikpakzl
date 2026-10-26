@@ -1,0 +1,79 @@
+name: Inspect FAST5 panel and official stats data without writes
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-stats-source-audit-20261026.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only inspect of FAST5 current UI and official settlement record metadata
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import time,os,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import urllib.request,json,pathlib,time,collections
+          def request(port,route):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:%s%s'%(port,route),timeout=8) as r:
+             return r.status,json.loads(r.read(10000000))
+           except Exception as e:return getattr(e,'code',0),{'error':type(e).__name__}
+          for port,route in [(13001,'/api/round-stats'),(13001,'/api/ai40-round-stats'),
+            (13001,'/api/deepseek-round-results?limit=3'),(13001,'/api/status'),
+            (13001,'/api/fast5-live-status'),(13002,'/api/round-stats'),(13003,'/api/round-stats')]:
+           status,v=request(port,route)
+           print('F5_STATS_ENDPOINT',json.dumps({'port':port,'route':route,'http':status,
+            'ok':v.get('ok'),'keys':list(v.keys())[:45],
+            'error':v.get('error'),'schema':v.get('schema'),
+            'recordsCount':len(v.get('records',[])) if isinstance(v.get('records'),list) else None,
+            'recordsSample':[ {k:r.get(k) for k in [
+             'roundStartMs','round','productionPrediction','productionActual',
+             'productionModel','productionSource','productionSignalSource','productionModelVersion',
+             'status','direction','actual','settledAt','officialSettlementAudit',
+             'executionStatus','signalLatencyMs','source'] if k in r}
+             for r in (v.get('records') or [])[:3] if isinstance(r,dict)],
+            'summary':{k:x for k,x in (v.get('summary') or {}).items() if isinstance(x,(int,float,str,bool,type(None)))}
+           },ensure_ascii=False,default=str)[:11000])
+          root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          for name in ['panel-stats-shell.mjs','fast5-dashboard-inject.mjs']:
+           p=root/name
+           if not p.exists():continue
+           src=p.read_text()
+           print('F5_PANEL_SOURCE',json.dumps({'name':name,'size':len(src),
+            'hasOldStatsCard': 'roundStatsCard' in src,
+            'hasFast5StatsCard': 'zlF5Settled' in src,
+            'hasFast5Inject':'injectFast5Dashboard' in src,
+            'hasStatsEndpoint':'/api/round-stats' in src,
+            'hasLocalRoundRecords':'roundResultsOnlyCard' in src}))
+          base=pathlib.Path('/var/lib/zl-prediction')
+          if base.exists():
+           files=[{'name':str(p.relative_to(base)),'size':p.stat().st_size} for p in base.rglob('*') if p.is_file() and p.suffix in ('.json','.jsonl','.db','.sqlite') and len(p.parts)<11]
+           print('F5_STATE_FILES',json.dumps(files[:60],ensure_ascii=False))
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          id=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-f5-stats-sources-readonly-20261026',type='RunShellScript',working_user='root',command_content=script,timeout=120)).body.invoke_id
+          for i in range(75):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=id)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('F5_STATS_AUDIT_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-24000:])
+            if int(r.exit_code)!=0:raise RuntimeError('STATS_READONLY_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('F5_STATS_AUDIT_TIMEOUT')
+          OUTER

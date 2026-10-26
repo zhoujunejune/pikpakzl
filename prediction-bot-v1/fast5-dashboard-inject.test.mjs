@@ -23,7 +23,7 @@ test('no duplicate panel injection',()=>{
 });
 test('never claims winrate or fills stats with DeepSeek records',()=>{
  const out=injectFast5Dashboard(html);
- assert.match(out,/V6仅统计≤5bps小幅波动的UP/DOWN/);
+ assert.ok(out.includes('V6仅统计≤5bps小幅波动的UP/DOWN'));
  assert.match(out,/FAST5 独立统计面板/);
  assert.match(out,/zlF5StatAccuracy/);
  assert.match(out,/zlF5OfficialRows/);

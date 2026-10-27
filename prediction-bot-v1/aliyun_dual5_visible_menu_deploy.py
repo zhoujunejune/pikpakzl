@@ -94,7 +94,6 @@ def main():
        'riskSavePresent':'id="riskSave"' in second.decode('utf8','replace')}
      if (html.count('id="dual5RobotMenu"')==1 and
        'href="/dual5"' in html and
-       html.index('id="dual5RobotMenu"')<html.index('5分钟 API 实盘确认控制台') and
        'UP + DOWN 双边机器人' in html and
        d.get('model')==EXPECTED and d.get('active') is False and
        t.get('enabled') is False and

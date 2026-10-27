@@ -1,0 +1,112 @@
+name: Deploy isolated Binance 5m simultaneous UP DOWN pair production service
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-binance-dual5-pair-production-release.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify binary complement, no fake profit, default idle and safe deployment
+        run: |
+          node --check prediction-bot-v1/binance_dual5_pairs.mjs
+          node --test prediction-bot-v1/binance_dual5_pairs.test.mjs
+          python -m py_compile prediction-bot-v1/binance_dual5_prod_deploy.py
+          python - <<'PY'
+          from pathlib import Path
+          page=Path('prediction-bot-v1/binance_dual5_dashboard.html').read_text()
+          assert 'UP + DOWN' in page and '/api/dual5-arm' in page
+          assert '确认启用真实资金双边交易' in page
+          src=Path('prediction-bot-v1/binance_dual5_pairs.mjs').read_text()
+          assert "if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}" in src
+          assert 'if(process.env.DUAL5_TEST' in src
+          assert 'config.armed=false;config.blocked=true;persist()' in src
+          print('DUAL5_GATE_TESTS_OK=true')
+          PY
+  deploy:
+    needs: [tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Guarded production deployment via authorized Alibaba instance
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feat/deepseek40-45s-ai-only-prod-20261025'
+          sh="""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/binance_dual5_prod_deploy.py" -o "$tmp/dual5.py"
+          python3 -m py_compile "$tmp/dual5.py"
+          python3 "$tmp/dual5.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-binance-up-down-dual5-prod-release',type='RunShellScript',working_user='root',command_content=sh,timeout=240)).body.invoke_id
+          for _ in range(125):
+           time.sleep(2)
+           x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
+           if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('DUAL5_ALIBABA_REMOTE',x.invocation_status,'EXIT',x.exit_code)
+            try:print(base64.b64decode(x.output or '',validate=True).decode('utf8','replace')[-14000:])
+            except Exception:print('DUAL5_REMOTE_OUTPUT_NOT_AVAILABLE')
+            if str(x.invocation_status)!='Success' or int(x.exit_code)!=0:raise RuntimeError('DUAL5_RELEASE_FAILED')
+            break
+          else:raise RuntimeError('DUAL5_ALIBABA_COMMAND_TIMEOUT')
+          OUTER
+  verify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Confirm authenticated production page, independent API and controls OFF
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,json,urllib.request
+          url='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           with urllib.request.urlopen(urllib.request.Request(url+path,
+            headers={'Authorization':auth,'Cache-Control':'no-store'}),timeout=17) as r:
+            return r.status,r.read(900000)
+          status,raw=get('/api/dual5-status')
+          x=json.loads(raw)
+          assert status==200 and x.get('model')=='BINANCE_DUAL5_PAIR_V1'
+          assert x.get('mode')=='PRODUCTION_IDLE' and x.get('active') is False
+          assert x.get('maxPerSide')==1.6 and x.get('dailySpendMax')==12.8
+          status,body=get('/dual5')
+          html=body.decode('utf8','replace')
+          assert status==200 and '启用独立双边实盘' in html
+          assert '/api/dual5-arm' in html
+          status,raw=get('/api/status')
+          current=json.loads(raw)
+          assert status==200 and current.get('enabled') is False
+          print('DUAL5_PUBLIC_PRODUCTION_UI_OK=true')
+          print('DUAL5_PUBLIC_PRODUCTION_API_OK=true')
+          print('DUAL5_SEPARATE_TRADE_MODE_IS_OFF=true')
+          print('DUAL5_EXISTING_BOT_NOT_AUTO_STARTED=true')
+          print('DUAL5_READONLY_MARKET_HEALTH',x.get('health'))
+          PY

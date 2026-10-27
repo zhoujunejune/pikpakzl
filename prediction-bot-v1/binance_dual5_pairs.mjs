@@ -182,9 +182,23 @@ async function walletInfo(){
  const row=Array.isArray(w.wallets)?w.wallets.find(x=>x.walletAddress&&x.walletId):null;
  if(!row)throw Error('WALLET_NOT_REGISTERED');return row;
 }
+function exactOrderResult(orders,id,topic){
+ const matches=(Array.isArray(orders)?orders:[])
+  .filter(x=>String(x?.orderId)===String(id)&&
+    String(x?.marketTopicId)===String(topic?.marketTopicId));
+ const filled=matches.find(x=>Number(x?.filledShareQty)>0);
+ if(filled)return {status:String(filled.status||'FILLED'),shares:Number(filled.filledShareQty),
+  spent:Number(filled.filledUsdtAmount),orderId:String(id),terminalZeroFill:false};
+ const terminal=matches.find(x=>['FAILED','CANCELLED','CANCELED','EXPIRED','REJECTED']
+   .includes(String(x?.status||'').toUpperCase())&&
+   Number(x?.filledShareQty)===0&&Number(x?.filledUsdtAmount)===0);
+ if(terminal)return {status:String(terminal.status),shares:0,spent:0,
+  orderId:String(id),terminalZeroFill:true};
+ return null;
+}
 async function confirmOrder(wallet,id,topic){
- // A Binance order ID proves submission, not execution. Reconcile briefly before
- // treating the first leg as uncertain; never submit DOWN based on submission alone.
+ // An order ID proves submission, not execution. Explicit FAILED/zero-fill is
+ // different from unknown status; only the latter requires fail-closed lock.
  const deadline=Date.now()+CONFIRM_WINDOW_MS;
  let lastSeen=null,queries=0;
  while(Date.now()<deadline && queries<12){
@@ -197,12 +211,9 @@ async function confirmOrder(wallet,id,topic){
   const matches=[...(live.orders||[]),...(past.orders||[])]
    .filter(x=>String(x.orderId)===String(id) &&
     String(x.marketTopicId)===String(topic.marketTopicId));
-  const filled=matches.find(x=>Number(x.filledShareQty)>0);
-  if(filled)return {status:filled.status,shares:Number(filled.filledShareQty),
-    spent:Number(filled.filledUsdtAmount),orderId:String(id)};
+  const verified=exactOrderResult(matches,id,topic);
+  if(verified)return verified;
   lastSeen=matches[0]?.status??lastSeen;
-  if(matches.some(x=>['CANCELLED','FAILED','EXPIRED','REJECTED'].includes(
-      String(x.status||'').toUpperCase())))break;
   const remaining=deadline-Date.now();
   if(remaining>0)await new Promise(r=>setTimeout(r,Math.min(700,remaining)));
  }
@@ -248,6 +259,15 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   persist();
   record.phase='VERIFYING_UP';
   const u=await confirmOrder(wallet,up.orderId,topic);
+  if(u?.terminalZeroFill){
+   // FOK rejected with verified zero fill: no exposure, no DOWN order.
+   // Preserve lastOrderRound (no repeat buy in this round) but do not lock future rounds.
+   record.first=u;record.phase='UP_ZERO_FILL_CONFIRMED';
+   delete config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId];
+   delete config.legs.UP;
+   persist();state.lastError=null;state.health='UP_ZERO_FILL_CONFIRMED';
+   return;
+  }
   if(!u||u.shares<=0)throw Error('UP_FILL_UNVERIFIED_STOP_NO_SECOND');
   record.first=u;
   record.upConfirmedAt=Date.now();
@@ -272,7 +292,11 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   record.second={orderId:String(dn.orderId),status:'SUBMITTED'};
   record.phase='VERIFYING_DOWN';
   const d=await confirmOrder(wallet,dn.orderId,topic);
-  if(!d)throw Error('DOWN_FILL_UNVERIFIED');
+  if(d?.terminalZeroFill){
+   record.second=d;
+   throw Error('DOWN_ZERO_FILL_CONFIRMED_UP_FILLED_MANUAL_REVIEW');
+  }
+  if(!d||d.shares<=0)throw Error('DOWN_FILL_UNVERIFIED');
   record.second=d;
   record.bothConfirmedAt=Date.now();
   record.openingFromRoundMs=record.firstOrderSubmitAt-round;
@@ -283,6 +307,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   persist();
   const guaranteed=Math.min(u.shares,d.shares)-u.spent-d.spent-0.025;
   record.phase='FILLED_BOTH';record.actualPairWorstCaseUSDT=Math.round(guaranteed*10000)/10000;
+  state.lastError=null;state.health='FILLED_BOTH';
   // Trade success is not a guarantee of eventual profit: fees and claim friction remain.
   if(guaranteed<0)record.warning='POST_FILL_NET_NEGATIVE';
  }catch(e){
@@ -436,4 +461,4 @@ if(process.env.DUAL5_TEST!=='1'){
  const scheduleNext=()=>setTimeout(()=>void tick().finally(scheduleNext),nextScanDelayMs()).unref();
  void tick().finally(scheduleNext);
 }
-export {complimentaryTokens,bestAsk,calcPair,validateAmounts,validFundingSource,nextScanDelayMs};
+export {complimentaryTokens,bestAsk,calcPair,exactOrderResult,validateAmounts,validFundingSource,nextScanDelayMs};

@@ -107,3 +107,101 @@ jobs:
             break
           else:raise RuntimeError('PAYMENT_READONLY_TIMEOUT')
           OUTER
+      - name: Audit actual UP order, current position and lock state through GET requests only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: \${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: \${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,subprocess,json,time,urllib.request,urllib.error,urllib.parse,hmac,hashlib
+          ORDER_ID='2610270001999631125'
+          CONFIG=pathlib.Path('/var/lib/zl-prediction/dual5/config.json')
+          def emit(key,data):
+           print(key,json.dumps(data,ensure_ascii=False,default=str)[:8000],flush=True)
+          try:
+           cfg=json.loads(CONFIG.read_text())
+           status=json.load(urllib.request.urlopen('http://127.0.0.1:13048/api/status',timeout=6))
+           emit('ORDER_FORENSIC_DUAL5', {k:status.get(k) for k in ['active','blocked','mode','lastError','health','lastOrder','round','firstScanLagMs','fundingSource','risk']})
+           emit('ORDER_FORENSIC_SAVED', {'armed':cfg.get('armed'),'blocked':cfg.get('blocked'),
+            'lastOrderRound':cfg.get('lastOrderRound'),'legs':cfg.get('legs'),
+            'trackedCount':len(cfg.get('tracked') or {})})
+           for unit in ('zl-prediction-dual5.service','zl-prediction-risk-exits.service'):
+            resp=subprocess.run(['systemctl','is-active',unit],capture_output=True,text=True,timeout=5)
+            emit('ORDER_FORENSIC_UNIT',{'unit':unit,'active':resp.stdout.strip()})
+           pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','zl-prediction-dual5.service'],text=True,timeout=5).strip()
+           pairs=[x.split(b'=',1) for x in pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\0') if b'=' in x]
+           env={k.decode('utf8','ignore'):v.decode('utf8','ignore') for k,v in pairs}
+           key=env.get('BINANCE_PREDICTION_API_KEY','')
+           secret=env.get('BINANCE_PREDICTION_API_SECRET','')
+           if not key or not secret:raise RuntimeError('SIGNED_GET_AUTH_NOT_AVAILABLE')
+           def api(route,params={}):
+            q=urllib.parse.urlencode({**params,'timestamp':int(time.time()*1000),'recvWindow':5000})
+            sig=hmac.new(secret.encode(),q.encode(),hashlib.sha256).hexdigest()
+            url='https://api.binance.com'+route+'?'+q+'&signature='+sig
+            req=urllib.request.Request(url,headers={'X-MBX-APIKEY':key,'Cache-Control':'no-store'})
+            try:
+             with urllib.request.urlopen(req,timeout=15) as resp:return json.load(resp)
+            except urllib.error.HTTPError as e:
+             emit('ORDER_FORENSIC_HTTP_ERROR',{'route':route,'status':e.code,
+              'snippet':e.read(260).decode('utf8','replace')})
+             return {'error':'HTTP_'+str(e.code)}
+           wallets=api('/sapi/v1/w3w/wallet/prediction/wallet/list').get('wallets') or []
+           emit('ORDER_FORENSIC_WALLETS',{'count':len(wallets),'usable':sum(1 for w in wallets if w.get('walletAddress') and w.get('walletId'))})
+           wallet=next((w for w in wallets if w.get('walletAddress') and w.get('walletId')),None)
+           if not wallet:raise RuntimeError('WALLET_NOT_FOUND')
+           topic=next((v.get('marketTopicId') for v in (cfg.get('legs') or {}).values() if isinstance(v,dict) and v.get('marketTopicId')),None)
+           def slim(o):
+            return {k:o.get(k) for k in ('orderId','marketTopicId','tokenId','status','side','orderType',
+             'createTime','modifyTime','makerUsdtAmount','filledUsdtAmount','filledShareQty',
+             'fillPercentage','marketTitle','outcome') if k in o}
+           params={'walletAddress':wallet['walletAddress'],'offset':0,'limit':100}
+           active=api('/sapi/v1/w3w/wallet/prediction/order/list',params)
+           hist=api('/sapi/v1/w3w/wallet/prediction/order/history',params)
+           all_orders=(active.get('orders') or [])+(hist.get('orders') or [])
+           matched=[o for o in all_orders if str(o.get('orderId'))==ORDER_ID]
+           by_topic=[o for o in all_orders if topic is not None and str(o.get('marketTopicId'))==str(topic)]
+           emit('ORDER_FORENSIC_ORDER',{'orderId':ORDER_ID,'targetTopic':topic,
+             'activeTotal':active.get('total'),'historyTotal':hist.get('total'),
+             'matching':[slim(o) for o in matched],'sameTopic':[slim(o) for o in by_topic][:20]})
+           if not matched and (hist.get('total') or 0)>100:
+            h=api('/sapi/v1/w3w/wallet/prediction/order/history',{**params,'offset':100})
+            found=[slim(o) for o in h.get('orders',[]) if str(o.get('orderId'))==ORDER_ID]
+            emit('ORDER_FORENSIC_HISTORY_PAGE2',{'matching':found,'total':h.get('total')})
+           positions=api('/sapi/v1/w3w/wallet/prediction/position/list',
+               {'walletAddress':wallet['walletAddress'],'tab':'ONGOING','offset':0,'limit':100})
+           current=(positions.get('positions') or [])
+           exact=[{'marketTopicId':p.get('marketTopicId'),'tokenId':p.get('tokenId'),
+             'shares':p.get('shares'),'totalCost':p.get('totalCost'),
+             'status':p.get('status')} for p in current if topic is not None
+              and str(p.get('marketTopicId'))==str(topic)]
+           emit('ORDER_FORENSIC_POSITIONS',{'total':positions.get('total'),'matched':exact,
+             'count':len(current)})
+          except Exception as e:
+           emit('ORDER_FORENSIC_DIAG_ERROR',{'type':type(e).__name__,'message':str(e)[:160]})
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+           access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+           region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          invoke=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+           instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+           name='dual5-read-only-up-order-261027',type='RunShellScript',
+           working_user='root',command_content=script,timeout=120)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('ORDER_FORENSIC_ALIBABA',r.invocation_status,r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-24000:])
+            if int(r.exit_code)!=0:raise RuntimeError('ORDER_FORENSIC_ALIBABA_FAILED')
+            break
+          else:raise RuntimeError('ORDER_FORENSIC_TIMEOUT')
+          OUTER

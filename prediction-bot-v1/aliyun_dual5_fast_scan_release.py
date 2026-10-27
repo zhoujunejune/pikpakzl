@@ -91,14 +91,18 @@ def main():
         raise RuntimeError('MAIN_ROBOT_IS_ACTIVE_ABORT')
     if dual_before.get('model')!='BINANCE_DUAL5_PAIR_V1':
         raise RuntimeError('WRONG_DUAL5_MODEL')
-    if dual_before.get('active') is not False or dual_before.get('blocked') is True:
-        raise RuntimeError('DUAL5_MUST_BE_IDLE_AND_UNBLOCKED')
+    if dual_before.get('active') is not False:
+        raise RuntimeError('DUAL5_MUST_BE_IDLE')
+    previous_blocked=dual_before.get('blocked')
+    if previous_blocked not in (True,False):raise RuntimeError('UNKNOWN_LOCK_STATE_ABORT')
     if (main_before.get('pendingAction') or {}).get('state') in (
         'READY','QUOTING','SUBMITTING','SUBMITTED_PENDING_CONFIRMATION','SUBMISSION_UNKNOWN'):
         raise RuntimeError('BASE_BOT_PENDING_ORDER_ABORT')
-    for leg in (dual_before.get('legs') or {}).values():
-        if isinstance(leg,dict) and leg.get('status')=='ORDER_PENDING':
-            raise RuntimeError('ORDER_PENDING_ABORT')
+    # Never change, drop, or resolve pending orders in a code-only release.
+    pending_legs=[leg for leg in (dual_before.get('legs') or {}).values()
+                  if isinstance(leg,dict) and leg.get('status')=='ORDER_PENDING']
+    if pending_legs and previous_blocked is not True:
+        raise RuntimeError('UNLOCKED_PENDING_ORDER_ABORT')
     for unit in ('zl-prediction-dual5.service','zl-prediction-trade.service','zl-prediction-risk-exits.service'):
         if run('systemctl','is-active',unit).stdout.strip()!='active':
             raise RuntimeError('SERVICE_NOT_ACTIVE_'+unit)
@@ -120,7 +124,10 @@ def main():
                        "quoteFor(topic,pair.down,wallet,config.amounts.DOWN,config.fundingSource)",
                        "req.url==='/api/funding'","STOP_TRADING_BEFORE_FUNDING_EDIT",
                        "place(wallet,topic,q1,fundingSource)",
-                       "place(wallet,topic,down,fundingSource)"):
+                       "place(wallet,topic,down,fundingSource)",
+                       'const ENTRY_WINDOW_MS=15000,CONFIRM_WINDOW_MS=12000',
+                       "exactOrderResult(orders,id,topic)",
+                       "record.phase='UP_ZERO_FILL_CONFIRMED'"):
             if marker not in new_worker:raise RuntimeError('SCANNER_GUARD_MISSING_'+marker)
         for marker in ('id="upAmount"','id="downAmount"','id="riskSave"',
                        'id="firstScanLag"','id="pairExecution"',
@@ -131,9 +138,11 @@ def main():
         if 'DAILY_BUDGET_STOP' in new_worker or 'MAX_DAILY_SPEND' in new_worker:
             raise RuntimeError('SPENDING_HARD_CAP_REGRESSION')
         panel_before=PANEL.read_text()
-        if panel_before.count(ROUTE_ANCHOR)!=1 or "'/api/dual5-funding'" in panel_before:
-            raise RuntimeError('DUAL5_FUNDING_PROXY_ROUTE_ANCHOR_DRIFT')
-        patched=panel_before.replace(ROUTE_ANCHOR,FUNDING_PROXY+ROUTE_ANCHOR,1)
+        if panel_before.count(ROUTE_ANCHOR)!=1:
+            raise RuntimeError('DUAL5_FUNDING_PROXY_ANCHOR_DRIFT')
+        if panel_before.count("'/api/dual5-funding'")!=1:
+            raise RuntimeError('DUAL5_FUNDING_PROXY_NOT_ALREADY_INSTALLED')
+        patched=panel_before
         (stage/'panel-stats-shell.mjs').write_text(patched)
         run(NODE,'--check',str(stage/'panel-stats-shell.mjs'))
         if obj(13048,'/api/status').get('active') is not False or obj(13001,'/api/status').get('enabled') is not False:
@@ -145,10 +154,9 @@ def main():
         try:
             atomic_replace(WORKER,(stage/WORKER.name).read_bytes())
             atomic_replace(PAGE,(stage/PAGE.name).read_bytes())
-            atomic_replace(PANEL,patched.encode('utf8'))
+            # Existing panel and FAST5 trade service are not restarted or altered.
             touched=True
             run('systemctl','restart','zl-prediction-dual5.service',timeout=70)
-            run('systemctl','restart','zl-prediction-trade.service',timeout=90)
             verified=False
             for _ in range(30):
                 time.sleep(1)
@@ -160,7 +168,9 @@ def main():
                       and d.get('scanMode')=='ROUND_BOUNDARY_FAST_V1'
                       and d.get('entryMode')=='ROUND_OPEN_VALID_QUOTES_V2'
                       and d.get('profitFilterEnabled') is False
-                      and d.get('active') is False and d.get('blocked') is False
+                      and d.get('active') is False and d.get('blocked') is previous_blocked
+                      and d.get('trackedCount')==dual_before.get('trackedCount')
+                      and d.get('legs')==dual_before.get('legs')
                       and d.get('amounts')==dual_before.get('amounts')
                       and d.get('risk')==dual_before.get('risk')
                       and d.get('fundingSource')==dual_before.get('fundingSource','MPC')
@@ -178,6 +188,8 @@ def main():
                 if run('systemctl','is-active',unit).stdout.strip()!='active':
                     raise RuntimeError('SERVICE_INACTIVE_AFTER_RELEASE_'+unit)
             print('DUAL5_FAST_SCAN_DEPLOY_SUCCESS=true',flush=True)
+            print('DUAL5_15S_ENTRY_AND_ZERO_FILL_TERMINAL_FIX_LIVE=true',flush=True)
+            print('DUAL5_EXISTING_ORDER_LOCK_UNCHANGED='+str(previous_blocked).lower(),flush=True)
             print('DUAL5_MPC_CEX_OWNER_SELECTOR_LIVE=true',flush=True)
             print('DUAL5_FUNDING_SOURCE='+str(d.get('fundingSource')),flush=True)
             print('DUAL5_SCAN_MODE=ROUND_BOUNDARY_FAST_V1',flush=True)
@@ -191,7 +203,7 @@ def main():
             if touched:
                 for f in (WORKER,PAGE,PANEL):shutil.copy2(archive/f.name,f)
                 subprocess.run(['systemctl','restart','zl-prediction-dual5.service'],timeout=75)
-                subprocess.run(['systemctl','restart','zl-prediction-trade.service'],timeout=90)
+                # Do not restart the unrelated FAST5 trade service.
             print('DUAL5_FAST_SCAN_ROLLBACK_ATTEMPTED=true',flush=True)
             raise
 

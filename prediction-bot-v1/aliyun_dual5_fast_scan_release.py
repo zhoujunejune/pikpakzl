@@ -69,7 +69,7 @@ def main():
         run(NODE,'--check',str(stage/WORKER.name))
         new_worker=(stage/WORKER.name).read_text()
         new_page=(stage/PAGE.name).read_text()
-        for marker in ('ROUND_BOUNDARY_FAST_V1','nextScanDelayMs','elapsed<15000?2000',
+        for marker in ('ROUND_BOUNDARY_FAST_V1','nextScanDelayMs','elapsed<15000?700',
                        'record.firstOrderSubmitAt=Date.now()','record.bothConfirmedAt=Date.now()',
                        'MIN_EDGE=0.08','UNHEDGED_OR_UNKNOWN_STOPPED',
                        "quoteFor(topic,pair.up,wallet,config.amounts.UP)",

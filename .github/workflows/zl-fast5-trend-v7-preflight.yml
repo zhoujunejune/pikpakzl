@@ -1,0 +1,65 @@
+name: Audit FAST5 trend V6 current production routing and latency
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-trend-v7-preflight.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only Alibaba production preflight for fast trend signals
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,pathlib,urllib.request
+          files={'choice':'/opt/zl-prediction-live/src/railway-diagnostic/production-signal-choice.mjs',
+           'index':'/opt/zl-prediction-live/src/railway-diagnostic/index.mjs',
+           'wrapper':'/opt/zl-prediction-live/src/railway-diagnostic/wrapper.mjs'}
+          terms={'choice':['export function validateFast5ProductionLive','REGIME_PREV15_CLOSED_1M_NET_BPS_V1'],
+           'index':["if(choice.model===FAST5_MODEL)",'FAST5_LOCAL_URL',"if (choice.model === FAST5_MODEL)","async function getSignal(","function start","setInterval("],
+           'wrapper':["setInterval(", "getSignal({ forceHttp: true })","AUTO_CONFIRM", "pendingOrderMatchesProduction"]}
+          for kind,path in files.items():
+           s=pathlib.Path(path).read_text()
+           for term in terms[kind]:
+            at=s.find(term)
+            if at>=0:print('TREND7_SOURCE',json.dumps({'kind':kind,'term':term,'at':at,'snippet':s[max(0,at-320):at+2600]},ensure_ascii=False)[:3700])
+          for port,route in [(13046,'/api/status'),(13001,'/api/status'),(13001,'/api/order-signal-model'),(13001,'/api/direction-mode'),(13047,'/api/round-stats'),(13003,'/api/shadow-market-data')]:
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,route),timeout=7) as response:d=json.load(response)
+            fields=['ok','model','strategyVersion','enabled','orderSignalModel','directionModeReady','lastError','latestError','lastRequestMs','fetchAttempts','round','locked','lastFetchAt','observedSamples','prewarmReady','readOnly','marketSource','signal','latest','summary','health','pendingAction','readiness']
+            state={k:d.get(k) for k in fields if k in d}
+            if isinstance(state.get('latest'),dict):
+             last=state['latest'];state['latest']={k:last.get(k) for k in ('round','direction','lockedAt','status','prewarmOnly','scoreBps','signalReason','eventMs','marketFeedConnected','lastPrice','roundOpenPrice','roundStartMs') if k in last}
+            if 'pendingAction' in state and isinstance(state['pendingAction'],dict):
+             pending=state['pendingAction'];state['pendingAction']={k:pending.get(k) for k in ('state','round','action')}
+            print('TREND7_LIVE',json.dumps({'port':port,'route':route,'data':state},ensure_ascii=False,default=str)[:3700])
+           except Exception as e:print('TREND7_HTTP_ERROR',port,route,str(e)[:120])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='fast5-v7-trend-preflight-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=110)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('TREND7_INSPECT_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-25000:])
+            if int(r.exit_code)!=0:raise RuntimeError('FAST5_TREND_PREFLIGHT_FAILED')
+            break
+          else:raise RuntimeError('FAST5_TREND_PREFLIGHT_TIMEOUT')
+          OUTER

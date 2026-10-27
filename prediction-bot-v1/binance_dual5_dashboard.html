@@ -10,13 +10,23 @@
 </div><p><small id="detail">仅在两边真正互补、成本扣费后仍有正优势时尝试；不保证两单同时成交。</small></p></article>
 <article><h2>独立实盘交易开关</h2><p class="warn">两笔独立订单不具有原子性：可能只成交 UP 或 DOWN，造成单边损失。发生未知状态会停机，需人工核对。仅在你主动开启后才发送真实订单。</p>
 <p>每边限额 <b>1.60 USDT</b>；单轮最多一组；每日累计提交预算 <b>12.80 USDT</b>；报价安全缓冲后最少剩余净优势 <b>0.08 USDT</b>。上限为程序硬编码，不因前台更改。</p>
+<h2>UP / DOWN 独立止盈止损</h2>
+<p class="sub">按该持仓的<strong>实时可卖出金额相对成本的收益率</strong>计算；与原有机器人的「最大可能利润比例」不同。各边单独判断、独立卖出。市场价格变化快，止盈止损不是保价单。</p>
+<div class="grid">
+ <div class="metric"><h2 class="ok">UP 持仓</h2>
+ <label><input type="checkbox" id="upTpOn" checked> 开启止盈</label><p>止盈 <input type="number" id="upTp" min="1" max="95" step="1" value="30" style="width:68px"> %</p>
+ <label><input type="checkbox" id="upSlOn" checked> 开启止损</label><p>止损 <input type="number" id="upSl" min="1" max="95" step="1" value="30" style="width:68px"> %</p></div>
+ <div class="metric"><h2 class="warn">DOWN 持仓</h2>
+ <label><input type="checkbox" id="downTpOn" checked> 开启止盈</label><p>止盈 <input type="number" id="downTp" min="1" max="95" step="1" value="30" style="width:68px"> %</p>
+ <label><input type="checkbox" id="downSlOn" checked> 开启止损</label><p>止损 <input type="number" id="downSl" min="1" max="95" step="1" value="30" style="width:68px"> %</p></div>
+</div><p><button id="riskSave" type="button" disabled>保存两边止盈止损</button><small id="riskMsg">加载中</small></p>
 <button id="arm" type="button" disabled>启用独立双边实盘</button><button id="stop" class="stop" type="button" disabled>关闭双边实盘</button>
 <p id="feedback" class="sub"></p></article>
 <article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
 <article><h2>为什么会不下单？</h2><p class="sub">典型原因包括盘口价格之和太高、手续费后净优势不够、某一边无报价、盘口过期、不是能严格证明互补的一对份额、该轮已尝试、余额或交易接口不可用。</p></article>
 </main><script>
 const el=id=>document.getElementById(id),label=x=>x==null?'--':String(x),fmt=x=>Number.isFinite(Number(x))?Number(x).toFixed(4):'--';
-let saving=false;
+let saving=false,riskEditing=false,riskLoaded=false;
 async function load(){
  try{
   const r=await fetch('/api/dual5-status',{cache:'no-store'});
@@ -32,6 +42,17 @@ async function load(){
    ' · 盘口筛选：'+(q?label(q.status):'等待有效市场')+
    ' · 本日提交预算已占用 '+fmt(d.dailySpend)+' USDT';
   el('arm').disabled=saving||d.active||d.blocked;el('stop').disabled=saving||!d.active;
+  el('riskSave').disabled=saving||d.active||d.blocked;
+  if(d.risk&&!riskEditing&&!riskLoaded){
+   for(const [leg,prefix] of [['UP','up'],['DOWN','down']]){
+    const cfg=d.risk[leg];if(!cfg)continue;
+    el(prefix+'TpOn').checked=cfg.takeProfitEnabled;
+    el(prefix+'SlOn').checked=cfg.stopLossEnabled;
+    el(prefix+'Tp').value=cfg.takeProfitPct;
+    el(prefix+'Sl').value=cfg.stopLossPct;
+   }
+   riskLoaded=true;el('riskMsg').textContent='默认 UP/DOWN 均止盈30%、止损30%。两边独立，可分别修改。';
+  }
   const o=d.lastOrder;
   if(o){
    const rows=[['轮次',new Date(o.round).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})],
@@ -45,6 +66,28 @@ async function load(){
   }
  }catch(e){el('banner').textContent='状态无法核验：'+String(e.message||e);el('arm').disabled=true;el('stop').disabled=true;}
 }
+async function saveRisk(){
+ if(saving)return;
+ const risk={};
+ for(const [leg,p] of [['UP','up'],['DOWN','down']]){
+  const takeProfitPct=Number(el(p+'Tp').value),stopLossPct=Number(el(p+'Sl').value);
+  if(!Number.isFinite(takeProfitPct)||takeProfitPct<1||takeProfitPct>95||
+     !Number.isFinite(stopLossPct)||stopLossPct<1||stopLossPct>95){
+   el('riskMsg').textContent='两边止盈止损必须在1%～95%之间。';return;
+  }
+  risk[leg]={takeProfitEnabled:el(p+'TpOn').checked,takeProfitPct,
+   stopLossEnabled:el(p+'SlOn').checked,stopLossPct};
+ }
+ saving=true;riskEditing=true;el('riskSave').disabled=true;
+ try{
+  const res=await fetch('/api/dual5-risk',{method:'POST',credentials:'same-origin',
+   headers:{'Content-Type':'application/json'},body:JSON.stringify({risk})});
+  const data=await res.json();
+  if(!res.ok||data.ok!==true)throw Error(data.error||'UPDATE_NOT_CONFIRMED');
+  el('riskMsg').textContent='已保存：UP/DOWN分别止盈止损，各自独立触发；仅实际可卖出报价满足条件才提交卖单。';
+ }catch(e){el('riskMsg').textContent='风险参数保存失败：'+String(e.message||e)}
+ finally{saving=false;riskEditing=false;await load();}
+}
 async function save(armed){
  if(saving)return;
  if(armed&&!confirm('确认启用真实资金双边交易？每笔为独立订单，一侧可能失败或亏损。'))return;
@@ -57,6 +100,7 @@ async function save(armed){
  }catch(e){el('feedback').textContent='保存失败：'+String(e.message||e)}
  finally{saving=false;await load();}
 }
+el('riskSave').addEventListener('click',()=>void saveRisk());
 el('arm').addEventListener('click',()=>void save(true));el('stop').addEventListener('click',()=>void save(false));
 void load();setInterval(load,4500);
 </script></body></html>

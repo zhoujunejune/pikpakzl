@@ -236,8 +236,8 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   // Re-price DOWN after UP fills: never blindly send a stale second quote.
   const down=await quoteFor(topic,pair.down,wallet,orderAmounts.DOWN);
   const reassess=calcPair(q1,down,orderAmounts.UP,orderAmounts.DOWN);
-  if(!reassess.feasible || Number(down.expireAt)<Date.now()+1800)
-   throw Error('DOWN_QUOTE_EDGE_DISAPPEARED');
+  if(!reassess.ok || Number(down.expireAt)<Date.now()+1800)
+   throw Error('DOWN_QUOTE_INVALID_OR_EXPIRED');
   config.legs.DOWN={tokenId:String(pair.down.tokenId),
    marketTopicId:String(topic.marketTopicId),round,status:'ORDER_PENDING',
    updatedAt:Date.now()};
@@ -306,7 +306,7 @@ async function tick(){
   state.lastOpportunity={round,topicId:topic.marketTopicId,
    upAsk:up.price,downAsk:down.price,askSum:Number(raw.toFixed(5)),
    rawSpread:Number((1-raw).toFixed(5)),feeRatePerSide:fee,at:Date.now(),status:'NO_EDGE'};
-  if(raw>=1-2*fee-MIN_EDGE/3.2){state.health='BOTH_ASKS_TOO_EXPENSIVE';return}
+  // Price-sum is diagnostic, not an entry condition in round-open mode.
   const wallet=await walletInfo();
   const [q1,q2]=await Promise.all([
     quoteFor(topic,pair.up,wallet,config.amounts.UP),
@@ -316,8 +316,8 @@ async function tick(){
   state.lastOpportunity={...state.lastOpportunity,
     quoteNetUSDT:estimate.conservativeNet,pairedShares:estimate.pairedShares,
     amountUp:config.amounts.UP,amountDown:config.amounts.DOWN,
-    status:estimate.feasible?'NET_EDGE_AVAILABLE':'FEES_OR_IMBALANCE_NEGATIVE'};
-  if(!estimate.feasible){state.health='QUOTE_NET_EDGE_TOO_SMALL';return}
+    status:estimate.ok?'VALID_QUOTES':'INVALID_QUOTES'};
+  if(!estimate.ok){state.health='INVALID_PAIR_QUOTES';return}
   if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}
   // Neither strategy may trade the same aggregated wallet+token concurrently.
   const t=await fetch('http://127.0.0.1:13001/api/status',

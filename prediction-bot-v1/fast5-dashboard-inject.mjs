@@ -3,9 +3,9 @@
 const OLD_CARD='<section class="c" id="roundResultsOnlyCard" style="margin:14px 0">';
 const CARD=[
 '<section class="c" id="zlFast5Card" style="margin:14px 0">',
-'<div class="k">5分钟预测 · FAST5 V6 · 只保留≤5bps小幅波动</div>',
+'<div class="k">5分钟预测 · FAST5 V7 · 实时多空趋势（2秒锁定）</div>',
 '<div class="big" id="zlF5Main" style="margin:9px 0;min-height:2.6em;font-variant-numeric:tabular-nums">读取FAST5生产信号中...</div>',
-'<div class="muted" id="zlF5Timeline" style="min-height:3.1em;font-variant-numeric:tabular-nums">上一轮倒数120秒预分析 → 本轮0.1～5秒锁定 → 超过5秒未锁定则WAIT</div>',
+'<div class="muted" id="zlF5Timeline" style="min-height:3.1em;font-variant-numeric:tabular-nums">前120秒实时行情预热 → 开轮立即判断多空 → 最晚2秒锁定，否则WAIT</div>',
 '<div class="grid" style="margin:12px 0">',
 '<div class="kv"><div class="k">当前生产模型</div><div class="v" id="zlF5Model">--</div></div>',
 '<div class="kv"><div class="k">最新信号 / 锁定时刻</div><div class="v" id="zlF5Lock">--</div></div>',
@@ -31,7 +31,7 @@ const CARD=[
 '<div class="kv"><div class="k">FAST5已结算</div><div class="v" id="zlF5StatSettled">--</div></div>',
 '<div class="kv"><div class="k">FAST5命中 / 失败</div><div class="v" id="zlF5StatWL">--</div></div>',
 '</div>',
-'<div class="muted" id="zlF5StatsNote">V6仅统计≤5bps小幅波动的UP/DOWN；>5bps记WAIT，不计入命中率。</div>',
+'<div class="muted" id="zlF5StatsNote">V7仅统计本版开轮2秒内锁定的UP/DOWN；超时WAIT不计入命中率。</div>',
 '<div class="k" style="margin-top:16px">FAST5逐轮信号与官方结算</div>',
 '<div class="muted" style="margin-top:5px">以下明细在框内上下滑动查看，整页高度保持固定；实时胜率在上方。</div>',
 '<div id="zlF5HistoryScroll" tabindex="0" role="region" aria-label="FAST5历史轮次，可在区域内上下滚动" style="height:300px;max-height:300px;min-height:300px;overflow-y:auto;overflow-x:auto;overscroll-behavior:contain;overflow-anchor:none;scrollbar-gutter:stable;margin-top:9px;border:1px solid #344155;border-radius:9px;position:relative">',
@@ -75,7 +75,7 @@ function renderTradeTilesSnapshot(state,trade,now,round,signal){
     label(mapped)+'（'+(mode==='INVERSE'?'反向':'正向')+'参考；未提交）':
     '方向关闭或配置未就绪（不可下单）');
  }else{
-  put('status',state.latestError==='REGIME_GT5_BPS_WAIT'?'WAIT · 中/大波动过滤，不下单':elapsed>=5000?'WAIT · 5秒内未锁定，不下单':'等待FAST5锁定');
+  put('status',elapsed>=2000?'WAIT · 2秒内未锁定，不下单':'等待FAST5多空趋势锁定');
   put('direction','无已锁定信号');
   put('orderDirection','无下单信号');
   put('score','--');
@@ -110,39 +110,31 @@ async function load(){
     now-signal.lockedAt<16000;
   var status;
   if(signal)status=label(signal.direction)+(signal.prewarmOnly?' · 已锁定（上轮120秒趋势信号）':tradingWindow?' · 本轮实时开盘锁定':' · 已锁定，交易窗口已过');
-  else if(s.latestError==='REGIME_GT5_BPS_WAIT')status='WAIT · 中等/较大波动（>5bps），本轮不出信号';
-  else if(elapsed>=5000)status='WAIT · 本轮5秒内未锁定，停止出信号';
-  else if(s.provisionalDirection)status=label(s.provisionalDirection)+' · 上轮120秒候选（仍在5秒锁定窗口）';
-  else if(elapsed<100)status='开轮准备中 · 等待100毫秒';
-  else status='开轮0.1～5秒内确认方向中';
+  else if(elapsed>=2000)status='WAIT · 开轮2秒内未形成有效多空信号';
+  else status='开轮0～2秒判断多头或空头趋势中';
   put('zlF5Main',status);
-  put('zlF5Model','FAST5 · 小幅波动专用V6 · 无DeepSeek');
+  put('zlF5Model','FAST5 · 多空趋势极速V7 · 无DeepSeek');
   put('zlF5Lock',signal?label(signal.direction)+' / 第'+(lock/1000).toFixed(2)+'秒':'未锁定');
   put('zlF5Age',age==null?'--':age+' ms'+(age>4000?'（数据延迟）':''));
   put('zlF5Follow',t.enabled===true?'开启':t.enabled===false?'关闭':'未知');
-  put('zlF5Timeline','本轮已过'+(elapsed/1000).toFixed(2)+'秒 · 上轮120秒预分析 · 本轮0.1～5秒锁定 · 超时WAIT · 已锁定订单仍须完成执行校验');
+  put('zlF5Timeline','本轮已过'+(elapsed/1000).toFixed(2)+'秒 · 上轮实时数据预分析 · 本轮0～2秒锁定多空 · 超时WAIT · 已锁定订单仍须完成执行校验');
   put('zlF5Reason',signal?(signal.prewarmOnly?'上轮120秒真实数据锁定；尚未获得本轮开盘价确认。':'本轮实时开盘价格锁定；')+
       (tradingWindow?'交易路由还须检查自动跟随及方向开关':'仅展示本轮信号历史，不可据此补单')
-    :valid?(elapsed>=5000?'5秒内未形成有效锁定方向，本轮WAIT，不补单。原因：':'锁定窗口内等待有效方向，原因：')+String(s.latestError||'等待真实行情')
+    :valid?(elapsed>=2000?'2秒内未形成有效锁定方向，本轮WAIT，不补单。原因：':'锁定窗口内等待有效方向，原因：')+String(s.latestError||'等待真实行情')
     :'轮次切换中，等待行情同步');
   put('zlF5Meta','生产信号：'+String(t.orderSignalModel)+
       ' · 独立交易开关：'+(t.enabled===true?'开启':'关闭')+
       ' · 信号不是成交回报 · '+(t.amount==null?'下单金额未配置':'每轮金额已配置'));
   put('zlF5Error',s.lastError?'行情故障：'+String(s.lastError).slice(0,120):
       age!=null&&age>4000?'行情服务异常：最近行情读取超过4秒':'生产行情服务正常');
-  if(signal&&signal.regime){
-   var directionModes=t.directionModes?.FAST5_SPOT_MOMENTUM_V1;
-   var map=directionModes?.[signal.direction]||'UNKNOWN';
-   put('zlF5Meta','行情分层：小幅波动≤5bps'+
-    ' · 15分钟净波动'+Number(signal.regimeMagnitudeBps).toFixed(2)+'bps'+
-    ' · 原始 '+label(signal.originalDirection)+' → V5 '+label(signal.direction)+
-    ' · 下单映射 '+(map==='INVERSE'?'反向':map==='FORWARD'?'正向':'不可用')+
-    ' · 锁定不代表成交');
-  }
-  if(!signal&&s.latestError==='REGIME_GT5_BPS_WAIT'){
-   put('zlF5Reason','波动过滤：开轮前15分钟净波动'+
-     Number(s.regimeMagnitudeBps||0).toFixed(2)+'bps > 5bps，本轮WAIT，不锁定、不下单。');
-   put('zlF5Meta','V6只允许≤5bps小幅波动出信号；WAIT不进入胜率分母。');
+  if(signal&&signal.trendVersion){
+   var modes=t.directionModes?.FAST5_SPOT_MOMENTUM_V1;
+   var mapping=modes?.[signal.direction]||'UNKNOWN';
+   put('zlF5Meta','多空趋势 V7 · 综合动量 '+Number(signal.trendScoreBps).toFixed(3)+' bps'+
+    ' · 短线 '+(Number.isFinite(signal.trendShortBps)?signal.trendShortBps.toFixed(3):'--')+' bps'+
+    ' · 当前信号 '+label(signal.direction)+
+    ' · 下单方向 '+(mapping==='INVERSE'?'反向':mapping==='FORWARD'?'正向':'关闭')+
+    ' · 锁定不代表已下单或成交');
   }
   renderTradeTilesSnapshot(s,t,now,round,signal);
  }catch(err){

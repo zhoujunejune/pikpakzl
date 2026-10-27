@@ -1,5 +1,5 @@
 name: Release dual5 round-boundary fast scanner
-# Deliver explicit user-clicked strict one-order Binance reconciliation. Keep old lock until user approves, no live orders.
+# Self-service wallet-wide double-snapshot risk audit for owner; trading stays OFF until owner arms.
 on:
   push:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
@@ -29,11 +29,11 @@ jobs:
           p=Path('prediction-bot-v1/aliyun_dual5_fast_scan_release.py').read_text()
           assert 'FUNDING_PROXY=r"""' in p
           assert "'/api/dual5-funding'" in p
-          assert 'RECOVERY_PROXY=r"""' in p
-          assert 'RECOVERY_PROXY+ROUTE_ANCHOR' in p
+          assert 'FLAT_PROXY=r"""' in p
+          assert 'FLAT_PROXY+ROUTE_ANCHOR' in p
           assert 'DUAL5_MPC_CEX_OWNER_SELECTOR_LIVE=true' in p
           assert 'DUAL5_EXISTING_ORDER_LOCK_UNCHANGED=' in p
-          assert 'DUAL5_OWNER_ONLY_HISTORIC_RECOVERY_BUTTON_DEPLOYED=true' in p
+          assert 'DUAL5_OWNER_WALLET_RISK_AUDIT_BUTTON_LIVE=true' in p
           assert 'DUAL5_FUNDING_PROXY_NOT_ALREADY_INSTALLED' in p
           assert 'for f in (WORKER,PAGE,PANEL):shutil.copy2(archive/f.name,f)' in p
           print('DUAL5_FUNDING_PROXY_BACKUP_ROLLBACK_CHECKS_OK=true')
@@ -65,8 +65,8 @@ jobs:
              'id="upAmount"','id="downAmount"','id="riskSave"',
              'id="firstScanLag"','id="pairExecution"',
              'id="fundingSource"','id="fundingSave"','/api/dual5-funding',
-             'id="reconcileOld"','id="oldLockPanel"',
-             '/api/dual5-reconcile-known-zero-fill'])
+             'id="riskUnlock"','id="riskUnlockPanel"',
+             '/api/dual5-reconcile-flat-wallet'])
           print('DUAL5_FAST_SCAN_TESTS_OK=true')
           PY
   deploy:
@@ -145,7 +145,7 @@ jobs:
           assert status==200 and 'id="firstScanLag"' in html and 'id="pairExecution"' in html
           assert 'id="fundingSource"' in html and 'id="fundingSave"' in html
           assert '/api/dual5-funding' in html
-          assert 'id="reconcileOld"' in html and '/api/dual5-reconcile-known-zero-fill' in html
+          assert 'id="riskUnlock"' in html and '/api/dual5-reconcile-flat-wallet' in html
           status,buf=get('/api/status')
           assert json.loads(buf).get('enabled') is False
           print('DUAL5_FAST_SCAN_PUBLIC_VERIFY=true')
@@ -154,6 +154,6 @@ jobs:
           print('DUAL5_FUNDING_SOURCE='+str(d.get('fundingSource')))
           print('DUAL5_LIVE_TRADING_OFF=true')
           print('DUAL5_ORIGINAL_MANUAL_REVIEW_LOCK_PRESERVED=true')
-          print('DUAL5_OWNER_RECONCILIATION_BUTTON_LIVE=true')
+          print('DUAL5_OWNER_WALLET_RISK_UNLOCK_BUTTON_LIVE=true')
           print('DUAL5_FIRST_SCAN_LAG_MS='+str(d.get('firstScanLagMs')))
           PY

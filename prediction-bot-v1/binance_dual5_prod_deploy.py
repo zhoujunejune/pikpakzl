@@ -179,17 +179,53 @@ def main():
    if needle not in page:raise RuntimeError('DUAL5_MISSING_WEB_CONTROL_'+needle)
   if '/api/dual5-risk' not in page or 'DOWN 持仓' not in page:
    raise RuntimeError('DUAL5_INDEPENDENT_TPSL_FRONTEND_MISSING')
-  old_risk=RISK_WORKER.read_text()
-  updated_risk=(tmp/'risk-worker.mjs').read_text()
+  live_risk=RISK_WORKER.read_text()
+  new_risk=(tmp/'risk-worker.mjs').read_text()
   for needle in ('DUAL5_CONFIG_FILE','function dual5RiskFor(position)',
                  'riskSide: targets.riskSide','PREDICTION_WALLET_LOOKUP_FAILED'):
-   if needle not in updated_risk:raise RuntimeError('DUAL5_RISK_WORKER_SCOPE_FAILED')
-  if 'DUAL5_CONFIG_FILE' in old_risk:
-   raise RuntimeError('DUAL5_RISK_WORKER_ALREADY_INSTALLED_ABORT')
-  # If production has drifted from the repo baseline, do not blindly overwrite.
+   if needle not in new_risk:raise RuntimeError('DUAL5_RISK_WORKER_SCOPE_FAILED')
+  if 'DUAL5_CONFIG_FILE' in live_risk:
+   raise RuntimeError('DUAL5_RISK_ALREADY_INSTALLED_ABORT')
+  # Only add scoped risk calculation and logging to ACTIVE risk worker.
+  # DO NOT remove current production sell retry, finality, unknown reconciliation,
+  # persistent pending sell journals or any other independently deployed protections.
   baseline_url='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/f529b8424ffd50e886c567d5ecc1850a4a54e411/railway-diagnostic/risk-worker.mjs'
-  with urllib.request.urlopen(baseline_url,timeout=30) as response:baseline=response.read()
-  if RISK_WORKER.read_bytes()!=baseline:raise RuntimeError('EXISTING_RISK_WORKER_SOURCE_DRIFT_ABORT')
+  with urllib.request.urlopen(baseline_url,timeout=30) as response:baseline=response.read().decode('utf8')
+  def between(src,a,b):
+   if src.count(a)!=1 or src.count(b)!=1:raise RuntimeError('RISK_HUNK_ANCHOR_CHANGED')
+   return src[src.index(a):src.index(b,src.index(a))]
+  def checked_hunk(a,b):
+   old=between(baseline,a,b)
+   if live_risk.count(old)!=1:raise RuntimeError('RISK_RELEVANT_HUNK_DRIFT_'+a[:28])
+   return old,between(new_risk,a,b)
+  for a,b in [('function calculateTargets(position) {','function evaluateRisk(targets, quote) {'),
+              ('function evaluateRisk(targets, quote) {','function quoteTooCloseToExpiry(quote) {')]:
+   before,after=checked_hunk(a,b)
+   live_risk=live_risk.replace(before,after,1)
+  addon=between(new_risk,
+   '// Scoped overrides for positions opened by BINANCE_DUAL5_PAIR_V1 only.',
+   'const health = {')
+  anchor="const WORKER_HEALTH_FILE = process.env.RISK_WORKER_HEALTH_FILE || '/tmp/risk-worker-health.json';"
+  if live_risk.count(anchor)!=1:raise RuntimeError('CURRENT_RISK_HEALTH_ANCHOR_DRIFT')
+  live_risk=live_risk.replace(anchor,anchor+'\n'+addon,1)
+  old_guard='  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED) || workerBusy) return;'
+  new_guard=between(new_risk,'  if (workerBusy) return;','  if (!API_KEY || !API_SECRET) return;')
+  if live_risk.count(old_guard)!=1:raise RuntimeError('CURRENT_RISK_TICK_GUARD_DRIFT')
+  live_risk=live_risk.replace(old_guard,new_guard.rstrip(),1)
+  old_targets='      const targets = calculateTargets(position);'
+  new_targets=between(new_risk,'      let targets;','      if (!targets.ok) {')
+  if live_risk.count(old_targets)!=1:raise RuntimeError('CURRENT_RISK_TARGET_HOOK_DRIFT')
+  live_risk=live_risk.replace(old_targets,new_targets.rstrip(),1)
+  # Risk dashboard log gains per-leg fields; no state-machine/sell changes.
+  log_anchor='        tpTriggered: evaluation.tpTriggered,\n        slTriggered: evaluation.slTriggered,'
+  if live_risk.count(log_anchor)!=1:raise RuntimeError('CURRENT_RISK_LOG_HOOK_DRIFT')
+  live_risk=live_risk.replace(log_anchor,
+    log_anchor+'\n        riskOwner: targets.riskOwner,\n        riskSide: targets.riskSide,',1)
+  for preservation in ("reconcileExactUnknownOrder","classifySubmittedRiskSellOrder",
+    "safeToRetryUnfilledSubmitted","persistPendingSellState","reconcileUnknownSell",
+    "reconcileSubmittedSell","UNKNOWN_RECONCILE_MS"):
+   if preservation not in live_risk:raise RuntimeError('CRITICAL_EXISTING_SELL_GUARD_MISSING_'+preservation)
+  (tmp/'risk-worker.mjs').write_text(live_risk)
   sh(NODE,'--check',str(tmp/'risk-worker.mjs'))
   patched=text
   if "import fs from 'node:fs';" not in patched:

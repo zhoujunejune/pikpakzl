@@ -177,3 +177,19 @@ test('one-order-only recovery is fail-closed and leaves real trading OFF',()=>{
  assert.match(src,/config\.blocked=false;\s*config\.armed=false;/);
  assert.match(src,/const result=await reconcileKnownZeroFill\(\)/);
 });
+
+
+test('historical recovery control is user-triggered and never arms real trading',()=>{
+ const code=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
+ const page=readFileSync(new URL('./binance_dual5_dashboard.html',import.meta.url),'utf8');
+ assert.match(code,/req\.url==='\/api\/reconcile-known-zero-fill'/);
+ assert.match(code,/config\.blocked=false;\s*config\.armed=false;/);
+ assert.match(code,/HISTORIC_PENDING_LEG_MISMATCH/);
+ assert.match(code,/EXACT_BINANCE_FAILED_ZERO_FILL_NOT_PROVEN/);
+ assert.match(code,/OTHER_ORDER_IN_RECOVERY_MARKET/);
+ assert.match(code,/OPEN_POSITION_IN_RECOVERY_MARKET/);
+ assert.match(page,/id="reconcileOld"/);
+ assert.match(page,/id="oldLockPanel"/);
+ assert.match(page,/api\/dual5-reconcile-known-zero-fill/);
+ assert.match(page,/confirm\('只核对指定历史零成交订单/);
+});

@@ -14,6 +14,11 @@ const MIN_EDGE=0.08; // $0.08 minimum remaining after conservative fee and execu
 const DEFAULT_SIDE_USDT=1,ROUND_MS=300000,DEADLINE_BUFFER_MS=45000;
 // Only enter during the first 15s of a round; never place a late buy minutes after open.
 const ENTRY_WINDOW_MS=15000,CONFIRM_WINDOW_MS=12000;
+// Explicit, single historical recovery target; never clears unknown/partially filled orders.
+const RECOVERY_ORDER_ID='26102700001999631125';
+const RECOVERY_TOPIC='7586769';
+const RECOVERY_TOKEN='37068596642631366318735116300978883320544930616603388101060416053519997861898';
+const RECOVERY_ROUND=1793120700000;
 // MPC uses the prediction/CeDeFi wallet; CEX + SPOT uses Binance exchange spot balance.
 // Never silently fall back to the other account if the selected funding source lacks funds.
 const validFundingSource=v=>v==='MPC'||v==='CEX';
@@ -195,6 +200,47 @@ function exactOrderResult(orders,id,topic){
  if(terminal)return {status:String(terminal.status),shares:0,spent:0,
   orderId:String(id),terminalZeroFill:true};
  return null;
+}
+async function reconcileKnownZeroFill(){
+ if(config.armed||!config.blocked||config.lastOrderRound!==RECOVERY_ROUND)
+  throw Error('HISTORIC_LOCK_PRECONDITION_FAILED');
+ const leg=config.legs?.UP, entries=Object.entries(config.tracked||{});
+ if(!leg||Object.keys(config.legs).length!==1||
+    leg.status!=='ORDER_PENDING'||String(leg.marketTopicId)!==RECOVERY_TOPIC||
+    String(leg.tokenId)!==RECOVERY_TOKEN||entries.length!==1||
+    entries[0][0]!==RECOVERY_TOPIC+':'+RECOVERY_TOKEN||entries[0][1]?.side!=='UP')
+  throw Error('HISTORIC_PENDING_LEG_MISMATCH');
+ const wallet=await walletInfo();
+ const query={walletAddress:wallet.walletAddress,offset:0,limit:100};
+ const [open,history,positions]=await Promise.all([
+   call('GET','/sapi/v1/w3w/wallet/prediction/order/list',query),
+   call('GET','/sapi/v1/w3w/wallet/prediction/order/history',query),
+   call('GET','/sapi/v1/w3w/wallet/prediction/position/list',
+    {walletAddress:wallet.walletAddress,tab:'ONGOING',offset:0,limit:100})
+ ]);
+ if(!Array.isArray(open.orders)||!Array.isArray(history.orders)||
+    !Array.isArray(positions.positions))
+  throw Error('BINANCE_RESPONSE_NOT_VERIFIABLE');
+ const orders=[...open.orders,...history.orders];
+ const target=orders.filter(o=>String(o.orderId)===RECOVERY_ORDER_ID&&
+  String(o.marketTopicId)===RECOVERY_TOPIC);
+ if(!target.length||target.some(o=>String(o.status).toUpperCase()!=='FAILED'||
+   Number(o.filledShareQty)!==0||Number(o.filledUsdtAmount)!==0))
+  throw Error('EXACT_BINANCE_FAILED_ZERO_FILL_NOT_PROVEN');
+ if(orders.some(o=>String(o.marketTopicId)===RECOVERY_TOPIC&&
+   String(o.orderId)!==RECOVERY_ORDER_ID))
+  throw Error('OTHER_ORDER_IN_RECOVERY_MARKET');
+ if(positions.positions.some(p=>String(p.marketTopicId)===RECOVERY_TOPIC))
+  throw Error('OPEN_POSITION_IN_RECOVERY_MARKET');
+ // No account mutation: only remove one locally persisted phantom ORDER_PENDING.
+ delete config.tracked[RECOVERY_TOPIC+':'+RECOVERY_TOKEN];
+ delete config.legs.UP;
+ config.blocked=false;
+ config.armed=false;
+ config.lastRecovery={orderId:RECOVERY_ORDER_ID,status:'FAILED_ZERO_FILL',at:new Date().toISOString()};
+ persist();state.lastError=null;
+ state.health='HISTORIC_ZERO_FILL_LOCK_CLEARED';
+ return {ok:true,armed:false,blocked:false,reconciledOrderId:RECOVERY_ORDER_ID};
 }
 async function confirmOrder(wallet,id,topic){
  // An order ID proves submission, not execution. Explicit FAILED/zero-fill is
@@ -391,6 +437,14 @@ const site='https://prediction.47-237-188-69.sslip.io';
 if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  if(req.method==='GET'&&req.url==='/api/status')return reply(res,200,safePublic());
  if(req.method==='GET'&&req.url==='/healthz')return reply(res,200,{ok:true,model:MODEL});
+ if(req.method==='POST'&&req.url==='/api/reconcile-known-zero-fill'){
+  if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
+   return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
+  try{
+   const result=await reconcileKnownZeroFill();
+   return reply(res,200,result);
+  }catch(e){return reply(res,409,{ok:false,error:safeErr(e)})}
+ }
  if(req.method==='POST'&&req.url==='/api/amounts'){
   if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
    return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});

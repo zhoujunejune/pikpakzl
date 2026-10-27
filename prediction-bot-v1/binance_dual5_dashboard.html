@@ -7,6 +7,8 @@
 <div class="metric"><small>本轮盘口和价</small><div class="value" id="ask">--</div></div>
 <div class="metric"><small>保守配对净收益估计</small><div class="value" id="edge">--</div></div>
 <div class="metric"><small>已检查 / 已报价</small><div class="value" id="checks">--</div></div>
+<div class="metric"><small>本轮首次扫描延迟</small><div class="value" id="firstScanLag">--</div></div>
+<div class="metric"><small>双边成交核验耗时</small><div class="value" id="pairExecution">--</div></div>
 </div><p><small id="detail">仅在两边真正互补、成本扣费后仍有正优势时尝试；不保证两单同时成交。</small></p></article>
 <article><h2>独立实盘交易开关</h2><p class="warn">两笔独立订单不具有原子性：可能只成交 UP 或 DOWN，造成单边损失。发生未知状态会停机，需人工核对。仅在你主动开启后才发送真实订单。</p>
 <p>UP 和 DOWN 买入金额可单独设置，默认各 <b>1 USDT</b>；<b>已取消每日硬性金额限制</b>。每轮最多尝试一组；必须通过保守净收益核验（至少 <b>0.08 USDT</b>）后才可能下单。</p>
@@ -45,6 +47,8 @@ async function load(){
   el('ask').textContent=q?fmt(q.askSum):'--';
   el('edge').textContent=q&&q.quoteNetUSDT!=null?fmt(q.quoteNetUSDT)+' USDT':'--';
   el('checks').textContent=label(d.checked)+' / '+label(d.quoteChecks);
+   el('firstScanLag').textContent=d.firstScanLagMs==null?'--':d.firstScanLagMs+' ms';
+   el('pairExecution').textContent=d.lastOrder?.pairExecutionMs==null?'--':d.lastOrder.pairExecutionMs+' ms';
   el('detail').textContent='UP卖一 '+(q?fmt(q.upAsk):'--')+' · DOWN卖一 '+(q?fmt(q.downAsk):'--')+
    ' · 盘口筛选：'+(q?label(q.status):'等待有效市场')+
    ' · 今日累计下单尝试金额 '+fmt(d.dailySpend)+' USDT（不设每日硬限制）';
@@ -70,7 +74,7 @@ async function load(){
   const o=d.lastOrder;
   if(o){
    const rows=[['轮次',new Date(o.round).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})],
-    ['执行阶段',o.phase],['UP订单',o.first?.orderId||'未提交'],
+    ['执行阶段',o.phase],['UP首次提交距开轮',o.firstOrderSubmitAt==null?'未提交':(o.firstOrderSubmitAt-o.round)+' ms'],['双边核验耗时',o.pairExecutionMs==null?'未完成':o.pairExecutionMs+' ms'],['UP订单',o.first?.orderId||'未提交'],
     ['DOWN订单',o.second?.orderId||'未提交'],['错误',o.error||'无'],
     ['实际配对保守收益',o.actualPairWorstCaseUSDT==null?'尚未确认':fmt(o.actualPairWorstCaseUSDT)+' USDT']];
    el('orders').replaceChildren(...rows.map(([k,v])=>{

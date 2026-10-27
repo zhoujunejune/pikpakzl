@@ -12,6 +12,17 @@
 </div><p><small id="detail">开轮尽快尝试双边下单；没有盈利筛选，两笔独立订单可能亏损或只成交一边。</small></p></article>
 <article><h2>独立实盘交易开关</h2><p class="warn">两笔独立订单不具有原子性：可能只成交 UP 或 DOWN，造成单边损失。发生未知状态会停机，需人工核对。仅在你主动开启后才发送真实订单。</p>
 <p>UP 和 DOWN 买入金额可单独设置，默认各 <b>1 USDT</b>；<b>已取消每日硬性金额限制</b>。每轮最多尝试一组；不再检查买价之和或预估净收益。必须能获取有效盘口与报价并完成必要的安全核验，交易所拒绝或缺少流动性仍可能无法成交。</p>
+<h2>双边交易资金来源</h2>
+<p class="sub">由你手动选择：预测账户（MPC / CeDeFi）或现货账户（CEX / SPOT）。UP 与 DOWN 两笔订单使用相同来源，余额不足时不会自动从另一账户扣款。切换只影响之后的买单，不会转移资金。</p>
+<div class="metric">
+<label for="fundingSource">选择扣款账户</label>
+<p><select id="fundingSource" style="width:100%;max-width:360px;padding:12px;background:#0d1728;color:#fff;border:1px solid #536680;border-radius:8px">
+<option value="MPC">预测账户钱包（MPC / CeDeFi）</option>
+<option value="CEX">币安现货账户（CEX / SPOT）</option>
+</select></p>
+<button id="fundingSave" type="button" disabled>保存资金来源</button>
+<small id="fundingMsg" role="status">读取中…</small>
+</div>
 <h2>UP / DOWN 各自买入金额</h2>
 <div class="grid">
  <div class="metric"><label for="upAmount" class="ok">UP 买入金额（USDT）</label><p><input id="upAmount" type="number" min="1" max="1000" step="0.01" value="1" inputmode="decimal" style="width:100%;max-width:165px;padding:9px;background:#0d1728;color:#fff;border:1px solid #536680;border-radius:8px"></p></div>
@@ -32,10 +43,10 @@
 <button id="arm" type="button" disabled>启用独立双边实盘</button><button id="stop" class="stop" type="button" disabled>关闭双边实盘</button>
 <p id="feedback" class="sub"></p></article>
 <article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
-<article><h2>为什么会不下单？</h2><p class="sub">典型原因包括某一边无流动性或有效报价、盘口过期、市场结果不互补、该轮已尝试、另一机器人正使用相同钱包、币安拒单或余额不足。预估利润不再是阻止买单的条件。</p></article>
+<article><h2>为什么会不下单？</h2><p class="sub">典型原因包括选定资金账户余额不足、某一边无流动性或有效报价、盘口过期、市场结果不互补、该轮已尝试、另一机器人正使用相同钱包、币安拒单。预估利润不再是阻止买单的条件。</p></article>
 </main><script>
 const el=id=>document.getElementById(id),label=x=>x==null?'--':String(x),fmt=x=>Number.isFinite(Number(x))?Number(x).toFixed(4):'--';
-let saving=false,riskEditing=false,riskLoaded=false,amountLoaded=false,amountEditing=false;
+let saving=false,riskEditing=false,riskLoaded=false,amountLoaded=false,amountEditing=false,fundingLoaded=false,fundingEditing=false;
 async function load(){
  try{
   const r=await fetch('/api/dual5-status',{cache:'no-store'});
@@ -55,6 +66,12 @@ async function load(){
   el('arm').disabled=saving||d.active||d.blocked;el('stop').disabled=saving||!d.active;
   el('riskSave').disabled=saving||d.active||d.blocked;
   el('amountSave').disabled=saving||d.active||d.blocked;
+  el('fundingSave').disabled=saving||d.active||d.blocked;
+  if(d.fundingSource&&!fundingEditing&&!fundingLoaded){
+   el('fundingSource').value=d.fundingSource;
+   fundingLoaded=true;
+   el('fundingMsg').textContent='后台当前来源：'+(d.fundingSource==='CEX'?'币安现货账户 CEX / SPOT':'预测账户 MPC / CeDeFi');
+  }
   if(d.amounts&&!amountEditing&&!amountLoaded){
    el('upAmount').value=d.amounts.UP;
    el('downAmount').value=d.amounts.DOWN;
@@ -74,7 +91,7 @@ async function load(){
   const o=d.lastOrder;
   if(o){
    const rows=[['轮次',new Date(o.round).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})],
-    ['执行阶段',o.phase],['UP首次提交距开轮',o.firstOrderSubmitAt==null?'未提交':(o.firstOrderSubmitAt-o.round)+' ms'],['双边核验耗时',o.pairExecutionMs==null?'未完成':o.pairExecutionMs+' ms'],['UP订单',o.first?.orderId||'未提交'],
+    ['执行阶段',o.phase],['下单资金来源',o.fundingSource==='CEX'?'现货账户 CEX / SPOT':'预测账户 MPC / CeDeFi'],['UP首次提交距开轮',o.firstOrderSubmitAt==null?'未提交':(o.firstOrderSubmitAt-o.round)+' ms'],['双边核验耗时',o.pairExecutionMs==null?'未完成':o.pairExecutionMs+' ms'],['UP订单',o.first?.orderId||'未提交'],
     ['DOWN订单',o.second?.orderId||'未提交'],['错误',o.error||'无'],
     ['实际配对保守收益',o.actualPairWorstCaseUSDT==null?'尚未确认':fmt(o.actualPairWorstCaseUSDT)+' USDT']];
    el('orders').replaceChildren(...rows.map(([k,v])=>{
@@ -82,7 +99,25 @@ async function load(){
      td1.textContent=k;td2.textContent=v;tr.append(td1,td2);return tr;
    }));
   }
- }catch(e){el('banner').textContent='状态无法核验：'+String(e.message||e);el('arm').disabled=true;el('stop').disabled=true;el('amountSave').disabled=true;el('riskSave').disabled=true;}
+ }catch(e){el('banner').textContent='状态无法核验：'+String(e.message||e);el('arm').disabled=true;el('stop').disabled=true;el('amountSave').disabled=true;el('riskSave').disabled=true;el('fundingSave').disabled=true;}
+}
+async function saveFunding(){
+ if(saving)return;
+ const fundingSource=el('fundingSource').value;
+ if(!['MPC','CEX'].includes(fundingSource)){el('fundingMsg').textContent='无效资金来源';return}
+ saving=true;fundingEditing=true;el('fundingSave').disabled=true;
+ try{
+  const response=await fetch('/api/dual5-funding',{
+   method:'POST',credentials:'same-origin',
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({fundingSource})
+  });
+  const data=await response.json();
+  if(!response.ok||data.ok!==true||data.fundingSource!==fundingSource)
+   throw Error(data.error||'FUNDING_SOURCE_NOT_SAVED');
+  el('fundingMsg').textContent='已保存：'+(fundingSource==='CEX'?'现货账户 CEX / SPOT':'预测账户 MPC / CeDeFi')+'；下一笔UP和DOWN使用此来源。';
+ }catch(e){el('fundingMsg').textContent='保存失败：'+String(e.message||e)}
+ finally{saving=false;fundingEditing=false;await load()}
 }
 async function saveAmounts(){
  if(saving)return;
@@ -138,6 +173,7 @@ async function save(armed){
  }catch(e){el('feedback').textContent='保存失败：'+String(e.message||e)}
  finally{saving=false;await load();}
 }
+el('fundingSave').addEventListener('click',()=>void saveFunding());
 el('amountSave').addEventListener('click',()=>void saveAmounts());
 el('riskSave').addEventListener('click',()=>void saveRisk());
 el('arm').addEventListener('click',()=>void save(true));el('stop').addEventListener('click',()=>void save(false));

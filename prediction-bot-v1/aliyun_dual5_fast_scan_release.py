@@ -71,13 +71,17 @@ def main():
         new_page=(stage/PAGE.name).read_text()
         for marker in ('ROUND_BOUNDARY_FAST_V1','nextScanDelayMs','elapsed<15000?700',
                        'record.firstOrderSubmitAt=Date.now()','record.bothConfirmedAt=Date.now()',
-                       'MIN_EDGE=0.08','UNHEDGED_OR_UNKNOWN_STOPPED',
+                       'profitFilterEnabled:false','UNHEDGED_OR_UNKNOWN_STOPPED',
+                       "if(!estimate.ok){state.health='INVALID_PAIR_QUOTES';return}",
+                       'if(!reassess.ok || Number(down.expireAt)',
                        "quoteFor(topic,pair.up,wallet,config.amounts.UP)",
                        "quoteFor(topic,pair.down,wallet,config.amounts.DOWN)"):
             if marker not in new_worker:raise RuntimeError('SCANNER_GUARD_MISSING_'+marker)
         for marker in ('id="upAmount"','id="downAmount"','id="riskSave"',
                        'id="firstScanLag"','id="pairExecution"'):
             if marker not in new_page:raise RuntimeError('FRONTEND_GUARD_MISSING_'+marker)
+        if any(old in new_worker for old in ('if(raw>=1-2*fee-MIN_EDGE/3.2)', 'if(!estimate.feasible)', 'if(!reassess.feasible')):
+            raise RuntimeError('PROFIT_FILTER_STILL_BLOCKS_ROUND_OPEN_ORDERS')
         if 'DAILY_BUDGET_STOP' in new_worker or 'MAX_DAILY_SPEND' in new_worker:
             raise RuntimeError('SPENDING_HARD_CAP_REGRESSION')
         if obj(13048,'/api/status').get('active') is not False or obj(13001,'/api/status').get('enabled') is not False:
@@ -100,6 +104,8 @@ def main():
                     ui=page(13001,'/dual5')
                     if (d.get('ok') is True and d.get('model')=='BINANCE_DUAL5_PAIR_V1'
                       and d.get('scanMode')=='ROUND_BOUNDARY_FAST_V1'
+                      and d.get('entryMode')=='ROUND_OPEN_VALID_QUOTES_V2'
+                      and d.get('profitFilterEnabled') is False
                       and d.get('active') is False and d.get('blocked') is False
                       and d.get('amounts')==dual_before.get('amounts')
                       and d.get('risk')==dual_before.get('risk')
@@ -115,6 +121,7 @@ def main():
                     raise RuntimeError('SERVICE_INACTIVE_AFTER_RELEASE_'+unit)
             print('DUAL5_FAST_SCAN_DEPLOY_SUCCESS=true',flush=True)
             print('DUAL5_SCAN_MODE=ROUND_BOUNDARY_FAST_V1',flush=True)
+            print('DUAL5_ROUND_OPEN_ORDERS_WITHOUT_PROFIT_FILTER=true',flush=True)
             print('DUAL5_AMOUNTS_AND_TP_SL_UNCHANGED=true',flush=True)
             print('DUAL5_FOLLOW_OFF=true',flush=True)
             print('DUAL5_MAIN_ROBOT_OFF=true',flush=True)

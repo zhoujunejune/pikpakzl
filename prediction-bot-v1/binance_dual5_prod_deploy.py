@@ -150,7 +150,8 @@ def main():
  if sh('systemctl','is-active','zl-prediction-trade.service').stdout.strip()!='active':
   raise RuntimeError('EXISTING_PRODUCTION_TRADE_DOWN_ABORT')
  trade=api(13001,'/api/status')
- if trade.get('enabled') is not False:raise RuntimeError('EXISTING_AUTO_FOLLOW_ON_ABORT_FOR_SAFETY')
+ base_follow=trade.get('enabled')
+ if type(base_follow) is not bool:raise RuntimeError('EXISTING_FOLLOW_STATE_UNREADABLE')
  if (trade.get('pendingAction') or {}).get('state') in ('READY','QUOTING','SUBMITTING','SUBMITTED_PENDING_CONFIRMATION','SUBMISSION_UNKNOWN'):
   raise RuntimeError('EXISTING_REAL_PENDING_ORDER_ABORT')
  text=PANEL.read_text()
@@ -199,7 +200,7 @@ def main():
   patched=patched.replace(ROUTE_ANCHOR,ROUTE+ROUTE_ANCHOR,1)
   t=tmp/'patched-panel.mjs';t.write_text(patched)
   sh(NODE,'--check',str(t))
-  if api(13001,'/api/status').get('enabled') is not False:
+  if api(13001,'/api/status').get('enabled') is not base_follow:
    raise RuntimeError('TRADE_FOLLOW_CHANGED_DURING_PREPARATION')
   backup=pathlib.Path('/var/lib/zl-prediction/archive/source-backups')/(
    'dual5-prod-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
@@ -246,7 +247,7 @@ def main():
      trade2=api(13001,'/api/status');q=api(13001,'/api/dual5-status')
      html=urllib.request.urlopen('http://127.0.0.1:13001/dual5',timeout=5).read().decode('utf8')
      if (q.get('ok') is True and q.get('mode')=='PRODUCTION_IDLE' and
-       q.get('active') is False and trade2.get('enabled') is False and
+       q.get('active') is False and trade2.get('enabled') is base_follow and
        '启用独立双边实盘' in html and '/api/dual5-arm' in html and
        'id="riskSave"' in html and '/api/dual5-risk' in html):
       valid=True;break
@@ -261,7 +262,7 @@ def main():
    print('DUAL5_EXISTING_RISK_EXECUTOR_REUSED=true',flush=True)
    print('DUAL5_PRODUCTION_UI=/dual5',flush=True)
    print('DUAL5_FAST5_ORIGINAL_MODEL_UNCHANGED=true',flush=True)
-   print('DUAL5_BASE_TRADING_FOLLOW_OFF=true',flush=True)
+   print('DUAL5_BASE_TRADING_FOLLOW_PRESERVED='+str(base_follow),flush=True)
    print('DUAL5_FIRST_STATUS='+json.dumps({k:q.get(k) for k in
     ('health','lastError','checked','quoteChecks','lastOpportunity','mode')},ensure_ascii=False),flush=True)
    print('DUAL5_BACKUP='+str(backup),flush=True)

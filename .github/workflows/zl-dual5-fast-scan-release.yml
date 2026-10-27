@@ -1,5 +1,5 @@
 name: Release dual5 round-boundary fast scanner
-# Wake around round boundary +80ms; early scans ~700ms; order execution protections unchanged.
+# Release verified round-open paired buy attempts without price/profit gating. Trading remains OFF until owner activates.
 on:
   push:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
@@ -33,11 +33,15 @@ jobs:
              'record.firstOrderSubmitAt=Date.now()',
              'record.bothConfirmedAt=Date.now()',
              'UNHEDGED_OR_UNKNOWN_STOPPED',
-             'const MIN_EDGE=0.08',
+             'profitFilterEnabled:false',
+             "if(!estimate.ok){state.health='INVALID_PAIR_QUOTES';return}",
+             'if(!reassess.ok || Number(down.expireAt)',
              "if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}",
              'config.lastOrderRound===round',
              'dailySpendMax:null',
              'risk:config.risk'])
+          assert all(s not in src for s in ['if(raw>=1-2*fee-MIN_EDGE/3.2)',
+              'if(!estimate.feasible)', 'if(!reassess.feasible'])
           assert all(s in page for s in [
              'id="upAmount"','id="downAmount"','id="riskSave"',
              'id="firstScanLag"','id="pairExecution"'])
@@ -110,6 +114,8 @@ jobs:
           d=json.loads(buf)
           assert status==200 and d.get('model')=='BINANCE_DUAL5_PAIR_V1'
           assert d.get('scanMode')=='ROUND_BOUNDARY_FAST_V1'
+          assert d.get('entryMode')=='ROUND_OPEN_VALID_QUOTES_V2'
+          assert d.get('profitFilterEnabled') is False
           assert d.get('active') is False and d.get('blocked') is False
           status,buf=get('/dual5')
           html=buf.decode('utf8','replace')
@@ -117,6 +123,7 @@ jobs:
           status,buf=get('/api/status')
           assert json.loads(buf).get('enabled') is False
           print('DUAL5_FAST_SCAN_PUBLIC_VERIFY=true')
+          print('DUAL5_NO_PROFIT_FILTER_LIVE_VERIFIED=true')
           print('DUAL5_LIVE_TRADING_OFF=true')
           print('DUAL5_FIRST_SCAN_LAG_MS='+str(d.get('firstScanLagMs')))
           PY

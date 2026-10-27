@@ -11,7 +11,11 @@ const APIKEY=process.env.BINANCE_PREDICTION_API_KEY||'';
 const SECRET=process.env.BINANCE_PREDICTION_API_SECRET||'';
 const MODEL='BINANCE_DUAL5_PAIR_V1';
 const MIN_EDGE=0.08; // $0.08 minimum remaining after conservative fee and execution reserve
-const MAX_SIDE_USDT=1.60,MAX_DAILY_SPEND=12.80,ROUND_MS=300000,DEADLINE_BUFFER_MS=45000;
+const DEFAULT_SIDE_USDT=1,ROUND_MS=300000,DEADLINE_BUFFER_MS=45000;
+// The owner chooses each side's spend. No daily hard trading budget.
+const validStake=n=>typeof n==='number'&&Number.isFinite(n)&&n>=1&&n<=1000&&Math.round(n*100)===n*100;
+const validateAmounts=v=>v&&validStake(v.UP)&&validStake(v.DOWN);
+const defaultAmounts=()=>({UP:DEFAULT_SIDE_USDT,DOWN:DEFAULT_SIDE_USDT});
 const DEFAULT_RISK=()=>({takeProfitEnabled:true,takeProfitPct:30,stopLossEnabled:true,stopLossPct:30});
 const validPercent=p=>typeof p==='number'&&Number.isFinite(p)&&p>=1&&p<=95;
 function validRisk(r){return r&&typeof r.takeProfitEnabled==='boolean'&&typeof r.stopLossEnabled==='boolean'&&validPercent(r.takeProfitPct)&&validPercent(r.stopLossPct)}
@@ -60,11 +64,12 @@ function loadConfig(){
   return {armed:d.armed===true,createdAt:d.createdAt||null,
     dailyDate:d.dailyDate||null,dailySpend:finite(d.dailySpend)?Number(d.dailySpend):0,
     lastOrderRound:Number(d.lastOrderRound)||0,blocked:d.blocked===true,
+    amounts:validateAmounts(d.amounts)?{UP:d.amounts.UP,DOWN:d.amounts.DOWN}:defaultAmounts(),
     risk:validRiskBoth(d.risk)?d.risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},
     legs:d.legs&&typeof d.legs==='object'?d.legs:{},
     tracked:d.tracked&&typeof d.tracked==='object'?d.tracked:{}};}
  catch{return {armed:false,dailyDate:null,dailySpend:0,lastOrderRound:0,blocked:false,createdAt:null,
-  risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{},tracked:{}};}
+  risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{},tracked:{},amounts:defaultAmounts()};}
 }
 let config=loadConfig(),state={model:MODEL,at:null,health:'BOOT',round:null,
  lastOpportunity:null,lastOrder:null,lastError:null,checked:0,quoteChecks:0,attempts:0,
@@ -79,7 +84,8 @@ if(process.env.DUAL5_TEST!=='1'&&config.armed){
 }
 function safePublic(){return {ok:true,model:MODEL,mode:config.armed?'LIVE_ARMED':'PRODUCTION_IDLE',
   active:config.armed&&!config.blocked,blocked:config.blocked,
-  dailySpend:config.dailySpend,dailySpendMax:MAX_DAILY_SPEND,maxPerSide:MAX_SIDE_USDT,
+  dailySpend:config.dailySpend,dailySpendMax:null,amounts:config.amounts,
+  combinedAmount:config.amounts.UP+config.amounts.DOWN,
   minNetEdgeUSDT:MIN_EDGE,configUpdatedAt:config.createdAt,
   risk:config.risk,legs:config.legs,trackedCount:Object.keys(config.tracked).length,
   ...state,wallet:undefined};}
@@ -114,18 +120,19 @@ function bestAsk(book){
  .sort((x,y)=>x.price-y.price);
  return r[0]||null;
 }
-function calcPair(qUp,qDown,stake=MAX_SIDE_USDT){
+function calcPair(qUp,qDown,upAmount=DEFAULT_SIDE_USDT,downAmount=upAmount){
  const a=decimal(qUp?.minReceive??qUp?.amountOut);
  const b=decimal(qDown?.minReceive??qDown?.amountOut);
  const f1=decimal(qUp?.feeAmount??'0'),f2=decimal(qDown?.feeAmount??'0');
- if(![a,b,f1,f2].every(Number.isFinite)||a<=0||b<=0||f1<0||f2<0)
+ if(!validStake(upAmount)||!validStake(downAmount)||
+    ![a,b,f1,f2].every(Number.isFinite)||a<=0||b<=0||f1<0||f2<0)
   return {ok:false,reason:'BAD_BINANCE_QUOTES'};
  const shares=Math.min(a,b);
  // Subtract fee again as an intentionally conservative upper-cost estimate:
  // Binance response does not guarantee how feeAmount impacts amountOut.
- const conservativeNet=shares-2*stake-f1-f2-0.025;
+ const conservativeNet=shares-upAmount-downAmount-f1-f2-0.025;
  return {ok:true,sharesUp:a,sharesDown:b,pairedShares:shares,
-  feeUp:f1,feeDown:f2,conservativeNet:Math.round(conservativeNet*10000)/10000,
+  amountUp:upAmount,amountDown:downAmount,feeUp:f1,feeDown:f2,conservativeNet:Math.round(conservativeNet*10000)/10000,
   feasible:conservativeNet>=MIN_EDGE};
 }
 async function discover(now){
@@ -154,7 +161,7 @@ async function bookFor(topic,leg){
   throw Error('STALE_ORDERBOOK');
  return bestAsk(b);
 }
-async function quoteFor(topic,leg,wallet,sideAmount=MAX_SIDE_USDT){
+async function quoteFor(topic,leg,wallet,sideAmount=DEFAULT_SIDE_USDT){
  const body={walletAddress:wallet.walletAddress,tokenId:leg.tokenId,side:'BUY',
  amountIn:wei(sideAmount),orderType:'MARKET',slippageBps:Math.min(1000,Number(topic.slippageBps||1200)),
  chainId:topic.chainId||'56',feeRateBps:topic.feeRateBps||200,fundingSource:'MPC'};
@@ -197,8 +204,10 @@ async function place(wallet,topic,quote){
 async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
  if(!config.armed||config.blocked||config.lastOrderRound===round)return;
  // Persistent pre-commit disables any duplicate re-entry on restarts, even for uncertain HTTP.
- config.lastOrderRound=round;config.dailySpend+=MAX_SIDE_USDT*2;persist();
- const record={round,phase:'PREPARED',first:null,second:null,at:Date.now(),
+ config.lastOrderRound=round;
+ const orderAmounts={UP:config.amounts.UP,DOWN:config.amounts.DOWN};
+ config.dailySpend+=orderAmounts.UP+orderAmounts.DOWN;persist();
+ const record={round,phase:'PREPARED',first:null,second:null,at:Date.now(),amounts:orderAmounts,
   estimatedNetUSDT:analysis.conservativeNet};
  state.lastOrder=record;state.at=Date.now();state.attempts++;
  try{
@@ -223,8 +232,8 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId]={...config.legs.UP,side:'UP'};
   persist();
   // Re-price DOWN after UP fills: never blindly send a stale second quote.
-  const down=await quoteFor(topic,pair.down,wallet);
-  const reassess=calcPair(q1,down);
+  const down=await quoteFor(topic,pair.down,wallet,orderAmounts.DOWN);
+  const reassess=calcPair(q1,down,orderAmounts.UP,orderAmounts.DOWN);
   if(!reassess.feasible || Number(down.expireAt)<Date.now()+1800)
    throw Error('DOWN_QUOTE_EDGE_DISAPPEARED');
   config.legs.DOWN={tokenId:String(pair.down.tokenId),
@@ -266,9 +275,6 @@ async function tick(){
    state.health='ROUND_CLOSING_WAIT';return;
   }
   if(config.blocked){state.health='UNHEDGED_OR_UNKNOWN_MANUAL_REVIEW';return}
-  if(config.dailySpend+2*MAX_SIDE_USDT>MAX_DAILY_SPEND){
-   state.health='DAILY_BUDGET_STOP';return;
-  }
   if(config.lastOrderRound===round){state.health='ROUND_ALREADY_ATTEMPTED';return}
   if(!cached||cached.round!==round){
    const v=await discover(now);cached={...v,round};
@@ -278,7 +284,8 @@ async function tick(){
   const [up,down]=await Promise.all([bookFor(topic,pair.up),bookFor(topic,pair.down)]);
   state.checked++;state.lastScanAt=Date.now();
   if(!up||!down)throw Error('ONE_SIDE_NO_LIQUIDITY');
-  if(up.size < MAX_SIDE_USDT/up.price||down.size < MAX_SIDE_USDT/down.price)
+  if(!validateAmounts(config.amounts))throw Error('INVALID_PER_SIDE_ORDER_AMOUNTS');
+  if(up.size < config.amounts.UP/up.price||down.size < config.amounts.DOWN/down.price)
     throw Error('INSUFFICIENT_TOP_OF_BOOK_DEPTH');
   const fee=(Number(topic.feeRateBps)||200)/10000;
   const raw=up.price+down.price;
@@ -287,11 +294,14 @@ async function tick(){
    rawSpread:Number((1-raw).toFixed(5)),feeRatePerSide:fee,at:Date.now(),status:'NO_EDGE'};
   if(raw>=1-2*fee-MIN_EDGE/3.2){state.health='BOTH_ASKS_TOO_EXPENSIVE';return}
   const wallet=await walletInfo();
-  const [q1,q2]=await Promise.all([quoteFor(topic,pair.up,wallet),quoteFor(topic,pair.down,wallet)]);
+  const [q1,q2]=await Promise.all([
+    quoteFor(topic,pair.up,wallet,config.amounts.UP),
+    quoteFor(topic,pair.down,wallet,config.amounts.DOWN)]);
   state.quoteChecks++;
-  const estimate=calcPair(q1,q2);
+  const estimate=calcPair(q1,q2,config.amounts.UP,config.amounts.DOWN);
   state.lastOpportunity={...state.lastOpportunity,
     quoteNetUSDT:estimate.conservativeNet,pairedShares:estimate.pairedShares,
+    amountUp:config.amounts.UP,amountDown:config.amounts.DOWN,
     status:estimate.feasible?'NET_EDGE_AVAILABLE':'FEES_OR_IMBALANCE_NEGATIVE'};
   if(!estimate.feasible){state.health='QUOTE_NET_EDGE_TOO_SMALL';return}
   if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}
@@ -315,6 +325,19 @@ const site='https://prediction.47-237-188-69.sslip.io';
 if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  if(req.method==='GET'&&req.url==='/api/status')return reply(res,200,safePublic());
  if(req.method==='GET'&&req.url==='/healthz')return reply(res,200,{ok:true,model:MODEL});
+ if(req.method==='POST'&&req.url==='/api/amounts'){
+  if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
+   return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
+  let body='';for await(const c of req){body+=c;if(body.length>1200)break}
+  try{
+   const d=JSON.parse(body);
+   if(!validateAmounts(d.amounts))throw Error('INVALID_UP_DOWN_AMOUNTS_1_TO_1000_USDT');
+   if(config.armed||config.blocked)throw Error('STOP_TRADING_BEFORE_AMOUNT_EDIT');
+   config.amounts={UP:d.amounts.UP,DOWN:d.amounts.DOWN};
+   config.createdAt=new Date().toISOString();persist();
+   return reply(res,200,{ok:true,amounts:config.amounts,dailySpendMax:null});
+  }catch(e){return reply(res,400,{ok:false,error:safeErr(e)})}
+ }
  if(req.method==='POST'&&req.url==='/api/risk'){
   if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
    return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
@@ -340,6 +363,7 @@ if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
    if(typeof d.armed!=='boolean')throw Error('INVALID_ARM_VALUE');
    if(d.armed===true&&config.blocked)throw Error('MANUAL_RECONCILIATION_REQUIRED');
    if(d.armed===true&&!validRiskBoth(config.risk))throw Error('UP_DOWN_RISK_NOT_CONFIGURED');
+   if(d.armed===true&&!validateAmounts(config.amounts))throw Error('UP_DOWN_ORDER_AMOUNTS_NOT_CONFIGURED');
    if(d.armed===true){
     const base=await fetch('http://127.0.0.1:13001/api/status',
       {signal:timeout(1400)}).then(r=>r.json());
@@ -352,4 +376,4 @@ if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  return reply(res,404,{ok:false,error:'NOT_FOUND'});
 }).listen(PORT,'127.0.0.1',()=>console.log(JSON.stringify({event:'dual5_listening',port:PORT,mode:config.armed?'armed':'off'})));
 if(process.env.DUAL5_TEST!=='1'){setInterval(()=>void tick(),19000).unref();void tick();}
-export {complimentaryTokens,bestAsk,calcPair};
+export {complimentaryTokens,bestAsk,calcPair,validateAmounts};

@@ -6,6 +6,17 @@ on:
   workflow_dispatch:
 permissions: {contents: read}
 jobs:
+  dual5-code-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with: {node-version: '22'}
+      - name: Verify dual5 entry window and order reconciliation without live trading
+        run: |
+          node --check prediction-bot-v1/binance_dual5_pairs.mjs
+          node --test prediction-bot-v1/binance_dual5_pairs.test.mjs
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -121,7 +132,7 @@ jobs:
           set -eu
           python3 - <<'INNER'
           import pathlib,subprocess,json,time,urllib.request,urllib.error,urllib.parse,hmac,hashlib
-          ORDER_ID='2610270001999631125'
+          ORDER_ID='26102700001999631125'
           CONFIG=pathlib.Path('/var/lib/zl-prediction/dual5/config.json')
           def emit(key,data):
            print(key,json.dumps(data,ensure_ascii=False,default=str)[:8000],flush=True)

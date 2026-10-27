@@ -54,3 +54,56 @@ jobs:
           print('DUAL5_PAIR_LIVE_STATE_READ_SUCCESS=true')
           print('DUAL5_PUBLIC_PAIR_HEALTH='+str(pair.get('health')))
           PY
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Diagnose prediction payment-option balances on running Alibaba server using GET only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,subprocess,urllib.request,urllib.error,urllib.parse,json,hmac,hashlib,time
+          try:
+           status=json.load(urllib.request.urlopen('http://127.0.0.1:13048/api/status',timeout=6))
+           print('DUAL5_READONLY_LIVE',json.dumps({k:status.get(k) for k in ('active','blocked','health','lastError','quoteChecks','attempts','amounts')},ensure_ascii=False))
+           pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','zl-prediction-dual5.service'],text=True,timeout=6).strip()
+           envraw=pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\0')
+           process_env={k.decode('utf8','ignore'):v.decode('utf8','ignore') for k,v in (b.split(b'=',1) for b in envraw if b'=' in b)}
+           key=process_env.get('BINANCE_PREDICTION_API_KEY','')
+           secret=process_env.get('BINANCE_PREDICTION_API_SECRET','')
+           if not key or not secret:raise RuntimeError('TRADING_API_ENV_NOT_AVAILABLE')
+           qs=urllib.parse.urlencode({'timestamp':int(time.time()*1000),'recvWindow':5000})
+           sig=hmac.new(secret.encode(),qs.encode(),hashlib.sha256).hexdigest()
+           request=urllib.request.Request('https://api.binance.com/sapi/v1/w3w/wallet/prediction/balance/payment-options?'+qs+'&signature='+sig,
+             headers={'X-MBX-APIKEY':key,'Cache-Control':'no-store'})
+           try:
+            with urllib.request.urlopen(request,timeout=14) as resp:response=json.load(resp)
+            rows=response.get('items',[])
+            sanitized=[{'type':r.get('accountType'),'available':r.get('availableBalanceDisplay'),'enabled':r.get('enabled')} for r in rows if isinstance(r,dict)]
+            print('DUAL5_READONLY_PAYMENT_OPTIONS',json.dumps(sanitized,ensure_ascii=False))
+           except urllib.error.HTTPError as e:
+            print('DUAL5_READONLY_PAYMENT_ERROR',e.code,e.read(350).decode('utf8','replace')[:350])
+          except Exception as e:
+           print('DUAL5_READONLY_DIAG_ERROR',type(e).__name__,str(e)[:160])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='dual5-binance-payment-options-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=110)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           result=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if result and str(result.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('DUAL5_READONLY_CLOUD',result.invocation_status,result.exit_code)
+            print(base64.b64decode(result.output or '',validate=True).decode('utf8','replace')[-7000:])
+            if int(result.exit_code)!=0:raise RuntimeError('PAYMENT_READONLY_REMOTE_FAILED')
+            break
+          else:raise RuntimeError('PAYMENT_READONLY_TIMEOUT')
+          OUTER

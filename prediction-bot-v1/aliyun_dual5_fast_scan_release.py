@@ -127,7 +127,11 @@ def main():
                        "place(wallet,topic,down,fundingSource)",
                        'const ENTRY_WINDOW_MS=15000,CONFIRM_WINDOW_MS=12000',
                        "exactOrderResult(orders,id,topic)",
-                       "record.phase='UP_ZERO_FILL_CONFIRMED'"):
+                       "record.phase='UP_ZERO_FILL_CONFIRMED'",
+                       "req.url==='/api/reconcile-known-zero-fill'",
+                       "EXACT_BINANCE_FAILED_ZERO_FILL_NOT_PROVEN",
+                       "OPEN_POSITION_IN_RECOVERY_MARKET",
+                       "HISTORIC_PENDING_LEG_MISMATCH"):
             if marker not in new_worker:raise RuntimeError('SCANNER_GUARD_MISSING_'+marker)
         for marker in ('id="upAmount"','id="downAmount"','id="riskSave"',
                        'id="firstScanLag"','id="pairExecution"',

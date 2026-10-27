@@ -13,7 +13,7 @@ const MODEL='BINANCE_DUAL5_PAIR_V1';
 const MIN_EDGE=0.08; // $0.08 minimum remaining after conservative fee and execution reserve
 const DEFAULT_SIDE_USDT=1,ROUND_MS=300000,DEADLINE_BUFFER_MS=45000;
 // The owner chooses each side's spend. No daily hard trading budget.
-const validStake=n=>typeof n==='number'&&Number.isFinite(n)&&n>=1&&n<=1000&&Math.round(n*100)===n*100;
+const validStake=n=>typeof n==='number'&&Number.isFinite(n)&&n>=1&&n<=1000&&Math.abs(Math.round(n*100)-n*100)<1e-7;
 const validateAmounts=v=>v&&validStake(v.UP)&&validStake(v.DOWN);
 const defaultAmounts=()=>({UP:DEFAULT_SIDE_USDT,DOWN:DEFAULT_SIDE_USDT});
 const DEFAULT_RISK=()=>({takeProfitEnabled:true,takeProfitPct:30,stopLossEnabled:true,stopLossPct:30});

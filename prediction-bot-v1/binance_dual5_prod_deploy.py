@@ -144,7 +144,7 @@ def main():
    if needle not in page:raise RuntimeError('DUAL5_MISSING_WEB_CONTROL_'+needle)
   patched=text
   if "import fs from 'node:fs';" not in patched:
-   patched="import fs as dual5fs from 'node:fs';\n"+patched
+   patched="import * as dual5fs from 'node:fs';\n"+patched
   else:
    patched="import {readFileSync as dual5ReadFileSync} from 'node:fs';\n"+patched
    patched=patched.replace('dual5fs.readFileSync','dual5ReadFileSync')

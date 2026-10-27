@@ -94,25 +94,50 @@ th{color:#a9c6e7}
 <p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
 </section>
 <section class="card">
-<h2>独立统计（非官方结算）</h2>
+<h2>仅 V6 信号统计（公开行情代理）</h2>
 <div class="grid">
-<div class="metric"><small>手动启动次数</small><strong id="total">0</strong></div>
-<div class="metric"><small>有最终方向次数</small><strong id="decided">0</strong></div>
-<div class="metric"><small>公开行情已核对次数</small><strong id="settled">0</strong></div>
-<div class="metric"><small>公开行情命中率</small><strong id="accuracy">—</strong></div>
+<div class="metric"><small>V6 轮次</small><strong id="total">0</strong></div>
+<div class="metric"><small>V6 已出方向</small><strong id="decided">0</strong></div>
+<div class="metric"><small>V6 已核对</small><strong id="settled">0</strong></div>
+<div class="metric"><small>V6 代理命中率</small><strong id="accuracy">—</strong></div>
+<div class="metric"><small>V6 最近5轮已核对</small><strong id="v6last5">—</strong></div>
+<div class="metric"><small>V6 最近10轮已核对</small><strong id="v6last10">—</strong></div>
 </div>
-<p class="sub">数据过期、DeepSeek 调用失败、缺少到期价格时会明确记录失败或无法核验，不会虚构 UP/DOWN、结算结果或胜率。这里不显示资金盈亏。</p>
+<p class="sub">仅统计版本为 V6 的记录，排除 V6.1、V5 及更早版本；统计范围是后台最近50条历史中的 V6 轮次，属于滚动窗口而非全量历史。无官方事件合约结算，且这里不显示资金盈亏。</p>
 </section>
 <section class="card">
-<div class="row"><h2>后台历史记录</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
+<div class="row"><h2>V6 历史记录（仅显示 V6）</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
 <div class="tablewrap"><table><thead><tr>
 <th>开始时间</th><th>参考价</th><th>AI方向</th><th>AI主观置信度</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
 </tr></thead><tbody id="records"><tr><td colspan="7">读取中…</td></tr></tbody></table></div>
-<p class="sub">历史记录存储在阿里云独立文件中。用于技术验证，不对应币安实际订单；官方事件合约胜率暂无可信的自动回填渠道。</p>
+<p class="sub">页面仅筛选展示后台最近50条里的 V6 记录，旧版本数据保留在后台，不会删除。用于技术验证，不对应币安实际订单或官方事件合约结算。</p>
 </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
+const V6_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6_20261024";
+// Only count actual V6 records returned from the latest 50-session history API.
+// V6.1, V5 and legacy records remain stored but never contribute to these metrics.
+const onlyV6=records=>(Array.isArray(records)?records:[])
+  .filter(s=>s&&s.decisionReviewVersion===V6_VERSION);
+const summarizedV6=records=>{
+ const settled=records.filter(s=>typeof s.proxyHit==="boolean");
+ const hits=settled.filter(s=>s.proxyHit===true).length;
+ const pct=settled.length?(100*hits/settled.length).toFixed(2)+"%":"—";
+ return {total:records.length,decided:records.filter(s=>s.direction==="UP"||s.direction==="DOWN").length,
+  settled:settled.length,hits,pct,
+  last5:settled.length?(100*settled.slice(0,5).filter(s=>s.proxyHit===true).length/Math.min(settled.length,5)).toFixed(2)+"%":"—",
+  last10:settled.length?(100*settled.slice(0,10).filter(s=>s.proxyHit===true).length/Math.min(settled.length,10)).toFixed(2)+"%":"—"};
+};
+function displayV6Stats(records){
+ const st=summarizedV6(records);
+ $("total").textContent=st.total;
+ $("decided").textContent=st.decided;
+ $("settled").textContent=st.settled;
+ $("accuracy").textContent=st.pct;
+ $("v6last5").textContent=st.last5;
+ $("v6last10").textContent=st.last10;
+}
 let active=null,inflight=false,pendingRequestId=null;
 const attemptedChineseTranslations=new Set();
 const hasChinese=text=>typeof text==="string"&&/[\u3400-\u9fff]/u.test(text);
@@ -287,11 +312,7 @@ function display(d){
   $("analysisDetail").replaceChildren();
   $("phase").textContent="尚未开始";
  }
- const stats=d.stats||{};
- $("total").textContent=stats.total??0;
- $("decided").textContent=stats.validDirections??0;
- $("settled").textContent=stats.proxySettled??0;
- $("accuracy").textContent=stats.proxyAccuracyPct==null?"—":stats.proxyAccuracyPct.toFixed(2)+"%";
+ // Version-specific metrics are updated from the same filtered V6 history as the table.
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
  updateClock();
 }
@@ -328,9 +349,11 @@ async function refresh(){
   if(d.lastSession)void localizeLegacyLatest(d.lastSession);
   if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
     d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
+  const v6Records=onlyV6(log.records);
+  displayV6Stats(v6Records);
   const rows=$("records");rows.replaceChildren();
-  if(!log.records?.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=7;td.textContent="暂无手动预测记录";tr.append(td);rows.append(tr);}
-  for(const s of log.records||[]){
+  if(!v6Records.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=7;td.textContent="最近50条历史中暂无 V6 信号";tr.append(td);rows.append(tr);}
+  for(const s of v6Records){
    const tr=document.createElement("tr");
    const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
      s.proxyOutcome==="FLAT"?"持平":s.settlementStatus?"未核验":"待到期";

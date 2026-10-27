@@ -165,7 +165,8 @@ def main():
  with tempfile.TemporaryDirectory(prefix='dual5-prod-release-') as dir:
   tmp=pathlib.Path(dir)
   for name in ('binance_dual5_pairs.mjs','binance_dual5_dashboard.html','risk-worker.mjs'):
-   uri='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/prediction-bot-v1/'+name
+   directory='railway-diagnostic' if name=='risk-worker.mjs' else 'prediction-bot-v1'
+   uri='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/'+directory+'/'+name
    with urllib.request.urlopen(uri,timeout=30) as r:(tmp/name).write_bytes(r.read())
   sh(NODE,'--check',str(tmp/'binance_dual5_pairs.mjs'))
   core=(tmp/'binance_dual5_pairs.mjs').read_text()

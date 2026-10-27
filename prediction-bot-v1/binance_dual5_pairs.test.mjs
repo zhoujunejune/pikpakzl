@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 process.env.DUAL5_TEST='1';
-const {complimentaryTokens,bestAsk,calcPair}=await import('./binance_dual5_pairs.mjs');
+const {complimentaryTokens,bestAsk,calcPair,validateAmounts}=await import('./binance_dual5_pairs.mjs');
 test('pair two actual complementary tokens in exactly the same outcome market',()=>{
  const topic={markets:[{marketId:12,title:'BTC Price 5m UP?',outcomes:[
   {name:'YES',tokenId:'UP_1'},{name:'NO',tokenId:'DOWN_1'}]}]};
@@ -39,4 +39,36 @@ test('two seemingly cheap prices fail after high fees and slippage allowance',()
  const x=calcPair({minReceive:w(3.23),feeAmount:w(.02)},
   {minReceive:w(3.24),feeAmount:w(.02)},1.6);
  assert.equal(x.feasible,false);
+});
+
+test('default owner selection 1 USDT on UP and 1 USDT on DOWN passes conservative net calc',()=>{
+ const both=calcPair({minReceive:w(2.30),feeAmount:w(0.01)},
+  {minReceive:w(2.40),feeAmount:w(0.01)},1,1);
+ assert.equal(both.amountUp,1);
+ assert.equal(both.amountDown,1);
+ assert.equal(both.feasible,true);
+ assert.equal(both.conservativeNet,0.255);
+});
+test('unequal 1 USDT UP and 2 USDT DOWN amounts use both spends in payout floor',()=>{
+ const p=calcPair({minReceive:w(4),feeAmount:w(0.01)},
+  {minReceive:w(4),feeAmount:w(0.01)},1,2);
+ assert.equal(p.conservativeNet,0.955);
+ assert.equal(p.amountUp,1);assert.equal(p.amountDown,2);
+ const q=calcPair({minReceive:w(4),feeAmount:w(0.01)},
+  {minReceive:w(4),feeAmount:w(0.01)},2,2);
+ assert.equal(q.feasible,false);
+});
+test('matching spent dollars on different prices does not imply paired profit',()=>{
+ const a=calcPair({minReceive:w(1/0.60),feeAmount:w(0.01)},
+  {minReceive:w(1/0.40),feeAmount:w(0.01)},1,1);
+ assert.equal(a.feasible,false);
+ assert.equal(a.pairedShares<2,true);
+});
+test('owner can set independent integer or 2-decimal side amounts, no daily budget in amount input',()=>{
+ assert.equal(validateAmounts({UP:1,DOWN:1}),true);
+ assert.equal(validateAmounts({UP:1.01,DOWN:2.55}),true);
+ assert.equal(validateAmounts({UP:3,DOWN:1.5}),true);
+ for(const input of [{UP:0,DOWN:1},{UP:1,DOWN:NaN},{UP:1.001,DOWN:2},
+                     {UP:'1',DOWN:1},{UP:1,DOWN:1001}])
+  assert.equal(validateAmounts(input),false);
 });

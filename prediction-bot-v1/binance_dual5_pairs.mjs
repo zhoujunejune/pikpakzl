@@ -63,6 +63,12 @@ let config=loadConfig(),state={model:MODEL,at:null,health:'BOOT',round:null,
  wallet:null,marketTopicId:null,lastScanAt:null};
 function persist(){fs.mkdirSync(new URL('.', 'file://'+FILE).pathname,{recursive:true});
  const temp=FILE+'.tmp';fs.writeFileSync(temp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(temp,FILE);}
+// A restart may have happened between two independent financial order posts.
+// Never auto-resume after a reboot with an unknown open hedge.
+if(process.env.DUAL5_TEST!=='1'&&config.armed){
+ config.armed=false;config.blocked=true;persist();
+ state.lastError='RESTART_WITH_PREVIOUS_LIVE_MODE_MANUAL_REVIEW_REQUIRED';
+}
 function safePublic(){return {ok:true,model:MODEL,mode:config.armed?'LIVE_ARMED':'PRODUCTION_IDLE',
   active:config.armed&&!config.blocked,blocked:config.blocked,
   dailySpend:config.dailySpend,dailySpendMax:MAX_DAILY_SPEND,maxPerSide:MAX_SIDE_USDT,
@@ -243,6 +249,8 @@ async function tick(){
   const [up,down]=await Promise.all([bookFor(topic,pair.up),bookFor(topic,pair.down)]);
   state.checked++;state.lastScanAt=Date.now();
   if(!up||!down)throw Error('ONE_SIDE_NO_LIQUIDITY');
+  if(up.size < MAX_SIDE_USDT/up.price||down.size < MAX_SIDE_USDT/down.price)
+    throw Error('INSUFFICIENT_TOP_OF_BOOK_DEPTH');
   const fee=(Number(topic.feeRateBps)||200)/10000;
   const raw=up.price+down.price;
   state.lastOpportunity={round,topicId:topic.marketTopicId,

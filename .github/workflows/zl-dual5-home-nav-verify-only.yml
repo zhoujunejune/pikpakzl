@@ -120,8 +120,8 @@ jobs:
           OUTER
       - name: Audit actual UP order, current position and lock state through GET requests only
         env:
-          ALIBABA_CLOUD_ACCESS_KEY_ID: \${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
-          ALIBABA_CLOUD_ACCESS_KEY_SECRET: \${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: |
           python - <<'OUTER'
           import os,time,base64

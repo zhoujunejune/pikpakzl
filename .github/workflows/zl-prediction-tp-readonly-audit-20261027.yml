@@ -1,0 +1,102 @@
+name: Diagnose live prediction take-profit failure without placing orders
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-prediction-tp-readonly-audit-20261027.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only inspect TP configuration, risk worker health, position checks, recent TP logs
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -euo pipefail
+          python3 - <<'INNER'
+          import json,urllib.request,pathlib,subprocess,re,datetime
+          def output(k,d):print(k,json.dumps(d,ensure_ascii=False,default=str)[:7000],flush=True)
+          def get(path):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:13001'+path,timeout=8) as r:
+             return {'http':r.status,'json':json.loads(r.read(1000000))}
+           except Exception as e:return {'error':type(e).__name__,'http':getattr(e,'code',None)}
+          for path in ['/api/risk-control','/api/status','/api/risk-runtime-status','/api/risk-status','/api/risk-worker-health']:
+           o=get(path);v=o.pop('json',{})
+           keep=('ok','enabled','takeProfitEnabled','takeProfitPercent','stopLossEnabled',
+             'stopLossPercent','source','updatedAt','persistenceReady','persistenceHealthy',
+             'error','lastError','lastSellEvent','lastSellEventAt','riskWorker','riskRuntime',
+             'execution','risk','orderSignalModel')
+           out={k:v[k] for k in keep if k in v}
+           for field in ['execution','riskWorker','riskRuntime','risk']:
+            if isinstance(out.get(field),dict):
+             out[field]={k:val for k,val in out[field].items() if any(w in k.lower() for w in
+               ['ready','enabled','running','status','reason','poll','last','error','pid','source','percent','updated'])}
+           output('TP_READONLY_HTTP',{'path':path,**o,'value':out})
+          for path in ['/tmp/risk-control.json','/tmp/risk-runtime-status.json','/tmp/risk-worker-health.json']:
+           p=pathlib.Path(path)
+           if not p.exists():output('TP_READONLY_FILE',{'path':path,'present':False});continue
+           try:
+            a=json.loads(p.read_text())
+            if path.endswith('risk-control.json'):
+             a={k:a.get(k) for k in ('takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent','source','updatedAt')}
+            output('TP_READONLY_FILE',{'path':path,'present':True,'ageSec':round((datetime.datetime.now().timestamp()-p.stat().st_mtime),2),'value':a})
+           except Exception as e:output('TP_READONLY_FILE',{'path':path,'error':type(e).__name__})
+          units=subprocess.run(['systemctl','list-units','--all','--type=service','--no-pager','--no-legend'],capture_output=True,text=True).stdout
+          names=[line.split()[0] for line in units.splitlines() if ('risk' in line.lower() or 'prediction-trade' in line.lower())]
+          for unit in names:
+           q=subprocess.run(['systemctl','show',unit,'--property=ActiveState,SubState,MainPID,ExecMainStartTimestamp,ExecMainStatus,Result'],capture_output=True,text=True)
+           output('TP_READONLY_UNIT',{'unit':unit,'state':q.stdout.strip().replace('\\n',';')})
+          for unit in names:
+           if 'risk' not in unit.lower() and 'trade' not in unit.lower():continue
+           r=subprocess.run(['journalctl','-u',unit,'--since','-4 hours','-n','2500','--no-pager','-o','cat'],capture_output=True,text=True,timeout=12)
+           events=[];totals={};filtered=[]
+           for line in r.stdout.splitlines():
+            if 'risk_' not in line and 'takeProfit' not in line and 'stopLoss' not in line:continue
+            try:a=json.loads(line[line.index('{'):])
+            except Exception:continue
+            ev=str(a.get('event',''))
+            if not ev.startswith('risk_') and ev not in ('risk_runtime_worker_started','risk_runtime_controller_started'):continue
+            totals[ev]=totals.get(ev,0)+1
+            if ev in ('risk_check','risk_triggered','risk_sell_quote_failed','risk_sell_submitted',
+                      'risk_sell_failed','risk_sell_unknown','risk_sell_exception',
+                      'risk_wallet_error','risk_positions_error','risk_invalid_position',
+                      'risk_worker_started','risk_runtime_worker_started','risk_worker_stopping',
+                      'risk_runtime_controller_started','risk_tick_exception'):
+             safe={k:a.get(k) for k in ('at','event','reason','totalCost','currentSellAmount',
+               'tpTarget','slTarget','takeProfitEnabled','takeProfitPercent',
+               'stopLossEnabled','stopLossPercent','pollMs','retryMs','positionCount',
+               'error','code','httpStatus','worker','controller') if k in a}
+             token=a.get('tokenId')
+             if token is not None:safe['positionKey']='…'+str(token)[-5:]
+             events.append(safe)
+           output('TP_READONLY_LOG_TOTALS',{'unit':unit,'total':len(r.stdout.splitlines()),'eventCounts':totals})
+           output('TP_READONLY_LOG_EVENTS',{'unit':unit,'events':events[-38:]})
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-prediction-tp-failure-readonly-inspection',type='RunShellScript',working_user='root',command_content=script,timeout=195)).body.invoke_id
+          for _ in range(102):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('TP_REMOTE_READONLY_RESULT',r.invocation_status,'EXIT',r.exit_code)
+            try:out=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            except Exception:out='REMOTE_OUTPUT_DECODE_FAILED'
+            print(out[-32000:])
+            if r.invocation_status!='Success' or int(r.exit_code)!=0:raise RuntimeError('TP_READONLY_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('TP_READONLY_AUDIT_TIMEOUT')
+          OUTER

@@ -269,13 +269,12 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   // Never duplicate an unknown order or automatically chase a missing leg.
  }
 }
-// Poll rapidly just after each five-minute boundary, back off later to avoid API bursts.
-// Crossing the round boundary takes priority over the previous 19-second cadence.
-// Schedule each scan only after the preceding one finishes; scans never overlap.
+// Wake near +80ms at every five-minute boundary, scan promptly while market data becomes ready.
+// Never overlap scans; Binance response time and available liquidity determine actual fill time.
 function nextScanDelayMs(now=Date.now()){
  const elapsed=((now%ROUND_MS)+ROUND_MS)%ROUND_MS;
- const cadence=elapsed<15000?2000:(elapsed<60000?5000:19000);
- return Math.max(150,Math.min(cadence,ROUND_MS-elapsed+250));
+ const cadence=elapsed<15000?700:(elapsed<60000?3000:19000);
+ return Math.max(60,Math.min(cadence,ROUND_MS-elapsed+80));
 }
 let cached=null,busy=false;
 async function tick(){

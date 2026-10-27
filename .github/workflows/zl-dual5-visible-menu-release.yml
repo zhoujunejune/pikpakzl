@@ -2,7 +2,7 @@ name: Show dual5 robot in existing production frontend menu
 on:
   push:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
-    paths: [.github/workflows/zl-dual5-visible-menu-release.yml]
+    paths: [.github/workflows/zl-dual5-visible-menu-release.yml, prediction-bot-v1/aliyun_dual5_visible_menu_deploy.py]
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:

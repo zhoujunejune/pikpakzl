@@ -1,0 +1,62 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>币安五分钟UP/DOWN双边配对</title>
+<style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0d121d;color:#f2f5fa;font:15px/1.6 system-ui,-apple-system,sans-serif}main{max-width:760px;margin:auto;padding:18px}h1{font-size:21px;margin:6px 0 4px}small,.sub{color:#9aa8bb}article{background:#182235;border:1px solid #303e55;border-radius:14px;padding:16px;margin:16px 0}h2{font-size:16px;margin:0 0 12px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metric{background:#101a2a;padding:11px;border-radius:10px}.value{font-size:22px;font-weight:700;margin:4px 0;color:#fff}button{padding:12px 17px;background:#2f65e7;color:#fff;border:0;border-radius:8px;font-weight:700;margin-right:9px}button:disabled{opacity:.4}button.stop{background:#bc414b}code{overflow-wrap:anywhere;color:#c0d4f9}table{width:100%;border-collapse:collapse}td{padding:10px 4px;border-bottom:1px solid #28354a}td:last-child{text-align:right}a{color:#9cc3fc}.warn{color:#ffc06d}.ok{color:#63deac}#banner{font-weight:600}#feedback{min-height:26px}</style></head><body><main>
+<p><a href="/">返回预测机器人首页</a></p><h1>币安 BTC 5分钟 · UP + DOWN 双边配对</h1>
+<p class="sub">BINANCE_DUAL5_PAIR_V1 · 阿里云独立生产服务；不修改 FAST5 的信号、下单或统计</p>
+<article><h2>运行状态</h2><div id="banner">读取中…</div><div class="grid">
+<div class="metric"><small>当前轮次</small><div class="value" id="round">--</div></div>
+<div class="metric"><small>本轮盘口和价</small><div class="value" id="ask">--</div></div>
+<div class="metric"><small>保守配对净收益估计</small><div class="value" id="edge">--</div></div>
+<div class="metric"><small>已检查 / 已报价</small><div class="value" id="checks">--</div></div>
+</div><p><small id="detail">仅在两边真正互补、成本扣费后仍有正优势时尝试；不保证两单同时成交。</small></p></article>
+<article><h2>独立实盘交易开关</h2><p class="warn">两笔独立订单不具有原子性：可能只成交 UP 或 DOWN，造成单边损失。发生未知状态会停机，需人工核对。仅在你主动开启后才发送真实订单。</p>
+<p>每边限额 <b>1.60 USDT</b>；单轮最多一组；每日累计提交预算 <b>12.80 USDT</b>；报价安全缓冲后最少剩余净优势 <b>0.08 USDT</b>。上限为程序硬编码，不因前台更改。</p>
+<button id="arm" type="button" disabled>启用独立双边实盘</button><button id="stop" class="stop" type="button" disabled>关闭双边实盘</button>
+<p id="feedback" class="sub"></p></article>
+<article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
+<article><h2>为什么会不下单？</h2><p class="sub">典型原因包括盘口价格之和太高、手续费后净优势不够、某一边无报价、盘口过期、不是能严格证明互补的一对份额、该轮已尝试、余额或交易接口不可用。</p></article>
+</main><script>
+const el=id=>document.getElementById(id),label=x=>x==null?'--':String(x),fmt=x=>Number.isFinite(Number(x))?Number(x).toFixed(4):'--';
+let saving=false;
+async function load(){
+ try{
+  const r=await fetch('/api/dual5-status',{cache:'no-store'});
+  const d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.error||'STATUS_UNAVAILABLE');
+  el('banner').textContent=(d.active?'已开启实盘':'实盘已关闭')+' · '+label(d.health)+(d.blocked?' · 交易保护锁定':'');
+  el('banner').className=d.active?'ok':'warn';
+  el('round').textContent=d.round?new Date(d.round).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit'}):'--';
+  const q=d.lastOpportunity;
+  el('ask').textContent=q?fmt(q.askSum):'--';
+  el('edge').textContent=q&&q.quoteNetUSDT!=null?fmt(q.quoteNetUSDT)+' USDT':'--';
+  el('checks').textContent=label(d.checked)+' / '+label(d.quoteChecks);
+  el('detail').textContent='UP卖一 '+(q?fmt(q.upAsk):'--')+' · DOWN卖一 '+(q?fmt(q.downAsk):'--')+
+   ' · 盘口筛选：'+(q?label(q.status):'等待有效市场')+
+   ' · 本日提交预算已占用 '+fmt(d.dailySpend)+' USDT';
+  el('arm').disabled=saving||d.active||d.blocked;el('stop').disabled=saving||!d.active;
+  const o=d.lastOrder;
+  if(o){
+   const rows=[['轮次',new Date(o.round).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})],
+    ['执行阶段',o.phase],['UP订单',o.first?.orderId||'未提交'],
+    ['DOWN订单',o.second?.orderId||'未提交'],['错误',o.error||'无'],
+    ['实际配对保守收益',o.actualPairWorstCaseUSDT==null?'尚未确认':fmt(o.actualPairWorstCaseUSDT)+' USDT']];
+   el('orders').replaceChildren(...rows.map(([k,v])=>{
+     const tr=document.createElement('tr'),td1=document.createElement('td'),td2=document.createElement('td');
+     td1.textContent=k;td2.textContent=v;tr.append(td1,td2);return tr;
+   }));
+  }
+ }catch(e){el('banner').textContent='状态无法核验：'+String(e.message||e);el('arm').disabled=true;el('stop').disabled=true;}
+}
+async function save(armed){
+ if(saving)return;
+ if(armed&&!confirm('确认启用真实资金双边交易？每笔为独立订单，一侧可能失败或亏损。'))return;
+ saving=true;el('arm').disabled=true;el('stop').disabled=true;
+ try{
+  const r=await fetch('/api/dual5-arm',{method:'POST',headers:{'Content-Type':'application/json'},
+   credentials:'same-origin',body:JSON.stringify({armed})});
+  const d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.error||'SAVE_FAILED');
+  el('feedback').textContent=d.armed?'独立实盘已开启，将按净收益门槛自主尝试交易':'独立实盘已关闭；已提交订单不会被撤销';
+ }catch(e){el('feedback').textContent='保存失败：'+String(e.message||e)}
+ finally{saving=false;await load();}
+}
+el('arm').addEventListener('click',()=>void save(true));el('stop').addEventListener('click',()=>void save(false));
+void load();setInterval(load,4500);
+</script></body></html>

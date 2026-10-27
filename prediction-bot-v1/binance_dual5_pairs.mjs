@@ -12,6 +12,9 @@ const SECRET=process.env.BINANCE_PREDICTION_API_SECRET||'';
 const MODEL='BINANCE_DUAL5_PAIR_V1';
 const MIN_EDGE=0.08; // $0.08 minimum remaining after conservative fee and execution reserve
 const DEFAULT_SIDE_USDT=1,ROUND_MS=300000,DEADLINE_BUFFER_MS=45000;
+// MPC uses the prediction/CeDeFi wallet; CEX + SPOT uses Binance exchange spot balance.
+// Never silently fall back to the other account if the selected funding source lacks funds.
+const validFundingSource=v=>v==='MPC'||v==='CEX';
 // The owner chooses each side's spend. No daily hard trading budget.
 const validStake=n=>typeof n==='number'&&Number.isFinite(n)&&n>=1&&n<=1000&&Math.abs(Math.round(n*100)-n*100)<1e-7;
 const validateAmounts=v=>v&&validStake(v.UP)&&validStake(v.DOWN);
@@ -65,11 +68,12 @@ function loadConfig(){
     dailyDate:d.dailyDate||null,dailySpend:finite(d.dailySpend)?Number(d.dailySpend):0,
     lastOrderRound:Number(d.lastOrderRound)||0,blocked:d.blocked===true,
     amounts:validateAmounts(d.amounts)?{UP:d.amounts.UP,DOWN:d.amounts.DOWN}:defaultAmounts(),
+    fundingSource:validFundingSource(d.fundingSource)?d.fundingSource:'MPC',
     risk:validRiskBoth(d.risk)?d.risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},
     legs:d.legs&&typeof d.legs==='object'?d.legs:{},
     tracked:d.tracked&&typeof d.tracked==='object'?d.tracked:{}};}
  catch{return {armed:false,dailyDate:null,dailySpend:0,lastOrderRound:0,blocked:false,createdAt:null,
-  risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{},tracked:{},amounts:defaultAmounts()};}
+  risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{},tracked:{},amounts:defaultAmounts(),fundingSource:'MPC'};}
 }
 let config=loadConfig(),state={model:MODEL,at:null,health:'BOOT',round:null,
  lastOpportunity:null,lastOrder:null,lastError:null,firstScanLagMs:null,checked:0,quoteChecks:0,attempts:0,
@@ -85,7 +89,7 @@ if(process.env.DUAL5_TEST!=='1'&&config.armed){
 function safePublic(){return {ok:true,model:MODEL,mode:config.armed?'LIVE_ARMED':'PRODUCTION_IDLE',
   active:config.armed&&!config.blocked,blocked:config.blocked,
   dailySpend:config.dailySpend,dailySpendMax:null,scanMode:'ROUND_BOUNDARY_FAST_V1',entryMode:'ROUND_OPEN_VALID_QUOTES_V2',profitFilterEnabled:false,amounts:config.amounts,
-  combinedAmount:config.amounts.UP+config.amounts.DOWN,
+  combinedAmount:config.amounts.UP+config.amounts.DOWN,fundingSource:config.fundingSource,
   minNetEdgeUSDT:MIN_EDGE,configUpdatedAt:config.createdAt,
   risk:config.risk,legs:config.legs,trackedCount:Object.keys(config.tracked).length,
   ...state,wallet:undefined};}
@@ -161,10 +165,10 @@ async function bookFor(topic,leg){
   throw Error('STALE_ORDERBOOK');
  return bestAsk(b);
 }
-async function quoteFor(topic,leg,wallet,sideAmount=DEFAULT_SIDE_USDT){
+async function quoteFor(topic,leg,wallet,sideAmount=DEFAULT_SIDE_USDT,fundingSource=config.fundingSource){
  const body={walletAddress:wallet.walletAddress,tokenId:leg.tokenId,side:'BUY',
  amountIn:wei(sideAmount),orderType:'MARKET',slippageBps:Math.min(1000,Number(topic.slippageBps||1200)),
- chainId:topic.chainId||'56',feeRateBps:topic.feeRateBps||200,fundingSource:'MPC'};
+ chainId:topic.chainId||'56',feeRateBps:topic.feeRateBps||200,fundingSource};
  const q=await call('POST','/sapi/v1/w3w/wallet/prediction/trade/get-quote',body);
  if(String(q.tokenId)!==String(leg.tokenId)||!q.quoteId||q.side!=='BUY')
   throw Error('WRONG_QUOTE_TOKEN_OR_SIDE');
@@ -194,21 +198,23 @@ async function confirmOrder(wallet,id,topic){
  }
  return null;
 }
-async function place(wallet,topic,quote){
+async function place(wallet,topic,quote,fundingSource){
+ if(!validFundingSource(fundingSource))throw Error('INVALID_ORDER_FUNDING_SOURCE');
  return call('POST','/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle',{
   walletAddress:wallet.walletAddress,walletId:wallet.walletId,
   quoteId:quote.quoteId,timeInForce:'FOK',accountType:'SPOT',
   orderType:'MARKET',slippageBps:Math.min(1000,Number(topic.slippageBps||1200)),
-  fundingSource:'MPC'});
+  fundingSource});
 }
 async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
  if(!config.armed||config.blocked||config.lastOrderRound===round)return;
  // Persistent pre-commit disables any duplicate re-entry on restarts, even for uncertain HTTP.
  config.lastOrderRound=round;
  const orderAmounts={UP:config.amounts.UP,DOWN:config.amounts.DOWN};
+ const fundingSource=config.fundingSource;
  config.dailySpend+=orderAmounts.UP+orderAmounts.DOWN;persist();
  const record={round,phase:'PREPARED',first:null,second:null,at:Date.now(),amounts:orderAmounts,
-  estimatedNetUSDT:analysis.conservativeNet,firstOrderSubmitAt:null,upConfirmedAt:null,downOrderSubmitAt:null,bothConfirmedAt:null};
+  estimatedNetUSDT:analysis.conservativeNet,fundingSource,firstOrderSubmitAt:null,upConfirmedAt:null,downOrderSubmitAt:null,bothConfirmedAt:null};
  state.lastOrder=record;state.at=Date.now();state.attempts++;
  try{
   if(!q1.quoteId||!q2.quoteId)throw Error('PAIR_QUOTES_INCOMPLETE');
@@ -221,7 +227,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   persist();
   record.phase='SUBMITTING_UP';
   record.firstOrderSubmitAt=Date.now();
-  const up=await place(wallet,topic,q1);
+  const up=await place(wallet,topic,q1,fundingSource);
   if(!up.orderId)throw Error('UP_ORDER_ID_MISSING');
   record.first={orderId:String(up.orderId),status:'SUBMITTED'};
   record.phase='VERIFYING_UP';
@@ -234,7 +240,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId]={...config.legs.UP,side:'UP'};
   persist();
   // Re-price DOWN after UP fills: never blindly send a stale second quote.
-  const down=await quoteFor(topic,pair.down,wallet,orderAmounts.DOWN);
+  const down=await quoteFor(topic,pair.down,wallet,orderAmounts.DOWN,fundingSource);
   const reassess=calcPair(q1,down,orderAmounts.UP,orderAmounts.DOWN);
   if(!reassess.ok || Number(down.expireAt)<Date.now()+1800)
    throw Error('DOWN_QUOTE_INVALID_OR_EXPIRED');
@@ -245,7 +251,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   persist();
   record.phase='SUBMITTING_DOWN';
   record.downOrderSubmitAt=Date.now();
-  const dn=await place(wallet,topic,down);
+  const dn=await place(wallet,topic,down,fundingSource);
   if(!dn.orderId)throw Error('DOWN_ORDER_ID_MISSING');
   record.second={orderId:String(dn.orderId),status:'SUBMITTED'};
   record.phase='VERIFYING_DOWN';
@@ -301,6 +307,7 @@ async function tick(){
   state.checked++;state.lastScanAt=Date.now();
   if(!up||!down)throw Error('ONE_SIDE_NO_LIQUIDITY');
   if(!validateAmounts(config.amounts))throw Error('INVALID_PER_SIDE_ORDER_AMOUNTS');
+  if(!validFundingSource(config.fundingSource))throw Error('INVALID_FUNDING_SOURCE');
   // The signed execution quote determines whether the full requested stake is fillable;
   // top-of-book quantity alone is not enough to reject a deeper executable order book.
   const fee=(Number(topic.feeRateBps)||200)/10000;
@@ -311,8 +318,8 @@ async function tick(){
   // Price-sum is diagnostic, not an entry condition in round-open mode.
 
   const [q1,q2]=await Promise.all([
-    quoteFor(topic,pair.up,wallet,config.amounts.UP),
-    quoteFor(topic,pair.down,wallet,config.amounts.DOWN)]);
+    quoteFor(topic,pair.up,wallet,config.amounts.UP,config.fundingSource),
+    quoteFor(topic,pair.down,wallet,config.amounts.DOWN,config.fundingSource)]);
   state.quoteChecks++;
   const estimate=calcPair(q1,q2,config.amounts.UP,config.amounts.DOWN);
   state.lastOpportunity={...state.lastOpportunity,
@@ -354,6 +361,21 @@ if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
    return reply(res,200,{ok:true,amounts:config.amounts,dailySpendMax:null});
   }catch(e){return reply(res,400,{ok:false,error:safeErr(e)})}
  }
+ if(req.method==='POST'&&req.url==='/api/funding'){
+  if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
+   return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
+  let body='';for await(const c of req){body+=c;if(body.length>500)break}
+  try{
+   const d=JSON.parse(body);
+   if(!validFundingSource(d.fundingSource))throw Error('INVALID_FUNDING_SOURCE_MPC_OR_CEX');
+   if(config.armed||config.blocked)throw Error('STOP_TRADING_BEFORE_FUNDING_EDIT');
+   if(Object.values(config.legs).some(l=>l?.status==='ORDER_PENDING'))
+    throw Error('PENDING_ORDER_PREVENTS_FUNDING_CHANGE');
+   config.fundingSource=d.fundingSource;
+   config.createdAt=new Date().toISOString();persist();
+   return reply(res,200,{ok:true,fundingSource:config.fundingSource});
+  }catch(e){return reply(res,400,{ok:false,error:safeErr(e)})}
+ }
  if(req.method==='POST'&&req.url==='/api/risk'){
   if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
    return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
@@ -380,6 +402,7 @@ if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
    if(d.armed===true&&config.blocked)throw Error('MANUAL_RECONCILIATION_REQUIRED');
    if(d.armed===true&&!validRiskBoth(config.risk))throw Error('UP_DOWN_RISK_NOT_CONFIGURED');
    if(d.armed===true&&!validateAmounts(config.amounts))throw Error('UP_DOWN_ORDER_AMOUNTS_NOT_CONFIGURED');
+   if(d.armed===true&&!validFundingSource(config.fundingSource))throw Error('INVALID_FUNDING_SOURCE');
    if(d.armed===true){
     const base=await fetch('http://127.0.0.1:13001/api/status',
       {signal:timeout(1400)}).then(r=>r.json());
@@ -395,4 +418,4 @@ if(process.env.DUAL5_TEST!=='1'){
  const scheduleNext=()=>setTimeout(()=>void tick().finally(scheduleNext),nextScanDelayMs()).unref();
  void tick().finally(scheduleNext);
 }
-export {complimentaryTokens,bestAsk,calcPair,validateAmounts,nextScanDelayMs};
+export {complimentaryTokens,bestAsk,calcPair,validateAmounts,validFundingSource,nextScanDelayMs};

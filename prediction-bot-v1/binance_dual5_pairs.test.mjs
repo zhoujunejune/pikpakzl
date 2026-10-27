@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 process.env.DUAL5_TEST='1';
-const {complimentaryTokens,bestAsk,calcPair,validateAmounts}=await import('./binance_dual5_pairs.mjs');
+const {complimentaryTokens,bestAsk,calcPair,validateAmounts,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
 test('pair two actual complementary tokens in exactly the same outcome market',()=>{
  const topic={markets:[{marketId:12,title:'BTC Price 5m UP?',outcomes:[
   {name:'YES',tokenId:'UP_1'},{name:'NO',tokenId:'DOWN_1'}]}]};
@@ -71,4 +71,19 @@ test('owner can set independent integer or 2-decimal side amounts, no daily budg
  for(const input of [{UP:0,DOWN:1},{UP:1,DOWN:NaN},{UP:1.001,DOWN:2},
                      {UP:'1',DOWN:1},{UP:1,DOWN:1001}])
   assert.equal(validateAmounts(input),false);
+});
+
+test('fast scan prioritizes the start of each 5-minute round, then backs off',()=>{
+ const start=1760000000000-(1760000000000%300000);
+ assert.equal(nextScanDelayMs(start+250),2000);
+ assert.equal(nextScanDelayMs(start+14999),2000);
+ assert.equal(nextScanDelayMs(start+15000),5000);
+ assert.equal(nextScanDelayMs(start+59000),5000);
+ assert.equal(nextScanDelayMs(start+60000),19000);
+ assert.equal(nextScanDelayMs(start+299900),350);
+});
+test('accelerated scanning leaves the conservative pair-profitability gate intact',()=>{
+ const p=calcPair({minReceive:w(1.8),feeAmount:w(0.01)},
+  {minReceive:w(2.5),feeAmount:w(0.01)},1,1);
+ assert.equal(p.feasible,false);
 });

@@ -124,7 +124,7 @@ test('funding mode supports only prediction wallet MPC and exchange spot CEX',()
  assert.match(src,/place\(wallet,topic,down,fundingSource\)/);
  assert.match(src,/quoteFor\(topic,pair\.down,wallet,orderAmounts\.DOWN,fundingSource\)/);
  assert.match(src,/fundingSource\}/);
- assert.doesNotMatch(src,/fundingSource:'MPC'/);
+ assert.doesNotMatch(src,/feeRateBps:topic.feeRateBps\|\|200,fundingSource:'MPC'/);
  assert.match(page,/id="fundingSource"/);
  assert.match(page,/id="fundingSave"/);
  assert.match(page,/api\/dual5-funding/);

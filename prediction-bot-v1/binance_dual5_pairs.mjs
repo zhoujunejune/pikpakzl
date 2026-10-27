@@ -12,6 +12,8 @@ const SECRET=process.env.BINANCE_PREDICTION_API_SECRET||'';
 const MODEL='BINANCE_DUAL5_PAIR_V1';
 const MIN_EDGE=0.08; // $0.08 minimum remaining after conservative fee and execution reserve
 const DEFAULT_SIDE_USDT=1,ROUND_MS=300000,DEADLINE_BUFFER_MS=45000;
+// Only enter during the first 15s of a round; never place a late buy minutes after open.
+const ENTRY_WINDOW_MS=15000,CONFIRM_WINDOW_MS=12000;
 // MPC uses the prediction/CeDeFi wallet; CEX + SPOT uses Binance exchange spot balance.
 // Never silently fall back to the other account if the selected funding source lacks funds.
 const validFundingSource=v=>v==='MPC'||v==='CEX';
@@ -181,21 +183,31 @@ async function walletInfo(){
  if(!row)throw Error('WALLET_NOT_REGISTERED');return row;
 }
 async function confirmOrder(wallet,id,topic){
- for(let i=0;i<4;i++){
+ // A Binance order ID proves submission, not execution. Reconcile briefly before
+ // treating the first leg as uncertain; never submit DOWN based on submission alone.
+ const deadline=Date.now()+CONFIRM_WINDOW_MS;
+ let lastSeen=null,queries=0;
+ while(Date.now()<deadline && queries<12){
   const [live,past]=await Promise.all([
    call('GET','/sapi/v1/w3w/wallet/prediction/order/list',
-    {walletAddress:wallet.walletAddress,offset:0,limit:100}),
+    {walletAddress:wallet.walletAddress,orderId:String(id),offset:0,limit:100}),
    call('GET','/sapi/v1/w3w/wallet/prediction/order/history',
     {walletAddress:wallet.walletAddress,offset:0,limit:100})]);
-  const all=[...(live.orders||[]),...(past.orders||[])];
-  const order=all.find(x=>String(x.orderId)===String(id)&&
+  queries++;
+  const matches=[...(live.orders||[]),...(past.orders||[])]
+   .filter(x=>String(x.orderId)===String(id) &&
     String(x.marketTopicId)===String(topic.marketTopicId));
-  if(order&&Number(order.filledShareQty)>0){
-   return {status:order.status,shares:Number(order.filledShareQty),
-    spent:Number(order.filledUsdtAmount),orderId:String(id)};
-  }
-  await new Promise(r=>setTimeout(r,350));
+  const filled=matches.find(x=>Number(x.filledShareQty)>0);
+  if(filled)return {status:filled.status,shares:Number(filled.filledShareQty),
+    spent:Number(filled.filledUsdtAmount),orderId:String(id)};
+  lastSeen=matches[0]?.status??lastSeen;
+  if(matches.some(x=>['CANCELLED','FAILED','EXPIRED','REJECTED'].includes(
+      String(x.status||'').toUpperCase())))break;
+  const remaining=deadline-Date.now();
+  if(remaining>0)await new Promise(r=>setTimeout(r,Math.min(700,remaining)));
  }
+ // No proof of a fill: retain the protective lock and preserve the order ID.
+ state.lastError='UP_FILL_UNVERIFIED_STATUS_'+String(lastSeen||'NOT_VISIBLE').slice(0,30);
  return null;
 }
 async function place(wallet,topic,quote,fundingSource){
@@ -208,6 +220,7 @@ async function place(wallet,topic,quote,fundingSource){
 }
 async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
  if(!config.armed||config.blocked||config.lastOrderRound===round)return;
+ if(Date.now()-round>ENTRY_WINDOW_MS){state.health='ENTRY_WINDOW_ELAPSED';return;}
  // Persistent pre-commit disables any duplicate re-entry on restarts, even for uncertain HTTP.
  config.lastOrderRound=round;
  const orderAmounts={UP:config.amounts.UP,DOWN:config.amounts.DOWN};
@@ -230,6 +243,9 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   const up=await place(wallet,topic,q1,fundingSource);
   if(!up.orderId)throw Error('UP_ORDER_ID_MISSING');
   record.first={orderId:String(up.orderId),status:'SUBMITTED'};
+  config.legs.UP={...config.legs.UP,orderId:String(up.orderId),updatedAt:Date.now()};
+  config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId]={...config.legs.UP,side:'UP'};
+  persist();
   record.phase='VERIFYING_UP';
   const u=await confirmOrder(wallet,up.orderId,topic);
   if(!u||u.shares<=0)throw Error('UP_FILL_UNVERIFIED_STOP_NO_SECOND');
@@ -294,6 +310,7 @@ async function tick(){
   if(now-round>ROUND_MS-DEADLINE_BUFFER_MS){
    state.health='ROUND_CLOSING_WAIT';return;
   }
+  if(now-round>ENTRY_WINDOW_MS){state.health='ENTRY_WINDOW_ELAPSED';return;}
   if(config.blocked){state.health='UNHEDGED_OR_UNKNOWN_MANUAL_REVIEW';return}
   if(config.lastOrderRound===round){state.health='ROUND_ALREADY_ATTEMPTED';return}
   if(!cached||cached.round!==round){
@@ -333,6 +350,7 @@ async function tick(){
     {signal:timeout(1200)}).then(r=>r.json());
   if(t.enabled!==false){state.health='OTHER_BOT_ACTIVE_BLOCK_PAIR';return;}
   if(!validRiskBoth(config.risk)){state.health='UNVERIFIED_LEG_RISK_CONFIG';return;}
+  if(Date.now()-round>ENTRY_WINDOW_MS){state.health='ENTRY_WINDOW_ELAPSED';return;}
   state.health='LIVE_PAIR_SUBMISSION';await attemptPair(round,topic,pair,q1,q2,estimate,wallet);
  }catch(e){
   state.lastError=safeErr(e);state.health='NO_VALID_PAIR_'+state.lastError;

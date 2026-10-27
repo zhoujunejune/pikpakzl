@@ -75,12 +75,13 @@ test('owner can set independent integer or 2-decimal side amounts, no daily budg
 
 test('fast scan prioritizes the start of each 5-minute round, then backs off',()=>{
  const start=1760000000000-(1760000000000%300000);
- assert.equal(nextScanDelayMs(start+250),2000);
- assert.equal(nextScanDelayMs(start+14999),2000);
- assert.equal(nextScanDelayMs(start+15000),5000);
- assert.equal(nextScanDelayMs(start+59000),5000);
+ assert.equal(nextScanDelayMs(start+250),700);
+ assert.equal(nextScanDelayMs(start+14999),700);
+ assert.equal(nextScanDelayMs(start+15000),3000);
+ assert.equal(nextScanDelayMs(start+59000),3000);
  assert.equal(nextScanDelayMs(start+60000),19000);
- assert.equal(nextScanDelayMs(start+299900),350);
+ assert.equal(nextScanDelayMs(start+299900),180);
+ assert.equal(nextScanDelayMs(start+299990),90);
 });
 test('accelerated scanning leaves the conservative pair-profitability gate intact',()=>{
  const p=calcPair({minReceive:w(1.8),feeAmount:w(0.01)},

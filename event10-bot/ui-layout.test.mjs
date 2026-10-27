@@ -79,3 +79,32 @@ test("the saved DeepSeek confidence appears for current signal and every histori
  assert.equal(fn({direction:"UP",confidence:1.5}),"—");
  assert.equal(fn({direction:"UP",confidence:"0.65"}),"—");
 });
+
+test("the live statistics and history use V6 only, excluding V6.1 and legacy records",()=>{
+ assert.match(page,/const V6_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6_20261024"/);
+ assert.match(page,/const v6Records=onlyV6\(log\.records\)/);
+ assert.match(page,/displayV6Stats\(v6Records\)/);
+ assert.match(page,/for\(const s of v6Records\)/);
+ assert.doesNotMatch(page,/stats\.proxyAccuracyPct/);
+ assert.match(page,/滚动窗口而非全量历史/);
+ assert.match(page,/旧版本数据保留在后台/);
+ const start=page.indexOf("const V6_VERSION=");
+ const end=page.indexOf("let active=",start);
+ assert.ok(start>=0&&end>start);
+ const getFns=new Function(page.slice(start,end)+"\nreturn {onlyV6,summarizedV6};");
+ const {onlyV6,summarizedV6}=getFns();
+ const all=[
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"UP",proxyHit:true},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6R1_20261025",direction:"DOWN",proxyHit:true},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"DOWN",proxyHit:false},
+  {decisionReviewVersion:"EVENT10_COMPACT_EVIDENCE_V5_20261024",direction:"UP",proxyHit:true},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"UP",proxyHit:null},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"DOWN",proxyHit:true}
+ ];
+ const v6=onlyV6(all);
+ assert.equal(v6.length,4);
+ assert.deepEqual(summarizedV6(v6),{total:4,decided:4,settled:3,hits:2,pct:"66.67%",
+  last5:"66.67%",last10:"66.67%"});
+ assert.equal(summarizedV6([]).pct,"—");
+ assert.equal(summarizedV6(onlyV6(all.filter(x=>x.direction==="UP"))).settled,1);
+});

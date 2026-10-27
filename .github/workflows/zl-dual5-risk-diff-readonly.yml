@@ -1,0 +1,54 @@
+name: Read live risk worker diff before dual5 patch
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-dual5-risk-diff-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Extract nonsecret source differences, no writes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,difflib,urllib.request,hashlib,json,re
+          path=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic/risk-worker.mjs')
+          live=path.read_text()
+          url='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/f529b8424ffd50e886c567d5ecc1850a4a54e411/railway-diagnostic/risk-worker.mjs'
+          with urllib.request.urlopen(url,timeout=18) as r:baseline=r.read().decode('utf8')
+          print('DUAL_RISK_DRIFT_META',json.dumps({'productionSha256':hashlib.sha256(live.encode()).hexdigest(),'baselineSha256':hashlib.sha256(baseline.encode()).hexdigest(),'prodBytes':len(live),'baseBytes':len(baseline),'prodDual5Marker':'DUAL5_CONFIG_FILE' in live}))
+          diff=list(difflib.unified_diff(baseline.splitlines(),live.splitlines(),fromfile='github-baseline',tofile='aliyun-risk-worker',n=3))
+          print('DUAL_RISK_DRIFT_DIFF_LINES',len(diff))
+          print('\n'.join(diff[:180])[:15000])
+          for anchor in ['function calculateTargets(position)','function evaluateRisk(targets, quote)','async function tick()']:
+           pos=live.find(anchor)
+           print('DUAL_RISK_ANCHOR',json.dumps({'anchor':anchor,'exists':pos>=0,'sample':live[pos:pos+2600] if pos>=0 else None})[:3000])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          id=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='dual5-risk-production-diff-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=95)).body.invoke_id
+          for _ in range(55):
+           time.sleep(2)
+           a=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=id)).body.invocation_result
+           if a and str(a.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('DUAL_RISK_AUDIT',a.invocation_status,a.exit_code)
+            print(base64.b64decode(a.output or '',validate=True).decode('utf8','replace')[-23000:])
+            if int(a.exit_code)!=0:raise RuntimeError('DUAL_RISK_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('DUAL_RISK_AUDIT_TIMEOUT')
+          OUTER

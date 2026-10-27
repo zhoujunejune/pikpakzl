@@ -1,190 +1,153 @@
-// FAST5 / SMALL-ONLY V6. Compute during the previous 120 s; accept
-// a provenance-verified current-round or prewarm-only direction before +5 s.
-// Validated 120-second prewarm can lock without a fresh current-round spot tick.
-// It is explicitly tagged PREWARM_ONLY; execution still needs a real exchange quote.
+// FAST5 multiscale bull/bear trend V7; independent of DeepSeek and orders.
+// Before every 5m boundary, continuously cache true Binance spot ticks.
+// At round open, calculate momentum immediately from real cached ticks /
+// completed candles. The decision window is 0..2 seconds, no late lock.
+// Missing market evidence or a mathematically flat trend -> WAIT, never fake.
 export const FAST_MODEL_ID='FAST5_SPOT_MOMENTUM_V1';
-export const STRATEGY_VERSION='FAST5_SMALL_ONLY_LE5BPS_15M_V6';
+export const STRATEGY_VERSION='FAST5_BULL_BEAR_TREND_2S_V7';
+export const TREND_VERSION='MULTISCALE_15S_120S_15M_REAL_MARKET_V1';
 export const ROUND_MS=300000,PREWARM_MS=120000;
-export const EARLIEST_SIGNAL_MS=100,SIGNAL_END_MS=5000;
+export const EARLIEST_SIGNAL_MS=0,SIGNAL_END_MS=2000;
 const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
-const finite=x=>typeof x==='number'&&Number.isFinite(x);
-const bps=(p,ref)=>10000*Math.log(p/ref);
-const fix=x=>Number(x.toFixed(5));
-const sign=x=>x>0?1:x<0?-1:0;
-const direction=s=>s<0?'DOWN':'UP';
-export const REGIME_VERSION='REGIME_PREV15_CLOSED_1M_NET_BPS_V1';
-export function classifyPreRoundRegime(market,round){
+const num=x=>typeof x==='number'&&Number.isFinite(x);
+const bps=(a,b)=>10000*Math.log(a/b);
+const fix=x=>Math.round(x*100000)/100000;
+const good=x=>num(x)&&x>0;
+const dir=x=>x<0?'DOWN':'UP';
+function exactClosed(market,start){
  const rows=market?.candles?.['1m']?.rows;
- if(!Array.isArray(rows))return null;
- const map=new Map(rows.map(x=>[x?.startMs,x]));
- const bars=[];
- for(let i=15;i>=1;i--){
-  const start=round-i*60000,b=map.get(start);
-  if(!b||b.closed!==true||b.endMs!==start+59999||
-     !finite(b.open)||b.open<=0||!finite(b.close)||b.close<=0)
-    return null;
-  bars.push(b);
- }
- const netBps=fix(bps(bars[14].close,bars[0].open));
- const magnitudeBps=Math.abs(netBps);
- return {regimeVersion:REGIME_VERSION,
-  regime:magnitudeBps<=5?'SMALL':magnitudeBps<12?'MEDIUM':'LARGE',
-  magnitudeBps,netBps,lookbackMinutes:15,bars:15,
-  firstStartMs:round-900000,lastEndMs:round-1};
+ return Array.isArray(rows)?rows.find(x=>x?.startMs===start&&
+  x.endMs===start+59999&&x.closed===true&&good(x.open)&&good(x.close)):null;
 }
-
-// Complete 1m candles in the preceding 120 seconds, including proper
-// time alignment. Never read the candle currently forming.
-function closedPrewarm(market,nextRound){
- const rows=market?.candles?.['1m']?.rows;
- if(!Array.isArray(rows))return null;
- const a=rows.find(x=>x?.startMs===nextRound-120000&&x.closed===true&&
-   x.endMs===x.startMs+59999&&finite(x.open)&&x.open>0&&finite(x.close)&&x.close>0);
- const b=rows.find(x=>x?.startMs===nextRound-60000&&x.closed===true&&
-   x.endMs===x.startMs+59999&&finite(x.close)&&x.close>0&&finite(x.open)&&x.open>0);
- if(!a||!b)return null;
- return {source:'CLOSED_1M_120S',first:a.open,last:b.close,
-   momentumBps:fix(bps(b.close,a.open)),samples:2,spanMs:120000};
+export function calculateTrendContext(market,round,ticks=[]){
+ const a=exactClosed(market,round-120000);
+ const b=exactClosed(market,round-60000);
+ const c=exactClosed(market,round-180000);
+ // Prefer fresh, observed previous-round ticks. Genuine completed candle
+ // evidence is a fallback when a process has just restarted.
+ const prior=ticks.filter(x=>x.at>=round-120000&&x.at<round);
+ let prewarm=null;
+ if(prior.length>=3&&prior.at(-1).at-prior[0].at>=25000&&
+    round-prior.at(-1).at<=2500){
+  prewarm={source:'REAL_TICKS_PREVIOUS_120S',momentumBps:fix(bps(prior.at(-1).price,prior[0].price)),
+   samples:prior.length,spanMs:prior.at(-1).at-prior[0].at};
+ }else if(a&&b){
+  prewarm={source:'CLOSED_1M_PREVIOUS_120S',momentumBps:fix(bps(b.close,a.open)),
+    samples:2,spanMs:120000};
+ }
+ const recent=prior.filter(x=>x.at>=round-20000);
+ let shortBps=null;
+ if(recent.length>=2&&recent.at(-1).at-recent[0].at>=600){
+  shortBps=fix(bps(recent.at(-1).price,recent[0].price));
+ }else if(b){
+  // The most recent completed 1m candle is an independently verified
+  // short-trend fallback, not an invented live tick.
+  shortBps=fix(bps(b.close,b.open));
+ }
+ // Longer context is optional; it must never suppress an available
+ // bullish/bearish signal just because 15m net movement > 5bps.
+ let longBps=null;
+ const longStart=exactClosed(market,round-900000);
+ if(longStart){
+  let complete=true;
+  for(let i=15;i>=1;i--)if(!exactClosed(market,round-i*60000)){complete=false;break}
+  if(complete)longBps=fix(bps(b.close,longStart.open));
+ }
+ if(!prewarm&&shortBps===null)return null;
+ return {prewarm,shortBps,longBps,
+   mediumBps:prewarm?prewarm.momentumBps:(c&&b?fix(bps(b.close,c.open)):shortBps)};
 }
 export function createFast5Calculator({now=()=>Date.now()}={}){
- let activeRound=null,locked=null,latestError=null;
- let lastObservationAt=null,lastValidMarketAt=null;
- let priceTicks=[],prewarm=null,provisionalDirection=null,provisionalReason=null;
- let filteredOut=false,regimeSnapshot=null;
- function rememberTick(market,at){
-  const x=market?.latest||{},event=x.eventMs;
+ let activeRound=null,locked=null,latestError=null,priceTicks=[];
+ let lastObservationAt=null,lastValidMarketAt=null,prewarm=null;
+ let provisionalDirection=null,provisionalReason=null,lastTrend=null;
+ function collect(market,at){
+  const q=market?.latest||{},event=q.eventMs;
   if(market?.ok!==true||market?.readOnly!==true||market?.symbol!=='BTCUSDT'||
-     x.marketFeedConnected!==true||!Number.isSafeInteger(event)||
-     event>at+250||at-event>900||!finite(x.lastPrice)||x.lastPrice<=0)
-    return false;
+     q.marketFeedConnected!==true||!Number.isSafeInteger(event)||event>at||
+     at-event>1300||!good(q.lastPrice))return false;
   if(event>(priceTicks.at(-1)?.at||0)){
-    priceTicks.push({at:event,price:x.lastPrice});
-    priceTicks=priceTicks.filter(y=>y.at>=at-125000).slice(-1800);
+   priceTicks.push({at:event,price:q.lastPrice});
+   // 150 sec genuine event-time history, including previous round.
+   priceTicks=priceTicks.filter(x=>x.at>=at-150000).slice(-2200);
   }
   lastObservationAt=event;lastValidMarketAt=at;return true;
  }
- function getPrewarm(market,round){
-  const ticks=priceTicks.filter(x=>x.at>=round-120000&&x.at<round);
-  // Use real observed prices if there is nearly the full prior 120s,
-  // otherwise use exact, closed one-minute candles.
-  if(ticks.length>=5&&ticks.at(-1).at-ticks[0].at>=105000&&
-     round-ticks.at(-1).at<2500){
-    const a=ticks[0],b=ticks.at(-1);
-    return {source:'PREVIOUS_120S_REAL_TICKS',first:a.price,last:b.price,
-      momentumBps:fix(bps(b.price,a.price)),samples:ticks.length,
-      spanMs:b.at-a.at};
-  }
-  return closedPrewarm(market,round);
- }
  function update(market){
   const at=now(),round=roundOf(at),elapsed=at-round;
-  const rawValid=rememberTick(market,at);
+  const validTick=collect(market,at);
   if(activeRound!==round){
    activeRound=round;locked=null;latestError=null;
-   prewarm=null;provisionalDirection=null;provisionalReason=null;
-   filteredOut=false;regimeSnapshot=null;
+   prewarm=null;provisionalDirection=null;provisionalReason=null;lastTrend=null;
   }
-  // During the last 120 seconds of this round, already collect and
-  // calculate context for the following round.
+  // Precompute during the preceding two minutes; no 15m regime gate.
   if(elapsed>=ROUND_MS-PREWARM_MS){
-   const upcoming=getPrewarm(market,round+ROUND_MS);
-   if(upcoming)prewarm=upcoming;
+   const upcoming=calculateTrendContext(market,round+ROUND_MS,priceTicks);
+   if(upcoming)prewarm=upcoming.prewarm;
   }
   if(locked)return {ok:true,locked:true,signal:locked};
-  if(filteredOut){
-   latestError='REGIME_GT5_BPS_WAIT';
-   provisionalDirection=null;provisionalReason='REGIME_FILTER_WAIT';
-   return {ok:true,locked:false,reason:latestError,signal:null};
-  }
-  // A strict, permanent per-round WAIT after +5s when no valid lock exists.
-  // Preserve prewarm collection for the next round, but never reopen
-  // this round's locking window or show a prewarm UP/DOWN as a live signal.
   if(elapsed>=SIGNAL_END_MS){
-   latestError='OPEN_5S_DEADLINE_MISSED';
-   provisionalDirection=null;provisionalReason='ROUND_WAIT_AFTER_5S';
+   latestError='OPEN_2S_DEADLINE_MISSED';
+   provisionalDirection=null;provisionalReason='ROUND_WAIT_AFTER_2S';
    return {ok:true,locked:false,reason:latestError,signal:null};
   }
-  if(elapsed<EARLIEST_SIGNAL_MS)return {ok:true,locked:false,
-    reason:'BEFORE_100MS_DECISION',signal:null};
-  // At the boundary the last 120s belong to the *preceding* round.
-  // Recalculate from those observations / closed candles, not current minute.
-  const prior=getPrewarm(market,round);
-  if(prior)prewarm=prior;
-  const momentum=prewarm?.momentumBps;
-  const regime=classifyPreRoundRegime(market,round);
-  if(regime)regimeSnapshot=regime;
-  if(!regime){
-   latestError='NO_VERIFIED_15M_CLOSED_REGIME';
+  const trend=calculateTrendContext(market,round,priceTicks);
+  if(trend)lastTrend=trend;
+  if(!trend){
+   latestError='NO_VERIFIED_TREND_HISTORY';
    return {ok:true,locked:false,reason:latestError,signal:null};
   }
-  // Reject mid/high 15m net-price movement BEFORE calculating any live
-  // direction. Once filtered, the round stays WAIT even if later ticks change.
-  // A verified SMALL regime is the only condition that permits an UP/DOWN lock.
-  if(regime.regime!=='SMALL'){
-   filteredOut=true;latestError='REGIME_GT5_BPS_WAIT';
-   provisionalDirection=null;provisionalReason='REGIME_FILTER_WAIT';
+  prewarm=trend.prewarm;
+  const q=market?.latest||{},event=q.eventMs;
+  const authenticated=validTick&&q.roundStartMs===round&&
+    Number.isSafeInteger(event)&&event>=round-1300&&event<=at&&
+    at-event<=1300;
+  if(!authenticated){
+   latestError='NO_RECENT_BINANCE_SPOT_EVENT';
    return {ok:true,locked:false,reason:latestError,signal:null};
   }
-  if(!prewarm){
-   latestError='NO_VERIFIED_PREVIOUS_120S_DATA';
+  const current=event>=round&&good(q.roundOpenPrice)&&
+   at-event<=800;
+  const openingBps=current?fix(bps(q.lastPrice,q.roundOpenPrice)):null;
+  // Weight true recent momentum most heavily, then 2-minute trend.
+  // The signed trend determines UP/DOWN; no artificial volatility threshold.
+  const short=trend.shortBps;
+  const medium=trend.mediumBps;
+  const long=trend.longBps;
+  const inputs=[
+   [short,0.46],[medium,0.34],[long,0.12],
+   [openingBps,0.08]
+  ].filter(([v])=>num(v));
+  const weight=inputs.reduce((v,x)=>v+x[1],0);
+  const score=weight?fix(inputs.reduce((v,x)=>v+x[0]*x[1],0)/weight):0;
+  if(!num(score)||score===0){
+   latestError='FLAT_OR_UNDETERMINED_BULL_BEAR_TREND';
    return {ok:true,locked:false,reason:latestError,signal:null};
   }
-  const priorSign=sign(momentum);
-  provisionalDirection=direction(priorSign);
-  provisionalReason=priorSign===0?'FLAT_PREWARM_TIE':'PREWARM_DIRECTION';
-  const live=market?.latest||{};
-  const event=live.eventMs,price=live.lastPrice,open=live.roundOpenPrice;
-  const currentOk=rawValid&&live.roundStartMs===round&&
-    Number.isSafeInteger(event)&&event>=round&&event<=at&&
-    at-event<=500&&finite(price)&&price>0&&finite(open)&&open>0;
-  // The collector can publish the current round marker before its first fresh tick.
-  // Accept this authentic prior tick only as a PREWARM_ONLY source, never
-  // mislabel it as a current-round opening-price comparison.
-  const prewarmOnly=!currentOk&&market?.ok===true&&market?.readOnly===true&&
-    market?.symbol==='BTCUSDT'&&live.marketFeedConnected===true&&
-    live.roundStartMs===round&&Number.isSafeInteger(event)&&
-    event>=round-3000&&event<=at+250&&at-event<=3000&&
-    finite(price)&&price>0&&prewarm.spanMs>=105000&&
-    Number.isSafeInteger(prewarm.samples)&&prewarm.samples>=2;
-  if(!currentOk&&!prewarmOnly){
-   latestError='NO_RECENT_MARKET_OR_120S_PREWARM';
-   return {ok:true,locked:false,reason:latestError,
-     provisionalDirection,signal:null};
-  }
-  const delta=currentOk?fix(bps(price,open)):0,trendSign=sign(delta);
-  const sourceReason=prewarmOnly?'PREWARM120_ONLY_VERIFIED_PRIOR_DATA':
-    trendSign===0?'PREWARM120_TIEBREAK':'CURRENT_OPEN_PRICE_DELTA';
-  const originalDirection=direction(trendSign||priorSign);
-  const invertByRegime=false;
-  const dir=originalDirection;
-  if(elapsed>=SIGNAL_END_MS){
-   latestError='OPEN_5S_DEADLINE_MISSED';
-   return {ok:true,locked:false,reason:latestError,
-     provisionalDirection:dir,signal:null};
-  }
+  const direction=dir(score);
+  provisionalDirection=direction;provisionalReason='VERIFIED_MULTISCALE_TREND';
+  const last=trend.prewarm||{source:'RECENT_CLOSED_1M_TREND',
+   samples:1,spanMs:60000,momentumBps:trend.mediumBps};
   locked={
-   ok:true,model:FAST_MODEL_ID,strategyVersion:STRATEGY_VERSION,
-   round,direction:dir,status:'LOCKED',lockedAt:at,marketAt:event,
-   originalDirection,invertByRegime,regime:regime.regime,
-   regimeVersion:regime.regimeVersion,
-   regimeNetBps:regime.netBps,regimeMagnitudeBps:regime.magnitudeBps,
-   regimeLookbackMinutes:regime.lookbackMinutes,
-   readOnly:true,orders:false,productionIntegration:false,
+   ok:true,model:FAST_MODEL_ID,strategyVersion:STRATEGY_VERSION,round,
+   status:'LOCKED',direction,lockedAt:at,marketAt:event,
+   trendVersion:TREND_VERSION,trendDirection:direction,trendScoreBps:score,
+   trendShortBps:short,trendMediumBps:medium,trendLongBps:long,
+   trendOpeningBps:openingBps,
+   prewarmSource:last.source,prewarmMomentumBps:last.momentumBps,
+   prewarmSamples:last.samples,prewarmSpanMs:last.spanMs,
+   prewarmOnly:!current,currentRoundQuoteVerified:current,
+   roundOpenPrice:current?q.roundOpenPrice:null,
+   openingObservedPrice:current?q.lastPrice:null,
+   fromSpotOpenBps:openingBps,
    source:'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',
-   decisionMethod:prewarmOnly?'PREWARM120_PRIOR_TICK_DIRECTION_1S':
-    'PREWARM120_REAL_TICKS_OR_CLOSED_1M_PLUS_ROUND_OPEN_1S',
-   prewarmSource:prewarm.source,prewarmMomentumBps:momentum,
-   prewarmSamples:prewarm.samples,prewarmSpanMs:prewarm.spanMs,
-   roundOpenPrice:currentOk?open:null,openingObservedPrice:currentOk?price:null,
-   currentRoundQuoteVerified:currentOk,prewarmOnly,
-   fromSpotOpenBps:currentOk?delta:null,
-   fromPriorTickAgeMs:prewarmOnly?at-event:null,
-   scoreBps:fix(Math.abs(delta)>0?delta:momentum),
-   signalReason:sourceReason,weakTie:delta===0&&priorSign===0,
-   requiresDeepSeek:false,analysisCalls:0,samples:1,
-   confidence:null,confidenceIsCalibrated:false,
+   decisionMethod:'MULTISCALE_15S_120S_15M_REAL_MARKET_V1',
+   signalReason:'WEIGHTED_SIGNED_REAL_SPOT_TREND',
+   scoreBps:score,confidence:null,confidenceIsCalibrated:false,
    officialOracleLiveQuoteUsed:false,
-   note:'SMALL_ONLY_V6: verified preceding 15 closed 1m candles <=5bps net movement. >5bps is WAIT; separate order mapping unchanged. No proven trading profitability.'
+   readOnly:true,orders:false,productionIntegration:false,
+   requiresDeepSeek:false,analysisCalls:0,samples:1,
+   note:'Fast real BTCUSDT spot trend, not guaranteed prediction market edge. Binance Prediction settlement may use a different source.'
   };
   latestError=null;
   return {ok:true,locked:true,signal:locked};
@@ -192,11 +155,12 @@ export function createFast5Calculator({now=()=>Date.now()}={}){
  function status(){
   return {ok:true,model:FAST_MODEL_ID,strategyVersion:STRATEGY_VERSION,
    round:activeRound,locked:!!locked,latest:locked,latestError,
-   filteredOut,regime:regimeSnapshot?.regime??null,
-   regimeMagnitudeBps:regimeSnapshot?.magnitudeBps??null,
    prewarmReady:!!prewarm,prewarm,provisionalDirection,provisionalReason,
-   observedSamples:priceTicks.filter(x=>x.at>=activeRound&&x.at<activeRound+ROUND_MS).length,
-   prewarmTickCount:priceTicks.filter(x=>activeRound!=null&&x.at>=activeRound-120000&&x.at<activeRound).length,
+   trendVersion:TREND_VERSION,
+   lastTrend,observedSamples:priceTicks.filter(x=>x.at>=activeRound&&
+    x.at<activeRound+ROUND_MS).length,
+   prewarmTickCount:priceTicks.filter(x=>activeRound!=null&&
+    x.at>=activeRound-120000&&x.at<activeRound).length,
    lastObservationAt,lastValidMarketAt,
    requiresDeepSeek:false,orders:false,productionIntegration:false};
  }

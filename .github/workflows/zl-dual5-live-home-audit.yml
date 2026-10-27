@@ -49,6 +49,40 @@ jobs:
               'dual5Page':('id="riskSave"' in b),
               'htmlHead':b[:350]},ensure_ascii=False)[:700])
            except Exception as e:print('LIVE_DUAL5_HOME_HTTP_ERR',route,str(e)[:120])
+          # Read Binance payment-option balances with existing trading API credentials.
+          # GET only: do not submit quotes, orders, transfers or any state-changing request.
+          import os,subprocess,hmac,hashlib,urllib.parse,urllib.error,time as pytime
+          try:
+           with urllib.request.urlopen('http://127.0.0.1:13048/api/status',timeout=5) as resp:
+            status=json.load(resp)
+           print('DUAL5_PAYMENT_AUDIT_STATUS',json.dumps({k:status.get(k) for k in
+            ('mode','active','blocked','health','lastError','quoteChecks','attempts','amounts')},ensure_ascii=False))
+           pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value',
+            'zl-prediction-dual5.service'],text=True,timeout=5).strip()
+           entries=pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\0')
+           env={k.decode('utf-8','ignore'):v.decode('utf-8','ignore') for k,v in
+            (e.split(b'=',1) for e in entries if b'=' in e)}
+           api_key=env.get('BINANCE_PREDICTION_API_KEY','')
+           secret=env.get('BINANCE_PREDICTION_API_SECRET','')
+           if not api_key or not secret:
+            print('DUAL5_PAYMENT_AUDIT_ERROR=API_ENV_UNAVAILABLE')
+           else:
+            for route in ('/sapi/v1/w3w/wallet/prediction/balance/payment-options',):
+             qs=urllib.parse.urlencode({'timestamp':int(pytime.time()*1000),'recvWindow':5000})
+             signature=hmac.new(secret.encode(),qs.encode(),hashlib.sha256).hexdigest()
+             url='https://api.binance.com'+route+'?'+qs+'&signature='+signature
+             req=urllib.request.Request(url,headers={'X-MBX-APIKEY':api_key,'Cache-Control':'no-store'})
+             try:
+              with urllib.request.urlopen(req,timeout=10) as resp:data=json.load(resp)
+              rows=data.get('items',[]) if isinstance(data,dict) else []
+              public=[{'accountType':e.get('accountType'),'enabled':e.get('enabled'),
+               'availableBalanceDisplay':e.get('availableBalanceDisplay')} for e in rows]
+              print('DUAL5_PAYMENT_OPTIONS',json.dumps(public,ensure_ascii=False))
+             except urllib.error.HTTPError as e:
+              details=e.read(500).decode('utf-8','replace')
+              print('DUAL5_PAYMENT_API_HTTP',e.code,details[:300])
+          except Exception as e:
+           print('DUAL5_PAYMENT_AUDIT_ERROR',type(e).__name__,str(e)[:140])
           INNER
           """
           c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))

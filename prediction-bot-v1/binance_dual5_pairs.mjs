@@ -19,6 +19,11 @@ const RECOVERY_ORDER_ID='26102700001999631125';
 const RECOVERY_TOPIC='7586769';
 const RECOVERY_TOKEN='37068596642631366318735116300978883320544930616603388101060416053519997861898';
 const RECOVERY_ROUND=1793120700000;
+// Second incident: UP bought, DOWN quote rejected, UP later sold by risk service.
+const SETTLED_RECOVERY_ROUND=1793125800000;
+const SETTLED_RECOVERY_TOPIC='7591885';
+const SETTLED_BUY_ID='26102700001999805503';
+const SETTLED_SELL_ID='26102700001999809504';
 // MPC uses the prediction/CeDeFi wallet; CEX + SPOT uses Binance exchange spot balance.
 // Never silently fall back to the other account if the selected funding source lacks funds.
 const validFundingSource=v=>v==='MPC'||v==='CEX';
@@ -242,6 +247,53 @@ async function reconcileKnownZeroFill(){
  state.health='HISTORIC_ZERO_FILL_LOCK_CLEARED';
  return {ok:true,armed:false,blocked:false,reconciledOrderId:RECOVERY_ORDER_ID};
 }
+async function reconcileSettledPairLock(){
+ // Owner-triggered recovery only. Both entries must be terminal and no pending
+ // orders or ongoing positions may exist anywhere in this prediction wallet.
+ if(config.armed||!config.blocked||
+    config.lastOrderRound!==SETTLED_RECOVERY_ROUND||
+    Date.now()<SETTLED_RECOVERY_ROUND+ROUND_MS*2)
+  throw Error('SETTLED_RECOVERY_PRECONDITION_NOT_MET');
+ const leg=config.legs?.UP;
+ if(!leg||leg.status!=='FILLED'||
+    String(leg.marketTopicId)!==SETTLED_RECOVERY_TOPIC||
+    String(leg.orderId)!==SETTLED_BUY_ID||
+    Object.values(config.legs||{}).some(x=>x?.status==='ORDER_PENDING'))
+  throw Error('SETTLED_LOCK_ORDER_DETAILS_MISMATCH');
+ const snapshot=JSON.stringify(config);
+ const wallet=await walletInfo();
+ const query={walletAddress:wallet.walletAddress,offset:0,limit:100};
+ const [active,history,ongoing]=await Promise.all([
+  call('GET','/sapi/v1/w3w/wallet/prediction/order/list',query),
+  call('GET','/sapi/v1/w3w/wallet/prediction/order/history',query),
+  call('GET','/sapi/v1/w3w/wallet/prediction/position/list',
+   {walletAddress:wallet.walletAddress,tab:'ONGOING',offset:0,limit:100})
+ ]);
+ if(!Array.isArray(active.orders)||!Array.isArray(history.orders)||
+    !Array.isArray(ongoing.positions))throw Error('BINANCE_SETTLEMENT_RESPONSE_UNVERIFIABLE');
+ if(active.orders.length||ongoing.positions.length)
+  throw Error('OTHER_ACTIVE_ORDERS_OR_POSITIONS_LOCK_PRESERVED');
+ const orders=history.orders.filter(o=>String(o.marketTopicId)===SETTLED_RECOVERY_TOPIC);
+ const buy=orders.find(o=>String(o.orderId)===SETTLED_BUY_ID&&
+    String(o.side).toUpperCase()==='BUY'&&String(o.status).toUpperCase()==='FILLED'&&
+    Number(o.filledShareQty)>0&&Number(o.filledUsdtAmount)>0);
+ const sell=orders.find(o=>String(o.orderId)===SETTLED_SELL_ID&&
+    String(o.side).toUpperCase()==='SELL'&&String(o.status).toUpperCase()==='FILLED'&&
+    Number(o.filledShareQty)>0);
+ if(!buy||!sell||orders.some(o=>
+    ![SETTLED_BUY_ID,SETTLED_SELL_ID].includes(String(o.orderId))))
+  throw Error('EXACT_BUY_AND_EXIT_NOT_CONFIRMED');
+ if(Number(sell.filledShareQty)>Number(buy.filledShareQty)+0.000001||
+    Number(buy.filledShareQty)-Number(sell.filledShareQty)>0.02)
+  throw Error('SELL_QUANTITY_NOT_RECONCILED');
+ if(JSON.stringify(config)!==snapshot||config.armed||!config.blocked)
+  throw Error('STATE_CHANGED_DURING_SETTLED_RECONCILIATION');
+ // Leave all historical tracked legs intact for the independent risk worker.
+ config.blocked=false;config.armed=false;persist();
+ state.health='SETTLED_POSITION_LOCK_RECONCILED';state.lastError=null;
+ return {ok:true,armed:false,blocked:false,reconciledOrderId:SETTLED_BUY_ID,
+  soldOrderId:SETTLED_SELL_ID,preservedTrackedCount:Object.keys(config.tracked).length};
+}
 async function confirmOrder(wallet,id,topic){
  // An order ID proves submission, not execution. Explicit FAILED/zero-fill is
  // different from unknown status; only the latter requires fail-closed lock.
@@ -437,6 +489,12 @@ const site='https://prediction.47-237-188-69.sslip.io';
 if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  if(req.method==='GET'&&req.url==='/api/status')return reply(res,200,safePublic());
  if(req.method==='GET'&&req.url==='/healthz')return reply(res,200,{ok:true,model:MODEL});
+ if(req.method==='POST'&&req.url==='/api/reconcile-settled-pair'){
+  if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
+   return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
+  try{return reply(res,200,await reconcileSettledPairLock())}
+  catch(e){return reply(res,409,{ok:false,error:safeErr(e)})}
+ }
  if(req.method==='POST'&&req.url==='/api/reconcile-known-zero-fill'){
   if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
    return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});

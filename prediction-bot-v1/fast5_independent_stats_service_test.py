@@ -4,12 +4,12 @@ import fast5_independent_stats_service as m
 R=1792980600000
 def signal(now, locked=False, direction='UP'):
  v={'ok':True,'model':m.MODEL,'strategyVersion':m.VERSION,'round':R,
-   'locked':locked,'latestError':'OPEN_5S_DEADLINE_MISSED' if not locked and now-R>=5000 else None,
+   'locked':locked,'latestError':'OPEN_2S_DEADLINE_MISSED' if not locked and now-R>=2000 else None,
    'latest':None}
  if locked:
   v['latest']={'model':m.MODEL,'strategyVersion':m.VERSION,'round':R,
-    'status':'LOCKED','direction':direction,'lockedAt':R+2500,
-    'marketAt':R+2300,'source':'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',
+    'status':'LOCKED','direction':direction,'lockedAt':R+850,
+    'marketAt':R+790,'source':'BINANCE_SPOT_WEBSOCKET_V3_COLLECTOR',
     'prewarmOnly':False,'signalReason':'CURRENT_OPEN_PRICE_DELTA'}
  return v
 def official(round_=R,direction='UP'):
@@ -29,7 +29,7 @@ class Stats(unittest.TestCase):
   self.j=m.Journal(m.connect())
   self.addCleanup(self.j.db.close)
  def test_signal_to_official_different_old_model_is_matched_by_round(self):
-  with patch.object(m,'ms',return_value=R+3000),patch.object(m,'get',return_value=signal(R+3000,True)):
+  with patch.object(m,'ms',return_value=R+1250),patch.object(m,'get',return_value=signal(R+1250,True)):
    self.j.snapshot()
   self.assertEqual(self.j.data()['summary']['signals'],1)
   with patch.object(m,'get',return_value={'ok':True,'records':[official()]}):
@@ -38,17 +38,17 @@ class Stats(unittest.TestCase):
   self.assertEqual((a['wins'],a['losses'],a['settled']),(1,0,1))
   self.assertEqual(a['accuracyPct'],100)
   # A second snapshot cannot double count the same round.
-  with patch.object(m,'ms',return_value=R+4900),patch.object(m,'get',return_value=signal(R+4900,True)):
+  with patch.object(m,'ms',return_value=R+1850),patch.object(m,'get',return_value=signal(R+1850,True)):
    self.j.snapshot()
   self.assertEqual(self.j.data()['summary']['signals'],1)
  def test_no_past_official_model_inference(self):
   with patch.object(m,'get',return_value={'ok':True,'records':[official()]}):
    self.j.settle()
   self.assertEqual(self.j.data()['summary']['total'],0)
- def test_wait_is_recorded_once_after_5_seconds_and_not_in_winrate(self):
+ def test_wait_is_recorded_once_after_2_seconds_and_not_in_winrate(self):
   with patch.object(m,'ms',return_value=R+500),patch.object(m,'get',return_value=signal(R+500)):
    self.j.snapshot()
-  with patch.object(m,'ms',return_value=R+5200),patch.object(m,'get',return_value=signal(R+5200)):
+  with patch.object(m,'ms',return_value=R+2300),patch.object(m,'get',return_value=signal(R+2300)):
    self.j.snapshot()
   a=self.j.data()['summary']
   self.assertEqual((a['total'],a['waits'],a['signals']),(1,1,0))
@@ -56,31 +56,26 @@ class Stats(unittest.TestCase):
    self.j.settle()
   a=self.j.data()['summary']
   self.assertEqual(a['settled'],0)
- def test_v6_filtered_large_regime_wait_is_saved_once_and_excluded_from_winrate(self):
-  with patch.object(m,'ms',return_value=R+300):
-   with patch.object(m,'get',return_value=signal(R+300)):
-    self.j.snapshot()
-  blocked=signal(R+5300)
-  blocked['latestError']='REGIME_GT5_BPS_WAIT'
-  with patch.object(m,'ms',return_value=R+5300):
-   with patch.object(m,'get',return_value=blocked):
-    self.j.snapshot();self.j.snapshot()
-  result=self.j.data()
-  self.assertEqual(result['summary']['waits'],1)
-  self.assertEqual(result['summary']['signals'],0)
-  self.assertEqual(result['summary']['settled'],0)
-  self.assertEqual(result['rows'][0]['decision_reason'],'REGIME_GT5_BPS_WAIT')
+ def test_v7_flat_or_stale_event_wait_is_not_in_winrate(self):
+  with patch.object(m,'ms',return_value=R+300),patch.object(m,'get',return_value=signal(R+300)):
+   self.j.snapshot()
+  blocked=signal(R+2400)
+  with patch.object(m,'ms',return_value=R+2400),patch.object(m,'get',return_value=blocked):
+   self.j.snapshot();self.j.snapshot()
+  a=self.j.data()['summary']
+  self.assertEqual((a['waits'],a['signals'],a['settled']),(1,0,0))
+  self.assertEqual(self.j.data()['rows'][0]['decision_reason'],'OPEN_2S_DEADLINE_MISSED')
  def test_unobserved_round_not_falsely_labeled_wait(self):
   with patch.object(m,'ms',return_value=R+160000),patch.object(m,'get',return_value=signal(R+160000)):
    self.j.snapshot()
   self.assertEqual(self.j.data()['summary']['total'],0)
  def test_reject_wrong_timestamp_or_unverified_outcome(self):
-  v=official();v['officialSettlementAudit']['topicStartDate']=R+300000
+  v=official();v['officialSettlementAudit']['topicStartDate']=R+125000
   self.assertIsNone(m.official(v))
   v=official();v['officialSettlementAudit']['variantEndPrice']='79990'
   self.assertIsNone(m.official(v))
  def test_restart_retains_exact_round_records(self):
-  with patch.object(m,'ms',return_value=R+3000),patch.object(m,'get',return_value=signal(R+3000,True)):
+  with patch.object(m,'ms',return_value=R+1250),patch.object(m,'get',return_value=signal(R+1250,True)):
    self.j.snapshot()
   db=m.connect()
   self.assertEqual(db.execute('SELECT COUNT(*) FROM rounds').fetchone()[0],1)

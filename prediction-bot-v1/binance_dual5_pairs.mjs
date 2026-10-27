@@ -12,6 +12,10 @@ const SECRET=process.env.BINANCE_PREDICTION_API_SECRET||'';
 const MODEL='BINANCE_DUAL5_PAIR_V1';
 const MIN_EDGE=0.08; // $0.08 minimum remaining after conservative fee and execution reserve
 const MAX_SIDE_USDT=1.60,MAX_DAILY_SPEND=12.80,ROUND_MS=300000,DEADLINE_BUFFER_MS=45000;
+const DEFAULT_RISK=()=>({takeProfitEnabled:true,takeProfitPct:30,stopLossEnabled:true,stopLossPct:30});
+const validPercent=p=>typeof p==='number'&&Number.isFinite(p)&&p>=1&&p<=95;
+function validRisk(r){return r&&typeof r.takeProfitEnabled==='boolean'&&typeof r.stopLossEnabled==='boolean'&&validPercent(r.takeProfitPct)&&validPercent(r.stopLossPct)}
+function validRiskBoth(r){return r&&validRisk(r.UP)&&validRisk(r.DOWN)}
 const timeout=(ms=7500)=>AbortSignal.timeout(ms);
 const roundOf=(t)=>Math.floor(t/ROUND_MS)*ROUND_MS;
 const finite=v=>Number.isFinite(Number(v));
@@ -55,8 +59,11 @@ function loadConfig(){
  try{const d=JSON.parse(fs.readFileSync(FILE,'utf8'));
   return {armed:d.armed===true,createdAt:d.createdAt||null,
     dailyDate:d.dailyDate||null,dailySpend:finite(d.dailySpend)?Number(d.dailySpend):0,
-    lastOrderRound:Number(d.lastOrderRound)||0,blocked:d.blocked===true};}
- catch{return {armed:false,dailyDate:null,dailySpend:0,lastOrderRound:0,blocked:false,createdAt:null};}
+    lastOrderRound:Number(d.lastOrderRound)||0,blocked:d.blocked===true,
+    risk:validRiskBoth(d.risk)?d.risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},
+    legs:d.legs&&typeof d.legs==='object'?d.legs:{}};}
+ catch{return {armed:false,dailyDate:null,dailySpend:0,lastOrderRound:0,blocked:false,createdAt:null,
+  risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{}};}
 }
 let config=loadConfig(),state={model:MODEL,at:null,health:'BOOT',round:null,
  lastOpportunity:null,lastOrder:null,lastError:null,checked:0,quoteChecks:0,attempts:0,
@@ -73,6 +80,7 @@ function safePublic(){return {ok:true,model:MODEL,mode:config.armed?'LIVE_ARMED'
   active:config.armed&&!config.blocked,blocked:config.blocked,
   dailySpend:config.dailySpend,dailySpendMax:MAX_DAILY_SPEND,maxPerSide:MAX_SIDE_USDT,
   minNetEdgeUSDT:MIN_EDGE,configUpdatedAt:config.createdAt,
+  risk:config.risk,legs:config.legs,
   ...state,wallet:undefined};}
 function norm(s){return String(s||'').toUpperCase().trim();}
 function complimentaryTokens(topic){
@@ -194,6 +202,12 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
  state.lastOrder=record;state.at=Date.now();state.attempts++;
  try{
   if(!q1.quoteId||!q2.quoteId)throw Error('PAIR_QUOTES_INCOMPLETE');
+  // Reserve the exact market+token for the existing risk-worker BEFORE placing.
+  // This persists UP/DOWN per-leg settings across restarts and avoids double exits.
+  config.legs.UP={tokenId:String(pair.up.tokenId),
+   marketTopicId:String(topic.marketTopicId),round,status:'ORDER_PENDING',
+   updatedAt:Date.now()};
+  persist();
   record.phase='SUBMITTING_UP';
   const up=await place(wallet,topic,q1);
   if(!up.orderId)throw Error('UP_ORDER_ID_MISSING');
@@ -202,11 +216,16 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   const u=await confirmOrder(wallet,up.orderId,topic);
   if(!u||u.shares<=0)throw Error('UP_FILL_UNVERIFIED_STOP_NO_SECOND');
   record.first=u;
+  config.legs.UP={...config.legs.UP,status:'FILLED',orderId:String(up.orderId),
+    costUSDT:u.spent,shares:u.shares,updatedAt:Date.now()};persist();
   // Re-price DOWN after UP fills: never blindly send a stale second quote.
   const down=await quoteFor(topic,pair.down,wallet);
   const reassess=calcPair(q1,down);
   if(!reassess.feasible || Number(down.expireAt)<Date.now()+1800)
    throw Error('DOWN_QUOTE_EDGE_DISAPPEARED');
+  config.legs.DOWN={tokenId:String(pair.down.tokenId),
+   marketTopicId:String(topic.marketTopicId),round,status:'ORDER_PENDING',
+   updatedAt:Date.now()};persist();
   record.phase='SUBMITTING_DOWN';
   const dn=await place(wallet,topic,down);
   if(!dn.orderId)throw Error('DOWN_ORDER_ID_MISSING');
@@ -215,6 +234,8 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   const d=await confirmOrder(wallet,dn.orderId,topic);
   if(!d)throw Error('DOWN_FILL_UNVERIFIED');
   record.second=d;
+  config.legs.DOWN={...config.legs.DOWN,status:'FILLED',orderId:String(dn.orderId),
+    costUSDT:d.spent,shares:d.shares,updatedAt:Date.now()};persist();
   const guaranteed=Math.min(u.shares,d.shares)-u.spent-d.spent-0.025;
   record.phase='FILLED_BOTH';record.actualPairWorstCaseUSDT=Math.round(guaranteed*10000)/10000;
   // Trade success is not a guarantee of eventual profit: fees and claim friction remain.
@@ -266,6 +287,11 @@ async function tick(){
     status:estimate.feasible?'NET_EDGE_AVAILABLE':'FEES_OR_IMBALANCE_NEGATIVE'};
   if(!estimate.feasible){state.health='QUOTE_NET_EDGE_TOO_SMALL';return}
   if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}
+  // Neither strategy may trade the same aggregated wallet+token concurrently.
+  const t=await fetch('http://127.0.0.1:13001/api/status',
+    {signal:timeout(1200)}).then(r=>r.json());
+  if(t.enabled!==false){state.health='OTHER_BOT_ACTIVE_BLOCK_PAIR';return;}
+  if(!validRiskBoth(config.risk)){state.health='UNVERIFIED_LEG_RISK_CONFIG';return;}
   state.health='LIVE_PAIR_SUBMISSION';await attemptPair(round,topic,pair,q1,q2,estimate,wallet);
  }catch(e){
   state.lastError=safeErr(e);state.health='NO_VALID_PAIR_'+state.lastError;
@@ -281,6 +307,21 @@ const site='https://prediction.47-237-188-69.sslip.io';
 if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  if(req.method==='GET'&&req.url==='/api/status')return reply(res,200,safePublic());
  if(req.method==='GET'&&req.url==='/healthz')return reply(res,200,{ok:true,model:MODEL});
+ if(req.method==='POST'&&req.url==='/api/risk'){
+  if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
+   return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
+  let body='';for await(const c of req){body+=c;if(body.length>3000)break}
+  try{
+   const d=JSON.parse(body);
+   if(!validRiskBoth(d.risk))throw Error('INVALID_UP_DOWN_RISK_PARAMS');
+   if(config.armed||config.blocked)throw Error('STOP_TRADING_BEFORE_RISK_EDIT');
+   // Settings are immutable while a submitted exit is pending; the risk worker
+   // will recalculate the exact token's target on its next quote cycle.
+   config.risk={UP:{...d.risk.UP},DOWN:{...d.risk.DOWN}};
+   config.createdAt=new Date().toISOString();persist();
+   return reply(res,200,{ok:true,risk:config.risk});
+  }catch(e){return reply(res,400,{ok:false,error:safeErr(e)})}
+ }
  if(req.method==='POST'&&req.url==='/api/arm'){
   // Browser owner only; cross-site form and direct no-origin scripts disallowed.
   if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
@@ -290,6 +331,12 @@ if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
    const d=JSON.parse(body);
    if(typeof d.armed!=='boolean')throw Error('INVALID_ARM_VALUE');
    if(d.armed===true&&config.blocked)throw Error('MANUAL_RECONCILIATION_REQUIRED');
+   if(d.armed===true&&!validRiskBoth(config.risk))throw Error('UP_DOWN_RISK_NOT_CONFIGURED');
+   if(d.armed===true){
+    const base=await fetch('http://127.0.0.1:13001/api/status',
+      {signal:timeout(1400)}).then(r=>r.json());
+    if(base.enabled!==false)throw Error('OTHER_PRODUCTION_BOT_FOLLOW_MUST_BE_OFF');
+   }
    config.armed=d.armed;config.createdAt=new Date().toISOString();persist();
    return reply(res,200,{ok:true,armed:config.armed,blocked:config.blocked});
   }catch(e){return reply(res,400,{ok:false,error:safeErr(e)})}

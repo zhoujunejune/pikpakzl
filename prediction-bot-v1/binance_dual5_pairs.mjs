@@ -307,12 +307,12 @@ async function tick(){
   if(config.dailyDate!==day){config.dailyDate=day;config.dailySpend=0;persist();}
   if(state.round!==round)state.firstScanLagMs=Math.max(0,now-round);
   state.round=round;state.at=now;
+  if(config.blocked){state.health='UNHEDGED_OR_UNKNOWN_MANUAL_REVIEW';return}
+  if(config.lastOrderRound===round){state.health='ROUND_ALREADY_ATTEMPTED';return}
   if(now-round>ROUND_MS-DEADLINE_BUFFER_MS){
    state.health='ROUND_CLOSING_WAIT';return;
   }
   if(now-round>ENTRY_WINDOW_MS){state.health='ENTRY_WINDOW_ELAPSED';return;}
-  if(config.blocked){state.health='UNHEDGED_OR_UNKNOWN_MANUAL_REVIEW';return}
-  if(config.lastOrderRound===round){state.health='ROUND_ALREADY_ATTEMPTED';return}
   if(!cached||cached.round!==round){
    const v=await discover(now);cached={...v,round};
   }

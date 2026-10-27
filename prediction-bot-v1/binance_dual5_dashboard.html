@@ -5,13 +5,13 @@
 <article><h2>运行状态</h2><div id="banner">读取中…</div><div class="grid">
 <div class="metric"><small>当前轮次</small><div class="value" id="round">--</div></div>
 <div class="metric"><small>本轮盘口和价</small><div class="value" id="ask">--</div></div>
-<div class="metric"><small>保守配对净收益估计</small><div class="value" id="edge">--</div></div>
+<div class="metric"><small>配对净收益估计（仅展示，不拦截买单）</small><div class="value" id="edge">--</div></div>
 <div class="metric"><small>已检查 / 已报价</small><div class="value" id="checks">--</div></div>
 <div class="metric"><small>本轮首次扫描延迟</small><div class="value" id="firstScanLag">--</div></div>
 <div class="metric"><small>双边成交核验耗时</small><div class="value" id="pairExecution">--</div></div>
-</div><p><small id="detail">仅在两边真正互补、成本扣费后仍有正优势时尝试；不保证两单同时成交。</small></p></article>
+</div><p><small id="detail">开轮尽快尝试双边下单；没有盈利筛选，两笔独立订单可能亏损或只成交一边。</small></p></article>
 <article><h2>独立实盘交易开关</h2><p class="warn">两笔独立订单不具有原子性：可能只成交 UP 或 DOWN，造成单边损失。发生未知状态会停机，需人工核对。仅在你主动开启后才发送真实订单。</p>
-<p>UP 和 DOWN 买入金额可单独设置，默认各 <b>1 USDT</b>；<b>已取消每日硬性金额限制</b>。每轮最多尝试一组；必须通过保守净收益核验（至少 <b>0.08 USDT</b>）后才可能下单。</p>
+<p>UP 和 DOWN 买入金额可单独设置，默认各 <b>1 USDT</b>；<b>已取消每日硬性金额限制</b>。每轮最多尝试一组；不再检查买价之和或预估净收益。必须能获取有效盘口与报价并完成必要的安全核验，交易所拒绝或缺少流动性仍可能无法成交。</p>
 <h2>UP / DOWN 各自买入金额</h2>
 <div class="grid">
  <div class="metric"><label for="upAmount" class="ok">UP 买入金额（USDT）</label><p><input id="upAmount" type="number" min="1" max="1000" step="0.01" value="1" inputmode="decimal" style="width:100%;max-width:165px;padding:9px;background:#0d1728;color:#fff;border:1px solid #536680;border-radius:8px"></p></div>
@@ -32,7 +32,7 @@
 <button id="arm" type="button" disabled>启用独立双边实盘</button><button id="stop" class="stop" type="button" disabled>关闭双边实盘</button>
 <p id="feedback" class="sub"></p></article>
 <article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
-<article><h2>为什么会不下单？</h2><p class="sub">典型原因包括盘口价格之和太高、手续费后净优势不够、某一边无报价、盘口过期、不是能严格证明互补的一对份额、该轮已尝试、余额或交易接口不可用。</p></article>
+<article><h2>为什么会不下单？</h2><p class="sub">典型原因包括某一边无流动性或有效报价、盘口过期、市场结果不互补、该轮已尝试、另一机器人正使用相同钱包、币安拒单或余额不足。预估利润不再是阻止买单的条件。</p></article>
 </main><script>
 const el=id=>document.getElementById(id),label=x=>x==null?'--':String(x),fmt=x=>Number.isFinite(Number(x))?Number(x).toFixed(4):'--';
 let saving=false,riskEditing=false,riskLoaded=false,amountLoaded=false,amountEditing=false;
@@ -50,7 +50,7 @@ async function load(){
    el('firstScanLag').textContent=d.firstScanLagMs==null?'--':d.firstScanLagMs+' ms';
    el('pairExecution').textContent=d.lastOrder?.pairExecutionMs==null?'--':d.lastOrder.pairExecutionMs+' ms';
   el('detail').textContent='UP卖一 '+(q?fmt(q.upAsk):'--')+' · DOWN卖一 '+(q?fmt(q.downAsk):'--')+
-   ' · 盘口筛选：'+(q?label(q.status):'等待有效市场')+
+   ' · 报价状态：'+(q?label(q.status):'等待有效市场')+
    ' · 今日累计下单尝试金额 '+fmt(d.dailySpend)+' USDT（不设每日硬限制）';
   el('arm').disabled=saving||d.active||d.blocked;el('stop').disabled=saving||!d.active;
   el('riskSave').disabled=saving||d.active||d.blocked;
@@ -69,7 +69,7 @@ async function load(){
     el(prefix+'Tp').value=cfg.takeProfitPct;
     el(prefix+'Sl').value=cfg.stopLossPct;
    }
-   riskLoaded=true;el('riskMsg').textContent='默认 UP/DOWN 均止盈30%、止损30%。两边独立，可分别修改。';
+   riskLoaded=true;el('riskMsg').textContent='已读取后台 UP/DOWN 止盈止损设置。';
   }
   const o=d.lastOrder;
   if(o){
@@ -134,7 +134,7 @@ async function save(armed){
   const r=await fetch('/api/dual5-arm',{method:'POST',headers:{'Content-Type':'application/json'},
    credentials:'same-origin',body:JSON.stringify({armed})});
   const d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.error||'SAVE_FAILED');
-  el('feedback').textContent=d.armed?'独立实盘已开启，将按净收益门槛自主尝试交易':'独立实盘已关闭；已提交订单不会被撤销';
+  el('feedback').textContent=d.armed?'独立实盘已开启；每轮尽快尝试买入 UP 和 DOWN，不过滤预估收益':'独立实盘已关闭；已提交订单不会被撤销';
  }catch(e){el('feedback').textContent='保存失败：'+String(e.message||e)}
  finally{saving=false;await load();}
 }

@@ -9,7 +9,7 @@ const html='<!doctype html><html><body><section class="c" id="roundResultsOnlyCa
 test('replaces retired DeepSeek status with FAST5 while keeping trade controls',()=>{
  const out=injectFast5Dashboard(html);
  assert.ok(out.includes('id="zlFast5Card"'));
- assert.ok(out.includes('FAST5 V6 · 只保留≤5bps小幅波动'));
+ assert.ok(out.includes('FAST5 V7 · 实时多空趋势（2秒锁定）'));
  assert.ok(out.includes('/api/fast5-live-status'));
  assert.ok(out.includes('id="tradeInputsCard"'));
  assert.ok(out.includes('keepControls'));
@@ -23,7 +23,7 @@ test('no duplicate panel injection',()=>{
 });
 test('never claims winrate or fills stats with DeepSeek records',()=>{
  const out=injectFast5Dashboard(html);
- assert.ok(out.includes('V6仅统计≤5bps小幅波动的UP/DOWN'));
+ assert.ok(out.includes('V7仅统计本版开轮2秒内锁定的UP/DOWN'));
  assert.match(out,/FAST5 独立统计面板/);
  assert.match(out,/zlF5StatAccuracy/);
  assert.match(out,/zlF5OfficialRows/);

@@ -72,7 +72,7 @@ function loadConfig(){
   risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{},tracked:{},amounts:defaultAmounts()};}
 }
 let config=loadConfig(),state={model:MODEL,at:null,health:'BOOT',round:null,
- lastOpportunity:null,lastOrder:null,lastError:null,checked:0,quoteChecks:0,attempts:0,
+ lastOpportunity:null,lastOrder:null,lastError:null,firstScanLagMs:null,checked:0,quoteChecks:0,attempts:0,
  wallet:null,marketTopicId:null,lastScanAt:null};
 function persist(){fs.mkdirSync(new URL('.', 'file://'+FILE).pathname,{recursive:true});
  const temp=FILE+'.tmp';fs.writeFileSync(temp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(temp,FILE);}
@@ -84,7 +84,7 @@ if(process.env.DUAL5_TEST!=='1'&&config.armed){
 }
 function safePublic(){return {ok:true,model:MODEL,mode:config.armed?'LIVE_ARMED':'PRODUCTION_IDLE',
   active:config.armed&&!config.blocked,blocked:config.blocked,
-  dailySpend:config.dailySpend,dailySpendMax:null,amounts:config.amounts,
+  dailySpend:config.dailySpend,dailySpendMax:null,scanMode:'ROUND_BOUNDARY_FAST_V1',amounts:config.amounts,
   combinedAmount:config.amounts.UP+config.amounts.DOWN,
   minNetEdgeUSDT:MIN_EDGE,configUpdatedAt:config.createdAt,
   risk:config.risk,legs:config.legs,trackedCount:Object.keys(config.tracked).length,
@@ -208,7 +208,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
  const orderAmounts={UP:config.amounts.UP,DOWN:config.amounts.DOWN};
  config.dailySpend+=orderAmounts.UP+orderAmounts.DOWN;persist();
  const record={round,phase:'PREPARED',first:null,second:null,at:Date.now(),amounts:orderAmounts,
-  estimatedNetUSDT:analysis.conservativeNet};
+  estimatedNetUSDT:analysis.conservativeNet,firstOrderSubmitAt:null,upConfirmedAt:null,downOrderSubmitAt:null,bothConfirmedAt:null};
  state.lastOrder=record;state.at=Date.now();state.attempts++;
  try{
   if(!q1.quoteId||!q2.quoteId)throw Error('PAIR_QUOTES_INCOMPLETE');
@@ -220,6 +220,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId]={...config.legs.UP,side:'UP'};
   persist();
   record.phase='SUBMITTING_UP';
+  record.firstOrderSubmitAt=Date.now();
   const up=await place(wallet,topic,q1);
   if(!up.orderId)throw Error('UP_ORDER_ID_MISSING');
   record.first={orderId:String(up.orderId),status:'SUBMITTED'};
@@ -227,6 +228,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   const u=await confirmOrder(wallet,up.orderId,topic);
   if(!u||u.shares<=0)throw Error('UP_FILL_UNVERIFIED_STOP_NO_SECOND');
   record.first=u;
+  record.upConfirmedAt=Date.now();
   config.legs.UP={...config.legs.UP,status:'FILLED',orderId:String(up.orderId),
     costUSDT:u.spent,shares:u.shares,updatedAt:Date.now()};
   config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId]={...config.legs.UP,side:'UP'};
@@ -242,6 +244,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   config.tracked[config.legs.DOWN.marketTopicId+':'+config.legs.DOWN.tokenId]={...config.legs.DOWN,side:'DOWN'};
   persist();
   record.phase='SUBMITTING_DOWN';
+  record.downOrderSubmitAt=Date.now();
   const dn=await place(wallet,topic,down);
   if(!dn.orderId)throw Error('DOWN_ORDER_ID_MISSING');
   record.second={orderId:String(dn.orderId),status:'SUBMITTED'};
@@ -249,6 +252,9 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   const d=await confirmOrder(wallet,dn.orderId,topic);
   if(!d)throw Error('DOWN_FILL_UNVERIFIED');
   record.second=d;
+  record.bothConfirmedAt=Date.now();
+  record.openingFromRoundMs=record.firstOrderSubmitAt-round;
+  record.pairExecutionMs=record.bothConfirmedAt-record.firstOrderSubmitAt;
   config.legs.DOWN={...config.legs.DOWN,status:'FILLED',orderId:String(dn.orderId),
     costUSDT:d.spent,shares:d.shares,updatedAt:Date.now()};
   config.tracked[config.legs.DOWN.marketTopicId+':'+config.legs.DOWN.tokenId]={...config.legs.DOWN,side:'DOWN'};
@@ -263,6 +269,14 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   // Never duplicate an unknown order or automatically chase a missing leg.
  }
 }
+// Poll rapidly just after each five-minute boundary, back off later to avoid API bursts.
+// Crossing the round boundary takes priority over the previous 19-second cadence.
+// Schedule each scan only after the preceding one finishes; scans never overlap.
+function nextScanDelayMs(now=Date.now()){
+ const elapsed=((now%ROUND_MS)+ROUND_MS)%ROUND_MS;
+ const cadence=elapsed<15000?2000:(elapsed<60000?5000:19000);
+ return Math.max(150,Math.min(cadence,ROUND_MS-elapsed+250));
+}
 let cached=null,busy=false;
 async function tick(){
  if(busy)return;busy=true;
@@ -270,6 +284,7 @@ async function tick(){
   const now=Date.now(),round=roundOf(now);
   const day=new Date(now).toISOString().slice(0,10);
   if(config.dailyDate!==day){config.dailyDate=day;config.dailySpend=0;persist();}
+  if(state.round!==round)state.firstScanLagMs=Math.max(0,now-round);
   state.round=round;state.at=now;
   if(now-round>ROUND_MS-DEADLINE_BUFFER_MS){
    state.health='ROUND_CLOSING_WAIT';return;
@@ -375,5 +390,8 @@ if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  }
  return reply(res,404,{ok:false,error:'NOT_FOUND'});
 }).listen(PORT,'127.0.0.1',()=>console.log(JSON.stringify({event:'dual5_listening',port:PORT,mode:config.armed?'armed':'off'})));
-if(process.env.DUAL5_TEST!=='1'){setInterval(()=>void tick(),19000).unref();void tick();}
-export {complimentaryTokens,bestAsk,calcPair,validateAmounts};
+if(process.env.DUAL5_TEST!=='1'){
+ const scheduleNext=()=>setTimeout(()=>void tick().finally(scheduleNext),nextScanDelayMs()).unref();
+ void tick().finally(scheduleNext);
+}
+export {complimentaryTokens,bestAsk,calcPair,validateAmounts,nextScanDelayMs};

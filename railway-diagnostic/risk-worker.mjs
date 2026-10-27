@@ -27,6 +27,38 @@ const topicCache = new Map();
 const sellState = new Map();
 // Read-only health output for the control panel. No trade inputs or decisions depend on it.
 const WORKER_HEALTH_FILE = '/tmp/risk-worker-health.json';
+// Scoped overrides for positions opened by BINANCE_DUAL5_PAIR_V1 only.
+// Never change TP/SL semantics for positions without an exact token+topic match.
+const DUAL5_CONFIG_FILE='/var/lib/zl-prediction/dual5/config.json';
+function dual5RiskFor(position){
+  let raw;
+  try{raw=fs.readFileSync(DUAL5_CONFIG_FILE,'utf8');}
+  catch(e){if(e?.code==='ENOENT')return null;throw e;}
+  const d=JSON.parse(raw);
+  if(!d.legs||!d.risk)return null;
+  for(const direction of ['UP','DOWN']){
+    const leg=d.legs[direction];
+    if(!leg||String(leg.tokenId)!==String(position?.tokenId)||
+      String(leg.marketTopicId)!==String(position?.marketTopicId))continue;
+    const risk=d.risk[direction];
+    if(!risk||typeof risk.takeProfitEnabled!=='boolean'||
+      typeof risk.stopLossEnabled!=='boolean'||
+      !Number.isFinite(Number(risk.takeProfitPct))||
+      !Number.isFinite(Number(risk.stopLossPct))||
+      Number(risk.takeProfitPct)<1||Number(risk.takeProfitPct)>95||
+      Number(risk.stopLossPct)<1||Number(risk.stopLossPct)>95)
+      throw Error('DUAL5_TRACKED_POSITION_RISK_INVALID_'+direction);
+    return {direction,tpEnabled:risk.takeProfitEnabled,slEnabled:risk.stopLossEnabled,
+      tpPercent:Number(risk.takeProfitPct),slPercent:Number(risk.stopLossPct)};
+  }
+  return null;
+}
+function hasDual5Positions(){
+ try{
+  const d=JSON.parse(fs.readFileSync(DUAL5_CONFIG_FILE,'utf8'));
+  return ['UP','DOWN'].some(k=>d.legs?.[k]?.tokenId&&d.legs?.[k]?.marketTopicId);
+ }catch(e){if(e?.code==='ENOENT')return false;throw e;}
+}
 const health = {
   at: null,
   pid: process.pid,
@@ -198,15 +230,28 @@ function basePosition(position) {
 function calculateTargets(position) {
   const base = basePosition(position);
   if (!base.ok) return base;
-  const out = { ...base, tpTarget: null, slTarget: null, toWin: null, maxProfit: null };
+  const dual5=dual5RiskFor(position);
+  const tpEnabled=dual5?dual5.tpEnabled:TAKE_PROFIT_ENABLED;
+  const slEnabled=dual5?dual5.slEnabled:STOP_LOSS_ENABLED;
+  const tpPercent=dual5?dual5.tpPercent:TAKE_PROFIT_PERCENT;
+  const slPercent=dual5?dual5.slPercent:STOP_LOSS_PERCENT;
+  const out = { ...base, tpTarget: null, slTarget: null, toWin: null,
+    maxProfit: null, riskOwner:dual5?'BINANCE_DUAL5_PAIR_V1':'LEGACY',
+    riskSide:dual5?.direction??null,tpEnabled,slEnabled };
 
-  if (STOP_LOSS_ENABLED) {
-    if (!validPercent(STOP_LOSS_PERCENT)) return { ok: false, error: 'INVALID_STOP_LOSS_PERCENT' };
-    out.slTarget = base.totalCost * (1 - STOP_LOSS_PERCENT / 100);
+  if (slEnabled) {
+    if (!validPercent(slPercent)) return { ok: false, error: 'INVALID_STOP_LOSS_PERCENT' };
+    out.slTarget = base.totalCost * (1 - slPercent / 100);
   }
 
-  if (TAKE_PROFIT_ENABLED) {
-    if (!validPercent(TAKE_PROFIT_PERCENT)) return { ok: false, error: 'INVALID_TAKE_PROFIT_PERCENT' };
+  if (tpEnabled) {
+    if (!validPercent(tpPercent)) return { ok: false, error: 'INVALID_TAKE_PROFIT_PERCENT' };
+    if (dual5) {
+      // UP/DOWN per-leg TP is executable SELL proceeds as a % of actual cost.
+      // This is not % of maximum hypothetical 5-minute payout.
+      out.tpTarget = Math.ceil(base.totalCost * (1 + tpPercent / 100)*1000000)/1000000;
+      return out;
+    }
     const toWin = Number(position?.toWin);
     if (!Number.isFinite(toWin) || toWin < 0) return { ok: false, error: 'INVALID_TO_WIN' };
     const maxProfit = toWin - base.totalCost;
@@ -223,8 +268,8 @@ function calculateTargets(position) {
 function evaluateRisk(targets, quote) {
   const currentSellAmount = weiToDecimal(quote?.amountOut);
   if (!Number.isFinite(currentSellAmount)) return { ok: false, error: 'INVALID_SELL_QUOTE_AMOUNT_OUT' };
-  const tpTriggered = TAKE_PROFIT_ENABLED && Number.isFinite(targets.tpTarget) && currentSellAmount >= targets.tpTarget;
-  const slTriggered = STOP_LOSS_ENABLED && Number.isFinite(targets.slTarget) && currentSellAmount <= targets.slTarget;
+  const tpTriggered = targets.tpEnabled && Number.isFinite(targets.tpTarget) && currentSellAmount >= targets.tpTarget;
+  const slTriggered = targets.slEnabled && Number.isFinite(targets.slTarget) && currentSellAmount <= targets.slTarget;
   const reason = slTriggered ? 'STOP_LOSS' : (tpTriggered ? 'TAKE_PROFIT' : null);
   return { ok: true, currentSellAmount, tpTriggered, slTriggered, triggered: Boolean(reason), reason };
 }
@@ -471,7 +516,10 @@ function cleanupSellState(activeTokenIds) {
 }
 
 async function tick() {
-  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED) || workerBusy) return;
+  if (workerBusy) return;
+  try{
+    if(!TAKE_PROFIT_ENABLED&&!STOP_LOSS_ENABLED&&!hasDual5Positions())return;
+  }catch(e){log('risk_tick_exception',{error:'DUAL5_CONFIG_INVALID_'+e.message});return;}
   if (!API_KEY || !API_SECRET) return;
   workerBusy = true;
   health.lastTickStartedAt = new Date().toISOString();
@@ -499,7 +547,13 @@ async function tick() {
       if (String(position?.positionStatus || '').toUpperCase() !== 'OPEN') continue;
       if (!(await inScope(position))) continue;
 
-      const targets = calculateTargets(position);
+      let targets;
+      try{targets = calculateTargets(position)}
+      catch(e){
+        log('risk_invalid_position',{tokenId,
+          marketTopicId:position?.marketTopicId,error:'RISK_CONFIG_FAILED_'+e.message});
+        continue;
+      }
       if (!targets.ok) {
         log('risk_invalid_position', {
           tokenId: tokenId || null,
@@ -555,6 +609,8 @@ async function tick() {
         slTarget: targets.slTarget,
         tpTriggered: evaluation.tpTriggered,
         slTriggered: evaluation.slTriggered,
+        riskOwner: targets.riskOwner,
+        riskSide: targets.riskSide,
       });
 
       if (!evaluation.triggered) continue;

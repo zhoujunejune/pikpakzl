@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 process.env.DUAL5_TEST='1';
-const {complimentaryTokens,bestAsk,calcPair,validateAmounts,validFundingSource,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
+const {complimentaryTokens,bestAsk,calcPair,exactOrderResult,validateAmounts,validFundingSource,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
 test('pair two actual complementary tokens in exactly the same outcome market',()=>{
  const topic={markets:[{marketId:12,title:'BTC Price 5m UP?',outcomes:[
   {name:'YES',tokenId:'UP_1'},{name:'NO',tokenId:'DOWN_1'}]}]};
@@ -137,9 +137,27 @@ test('no late buy after the opening 15 seconds and no unverified second leg',()=
  assert.match(src,/if\(now-round>ENTRY_WINDOW_MS\)/);
  assert.match(src,/orderId:String\(id\),offset:0,limit:100/);
  assert.match(src,/String\(x\.marketTopicId\)===String\(topic\.marketTopicId\)/);
- assert.match(src,/Number\(x\.filledShareQty\)>0/);
+ assert.match(src,/Number\(x\?\.filledShareQty\)>0/);
  assert.match(src,/lastSeen=matches\[0\]\?\.status/);
+ assert.match(src,/record\.phase='UP_ZERO_FILL_CONFIRMED'/);
+ assert.match(src,/delete config\.tracked\[config\.legs\.UP\.marketTopicId/);
+ assert.match(src,/DOWN_ZERO_FILL_CONFIRMED_UP_FILLED_MANUAL_REVIEW/);
  assert.match(src,/config\.legs\.UP=\{\.\.\.config\.legs\.UP,orderId:String\(up\.orderId\)/);
  assert.match(src,/if\(!u\|\|u\.shares<=0\)throw Error\('UP_FILL_UNVERIFIED_STOP_NO_SECOND'\)/);
  assert.match(src,/UNHEDGED_OR_UNKNOWN_STOPPED/);
+});
+
+test('exact Binance FAILED zero-fill is terminal and never proof of a fill',()=>{
+ const topic={marketTopicId:'7586769'};
+ const id='26102700001999631125';
+ const match={orderId:id,marketTopicId:7586769,status:'FAILED',filledUsdtAmount:'0',filledShareQty:'0'};
+ assert.deepEqual(exactOrderResult([match],id,topic),{
+  orderId:id,status:'FAILED',shares:0,spent:0,terminalZeroFill:true});
+ assert.equal(exactOrderResult([match],id,{marketTopicId:1111}),null);
+ assert.equal(exactOrderResult([match],'another-order',topic),null);
+ assert.equal(exactOrderResult([{...match,status:'PENDING'}],id,topic),null);
+ assert.equal(exactOrderResult([{...match,filledUsdtAmount:'1'}],id,topic),null);
+ const partial={...match,status:'FAILED',filledShareQty:'0.5',filledUsdtAmount:'0.4'};
+ assert.deepEqual(exactOrderResult([partial],id,topic),{
+  orderId:id,status:'FAILED',shares:0.5,spent:0.4,terminalZeroFill:false});
 });

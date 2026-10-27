@@ -84,7 +84,7 @@ if(process.env.DUAL5_TEST!=='1'&&config.armed){
 }
 function safePublic(){return {ok:true,model:MODEL,mode:config.armed?'LIVE_ARMED':'PRODUCTION_IDLE',
   active:config.armed&&!config.blocked,blocked:config.blocked,
-  dailySpend:config.dailySpend,dailySpendMax:null,scanMode:'ROUND_BOUNDARY_FAST_V1',amounts:config.amounts,
+  dailySpend:config.dailySpend,dailySpendMax:null,scanMode:'ROUND_BOUNDARY_FAST_V1',entryMode:'ROUND_OPEN_VALID_QUOTES_V2',profitFilterEnabled:false,amounts:config.amounts,
   combinedAmount:config.amounts.UP+config.amounts.DOWN,
   minNetEdgeUSDT:MIN_EDGE,configUpdatedAt:config.createdAt,
   risk:config.risk,legs:config.legs,trackedCount:Object.keys(config.tracked).length,

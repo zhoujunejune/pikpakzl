@@ -6,6 +6,7 @@ import os,sys,re,json,pathlib,shutil,subprocess,tempfile,urllib.request,time
 from datetime import datetime,timezone
 ROOT=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
 PANEL=ROOT/'panel-stats-shell.mjs'
+RISK_WORKER=ROOT/'risk-worker.mjs'
 APP=pathlib.Path('/opt/zl-prediction-dual5')
 SOURCE=APP/'binance_dual5_pairs.mjs'
 PAGE=APP/'binance_dual5_dashboard.html'
@@ -62,6 +63,36 @@ ROUTE=r"""
       });
     return;
   }
+  if (url.pathname === '/api/dual5-risk' && req.method === 'POST') {
+    if (req.headers.origin !== 'https://prediction.47-237-188-69.sslip.io' ||
+        req.headers['sec-fetch-site'] !== 'same-origin') {
+      res.writeHead(403,{'content-type':'application/json'});
+      res.end(JSON.stringify({ok:false,error:'SAME_ORIGIN_AUTH_REQUIRED'}));return;
+    }
+    void (async()=>{
+      try{
+        let b='',bytes=0;
+        for await (const chunk of req){
+          bytes+=chunk.length;if(bytes>1400)throw Error('RISK_REQUEST_TOO_LARGE');
+          b+=chunk.toString('utf8');
+        }
+        const data=JSON.parse(b);
+        if(!data?.risk?.UP||!data?.risk?.DOWN)throw Error('RISK_BOTH_SIDES_REQUIRED');
+        const reply=await fetch('http://127.0.0.1:13048/api/risk',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','Origin':req.headers.origin,
+            'Sec-Fetch-Site':req.headers['sec-fetch-site']},
+          body:JSON.stringify({risk:data.risk}),signal:AbortSignal.timeout(2700)});
+        const raw=await reply.text();
+        res.writeHead(reply.status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+        res.end(raw);
+      }catch(e){
+        res.writeHead(503,{'content-type':'application/json'});
+        res.end(JSON.stringify({ok:false,error:'DUAL5_RISK_CONFIG_UNAVAILABLE'}));
+      }
+    })();
+    return;
+  }
   if (url.pathname === '/api/dual5-arm' && req.method === 'POST') {
     if (req.headers.origin !== 'https://prediction.47-237-188-69.sslip.io' ||
         req.headers['sec-fetch-site'] !== 'same-origin') {
@@ -112,8 +143,10 @@ def main():
  if os.geteuid()!=0 or len(sys.argv)!=2 or not re.fullmatch(r'[0-9a-f]{40}',sys.argv[1]):
   raise RuntimeError('ROOT_AND_PINNED_SHA_REQUIRED')
  sha=sys.argv[1]
- if not PANEL.is_file():raise RuntimeError('EXISTING_DASHBOARD_MISSING')
+ if not PANEL.is_file() or not RISK_WORKER.is_file():raise RuntimeError('EXISTING_DASHBOARD_OR_RISK_WORKER_MISSING')
  if UNIT.exists() or SOURCE.exists():raise RuntimeError('DUAL5_ALREADY_DEPLOYED_ABORT')
+ if sh('systemctl','is-active','zl-prediction-risk-exits.service').stdout.strip()!='active':
+  raise RuntimeError('EXISTING_RISK_EXITS_NOT_RUNNING_ABORT')
  if sh('systemctl','is-active','zl-prediction-trade.service').stdout.strip()!='active':
   raise RuntimeError('EXISTING_PRODUCTION_TRADE_DOWN_ABORT')
  trade=api(13001,'/api/status')
@@ -131,7 +164,7 @@ def main():
  uid,gid=int(node_user),int(node_gid)
  with tempfile.TemporaryDirectory(prefix='dual5-prod-release-') as dir:
   tmp=pathlib.Path(dir)
-  for name in ('binance_dual5_pairs.mjs','binance_dual5_dashboard.html'):
+  for name in ('binance_dual5_pairs.mjs','binance_dual5_dashboard.html','risk-worker.mjs'):
    uri='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/'+sha+'/prediction-bot-v1/'+name
    with urllib.request.urlopen(uri,timeout=30) as r:(tmp/name).write_bytes(r.read())
   sh(NODE,'--check',str(tmp/'binance_dual5_pairs.mjs'))
@@ -142,6 +175,20 @@ def main():
    if needle not in core:raise RuntimeError('DUAL5_UNSAFE_BUILD_'+needle)
   for needle in ('UP + DOWN','/api/dual5-status','/api/dual5-arm','启用独立双边实盘'):
    if needle not in page:raise RuntimeError('DUAL5_MISSING_WEB_CONTROL_'+needle)
+  if '/api/dual5-risk' not in page or 'DOWN 持仓' not in page:
+   raise RuntimeError('DUAL5_INDEPENDENT_TPSL_FRONTEND_MISSING')
+  old_risk=RISK_WORKER.read_text()
+  updated_risk=(tmp/'risk-worker.mjs').read_text()
+  for needle in ('DUAL5_CONFIG_FILE','function dual5RiskFor(position)',
+                 'riskSide: targets.riskSide','PREDICTION_WALLET_LOOKUP_FAILED'):
+   if needle not in updated_risk:raise RuntimeError('DUAL5_RISK_WORKER_SCOPE_FAILED')
+  if 'DUAL5_CONFIG_FILE' in old_risk:
+   raise RuntimeError('DUAL5_RISK_WORKER_ALREADY_INSTALLED_ABORT')
+  # If production has drifted from the repo baseline, do not blindly overwrite.
+  baseline_url='https://raw.githubusercontent.com/zhoujunejune/pikpakzl/f529b8424ffd50e886c567d5ecc1850a4a54e411/railway-diagnostic/risk-worker.mjs'
+  with urllib.request.urlopen(baseline_url,timeout=30) as response:baseline=response.read()
+  if RISK_WORKER.read_bytes()!=baseline:raise RuntimeError('EXISTING_RISK_WORKER_SOURCE_DRIFT_ABORT')
+  sh(NODE,'--check',str(tmp/'risk-worker.mjs'))
   patched=text
   if "import fs from 'node:fs';" not in patched:
    patched="import * as dual5fs from 'node:fs';\n"+patched
@@ -157,6 +204,7 @@ def main():
    'dual5-prod-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
   backup.mkdir(parents=True,exist_ok=False)
   shutil.copy2(PANEL,backup/PANEL.name)
+  shutil.copy2(RISK_WORKER,backup/RISK_WORKER.name)
   touched=False
   try:
    APP.mkdir(parents=True,exist_ok=True)
@@ -165,13 +213,20 @@ def main():
    os.chown(CONFIG.parent,uid,gid)
    os.chmod(CONFIG.parent,0o750)
    if not CONFIG.exists():
-    install(CONFIG,json.dumps({'armed':False,'blocked':False,'dailySpend':0,
-      'lastOrderRound':0,'dailyDate':None},indent=2).encode(),0o600,uid,gid)
+    default={'armed':False,'blocked':False,'dailySpend':0,
+      'lastOrderRound':0,'dailyDate':None,'legs':{},
+      'risk':{'UP':{'takeProfitEnabled':True,'takeProfitPct':30,
+        'stopLossEnabled':True,'stopLossPct':30},
+      'DOWN':{'takeProfitEnabled':True,'takeProfitPct':30,
+        'stopLossEnabled':True,'stopLossPct':30}}}
+    install(CONFIG,json.dumps(default,indent=2).encode(),0o600,uid,gid)
    install(SOURCE,(tmp/SOURCE.name).read_bytes(),0o640,uid,gid)
+   install(RISK_WORKER,(tmp/RISK_WORKER.name).read_bytes(),RISK_WORKER.stat().st_mode&0o777,RISK_WORKER.stat().st_uid,RISK_WORKER.stat().st_gid)
    install(PAGE,(tmp/PAGE.name).read_bytes(),0o640,uid,gid)
    install(UNIT,UNIT_CONTENT.encode(),0o644,0,0)
    sh('systemctl','daemon-reload')
    sh('systemctl','enable','--now',UNIT.name)
+   sh('systemctl','restart','zl-prediction-risk-exits.service',timeout=80)
    for _ in range(22):
     time.sleep(1)
     try:
@@ -191,7 +246,8 @@ def main():
      html=urllib.request.urlopen('http://127.0.0.1:13001/dual5',timeout=5).read().decode('utf8')
      if (q.get('ok') is True and q.get('mode')=='PRODUCTION_IDLE' and
        q.get('active') is False and trade2.get('enabled') is False and
-       '启用独立双边实盘' in html and '/api/dual5-arm' in html):
+       '启用独立双边实盘' in html and '/api/dual5-arm' in html and
+       'id="riskSave"' in html and '/api/dual5-risk' in html):
       valid=True;break
     except Exception:pass
    if not valid:raise RuntimeError('DUAL5_POSTDEPLOY_ROUTE_OR_TRADING_STATE_FAILED')
@@ -199,6 +255,9 @@ def main():
    print('DUAL5_MODULE='+MODEL,flush=True)
    print('DUAL5_REAL_ORDER_IMPLEMENTED=true',flush=True)
    print('DUAL5_LIVE_SWITCH_DEFAULT_OFF=true',flush=True)
+   print('DUAL5_UP_DOWN_INDEPENDENT_TPSL_READY=true',flush=True)
+   print('DUAL5_BOTH_DEFAULT_TP30_SL30=true',flush=True)
+   print('DUAL5_EXISTING_RISK_EXECUTOR_REUSED=true',flush=True)
    print('DUAL5_PRODUCTION_UI=/dual5',flush=True)
    print('DUAL5_FAST5_ORIGINAL_MODEL_UNCHANGED=true',flush=True)
    print('DUAL5_BASE_TRADING_FOLLOW_OFF=true',flush=True)
@@ -208,6 +267,8 @@ def main():
   except BaseException:
    print('DUAL5_ROLLBACK_STARTED=true',flush=True)
    subprocess.run(['systemctl','disable','--now',UNIT.name],timeout=45)
+   shutil.copy2(backup/RISK_WORKER.name,RISK_WORKER)
+   subprocess.run(['systemctl','restart','zl-prediction-risk-exits.service'],timeout=85)
    if touched:
     shutil.copy2(backup/PANEL.name,PANEL)
     subprocess.run(['systemctl','restart','zl-prediction-trade.service'],timeout=85)

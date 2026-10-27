@@ -295,19 +295,21 @@ async function tick(){
   }
   const {topic,pair}=cached;
   state.marketTopicId=topic.marketTopicId;
-  const [up,down]=await Promise.all([bookFor(topic,pair.up),bookFor(topic,pair.down)]);
+  // Read independent wallet and both fresh books concurrently at round-open.
+  const [up,down,wallet]=await Promise.all([
+    bookFor(topic,pair.up),bookFor(topic,pair.down),walletInfo()]);
   state.checked++;state.lastScanAt=Date.now();
   if(!up||!down)throw Error('ONE_SIDE_NO_LIQUIDITY');
   if(!validateAmounts(config.amounts))throw Error('INVALID_PER_SIDE_ORDER_AMOUNTS');
-  if(up.size < config.amounts.UP/up.price||down.size < config.amounts.DOWN/down.price)
-    throw Error('INSUFFICIENT_TOP_OF_BOOK_DEPTH');
+  // The signed execution quote determines whether the full requested stake is fillable;
+  // top-of-book quantity alone is not enough to reject a deeper executable order book.
   const fee=(Number(topic.feeRateBps)||200)/10000;
   const raw=up.price+down.price;
   state.lastOpportunity={round,topicId:topic.marketTopicId,
    upAsk:up.price,downAsk:down.price,askSum:Number(raw.toFixed(5)),
    rawSpread:Number((1-raw).toFixed(5)),feeRatePerSide:fee,at:Date.now(),status:'NO_EDGE'};
   // Price-sum is diagnostic, not an entry condition in round-open mode.
-  const wallet=await walletInfo();
+
   const [q1,q2]=await Promise.all([
     quoteFor(topic,pair.up,wallet,config.amounts.UP),
     quoteFor(topic,pair.down,wallet,config.amounts.DOWN)]);

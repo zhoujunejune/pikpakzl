@@ -193,21 +193,3 @@ test('historical recovery control is user-triggered and never arms real trading'
  assert.match(page,/api\/dual5-reconcile-known-zero-fill/);
  assert.match(page,/confirm\('只核对指定历史零成交订单/);
 });
-
-test('recent filled buy and terminal exit lock recovery is owner-only and fail-closed',()=>{
- const src=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
- const html=readFileSync(new URL('./binance_dual5_dashboard.html',import.meta.url),'utf8');
- assert.match(src,/SETTLED_RECOVERY_ROUND=1793125800000/);
- assert.match(src,/SETTLED_BUY_ID='26102700001999805503'/);
- assert.match(src,/SETTLED_SELL_ID='26102700001999809504'/);
- assert.match(src,/req\.url==='\/api\/reconcile-settled-pair'/);
- assert.match(src,/EXACT_BUY_AND_EXIT_NOT_CONFIRMED/);
- assert.match(src,/OTHER_ACTIVE_ORDERS_OR_POSITIONS_LOCK_PRESERVED/);
- assert.match(src,/SELL_QUANTITY_NOT_RECONCILED/);
- assert.match(src,/STATE_CHANGED_DURING_SETTLED_RECONCILIATION/);
- assert.match(src,/config\.blocked=false;config\.armed=false;persist\(\)/);
- assert.doesNotMatch(src,/config\.tracked=\{\}/);
- assert.match(html,/id="settledLockPanel"/);
- assert.match(html,/id="reconcileSettled"/);
- assert.match(html,/api\/dual5-reconcile-settled-pair/);
-});

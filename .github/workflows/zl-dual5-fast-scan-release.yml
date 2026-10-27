@@ -29,7 +29,7 @@ jobs:
           p=Path('prediction-bot-v1/aliyun_dual5_fast_scan_release.py').read_text()
           assert 'FUNDING_PROXY=r"""' in p
           assert "'/api/dual5-funding'" in p
-          assert 'atomic_replace(PANEL,patched.encode' in p
+          assert 'patched=panel_before' in p
           assert 'DUAL5_MPC_CEX_OWNER_SELECTOR_LIVE=true' in p
           assert 'DUAL5_EXISTING_ORDER_LOCK_UNCHANGED=' in p
           assert 'DUAL5_FUNDING_PROXY_NOT_ALREADY_INSTALLED' in p

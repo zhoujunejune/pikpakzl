@@ -61,9 +61,10 @@ function loadConfig(){
     dailyDate:d.dailyDate||null,dailySpend:finite(d.dailySpend)?Number(d.dailySpend):0,
     lastOrderRound:Number(d.lastOrderRound)||0,blocked:d.blocked===true,
     risk:validRiskBoth(d.risk)?d.risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},
-    legs:d.legs&&typeof d.legs==='object'?d.legs:{}};}
+    legs:d.legs&&typeof d.legs==='object'?d.legs:{},
+    tracked:d.tracked&&typeof d.tracked==='object'?d.tracked:{}};}
  catch{return {armed:false,dailyDate:null,dailySpend:0,lastOrderRound:0,blocked:false,createdAt:null,
-  risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{}};}
+  risk:{UP:DEFAULT_RISK(),DOWN:DEFAULT_RISK()},legs:{},tracked:{}};}
 }
 let config=loadConfig(),state={model:MODEL,at:null,health:'BOOT',round:null,
  lastOpportunity:null,lastOrder:null,lastError:null,checked:0,quoteChecks:0,attempts:0,
@@ -80,7 +81,7 @@ function safePublic(){return {ok:true,model:MODEL,mode:config.armed?'LIVE_ARMED'
   active:config.armed&&!config.blocked,blocked:config.blocked,
   dailySpend:config.dailySpend,dailySpendMax:MAX_DAILY_SPEND,maxPerSide:MAX_SIDE_USDT,
   minNetEdgeUSDT:MIN_EDGE,configUpdatedAt:config.createdAt,
-  risk:config.risk,legs:config.legs,
+  risk:config.risk,legs:config.legs,trackedCount:Object.keys(config.tracked).length,
   ...state,wallet:undefined};}
 function norm(s){return String(s||'').toUpperCase().trim();}
 function complimentaryTokens(topic){
@@ -207,6 +208,7 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   config.legs.UP={tokenId:String(pair.up.tokenId),
    marketTopicId:String(topic.marketTopicId),round,status:'ORDER_PENDING',
    updatedAt:Date.now()};
+  config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId]={...config.legs.UP,side:'UP'};
   persist();
   record.phase='SUBMITTING_UP';
   const up=await place(wallet,topic,q1);
@@ -217,7 +219,9 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   if(!u||u.shares<=0)throw Error('UP_FILL_UNVERIFIED_STOP_NO_SECOND');
   record.first=u;
   config.legs.UP={...config.legs.UP,status:'FILLED',orderId:String(up.orderId),
-    costUSDT:u.spent,shares:u.shares,updatedAt:Date.now()};persist();
+    costUSDT:u.spent,shares:u.shares,updatedAt:Date.now()};
+  config.tracked[config.legs.UP.marketTopicId+':'+config.legs.UP.tokenId]={...config.legs.UP,side:'UP'};
+  persist();
   // Re-price DOWN after UP fills: never blindly send a stale second quote.
   const down=await quoteFor(topic,pair.down,wallet);
   const reassess=calcPair(q1,down);
@@ -225,7 +229,9 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
    throw Error('DOWN_QUOTE_EDGE_DISAPPEARED');
   config.legs.DOWN={tokenId:String(pair.down.tokenId),
    marketTopicId:String(topic.marketTopicId),round,status:'ORDER_PENDING',
-   updatedAt:Date.now()};persist();
+   updatedAt:Date.now()};
+  config.tracked[config.legs.DOWN.marketTopicId+':'+config.legs.DOWN.tokenId]={...config.legs.DOWN,side:'DOWN'};
+  persist();
   record.phase='SUBMITTING_DOWN';
   const dn=await place(wallet,topic,down);
   if(!dn.orderId)throw Error('DOWN_ORDER_ID_MISSING');
@@ -235,7 +241,9 @@ async function attemptPair(round,topic,pair,q1,q2,analysis,wallet){
   if(!d)throw Error('DOWN_FILL_UNVERIFIED');
   record.second=d;
   config.legs.DOWN={...config.legs.DOWN,status:'FILLED',orderId:String(dn.orderId),
-    costUSDT:d.spent,shares:d.shares,updatedAt:Date.now()};persist();
+    costUSDT:d.spent,shares:d.shares,updatedAt:Date.now()};
+  config.tracked[config.legs.DOWN.marketTopicId+':'+config.legs.DOWN.tokenId]={...config.legs.DOWN,side:'DOWN'};
+  persist();
   const guaranteed=Math.min(u.shares,d.shares)-u.spent-d.spent-0.025;
   record.phase='FILLED_BOTH';record.actualPairWorstCaseUSDT=Math.round(guaranteed*10000)/10000;
   // Trade success is not a guarantee of eventual profit: fees and claim friction remain.

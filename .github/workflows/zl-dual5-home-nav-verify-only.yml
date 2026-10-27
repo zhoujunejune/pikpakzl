@@ -223,9 +223,9 @@ jobs:
     steps:
       - name: Find exact UP order in Binance API without Alibaba credentials or trades
         env:
-          BINANCE_KEY: \${{ secrets.BINANCE_PREDICTION_API_KEY }}
-          BINANCE_SECRET: \${{ secrets.BINANCE_PREDICTION_API_SECRET }}
-          BINANCE_WALLET_ADDRESS: \${{ secrets.BINANCE_PREDICTION_WALLET_ADDRESS }}
+          BINANCE_KEY: ${{ secrets.BINANCE_PREDICTION_API_KEY }}
+          BINANCE_SECRET: ${{ secrets.BINANCE_PREDICTION_API_SECRET }}
+          BINANCE_WALLET_ADDRESS: ${{ secrets.BINANCE_PREDICTION_WALLET_ADDRESS }}
         run: |
           python - <<'PY'
           import os,time,json,hmac,hashlib,urllib.request,urllib.error,urllib.parse

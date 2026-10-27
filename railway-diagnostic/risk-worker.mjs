@@ -35,11 +35,12 @@ function dual5RiskFor(position){
   try{raw=fs.readFileSync(DUAL5_CONFIG_FILE,'utf8');}
   catch(e){if(e?.code==='ENOENT')return null;throw e;}
   const d=JSON.parse(raw);
-  if(!d.legs||!d.risk)return null;
-  for(const direction of ['UP','DOWN']){
-    const leg=d.legs[direction];
-    if(!leg||String(leg.tokenId)!==String(position?.tokenId)||
-      String(leg.marketTopicId)!==String(position?.marketTopicId))continue;
+  if(!d.tracked||!d.risk)return null;
+  const leg=d.tracked[String(position?.marketTopicId)+':'+String(position?.tokenId)];
+  if(!leg||!['UP','DOWN'].includes(leg.side)||
+    String(leg.tokenId)!==String(position?.tokenId)||
+    String(leg.marketTopicId)!==String(position?.marketTopicId))return null;
+  for(const direction of [leg.side]){
     const risk=d.risk[direction];
     if(!risk||typeof risk.takeProfitEnabled!=='boolean'||
       typeof risk.stopLossEnabled!=='boolean'||
@@ -56,7 +57,7 @@ function dual5RiskFor(position){
 function hasDual5Positions(){
  try{
   const d=JSON.parse(fs.readFileSync(DUAL5_CONFIG_FILE,'utf8'));
-  return ['UP','DOWN'].some(k=>d.legs?.[k]?.tokenId&&d.legs?.[k]?.marketTopicId);
+  return Object.keys(d.tracked||{}).length>0;
  }catch(e){if(e?.code==='ENOENT')return false;throw e;}
 }
 const health = {

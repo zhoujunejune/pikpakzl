@@ -1,0 +1,70 @@
+name: Read exact live TP switch changes and latest exit events
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-tp-change-events-readonly-20261027.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read risk trigger and configuration events only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import time,base64,os
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import subprocess,json
+          for unit in ('zl-prediction-risk-exits.service','zl-prediction-trade.service'):
+           res=subprocess.run(['journalctl','-u',unit,'--since','-5 hours','--no-pager','-o','cat'],capture_output=True,text=True,timeout=18)
+           events=[];high=None;count=0
+           for line in res.stdout.splitlines():
+            if 'risk_' not in line:continue
+            try:x=json.loads(line[line.index('{'):])
+            except Exception:continue
+            kind=x.get('event','')
+            if kind=='risk_check':
+             cost=x.get('totalCost');sell=x.get('currentSellAmount')
+             if isinstance(cost,(int,float)) and cost>0 and isinstance(sell,(int,float)):
+              roi=(sell/cost-1)*100
+              if high is None or roi>high['roiPercent']:
+               high={'roiPercent':round(roi,3),'at':x.get('at'),'cost':cost,'sellQuote':sell,
+               'tpTarget':x.get('tpTarget'),'slTarget':x.get('slTarget'),
+               'positionKey':'…'+str(x.get('tokenId',''))[-5:]}
+            elif kind in ('risk_control_updated','risk_runtime_worker_started','risk_worker_started',
+                 'risk_triggered','risk_sell_submitted','risk_sell_finality_pending',
+                 'risk_sell_failed','risk_sell_unknown','risk_sell_exception',
+                 'risk_sell_quote_failed','risk_positions_error','risk_config_redis_sync_failed'):
+             keep=('at','event','takeProfitEnabled','takeProfitPercent','stopLossEnabled',
+                   'stopLossPercent','reason','targetAmount','currentSellAmount','error',
+                   'code','httpStatus','pollMs','retryMs','updatedAt','worker')
+             item={k:x[k] for k in keep if k in x}
+             if x.get('tokenId') is not None:item['positionKey']='…'+str(x['tokenId'])[-5:]
+             events.append(item)
+           print('TP_EVENT_AUDIT',json.dumps({'unit':unit,'highestQuoteROI':high,'events':events[-65:]},ensure_ascii=False)[:15000])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          i=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-risk-last-tp-settings-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=100)).body.invoke_id
+          for _ in range(62):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=i)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('TP_EVENT_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-22000:])
+            if int(r.exit_code)!=0:raise RuntimeError('READONLY_TP_EVENTS_FAILED')
+            break
+          else:raise RuntimeError('READONLY_TP_EVENTS_TIMEOUT')
+          OUTER

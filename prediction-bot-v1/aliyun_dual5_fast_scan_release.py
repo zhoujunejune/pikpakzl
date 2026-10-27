@@ -54,6 +54,40 @@ FUNDING_PROXY=r"""
     return;
   }
 """
+RECOVERY_PROXY=r"""
+  // Explicit same-origin owner click only; worker verifies exact FAILED zero-fill and no position.
+  if (url.pathname === '/api/dual5-reconcile-known-zero-fill' && req.method === 'POST') {
+    if (req.headers.origin !== 'https://prediction.47-237-188-69.sslip.io' ||
+        req.headers['sec-fetch-site'] !== 'same-origin') {
+      res.writeHead(403,{'content-type':'application/json'});
+      res.end(JSON.stringify({ok:false,error:'SAME_ORIGIN_AUTH_REQUIRED'}));return;
+    }
+    void (async()=>{
+      try{
+        let body='',bytes=0;
+        for await(const chunk of req){
+          bytes+=chunk.length;if(bytes>100)throw Error('RECOVERY_REQUEST_TOO_LARGE');
+          body+=chunk.toString('utf8');
+        }
+        if(body.trim()!=='{}')throw Error('RECOVERY_EMPTY_BODY_REQUIRED');
+        const upstream=await fetch('http://127.0.0.1:13048/api/reconcile-known-zero-fill',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','Origin':req.headers.origin,
+            'Sec-Fetch-Site':req.headers['sec-fetch-site']},
+          body:'{}',signal:AbortSignal.timeout(45000)
+        });
+        const text=await upstream.text();
+        res.writeHead(upstream.status,{'content-type':'application/json; charset=utf-8',
+          'cache-control':'no-store'});
+        res.end(text);
+      }catch(e){
+        res.writeHead(503,{'content-type':'application/json'});
+        res.end(JSON.stringify({ok:false,error:'BINANCE_RECONCILIATION_UNAVAILABLE'}));
+      }
+    })();
+    return;
+  }
+"""
 NODE='/opt/zl-prediction-node/bin/node'
 BACKUPS=pathlib.Path('/var/lib/zl-prediction/archive/source-backups')
 
@@ -135,7 +169,8 @@ def main():
             if marker not in new_worker:raise RuntimeError('SCANNER_GUARD_MISSING_'+marker)
         for marker in ('id="upAmount"','id="downAmount"','id="riskSave"',
                        'id="firstScanLag"','id="pairExecution"',
-                       'id="fundingSource"','id="fundingSave"','/api/dual5-funding'):
+                       'id="fundingSource"','id="fundingSave"','/api/dual5-funding',
+                       'id="reconcileOld"','/api/dual5-reconcile-known-zero-fill'):
             if marker not in new_page:raise RuntimeError('FRONTEND_GUARD_MISSING_'+marker)
         if any(old in new_worker for old in ('if(raw>=1-2*fee-MIN_EDGE/3.2)', 'if(!estimate.feasible)', 'if(!reassess.feasible')):
             raise RuntimeError('PROFIT_FILTER_STILL_BLOCKS_ROUND_OPEN_ORDERS')
@@ -146,7 +181,10 @@ def main():
             raise RuntimeError('DUAL5_FUNDING_PROXY_ANCHOR_DRIFT')
         if panel_before.count("'/api/dual5-funding'")!=1:
             raise RuntimeError('DUAL5_FUNDING_PROXY_NOT_ALREADY_INSTALLED')
-        patched=panel_before
+        if "'/api/dual5-reconcile-known-zero-fill'" in panel_before:
+            patched=panel_before
+        else:
+            patched=panel_before.replace(ROUTE_ANCHOR,RECOVERY_PROXY+ROUTE_ANCHOR,1)
         (stage/'panel-stats-shell.mjs').write_text(patched)
         run(NODE,'--check',str(stage/'panel-stats-shell.mjs'))
         if obj(13048,'/api/status').get('active') is not False or obj(13001,'/api/status').get('enabled') is not False:
@@ -158,9 +196,10 @@ def main():
         try:
             atomic_replace(WORKER,(stage/WORKER.name).read_bytes())
             atomic_replace(PAGE,(stage/PAGE.name).read_bytes())
-            # Existing panel and FAST5 trade service are not restarted or altered.
+            if patched!=panel_before:atomic_replace(PANEL,patched.encode('utf8'))
             touched=True
             run('systemctl','restart','zl-prediction-dual5.service',timeout=70)
+            if patched!=panel_before:run('systemctl','restart','zl-prediction-trade.service',timeout=90)
             verified=False
             for _ in range(30):
                 time.sleep(1)
@@ -180,6 +219,8 @@ def main():
                       and d.get('fundingSource')==dual_before.get('fundingSource','MPC')
                       and base.get('enabled') is False
                       and "'/api/dual5-funding'" in PANEL.read_text()
+                      and "'/api/dual5-reconcile-known-zero-fill'" in PANEL.read_text()
+                      and 'id="reconcileOld"' in ui
                       and 'id="fundingSource"' in ui and 'id="fundingSave"' in ui
                       and '/api/dual5-funding' in ui
                       and 'id="firstScanLag"' in ui and 'id="pairExecution"' in ui):
@@ -192,6 +233,7 @@ def main():
                 if run('systemctl','is-active',unit).stdout.strip()!='active':
                     raise RuntimeError('SERVICE_INACTIVE_AFTER_RELEASE_'+unit)
             print('DUAL5_FAST_SCAN_DEPLOY_SUCCESS=true',flush=True)
+            print('DUAL5_OWNER_ONLY_HISTORIC_RECOVERY_BUTTON_DEPLOYED=true',flush=True)
             print('DUAL5_15S_ENTRY_AND_ZERO_FILL_TERMINAL_FIX_LIVE=true',flush=True)
             print('DUAL5_EXISTING_ORDER_LOCK_UNCHANGED='+str(previous_blocked).lower(),flush=True)
             print('DUAL5_MPC_CEX_OWNER_SELECTOR_LIVE=true',flush=True)
@@ -207,7 +249,8 @@ def main():
             if touched:
                 for f in (WORKER,PAGE,PANEL):shutil.copy2(archive/f.name,f)
                 subprocess.run(['systemctl','restart','zl-prediction-dual5.service'],timeout=75)
-                # Do not restart the unrelated FAST5 trade service.
+                if patched!=panel_before:
+                    subprocess.run(['systemctl','restart','zl-prediction-trade.service'],timeout=90)
             print('DUAL5_FAST_SCAN_ROLLBACK_ATTEMPTED=true',flush=True)
             raise
 

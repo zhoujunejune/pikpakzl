@@ -1,0 +1,65 @@
+name: Read live dual5 home injection markers
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-dual5-live-home-audit.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Check page transformation and active module markers without writes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          cmd=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,json,urllib.request,re
+          root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          p=root/'panel-stats-shell.mjs'
+          s=p.read_text()
+          for token in ['function injectStats(html)', 'function injectStats(html) {','injectRobotMenu',
+            'injectDual5RobotMenu','dual5-menu-nav.mjs','dual5-robot-navigation.mjs',
+            '/api/dual5-status','/api/dual5-risk','/dual5','const primaryCard']:
+           at=s.find(token)
+           print('LIVE_DUAL5_HOME_SOURCE',json.dumps({'token':token,'exists':at>=0,
+             'count':s.count(token),'at':at,'around':s[max(0,at-200):at+700] if at>=0 else None},ensure_ascii=False)[:1300])
+          for name in ('dual5-menu-nav.mjs','dual5-robot-navigation.mjs'):
+           n=root/name
+           print('LIVE_DUAL5_HOME_MODULE',json.dumps({'name':name,'exists':n.is_file(),'size':n.stat().st_size if n.is_file() else 0}))
+          for route in ('/','/dual5'):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:13001'+route,timeout=8) as r:b=r.read(1800000).decode('utf8','replace')
+            print('LIVE_DUAL5_HOME_RESPONSE',json.dumps({'route':route,'size':len(b),
+              'robotMenu':b.count('id="zlRobotMenu"'),
+              'dualRobotMenu':b.count('id="dual5RobotMenu"'),
+              'fast5Card':b.count('id="zlFast5Card"'),
+              'dual5Page':('id="riskSave"' in b),
+              'htmlHead':b[:350]},ensure_ascii=False)[:700])
+           except Exception as e:print('LIVE_DUAL5_HOME_HTTP_ERR',route,str(e)[:120])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          iv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='dual5-home-markers-readonly',type='RunShellScript',working_user='root',command_content=cmd,timeout=100)).body.invoke_id
+          for _ in range(57):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=iv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('LIVE_DUAL5_HOME_CLOUD',r.invocation_status,r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-17000:])
+            if int(r.exit_code)!=0:raise RuntimeError('HOME_INSPECT_FAILED')
+            break
+          else:raise RuntimeError('HOME_INSPECT_TIMEOUT')
+          OUTER

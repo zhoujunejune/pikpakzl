@@ -161,3 +161,19 @@ test('exact Binance FAILED zero-fill is terminal and never proof of a fill',()=>
  assert.deepEqual(exactOrderResult([partial],id,topic),{
   orderId:id,status:'FAILED',shares:0.5,spent:0.4,terminalZeroFill:false});
 });
+
+test('one-order-only recovery is fail-closed and leaves real trading OFF',()=>{
+ const src=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
+ assert.match(src,/req\.url==='\/api\/reconcile-known-zero-fill'/);
+ assert.match(src,/RECOVERY_ORDER_ID='26102700001999631125'/);
+ assert.match(src,/RECOVERY_ROUND=1793120700000/);
+ assert.match(src,/if\(config\.armed\|\|!config\.blocked\|\|config\.lastOrderRound!==RECOVERY_ROUND\)/);
+ assert.match(src,/HISTORIC_PENDING_LEG_MISMATCH/);
+ assert.match(src,/EXACT_BINANCE_FAILED_ZERO_FILL_NOT_PROVEN/);
+ assert.match(src,/OTHER_ORDER_IN_RECOVERY_MARKET/);
+ assert.match(src,/OPEN_POSITION_IN_RECOVERY_MARKET/);
+ assert.match(src,/delete config\.tracked\[RECOVERY_TOPIC\+'\:\'\+RECOVERY_TOKEN\]/);
+ assert.match(src,/delete config\.legs\.UP/);
+ assert.match(src,/config\.blocked=false;\s*config\.armed=false;/);
+ assert.match(src,/const result=await reconcileKnownZeroFill\(\)/);
+});

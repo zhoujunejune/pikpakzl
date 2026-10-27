@@ -1,0 +1,103 @@
+name: Show dual5 robot in existing production frontend menu
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-dual5-visible-menu-release.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check visible navigation injection and deployment script
+        run: |
+          node --check prediction-bot-v1/dual5-menu-nav.mjs
+          node --test prediction-bot-v1/dual5-menu-nav.test.mjs
+          python -m py_compile prediction-bot-v1/aliyun_dual5_visible_menu_deploy.py
+  deploy:
+    needs: [tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Release navigation on Alibaba cloud while keeping all orders OFF
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feat/deepseek40-45s-ai-only-prod-20261025'
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/aliyun_dual5_visible_menu_deploy.py" -o "$tmp/deploy.py"
+          python3 -m py_compile "$tmp/deploy.py"
+          python3 "$tmp/deploy.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-visible-dual5-menu-production',type='RunShellScript',working_user='root',command_content=script,timeout=205)).body.invoke_id
+          for _ in range(108):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('DUAL5_MENU_CLOUD_STATUS',r.invocation_status,'EXIT',r.exit_code)
+            try:print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-11000:])
+            except Exception:print('DUAL5_MENU_REMOTE_OUTPUT_UNAVAILABLE')
+            if str(r.invocation_status)!='Success' or int(r.exit_code)!=0:raise RuntimeError('DUAL5_MENU_DEPLOY_FAILED')
+            break
+          else:raise RuntimeError('DUAL5_MENU_CLOUD_TIMEOUT')
+          OUTER
+  verify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Read real HTTPS homepage markup and both-legs TP/SL panel
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,json,urllib.request
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(p):
+           request=urllib.request.Request(base+p,headers={'Authorization':auth,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(request,timeout=16) as r:return r.status,r.read(1500000)
+          status,body=get('/')
+          html=body.decode('utf8','replace')
+          assert status==200 and html.count('id="dual5RobotMenu"')==1
+          assert 'href="/dual5"' in html and 'UP + DOWN 双边机器人' in html
+          assert html.index('id="dual5RobotMenu"')<html.index('5分钟 API 实盘确认控制台')
+          status,body=get('/dual5')
+          page=body.decode('utf8','replace')
+          assert status==200 and 'id="riskSave"' in page and 'id="downSl"' in page
+          status,body=get('/api/dual5-status')
+          pair=json.loads(body)
+          assert status==200 and pair.get('model')=='BINANCE_DUAL5_PAIR_V1'
+          assert pair.get('active') is False
+          status,body=get('/api/status')
+          bot=json.loads(body)
+          assert status==200 and bot.get('enabled') is False
+          print('DUAL5_PUBLIC_HOMEPAGE_MENU_VISIBLE=true')
+          print('DUAL5_PUBLIC_MENU_LINK_WORKING=true')
+          print('DUAL5_INDEPENDENT_UP_DOWN_TPSL_PRESENT=true')
+          print('DUAL5_PAIR_LIVE_SWITCH_OFF=true')
+          print('DUAL5_ORIGINAL_AUTO_FOLLOW_OFF=true')
+          PY

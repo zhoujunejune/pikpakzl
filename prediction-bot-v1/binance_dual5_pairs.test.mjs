@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 process.env.DUAL5_TEST='1';
 const {complimentaryTokens,bestAsk,calcPair,validateAmounts,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
 test('pair two actual complementary tokens in exactly the same outcome market',()=>{
@@ -87,4 +88,20 @@ test('accelerated scanning leaves the conservative pair-profitability gate intac
  const p=calcPair({minReceive:w(1.8),feeAmount:w(0.01)},
   {minReceive:w(2.5),feeAmount:w(0.01)},1,1);
  assert.equal(p.feasible,false);
+});
+
+test('live dual5 attempts valid paired quotes without blocking on pair-profit estimate',()=>{
+ const src=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
+ assert.doesNotMatch(src,/if\(raw>=1-2\*fee-MIN_EDGE\/3\.2\)/);
+ assert.doesNotMatch(src,/if\(!estimate\.feasible\)/);
+ assert.doesNotMatch(src,/if\(!reassess\.feasible/);
+ assert.doesNotMatch(src,/INSUFFICIENT_TOP_OF_BOOK_DEPTH/);
+ assert.match(src,/if\(!estimate\.ok\).*INVALID_PAIR_QUOTES/);
+ assert.match(src,/if\(!reassess\.ok \|\| Number\(down\.expireAt\)/);
+ assert.match(src,/if\(!config\.armed\).*return/);
+ assert.match(src,/config\.lastOrderRound=round/);
+ assert.match(src,/UNHEDGED_OR_UNKNOWN_STOPPED/);
+ assert.match(src,/OTHER_BOT_ACTIVE_BLOCK_PAIR/);
+ assert.match(src,/risk:config\.risk/);
+ assert.match(src,/bookFor\(topic,pair\.up\),bookFor\(topic,pair\.down\),walletInfo\(\)/);
 });

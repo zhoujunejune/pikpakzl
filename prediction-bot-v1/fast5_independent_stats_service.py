@@ -7,9 +7,9 @@ import os,json,sqlite3,threading,time,urllib.request,logging
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse
 MODEL='FAST5_SPOT_MOMENTUM_V1'
-VERSION='FAST5_SMALL_ONLY_LE5BPS_15M_V6'
+VERSION='FAST5_BULL_BEAR_TREND_2S_V7'
 ROUND_MS=300000
-DB=os.environ.get('FAST5_STATS_DB','/var/lib/zl-prediction/fast5-stats/rounds.sqlite3')
+DB=os.environ.get('FAST5_STATS_DB','/var/lib/zl-prediction/fast5-stats/rounds-v7.sqlite3')
 PORT=int(os.environ.get('FAST5_STATS_PORT','13047'))
 def ms():return int(time.time()*1000)
 def get(url):
@@ -60,16 +60,16 @@ class Journal:
   x=get('http://127.0.0.1:13046/api/status')
   now=ms();round_=now//ROUND_MS*ROUND_MS;elapsed=now-round_
   if x.get('ok') is not True or x.get('model')!=MODEL or x.get('strategyVersion')!=VERSION:
-   raise RuntimeError('FAST5_MODEL_NOT_V6')
+   raise RuntimeError('FAST5_MODEL_NOT_V7')
   if x.get('round')!=round_:
    # Between raw source round transitions; do not label WAIT.
    return
-  if elapsed<5000:self.seen_rounds.add(round_)
+  if elapsed<2000:self.seen_rounds.add(round_)
   row=x.get('latest')
   if (isinstance(row,dict) and row.get('round')==round_ and row.get('model')==MODEL and
     row.get('strategyVersion')==VERSION and row.get('status')=='LOCKED' and
     row.get('direction') in ('UP','DOWN') and isint(row.get('lockedAt')) and
-    round_+100<=row['lockedAt']<round_+5000):
+    round_<=row['lockedAt']<round_+2000):
    with self.lock:
     self.db.execute("""INSERT OR IGNORE INTO rounds
     (round,model,version,decision,locked_at,market_at,source,prewarm_only,decision_reason,first_seen_at)
@@ -79,11 +79,11 @@ class Journal:
     row.get('signalReason'),now))
     self.db.commit()
    self.seen_rounds.discard(round_)
-  elif elapsed>=5000 and round_ in self.seen_rounds:
+  elif elapsed>=2000 and round_ in self.seen_rounds:
    # Only mark WAIT when observed current round in its decision window and
    # FAST5 itself says unlocked. Never infer WAIT from old official rows.
    if (x.get('locked') is False and row is None and
-       x.get('latestError') in ('OPEN_5S_DEADLINE_MISSED','REGIME_GT5_BPS_WAIT')):
+       x.get('latestError')=='OPEN_2S_DEADLINE_MISSED'):
     with self.lock:
      self.db.execute("""INSERT OR IGNORE INTO rounds
       (round,model,version,decision,locked_at,first_seen_at,decision_reason)

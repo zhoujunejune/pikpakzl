@@ -1,0 +1,70 @@
+name: Check running risk worker scheduler before speed patch (read-only)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-risk-worker-live-code-audit-20261027.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect current production worker and order pipeline without changes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          cmd=r"""#!/bin/bash
+          set -Eeuo pipefail
+          python3 - <<'INNER'
+          import json,pathlib,hashlib,subprocess
+          root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          for file,terms in [('risk-worker.mjs',['setInterval(tick, POLL_MS)','void tick();','async function tick()','const POLL_MS','const RETRY_MS','risk_sell_finality_pending','risk_sell_journal_ready','inFlight','setTimeout(','setInterval(']),
+           ('index.mjs',['getFreshQuote(intent)','async function discoverTopic(','async function prepareIntent(','async function signedPost(','let fastLivePrepareCheckBusy','},80);','setInterval(prepareWorker']),
+           ('wrapper.mjs',['Promise.all([','quoteRequestStartedAt','const quoteRequestStartedAt','auto_submit_triggered','api_order_submit_attempt']),
+           ('risk-runner.mjs',['const CHECK_MS =','const STATUS_MS ='])]:
+           p=root/file
+           if not p.exists():print('FAST_RISK_FILE_MISSING',file);continue
+           s=p.read_text()
+           d={'file':file,'bytes':len(s),'sha256':hashlib.sha256(s.encode()).hexdigest(),
+             'terms':{k:{'count':s.count(k),'lastPos':s.rfind(k)} for k in terms}}
+           if file=='risk-worker.mjs':
+            d['tail']=s[-1400:]
+            d['tickStart']=s[s.find('async function tick()'):s.find('async function tick()')+1900]
+            d['hasJournal']=('risk_sell_finality_pending' in s or 'risk_sell_journal_ready' in s)
+           if file=='index.mjs':
+            at=s.find('async function prepareIntent(')
+            d['prepareSnippet']=s[at:at+740] if at>=0 else None
+           print('FAST_RISK_SOURCE',json.dumps(d,ensure_ascii=False)[:6800])
+          u=subprocess.run(['systemctl','cat','zl-prediction-risk-exits.service'],capture_output=True,text=True,timeout=8)
+          print('FAST_RISK_SYSTEMD',u.stdout[:2500])
+          import urllib.request
+          try:
+           with urllib.request.urlopen('http://127.0.0.1:13001/api/risk-control',timeout=7) as r:c=json.load(r)
+           print('FAST_RISK_CONFIG',json.dumps({k:c.get(k) for k in
+             ('takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent','updatedAt','execution')},ensure_ascii=False)[:1400])
+          except Exception as e:print('FAST_RISK_CONFIG_ERROR',type(e).__name__)
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-risk-prod-source-inspect',type='RunShellScript',working_user='root',command_content=cmd,timeout=100)).body.invoke_id
+          for _ in range(63):
+           time.sleep(2)
+           x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST_RISK_READONLY_REMOTE',x.invocation_status,x.exit_code)
+            try:print(base64.b64decode(x.output or '',validate=True).decode('utf8','replace')[-16000:])
+            except Exception:print('OUTPUT_DECODE_ERROR')
+            if int(x.exit_code)!=0:raise RuntimeError('SOURCE_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('SOURCE_AUDIT_TIMEOUT')
+          OUTER

@@ -103,7 +103,7 @@ th{color:#a9c6e7}
 <div class="metric"><small>V6 最近5轮已核对</small><strong id="v6last5">—</strong></div>
 <div class="metric"><small>V6 最近10轮已核对</small><strong id="v6last10">—</strong></div>
 </div>
-<p class="sub">仅统计版本为 V6 的记录，排除 V6.1、V5 及更早版本；统计范围是后台最近50条历史中的 V6 轮次，属于滚动窗口而非全量历史。无官方事件合约结算，且这里不显示资金盈亏。</p>
+<p class="sub">仅统计版本为 V6 的记录，排除其他所有旧版本；统计范围是后台最近50条历史中的 V6 轮次，属于滚动窗口而非全量历史。无官方事件合约结算，且这里不显示资金盈亏。</p>
 </section>
 <section class="card">
 <div class="row"><h2>V6 历史记录（仅显示 V6）</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
@@ -117,7 +117,7 @@ th{color:#a9c6e7}
 const $=id=>document.getElementById(id);
 const V6_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6_20261024";
 // Only count actual V6 records returned from the latest 50-session history API.
-// V6.1, V5 and legacy records remain stored but never contribute to these metrics.
+// Non-V6 records remain stored but never contribute to these metrics.
 const onlyV6=records=>(Array.isArray(records)?records:[])
   .filter(s=>s&&s.decisionReviewVersion===V6_VERSION);
 const summarizedV6=records=>{

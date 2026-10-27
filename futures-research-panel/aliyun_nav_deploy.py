@@ -42,7 +42,7 @@ bash "$s"
                     "[EVENT10-READ-ONLY-AUDIT]" in str((event.get("head_commit") or {}).get("message","")))
     except (OSError,ValueError,TypeError):
         audit_only=False
-    # UI-only release: V6 version-filtered hit rate and historical rows; no AI model changes.
+    # UI-only release: V6-exclusive counts, history rows and safe page label; no AI model changes.
     ui_only=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
              "[EVENT10-CONFIDENCE-UI-ONLY]" in
              str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False

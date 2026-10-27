@@ -270,7 +270,7 @@ function reply(res,code,json){
  res.end(s);
 }
 const site='https://prediction.47-237-188-69.sslip.io';
-http.createServer(async(req,res)=>{
+if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  if(req.method==='GET'&&req.url==='/api/status')return reply(res,200,safePublic());
  if(req.method==='GET'&&req.url==='/healthz')return reply(res,200,{ok:true,model:MODEL});
  if(req.method==='POST'&&req.url==='/api/arm'){
@@ -288,5 +288,5 @@ http.createServer(async(req,res)=>{
  }
  return reply(res,404,{ok:false,error:'NOT_FOUND'});
 }).listen(PORT,'127.0.0.1',()=>console.log(JSON.stringify({event:'dual5_listening',port:PORT,mode:config.armed?'armed':'off'})));
-setInterval(()=>void tick(),19000).unref();void tick();
+if(process.env.DUAL5_TEST!=='1'){setInterval(()=>void tick(),19000).unref();void tick();}
 export {complimentaryTokens,bestAsk,calcPair};

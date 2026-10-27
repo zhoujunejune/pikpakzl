@@ -242,6 +242,65 @@ async function reconcileKnownZeroFill(){
  state.health='HISTORIC_ZERO_FILL_LOCK_CLEARED';
  return {ok:true,armed:false,blocked:false,reconciledOrderId:RECOVERY_ORDER_ID};
 }
+// Read-only, fail-closed assessment of the wallet. Any open order or ongoing
+// position means the lock stays in place. Null/missing result arrays are NOT flat.
+function flatExposureSnapshot(orderData,positionData){
+ if(!Array.isArray(orderData?.orders)||!Array.isArray(positionData?.positions))
+  return {safe:false,reason:'BINANCE_ACCOUNT_SNAPSHOT_INCOMPLETE'};
+ if(orderData.orders.length||positionData.positions.length)
+  return {safe:false,reason:'OPEN_ORDERS_OR_ONGOING_POSITIONS',
+    openOrders:orderData.orders.length,ongoingPositions:positionData.positions.length};
+ const orderTotal=Number(orderData.total);
+ const positionTotal=Number(positionData.total);
+ if((Number.isFinite(orderTotal)&&orderTotal>0)||
+    (Number.isFinite(positionTotal)&&positionTotal>0))
+  return {safe:false,reason:'ACCOUNT_SNAPSHOT_TOTAL_NONZERO'};
+ return {safe:true,openOrders:0,ongoingPositions:0};
+}
+let reconciling=false;
+async function verifyFlatWallet(wallet){
+ const args={walletAddress:wallet.walletAddress,offset:0,limit:100};
+ const [open,positions]=await Promise.all([
+  call('GET','/sapi/v1/w3w/wallet/prediction/order/list',args),
+  call('GET','/sapi/v1/w3w/wallet/prediction/position/list',
+   {...args,tab:'ONGOING'})
+ ]);
+ const report=flatExposureSnapshot(open,positions);
+ if(!report.safe)throw Error('RISK_UNLOCK_DENIED_'+report.reason);
+ return report;
+}
+async function reconcileFlatWalletLock(){
+ if(reconciling)throw Error('RECONCILIATION_ALREADY_RUNNING');
+ if(config.armed||!config.blocked)throw Error('TRADING_NOT_OFF_OR_NOT_LOCKED');
+ // Do not clear a lock from a round that might still be live or settling.
+ if(!Number.isFinite(config.lastOrderRound)||!config.lastOrderRound||
+    Date.now()-config.lastOrderRound<ROUND_MS*2)
+  throw Error('LATEST_ROUND_NOT_YET_SAFE_TO_RECONCILE');
+ const baseline=JSON.stringify(config);
+ reconciling=true;
+ try{
+  const mainResponse=await fetch('http://127.0.0.1:13001/api/status',
+   {signal:timeout(4000)});
+  if(!mainResponse.ok)throw Error('MAIN_ROBOT_STATUS_UNVERIFIABLE');
+  const main=await mainResponse.json();
+  if(main.enabled!==false)throw Error('MAIN_ROBOT_MUST_BE_OFF');
+  const wallet=await walletInfo();
+  // Two independent signed GET snapshots guard against transient empty replies.
+  const first=await verifyFlatWallet(wallet);
+  await new Promise(resolve=>setTimeout(resolve,1300));
+  const second=await verifyFlatWallet(wallet);
+  if(JSON.stringify(config)!==baseline||config.armed||!config.blocked)
+   throw Error('STATE_CHANGED_DURING_RECONCILIATION');
+  config.armed=false;
+  config.blocked=false;
+  // Leave tracked and legs untouched for the independent exit risk worker.
+  config.lastRecovery={at:new Date().toISOString(),method:'TWO_EMPTY_SIGNED_SNAPSHOTS',
+   openOrders:0,ongoingPositions:0,oldTrackedCount:Object.keys(config.tracked).length};
+  persist();state.lastError=null;state.health='WALLET_FLAT_RECONCILED_TRADING_OFF';
+  return {ok:true,armed:false,blocked:false,method:config.lastRecovery.method,
+   verifiedSnapshots:2,preservedTrackedCount:config.lastRecovery.oldTrackedCount};
+ }finally{reconciling=false}
+}
 async function confirmOrder(wallet,id,topic){
  // An order ID proves submission, not execution. Explicit FAILED/zero-fill is
  // different from unknown status; only the latter requires fail-closed lock.
@@ -437,6 +496,12 @@ const site='https://prediction.47-237-188-69.sslip.io';
 if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
  if(req.method==='GET'&&req.url==='/api/status')return reply(res,200,safePublic());
  if(req.method==='GET'&&req.url==='/healthz')return reply(res,200,{ok:true,model:MODEL});
+ if(req.method==='POST'&&req.url==='/api/reconcile-flat-wallet'){
+  if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
+   return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
+  try{return reply(res,200,await reconcileFlatWalletLock())}
+  catch(e){return reply(res,409,{ok:false,error:safeErr(e)})}
+ }
  if(req.method==='POST'&&req.url==='/api/reconcile-known-zero-fill'){
   if(req.headers.origin!==site||req.headers['sec-fetch-site']!=='same-origin')
    return reply(res,403,{ok:false,error:'OWNER_ORIGIN_REQUIRED'});
@@ -515,4 +580,4 @@ if(process.env.DUAL5_TEST!=='1'){
  const scheduleNext=()=>setTimeout(()=>void tick().finally(scheduleNext),nextScanDelayMs()).unref();
  void tick().finally(scheduleNext);
 }
-export {complimentaryTokens,bestAsk,calcPair,exactOrderResult,validateAmounts,validFundingSource,nextScanDelayMs};
+export {complimentaryTokens,bestAsk,calcPair,exactOrderResult,flatExposureSnapshot,validateAmounts,validFundingSource,nextScanDelayMs};

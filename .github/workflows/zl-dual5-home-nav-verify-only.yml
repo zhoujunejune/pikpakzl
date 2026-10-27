@@ -1,0 +1,44 @@
+name: Verify public Binance dual5 homepage menu
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-dual5-home-nav-verify-only.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Assert public authenticated robot menu and UP/DOWN risk panel
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,urllib.request
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(base+path,headers={'Authorization':auth,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(req,timeout=17) as r:return r.status,r.read(1500000)
+          status,raw=get('/')
+          html=raw.decode('utf8','replace')
+          assert status==200
+          assert html.count('id="dual5RobotMenu"')==1
+          assert 'href="/dual5"' in html and 'UP + DOWN 双边机器人' in html
+          assert 'href="/"' in html and 'BTC 五分钟 FAST5' in html
+          status,raw=get('/dual5')
+          page=raw.decode('utf8','replace')
+          assert status==200 and 'id="riskSave"' in page
+          assert 'id="upTp"' in page and 'id="upSl"' in page
+          assert 'id="downTp"' in page and 'id="downSl"' in page
+          status,raw=get('/api/dual5-status')
+          pair=json.loads(raw)
+          assert status==200 and pair.get('model')=='BINANCE_DUAL5_PAIR_V1'
+          assert pair.get('active') is False
+          print('DUAL5_FRONTEND_HOME_MENU_VISIBLE=true')
+          print('DUAL5_MENU_LINK_TO_PAIR_WORKS=true')
+          print('DUAL5_BOTH_TAKE_PROFIT_STOP_LOSS_CONTROLS_PRESENT=true')
+          print('DUAL5_PAIR_REAL_TRADING_OFF=true')
+          print('DUAL5_PUBLIC_PAIR_HEALTH='+str(pair.get('health')))
+          PY

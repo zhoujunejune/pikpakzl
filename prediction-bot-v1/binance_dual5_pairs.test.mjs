@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 process.env.DUAL5_TEST='1';
-const {complimentaryTokens,bestAsk,calcPair,exactOrderResult,validateAmounts,validFundingSource,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
+const {complimentaryTokens,bestAsk,calcPair,exactOrderResult,flatExposureSnapshot,validateAmounts,validFundingSource,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
 test('pair two actual complementary tokens in exactly the same outcome market',()=>{
  const topic={markets:[{marketId:12,title:'BTC Price 5m UP?',outcomes:[
   {name:'YES',tokenId:'UP_1'},{name:'NO',tokenId:'DOWN_1'}]}]};
@@ -179,17 +179,29 @@ test('one-order-only recovery is fail-closed and leaves real trading OFF',()=>{
 });
 
 
-test('historical recovery control is user-triggered and never arms real trading',()=>{
+
+test('wallet-flat gate rejects nonempty or malformed Binance order and position snapshots',()=>{
+ assert.deepEqual(flatExposureSnapshot({orders:[],total:0},{positions:[],total:0}),
+  {safe:true,openOrders:0,ongoingPositions:0});
+ assert.equal(flatExposureSnapshot({orders:[]},{}).safe,false);
+ assert.equal(flatExposureSnapshot({orders:[{orderId:'one'}]},{positions:[]}).safe,false);
+ assert.equal(flatExposureSnapshot({orders:[]},{positions:[{tokenId:'one'}]}).safe,false);
+ assert.equal(flatExposureSnapshot({orders:[],total:1},{positions:[]}).safe,false);
+ assert.equal(flatExposureSnapshot({orders:[]},{positions:[],total:2}).safe,false);
+});
+test('generic risk unlock requires two signed read-only snapshots and keeps trading OFF',()=>{
  const code=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
  const page=readFileSync(new URL('./binance_dual5_dashboard.html',import.meta.url),'utf8');
- assert.match(code,/req\.url==='\/api\/reconcile-known-zero-fill'/);
- assert.match(code,/config\.blocked=false;\s*config\.armed=false;/);
- assert.match(code,/HISTORIC_PENDING_LEG_MISMATCH/);
- assert.match(code,/EXACT_BINANCE_FAILED_ZERO_FILL_NOT_PROVEN/);
- assert.match(code,/OTHER_ORDER_IN_RECOVERY_MARKET/);
- assert.match(code,/OPEN_POSITION_IN_RECOVERY_MARKET/);
- assert.match(page,/id="reconcileOld"/);
- assert.match(page,/id="oldLockPanel"/);
- assert.match(page,/api\/dual5-reconcile-known-zero-fill/);
- assert.match(page,/confirm\('只核对指定历史零成交订单/);
+ assert.match(code,/req\.url==='\/api\/reconcile-flat-wallet'/);
+ assert.match(code,/TRADING_NOT_OFF_OR_NOT_LOCKED/);
+ assert.match(code,/LATEST_ROUND_NOT_YET_SAFE_TO_RECONCILE/);
+ assert.match(code,/OTHER_ACTIVE_ORDERS_OR_POSITIONS_LOCK_PRESERVED|RISK_UNLOCK_DENIED_/);
+ assert.match(code,/const first=await verifyFlatWallet\(wallet\)/);
+ assert.match(code,/const second=await verifyFlatWallet\(wallet\)/);
+ assert.match(code,/STATE_CHANGED_DURING_RECONCILIATION/);
+ assert.match(code,/config\.armed=false;\s*config\.blocked=false;/);
+ assert.doesNotMatch(code,/config\.tracked=\{\}/);
+ assert.match(page,/id="riskUnlock"/);
+ assert.match(page,/id="riskUnlockPanel"/);
+ assert.match(page,/api\/dual5-reconcile-flat-wallet/);
 });

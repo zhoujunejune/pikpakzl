@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 process.env.DUAL5_TEST='1';
-const {complimentaryTokens,bestAsk,calcPair,validateAmounts,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
+const {complimentaryTokens,bestAsk,calcPair,validateAmounts,validFundingSource,nextScanDelayMs}=await import('./binance_dual5_pairs.mjs');
 test('pair two actual complementary tokens in exactly the same outcome market',()=>{
  const topic={markets:[{marketId:12,title:'BTC Price 5m UP?',outcomes:[
   {name:'YES',tokenId:'UP_1'},{name:'NO',tokenId:'DOWN_1'}]}]};
@@ -104,4 +104,28 @@ test('live dual5 attempts valid paired quotes without blocking on pair-profit es
  assert.match(src,/OTHER_BOT_ACTIVE_BLOCK_PAIR/);
  assert.match(src,/risk:config\.risk/);
  assert.match(src,/bookFor\(topic,pair\.up\),bookFor\(topic,pair\.down\),walletInfo\(\)/);
+});
+
+test('funding mode supports only prediction wallet MPC and exchange spot CEX',()=>{
+ assert.equal(validFundingSource('MPC'),true);
+ assert.equal(validFundingSource('CEX'),true);
+ for(const bad of ['SPOT','FUNDING','AUTO','',null,undefined,1])
+  assert.equal(validFundingSource(bad),false);
+ const src=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
+ const page=readFileSync(new URL('./binance_dual5_dashboard.html',import.meta.url),'utf8');
+ assert.match(src,/fundingSource:validFundingSource\(d\.fundingSource\)\?d\.fundingSource:'MPC'/);
+ assert.match(src,/req\.url==='\/api\/funding'/);
+ assert.match(src,/STOP_TRADING_BEFORE_FUNDING_EDIT/);
+ assert.match(src,/PENDING_ORDER_PREVENTS_FUNDING_CHANGE/);
+ assert.match(src,/quoteFor\(topic,pair\.up,wallet,config\.amounts\.UP,config\.fundingSource\)/);
+ assert.match(src,/quoteFor\(topic,pair\.down,wallet,config\.amounts\.DOWN,config\.fundingSource\)/);
+ assert.match(src,/const fundingSource=config\.fundingSource/);
+ assert.match(src,/place\(wallet,topic,q1,fundingSource\)/);
+ assert.match(src,/place\(wallet,topic,down,fundingSource\)/);
+ assert.match(src,/quoteFor\(topic,pair\.down,wallet,orderAmounts\.DOWN,fundingSource\)/);
+ assert.match(src,/fundingSource\}/);
+ assert.doesNotMatch(src,/fundingSource:'MPC'/);
+ assert.match(page,/id="fundingSource"/);
+ assert.match(page,/id="fundingSave"/);
+ assert.match(page,/api\/dual5-funding/);
 });

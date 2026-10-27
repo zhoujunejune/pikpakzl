@@ -216,3 +216,65 @@ jobs:
             break
           else:raise RuntimeError('ORDER_FORENSIC_TIMEOUT')
           OUTER
+
+  binance-direct-order-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Find exact UP order in Binance API without Alibaba credentials or trades
+        env:
+          BINANCE_KEY: \${{ secrets.BINANCE_PREDICTION_API_KEY }}
+          BINANCE_SECRET: \${{ secrets.BINANCE_PREDICTION_API_SECRET }}
+          BINANCE_WALLET_ADDRESS: \${{ secrets.BINANCE_PREDICTION_WALLET_ADDRESS }}
+        run: |
+          python - <<'PY'
+          import os,time,json,hmac,hashlib,urllib.request,urllib.error,urllib.parse
+          target='26102700001999631125'
+          topic='7586769'
+          key=os.environ.get('BINANCE_KEY','')
+          secret=os.environ.get('BINANCE_SECRET','')
+          address=os.environ.get('BINANCE_WALLET_ADDRESS','')
+          print('BINANCE_DIRECT_CREDENTIALS_AVAILABLE',bool(key and secret),'WALLET_AVAILABLE',bool(address))
+          if not key or not secret:
+           print('BINANCE_DIRECT_AUDIT_BLOCKED_NO_CREDENTIALS')
+           raise SystemExit(0)
+          def get(path,fields={}):
+           q=urllib.parse.urlencode({**fields,'timestamp':int(time.time()*1000),'recvWindow':5000})
+           signature=hmac.new(secret.encode(),q.encode(),hashlib.sha256).hexdigest()
+           url='https://api.binance.com'+path+'?'+q+'&signature='+signature
+           req=urllib.request.Request(url,headers={'X-MBX-APIKEY':key,'Cache-Control':'no-store'})
+           try:
+            with urllib.request.urlopen(req,timeout=17) as response:return json.load(response)
+           except urllib.error.HTTPError as e:
+            print('BINANCE_DIRECT_HTTP_ERROR',path,e.code,e.read(250).decode('utf8','replace')[:250])
+            return {'error':str(e.code)}
+           except Exception as e:
+            print('BINANCE_DIRECT_NETWORK_ERROR',path,type(e).__name__,str(e)[:100])
+            return {'error':'NETWORK'}
+          if not address:
+           wallets=get('/sapi/v1/w3w/wallet/prediction/wallet/list').get('wallets') or []
+           address=next((v.get('walletAddress') for v in wallets if v.get('walletAddress')),None)
+          if not address:
+           print('BINANCE_DIRECT_AUDIT_BLOCKED_NO_WALLET')
+           raise SystemExit(0)
+          def slim(v):
+           return {k:v.get(k) for k in ('orderId','marketTopicId','tokenId','side','status',
+             'filledShareQty','filledUsdtAmount','createTime','updateTime','timeInForce') if k in v}
+          for route in ('/sapi/v1/w3w/wallet/prediction/order/list',
+                        '/sapi/v1/w3w/wallet/prediction/order/history'):
+           found=[]
+           for offset in (0,100,200,300,400):
+            result=get(route,{'walletAddress':address,'offset':offset,'limit':100})
+            batch=result.get('orders') or []
+            found.extend(slim(v) for v in batch if str(v.get('orderId'))==target or
+               str(v.get('marketTopicId'))==topic)
+            if len(batch)<100 or result.get('error'):break
+           print('BINANCE_DIRECT_ORDER_AUDIT',json.dumps({'endpoint':route,'matches':found[:30]},ensure_ascii=False))
+          for tab in ('ONGOING','HISTORY'):
+           response=get('/sapi/v1/w3w/wallet/prediction/position/list',
+              {'walletAddress':address,'tab':tab,'offset':0,'limit':100})
+           related=[{k:o.get(k) for k in ('marketTopicId','tokenId','shares','totalCost','status')
+             if k in o} for o in (response.get('positions') or []) if str(o.get('marketTopicId'))==topic]
+           print('BINANCE_DIRECT_POSITION_AUDIT',json.dumps({'tab':tab,'matching':related,
+             'total':response.get('total'),'error':response.get('error')},ensure_ascii=False))
+          PY

@@ -75,7 +75,8 @@ def main():
    atomic(SHELL,updated.encode(),stat.st_mode&0o777,stat.st_uid,stat.st_gid)
    sh('systemctl','restart','zl-prediction-trade.service',timeout=90)
    ready=False
-   for _ in range(38):
+   diagnostic={}
+   for _ in range(22):
     time.sleep(1)
     try:
      _,body=get('/')
@@ -83,6 +84,14 @@ def main():
      d=jsonget('/api/dual5-status')
      t=jsonget('/api/status')
      _,second=get('/dual5')
+     diagnostic={'menuCount':html.count('id="dual5RobotMenu"'),
+       'hrefPresent':'href="/dual5"' in html,
+       'bodyPrefix':html[0:400],
+       'menuAt':html.find('id="dual5RobotMenu"'),
+       'titleAt':html.find('5分钟 API 实盘确认控制台'),
+       'pairModel':d.get('model'),'pairActive':d.get('active'),
+       'follow':t.get('enabled'),
+       'riskSavePresent':'id="riskSave"' in second.decode('utf8','replace')}
      if (html.count('id="dual5RobotMenu"')==1 and
        'href="/dual5"' in html and
        html.index('id="dual5RobotMenu"')<html.index('5分钟 API 实盘确认控制台') and
@@ -91,8 +100,10 @@ def main():
        t.get('enabled') is False and
        'id="riskSave"' in second.decode('utf8','replace')):
       ready=True;break
-    except Exception:pass
-   if not ready:raise RuntimeError('VISIBLE_ROOT_NAV_OR_DUAL5_ROUTE_NOT_VERIFIED')
+    except Exception as e:diagnostic={'exception':type(e).__name__,'error':str(e)[:190]}
+   if not ready:
+    print('DUAL5_MENU_VERIFY_DIAGNOSTIC='+json.dumps(diagnostic,ensure_ascii=False),flush=True)
+    raise RuntimeError('VISIBLE_ROOT_NAV_OR_DUAL5_ROUTE_NOT_VERIFIED')
    for unit in ('zl-prediction-trade.service','zl-prediction-risk-exits.service',
                 'zl-prediction-dual5.service'):
     if sh('systemctl','is-active',unit).stdout.strip()!='active':

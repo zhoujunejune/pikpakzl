@@ -47,12 +47,6 @@
 <button id="reconcileOld" type="button" disabled>核对失败订单并解除旧锁</button>
 <small id="reconcileOldMsg" role="status"></small>
 </div>
-<div class="metric" id="settledLockPanel" hidden style="margin-top:12px">
-<strong>最新成交订单保护锁核验</strong>
-<p class="sub">当前锁来自UP买入成功、DOWN失败后的单边交易。核对历史买卖单和币安所有当前未结持仓；只有最新UP已成交、相关SELL已成交、没有待处理订单或未结持仓时才解除本次旧锁。已有历史跟踪信息和止损设置不删除。</p>
-<button id="reconcileSettled" type="button" disabled>核实最新已平仓订单并解除锁定</button>
-<small id="reconcileSettledMsg" role="status"></small>
-</div>
 <p id="feedback" class="sub"></p></article>
 <article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
 <article><h2>为什么会不下单？</h2><p class="sub">典型原因包括选定资金账户余额不足、某一边无流动性或有效报价、盘口过期、市场结果不互补、该轮已尝试、另一机器人正使用相同钱包、币安拒单。预估利润不再是阻止买单的条件。</p></article>
@@ -81,12 +75,6 @@ async function load(){
    String(d.legs.UP.marketTopicId)==='7586769';
   el('oldLockPanel').hidden=!historicLock;
   el('reconcileOld').disabled=saving||!historicLock;
-  const settledLock=d.blocked===true&&d.active===false&&
-    String(d.legs?.UP?.marketTopicId)==='7591885'&&
-    d.legs?.UP?.status==='FILLED'&&
-    String(d.legs?.UP?.orderId)==='26102700001999805503';
-  el('settledLockPanel').hidden=!settledLock;
-  el('reconcileSettled').disabled=saving||!settledLock;
   el('riskSave').disabled=saving||d.active||d.blocked;
   el('amountSave').disabled=saving||d.active||d.blocked;
   el('fundingSave').disabled=saving||d.active||d.blocked;
@@ -122,7 +110,7 @@ async function load(){
      td1.textContent=k;td2.textContent=v;tr.append(td1,td2);return tr;
    }));
   }
- }catch(e){el('banner').textContent='状态无法核验：'+String(e.message||e);el('arm').disabled=true;el('stop').disabled=true;el('amountSave').disabled=true;el('riskSave').disabled=true;el('fundingSave').disabled=true;el('reconcileOld').disabled=true;el('reconcileSettled').disabled=true;}
+ }catch(e){el('banner').textContent='状态无法核验：'+String(e.message||e);el('arm').disabled=true;el('stop').disabled=true;el('amountSave').disabled=true;el('riskSave').disabled=true;el('fundingSave').disabled=true;}
 }
 async function saveFunding(){
  if(saving)return;
@@ -213,24 +201,6 @@ async function reconcileOld(){
  }catch(e){el('reconcileOldMsg').textContent='未解锁：'+String(e.message||e)}
  finally{saving=false;await load()}
 }
-async function reconcileSettled(){
- if(saving||!confirm('确认核对最新UP已成交和SELL已成交的历史订单？只有没有待处理订单及未结持仓，才解除这一条交易锁。实盘仍保持关闭。'))return;
- saving=true;el('reconcileSettled').disabled=true;
- el('reconcileSettledMsg').textContent='币安正在核验订单、卖出记录及未结持仓…';
- try{
-  const r=await fetch('/api/dual5-reconcile-settled-pair',{
-   method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
-   body:'{}'
-  });
-  const d=await r.json();
-  if(!r.ok||d.ok!==true||d.blocked!==false||d.armed!==false)
-   throw Error(d.error||'仍存在不能排除的交易风险');
-  el('reconcileSettledMsg').textContent='核验成功，交易保护锁已解除。实盘保持关闭。';
-  el('feedback').textContent='请核对资金来源、金额及止损，然后由你决定是否重新开启交易。';
- }catch(e){el('reconcileSettledMsg').textContent='保持锁定：'+String(e.message||e)}
- finally{saving=false;await load()}
-}
-el('reconcileSettled').addEventListener('click',()=>void reconcileSettled());
 el('reconcileOld').addEventListener('click',()=>void reconcileOld());
 el('fundingSave').addEventListener('click',()=>void saveFunding());
 el('amountSave').addEventListener('click',()=>void saveAmounts());

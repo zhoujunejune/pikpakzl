@@ -129,3 +129,17 @@ test('funding mode supports only prediction wallet MPC and exchange spot CEX',()
  assert.match(page,/id="fundingSave"/);
  assert.match(page,/api\/dual5-funding/);
 });
+
+test('no late buy after the opening 15 seconds and no unverified second leg',()=>{
+ const src=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
+ assert.match(src,/const ENTRY_WINDOW_MS=15000,CONFIRM_WINDOW_MS=12000/);
+ assert.match(src,/if\(Date\.now\(\)-round>ENTRY_WINDOW_MS\)/);
+ assert.match(src,/if\(now-round>ENTRY_WINDOW_MS\)/);
+ assert.match(src,/orderId:String\(id\),offset:0,limit:100/);
+ assert.match(src,/String\(x\.marketTopicId\)===String\(topic\.marketTopicId\)/);
+ assert.match(src,/Number\(x\.filledShareQty\)>0/);
+ assert.match(src,/lastSeen=matches\[0\]\?\.status/);
+ assert.match(src,/config\.legs\.UP=\{\.\.\.config\.legs\.UP,orderId:String\(up\.orderId\)/);
+ assert.match(src,/if\(!u\|\|u\.shares<=0\)throw Error\('UP_FILL_UNVERIFIED_STOP_NO_SECOND'\)/);
+ assert.match(src,/UNHEDGED_OR_UNKNOWN_STOPPED/);
+});

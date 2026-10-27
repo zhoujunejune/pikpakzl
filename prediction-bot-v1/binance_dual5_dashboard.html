@@ -41,6 +41,12 @@
  <label><input type="checkbox" id="downSlOn" checked> 开启止损</label><p>止损 <input type="number" id="downSl" min="1" max="95" step="1" value="30" style="width:68px"> %</p></div>
 </div><p><button id="riskSave" type="button" disabled>保存两边止盈止损</button><small id="riskMsg">加载中</small></p>
 <button id="arm" type="button" disabled>启用独立双边实盘</button><button id="stop" class="stop" type="button" disabled>关闭双边实盘</button>
+<div class="metric" id="oldLockPanel" hidden style="margin-top:12px">
+<strong>历史零成交订单核验</strong>
+<p class="sub">仅适用于指定历史订单。点击后后台会实时查询币安：必须明确为 FAILED、成交0、没有相关持仓和其他订单，才能清除这一条保护锁。不会下单或自动打开实盘；不符合条件则保持锁定。</p>
+<button id="reconcileOld" type="button" disabled>核对失败订单并解除旧锁</button>
+<small id="reconcileOldMsg" role="status"></small>
+</div>
 <p id="feedback" class="sub"></p></article>
 <article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
 <article><h2>为什么会不下单？</h2><p class="sub">典型原因包括选定资金账户余额不足、某一边无流动性或有效报价、盘口过期、市场结果不互补、该轮已尝试、另一机器人正使用相同钱包、币安拒单。预估利润不再是阻止买单的条件。</p></article>
@@ -64,6 +70,11 @@ async function load(){
    ' · 报价状态：'+(q?label(q.status):'等待有效市场')+
    ' · 今日累计下单尝试金额 '+fmt(d.dailySpend)+' USDT（不设每日硬限制）';
   el('arm').disabled=saving||d.active||d.blocked;el('stop').disabled=saving||!d.active;
+  const historicLock=d.blocked===true&&d.active===false&&d.trackedCount===1&&
+   d.legs?.UP?.status==='ORDER_PENDING'&&
+   String(d.legs.UP.marketTopicId)==='7586769';
+  el('oldLockPanel').hidden=!historicLock;
+  el('reconcileOld').disabled=saving||!historicLock;
   el('riskSave').disabled=saving||d.active||d.blocked;
   el('amountSave').disabled=saving||d.active||d.blocked;
   el('fundingSave').disabled=saving||d.active||d.blocked;
@@ -173,6 +184,24 @@ async function save(armed){
  }catch(e){el('feedback').textContent='保存失败：'+String(e.message||e)}
  finally{saving=false;await load();}
 }
+async function reconcileOld(){
+ if(saving||!confirm('只核对指定历史零成交订单；如果币安已确认 FAILED、零成交、无持仓，清除这条旧锁。实盘仍保持关闭。确定继续？'))return;
+ saving=true;el('reconcileOld').disabled=true;
+ el('reconcileOldMsg').textContent='正在核实币安订单和持仓…';
+ try{
+  const r=await fetch('/api/dual5-reconcile-known-zero-fill',{
+   method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+   body:'{}'
+  });
+  const data=await r.json();
+  if(!r.ok||data.ok!==true||data.blocked!==false||data.armed!==false)
+   throw Error(data.error||'订单尚不能安全解锁');
+  el('reconcileOldMsg').textContent='已核对零成交，旧保护锁清除；实盘仍关闭。';
+  el('feedback').textContent='历史失败订单保护锁已经核验清除。请检查资金来源、金额和止损，再自行开启实盘。';
+ }catch(e){el('reconcileOldMsg').textContent='未解锁：'+String(e.message||e)}
+ finally{saving=false;await load()}
+}
+el('reconcileOld').addEventListener('click',()=>void reconcileOld());
 el('fundingSave').addEventListener('click',()=>void saveFunding());
 el('amountSave').addEventListener('click',()=>void saveAmounts());
 el('riskSave').addEventListener('click',()=>void saveRisk());

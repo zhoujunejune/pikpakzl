@@ -10,6 +10,9 @@ import pathlib
 import tempfile
 import subprocess
 import urllib.request
+import urllib.parse
+import hashlib
+import hmac
 from datetime import datetime, timezone
 
 APP=pathlib.Path('/opt/zl-prediction-dual5')
@@ -147,6 +150,45 @@ def atomic_replace(dest, new_data):
     finally:
         if os.path.exists(tmp):os.unlink(tmp)
 
+def check_pending_exposure_readonly():
+    """Gate code-only deploy when stale pending markers survive a previous manual unlock.
+    Never alter the config. Two signed Binance snapshots must both show zero exposure.
+    """
+    pid=run('systemctl','show','-p','MainPID','--value',
+        'zl-prediction-dual5.service',timeout=8).stdout.strip()
+    entries=pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\\0')
+    env=dict(z.split('=',1) for z in
+        (x.decode('utf8','ignore') for x in entries if b'=' in x))
+    key=env.get('BINANCE_PREDICTION_API_KEY','')
+    secret=env.get('BINANCE_PREDICTION_API_SECRET','')
+    if not key or not secret:raise RuntimeError('BINANCE_READONLY_CREDENTIALS_UNAVAILABLE')
+    def signed_get(route,params=None):
+        q=urllib.parse.urlencode({**(params or {}),
+            'timestamp':int(time.time()*1000),'recvWindow':5000})
+        sig=hmac.new(secret.encode(),q.encode(),hashlib.sha256).hexdigest()
+        req=urllib.request.Request('https://api.binance.com'+route+'?'+q+'&signature='+sig,
+            headers={'X-MBX-APIKEY':key,'Cache-Control':'no-store'})
+        with urllib.request.urlopen(req,timeout=20) as resp:return json.load(resp)
+    wallets=signed_get('/sapi/v1/w3w/wallet/prediction/wallet/list').get('wallets') or []
+    wallet=next((w for w in wallets if w.get('walletAddress') and w.get('walletId')),None)
+    if not wallet:raise RuntimeError('BINANCE_PREDICTION_WALLET_UNAVAILABLE')
+    for i in (1,2):
+        params={'walletAddress':wallet['walletAddress'],'offset':0,'limit':100}
+        orders=signed_get('/sapi/v1/w3w/wallet/prediction/order/list',params)
+        positions=signed_get('/sapi/v1/w3w/wallet/prediction/position/list',
+            {**params,'tab':'ONGOING'})
+        if not isinstance(orders.get('orders'),list) or not isinstance(positions.get('positions'),list):
+            raise RuntimeError('BINANCE_READONLY_SNAPSHOT_INCOMPLETE')
+        if orders['orders'] or positions['positions']:
+            raise RuntimeError('OPEN_ORDERS_OR_ONGOING_POSITIONS_ABORT')
+        for result in (orders,positions):
+            t=result.get('total')
+            if t is not None and (not str(t).isdigit() or int(t)>0):
+                raise RuntimeError('BINANCE_SNAPSHOT_TOTAL_NONZERO_ABORT')
+        if i==1:time.sleep(1.3)
+    print('DUAL5_PENDING_MARKERS_WALLET_FLAT_TWICE_VERIFIED=true',flush=True)
+
+
 def main():
     if os.geteuid()!=0 or len(sys.argv)!=2 or not re.fullmatch(r'[0-9a-f]{40}',sys.argv[1]):
         raise RuntimeError('ROOT_AND_SHA_REQUIRED')
@@ -170,7 +212,10 @@ def main():
     pending_legs=[leg for leg in (dual_before.get('legs') or {}).values()
                   if isinstance(leg,dict) and leg.get('status')=='ORDER_PENDING']
     if pending_legs and previous_blocked is not True:
-        raise RuntimeError('UNLOCKED_PENDING_ORDER_ABORT')
+        if any(not isinstance(p.get('round'),(int,float)) or
+               time.time()*1000-float(p['round'])<600000 for p in pending_legs):
+            raise RuntimeError('RECENT_UNLOCKED_PENDING_ORDER_ABORT')
+        check_pending_exposure_readonly()
     for unit in ('zl-prediction-dual5.service','zl-prediction-trade.service','zl-prediction-risk-exits.service'):
         if run('systemctl','is-active',unit).stdout.strip()!='active':
             raise RuntimeError('SERVICE_NOT_ACTIVE_'+unit)
@@ -202,7 +247,10 @@ def main():
                        "HISTORIC_PENDING_LEG_MISMATCH",
                        "req.url==='/api/reconcile-flat-wallet'",
                        "LATEST_ROUND_NOT_YET_SAFE_TO_RECONCILE",
-                       "BINANCE_ACCOUNT_SNAPSHOT_INCOMPLETE"):
+                       "BINANCE_ACCOUNT_SNAPSHOT_INCOMPLETE",
+                       "reconcileStalePendingForFundingChange",
+                       "FUNDING_RECONCILIATION_STATE_CHANGED",
+                       "NO_OPEN_EXPOSURE_VERIFIED"):
             if marker not in new_worker:raise RuntimeError('SCANNER_GUARD_MISSING_'+marker)
         for marker in ('id="upAmount"','id="downAmount"','id="riskSave"',
                        'id="firstScanLag"','id="pairExecution"',
@@ -270,6 +318,7 @@ def main():
                 if run('systemctl','is-active',unit).stdout.strip()!='active':
                     raise RuntimeError('SERVICE_INACTIVE_AFTER_RELEASE_'+unit)
             print('DUAL5_FAST_SCAN_DEPLOY_SUCCESS=true',flush=True)
+            print('DUAL5_FUNDING_SWITCH_PENDING_RECONCILIATION_PATCH_LIVE=true',flush=True)
             print('DUAL5_OWNER_ONLY_HISTORIC_RECOVERY_BUTTON_DEPLOYED=true',flush=True)
             print('DUAL5_OWNER_WALLET_RISK_AUDIT_BUTTON_LIVE=true',flush=True)
             print('DUAL5_15S_ENTRY_AND_ZERO_FILL_TERMINAL_FIX_LIVE=true',flush=True)

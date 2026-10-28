@@ -4,11 +4,10 @@
 set -Eeuo pipefail
 test "$(id -u)" -eq 0
 [[ "${APP_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || { echo EVENT10_INVALID_RESTORE_SHA; exit 2; }
-for unit in caddy zl-futures-bot-paper zl-prediction-trade; do
+for unit in caddy zl-prediction-trade; do
   systemctl is-active --quiet "$unit" || { echo "EVENT10_PREREQUISITE_NOT_RUNNING=$unit"; exit 11; }
 done
 prediction_pid=$(systemctl show -p MainPID --value zl-prediction-trade)
-futures_pid=$(systemctl show -p MainPID --value zl-futures-bot-paper)
 base=http://127.0.0.1:13020
 repo="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA"
 work=$(mktemp -d /tmp/event10-ui-restore.XXXXXXXX)
@@ -26,7 +25,7 @@ rollback_panel(){
 }
 trap rollback_panel EXIT
 curl -fsSL --retry 3 --max-time 25 "$repo/event10-bot/panel.html" -o "$work/panel.new"
-curl -fsSL --retry 3 --max-time 25 "$repo/event10-bot/install_routes.sh" -o "$work/routes.sh"
+curl -fsSL --retry 3 --max-time 25 "$repo/event10-bot/install_current_routes.sh" -o "$work/routes.sh"
 bash -n "$work/routes.sh"
 python3 - "$work/panel.new" <<'PY'
 from pathlib import Path
@@ -103,6 +102,5 @@ print('EVENT10_FRONTEND_PAGE_RESTORED=true')
 print('EVENT10_HISTORY_AND_AI_SETTINGS_PRESERVED=true')
 PY
 test "$prediction_pid" = "$(systemctl show -p MainPID --value zl-prediction-trade)"
-test "$futures_pid" = "$(systemctl show -p MainPID --value zl-futures-bot-paper)"
-echo EVENT10_OTHER_TRADING_PROCESSES_UNCHANGED=true
+echo EVENT10_CURRENT_5MIN_TRADING_PROCESS_UNCHANGED=true
 echo EVENT10_FRONTEND_RESTORE_COMPLETE=true

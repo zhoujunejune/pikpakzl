@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Authenticated public smoke: verify GUARDIAN belongs to single bot and cannot trade."""
+import os,sys,json,base64,urllib.request,urllib.error,time
+HOST='https://prediction.47-237-188-69.sslip.io'
+pw=os.environ['ZL_PANEL_PASSWORD']
+auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+def get(p,authorized=True):
+ h={'Cache-Control':'no-store'}
+ if authorized:h['Authorization']=auth
+ req=urllib.request.Request(HOST+p,headers=h)
+ try:
+  with urllib.request.urlopen(req,timeout=16) as r:return r.status,r.read(800000)
+ except urllib.error.HTTPError as e:return e.code,e.read(1000)
+def main():
+ assert get('/guardian/',False)[0]==401,'GUARDIAN_PUBLIC_AUTH_BYPASS'
+ print('GUARDIAN_BASIC_AUTH_PRESERVED=true')
+ code,body=get('/guardian/')
+ assert code==200,('GUARDIAN_UI_HTTP',code)
+ html=body.decode('utf8','replace')
+ assert 'GUARDIAN' in html and '影子' in html
+ print('GUARDIAN_PUBLIC_CHINESE_UI_OK=true')
+ code,body=get('/guardian/api/status')
+ assert code==200,('GUARDIAN_STATUS_HTTP',code)
+ s=json.loads(body)
+ assert s.get('ok') and s.get('model')=='ZL_GUARDIAN_5M_V1'
+ assert s.get('configured') and s.get('readOnly') and s.get('orders') is False
+ assert s.get('productionIntegration') is False and s.get('autoTP_SL') is False
+ assert s.get('automaticTradeEligibility',{}).get('eligible') is False
+ assert s.get('lastTickAt') and time.time()*1000-s['lastTickAt']<45000
+ print('GUARDIAN_PUBLIC_SHADOW_STATUS_OK=true')
+ print('GUARDIAN_LATEST_DIRECTION',s.get('latest',{}).get('direction'))
+ print('GUARDIAN_LATEST_REASON',str(s.get('latest',{}).get('reason') or '-')[:170])
+ print('GUARDIAN_RUNTIME_ERROR',str(s.get('error') or '-')[:130])
+ print('GUARDIAN_CURRENT_SHADOW_SIGNALS',s.get('stats',{}).get('shadowPredictions'))
+ code,body=get('/')
+ assert code==200 and '5分钟单边预测' in body.decode('utf8','replace')
+ print('GUARDIAN_ORIGINAL_SINGLE_PAGE_PRESERVED=true')
+ code,body=get('/api/status')
+ assert code==200
+ d=json.loads(body);assert d.get('enabled') is False
+ print('GUARDIAN_ORIGINAL_LIVE_SWITCH_STILL_OFF=true')
+ for p in ('/dual5','/event10/','/futures-lab/'):
+  assert get(p)[0]==404,('RETIRED_ROUTE_RETURNED',p)
+ print('GUARDIAN_NO_RETIRED_BOTS_REINTRODUCED=true')
+ print('GUARDIAN_PUBLIC_SMOKE_PASSED=true')
+if __name__=='__main__':
+ try:sys.exit(main() or 0)
+ except Exception as e:print('GUARDIAN_SMOKE_FAILED',str(e)[:260]);sys.exit(2)

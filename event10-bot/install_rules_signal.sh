@@ -14,7 +14,7 @@ cleanup(){
   code=$?
   trap - EXIT
   if test "$code" -ne 0 && test "$rollback_needed" = true;then
-    for f in manual-engine.mjs panel.html;do
+    for f in manual-engine.mjs server.mjs panel.html;do
       cp -p "$temp/backups/$f" "/opt/zl-event10/$f"
     done
     if test -f "$temp/backups/pure-signal.mjs";then
@@ -28,17 +28,18 @@ cleanup(){
 }
 trap cleanup EXIT
 mkdir -p "$temp/backups"
-for filename in manual-engine.mjs pure-signal.mjs panel.html;do
+for filename in manual-engine.mjs server.mjs pure-signal.mjs panel.html;do
   curl -fsSL --retry 3 --max-time 30 \
     "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$APP_SHA/event10-bot/$filename" \
     -o "$temp/$filename"
 done
 node=/opt/zl-prediction-node/bin/node
 "$node" --check "$temp/manual-engine.mjs"
+"$node" --check "$temp/server.mjs"
 "$node" --check "$temp/pure-signal.mjs"
 test -f /opt/zl-event10/server.mjs
 test -f /var/lib/zl-event10/manual-sessions-v2.json
-for file in manual-engine.mjs panel.html;do cp -p "/opt/zl-event10/$file" "$temp/backups/$file";done
+for file in manual-engine.mjs server.mjs panel.html;do cp -p "/opt/zl-event10/$file" "$temp/backups/$file";done
 if test -f /opt/zl-event10/pure-signal.mjs;then
   cp -p /opt/zl-event10/pure-signal.mjs "$temp/backups/pure-signal.mjs"
 fi
@@ -93,11 +94,25 @@ assert b.get('autoTradingEnabled') is False and b.get('executionAvailable') is F
 assert (b.get('stats') or {}).get('total',0) >= (a.get('stats') or {}).get('total',0)
 assert (b.get('lastSession') or {}).get('id')==(a.get('lastSession') or {}).get('id')
 assert b.get('strategyStats',{}).get('proxySettled',0)>=0
+assert b.get('strategyStats',{}).get('total',0) >= a.get('strategyStats',{}).get('total',0)
 print('EVENT10_PURE_RULE_SIGNAL_ACTIVE=true')
 print('EVENT10_OLD_HISTORY_PRESERVED=true')
 print('EVENT10_NO_MODEL_REQUESTS=true')
 print('EVENT10_NO_REAL_TRADING=true')
 print('EVENT10_PREVIOUS_RECORDS='+str((a.get('stats') or {}).get('total',0)))
+PY
+# Complete read-only signal archive survives restart and supports page navigation.
+curl -fsS --max-time 5 "$base/api/signals?limit=25&offset=0" >"$temp/signals.json"
+python3 - "$temp/signals.json" "$temp/new-status.json" <<'PYSIGNALS'
+import json,sys
+history=json.load(open(sys.argv[1]));state=json.load(open(sys.argv[2]))
+assert history['ok'] is True and history['version']=='EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029'
+assert history['autoTradingEnabled'] is False
+assert len(history['records'])<=25
+assert history['total']==state['strategyStats']['total']
+assert history['stats']['proxySettled']==state['strategyStats']['proxySettled']
+print('EVENT10_ALL_VALID_SIGNALS_PERSISTENT_LEDGER_READY=true')
+print('EVENT10_SAVED_SIGNALS_TOTAL='+str(history['total']))
 PY
 curl -fsS --max-time 5 "$base/" >"$temp/served.html"
 python3 - "$temp/served.html" <<'PY'
@@ -106,7 +121,8 @@ import sys
 s=Path(sys.argv[1]).read_text()
 for key in ('BTC 10分钟事件合约 · 纯信号','立即检测五项条件',
             'id="quickDirection"','id="quickConfidence"',
-            'EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029'):
+            'EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029',
+            'id="historySummary"','id="olderSignals"','id="newerSignals"'):
  assert key in s,'RULE_PANEL_MISSING_'+key
 print('EVENT10_PURE_RULE_FRONTEND_ACTIVE=true')
 PY

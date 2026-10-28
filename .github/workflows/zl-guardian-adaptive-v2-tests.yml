@@ -1,0 +1,37 @@
+name: GUARDIAN adaptive V2 isolated shadow tests
+on:
+  push:
+    branches: [feature/guardian-adaptive-v2-shadow]
+    paths:
+      - railway-diagnostic/guardian-adaptive-exit-v2.mjs
+      - railway-diagnostic/guardian-adaptive-exit-v2.test.mjs
+      - railway-diagnostic/guardian-adaptive-replay-v2.mjs
+      - .github/workflows/zl-guardian-adaptive-v2-tests.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate source syntax
+        run: |
+          node --check railway-diagnostic/guardian-adaptive-exit-v2.mjs
+          node --check railway-diagnostic/guardian-adaptive-replay-v2.mjs
+          node --check railway-diagnostic/guardian-adaptive-exit-v2.test.mjs
+      - name: Test causal SELL quote risk and replay guards
+        run: node --test railway-diagnostic/guardian-adaptive-exit-v2.test.mjs
+      - name: Prove that empty evidence never becomes fake profitability
+        run: |
+          printf '[]' > /tmp/guardian-quote-empty.json
+          node railway-diagnostic/guardian-adaptive-replay-v2.mjs /tmp/guardian-quote-empty.json > /tmp/report.json
+          python - <<'PY'
+          import json
+          v=json.load(open('/tmp/report.json'))
+          assert v['validPositions']==0 and v['performanceValidated'] is False
+          assert v['netTradingProfit'] is None
+          print('GUARDIAN_ADAPTIVE_NO_FAKE_PROFIT=true')
+          PY

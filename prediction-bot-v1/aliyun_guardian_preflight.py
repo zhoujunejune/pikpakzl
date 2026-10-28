@@ -95,6 +95,23 @@ if fast.exists():
 main=Path('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs')
 for line in main.read_text().splitlines():
  if 'fast5-dashboard' in line or 'injectFast5' in line or 'fast5Dashboard' in line:print('FAST5_MODULE_WIRING',line[:280])
+import urllib.error
+for endpoint in ['/api/risk-control','/api/risk-status','/api/risk-runtime','/api/trade-risk']:
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:13001'+endpoint,timeout=7) as response:
+   obj=json.loads(response.read(140000))
+   print('GUARDIAN_RISK_API',endpoint,response.status,str({k:obj.get(k) for k in ['ok','takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent','persistenceHealthy','workerRunning','error']})[:450])
+ except urllib.error.HTTPError as ex: print('GUARDIAN_RISK_API',endpoint,ex.code)
+ except Exception as ex: print('GUARDIAN_RISK_API',endpoint,type(ex).__name__)
+for p in ['/tmp/risk-runtime-status.json','/tmp/risk-worker-health.json','/tmp/risk-control.json']:
+ try:
+  obj=json.load(open(p))
+  fields={k:v for k,v in obj.items() if k not in ('walletAddress','walletId','tokenId','orderId')}
+  print('GUARDIAN_RISK_FILE',p,str(fields)[:1000])
+ except Exception as ex:print('GUARDIAN_RISK_FILE',p,type(ex).__name__)
+for unit in ['zl-prediction-risk-exits','zl-prediction-trade','zl-prediction-guardian-analysis']:
+ out=subprocess.run(['systemctl','show',unit,'-p','ActiveState','-p','SubState','-p','MainPID','-p','PrivateTmp'],text=True,capture_output=True)
+ print('GUARDIAN_RISK_UNIT',unit,out.stdout.replace('\\n',' ').strip()[:300])
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

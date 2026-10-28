@@ -102,10 +102,6 @@ jobs:
           curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/aliyun_dual5_fast_scan_release.py" -o "$tmp/release.py"
           python3 -m py_compile "$tmp/release.py"
           python3 "$tmp/release.py" COMMIT_SHA
-          # Owner requested an unlock. Reconcile with the exact live risk guards;
-          # 2 signed Binance snapshots + main bot off + round completed are mandatory.
-          # An unsuccessful audit fails closed; never arm the trading service.
-          python3 -c 'import urllib.request,json;u="http://127.0.0.1:13048/api/reconcile-flat-wallet";h={"Origin":"https://prediction.47-237-188-69.sslip.io","Sec-Fetch-Site":"same-origin","Content-Type":"application/json"};r=urllib.request.Request(u,data=b"{}",headers=h,method="POST");d=json.load(urllib.request.urlopen(r,timeout=75));assert d.get("ok") is True and d.get("blocked") is False and d.get("armed") is False and d.get("verifiedSnapshots")==2, "SAFE_WALLET_RECONCILIATION_NOT_CONFIRMED";print("DUAL5_OWNER_WALLET_FLAT_UNLOCK_CONFIRMED=true",flush=True)'
           """.replace('COMMIT_SHA',sha)
           cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
               access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],

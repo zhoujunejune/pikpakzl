@@ -49,7 +49,7 @@ export function guardianOrderSignal(status, now=Date.now()){
    return {ok:false,reason:'UNTRUSTED_GUARDIAN_SOURCE'};
  if(!['UP','DOWN'].includes(latest.direction)||latest.round!==round||
     latest.status!=='SHADOW_OBSERVATION'||!record||record.status!=='PREDICTED'||
-    !Number.isSafeInteger(record.at)||record.at<round||record.at>now+300||
+    !Number.isSafeInteger(record.at)||record.at<round||record.at>now+300||now-record.at>15000||
     !Number.isSafeInteger(record.marketAt)||now-record.marketAt>300000||
     !Number.isSafeInteger(status.observedAt)||now-status.observedAt>10000||
     now-status.observedAt< -500||round+FIVE_MIN-now<25000)

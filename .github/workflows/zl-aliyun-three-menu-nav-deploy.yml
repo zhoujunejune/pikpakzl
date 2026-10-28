@@ -24,6 +24,21 @@ jobs:
       - name: Unit tests and static non-trading audit
         run: |
           bash -n futures-research-panel/install_nav_bridge.sh
+          bash -n event10-bot/install_aliyun.sh event10-bot/restore_frontend.sh event10-bot/install_current_routes.sh
+          python -m py_compile event10-bot/frontend_nav.py
+          node --check event10-bot/server.mjs
+          node --test event10-bot/ui-layout.test.mjs event10-bot/server.test.mjs
+          python - <<'PYTEST'
+          import importlib.util
+          spec=importlib.util.spec_from_file_location('event10_nav','event10-bot/frontend_nav.py')
+          mod=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          original='<html><body><h1>5分钟 API 实盘确认控制台</h1></body></html>'
+          actual=mod.decorate(original)
+          assert actual.count('id="zl-event10-restored-nav"')==1
+          assert 'href="/event10/"' in actual
+          assert mod.decorate(actual)==actual
+          PYTEST
           python -m py_compile futures-research-panel/nav_bridge.py futures-research-panel/aliyun_nav_deploy.py
           python -m unittest discover -v -s futures-research-panel -p test_nav_bridge.py
           python - <<'PY'

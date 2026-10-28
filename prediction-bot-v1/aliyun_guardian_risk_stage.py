@@ -96,8 +96,9 @@ rep("function quoteTooCloseToExpiry(quote) {",
     "}\nfunction quoteTooCloseToExpiry(quote) {")
 rep("evaluateRisk(targets, quoteResult.quote)",
     "evaluatePositionRisk(position,targets,quoteResult.quote)",2)
-rep("  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED) || workerBusy) return;",
-    "  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED && !GUARDIAN_RISK_ENABLED) || workerBusy) return;")
+guards=[line for line in src.splitlines() if 'workerBusy' in line and '!STOP_LOSS_ENABLED' in line and 'return' in line]
+assert len(guards)==1,('UNRECOGNIZED_LIVE_TICK_GUARD',guards)
+rep(guards[0],guards[0].replace('!STOP_LOSS_ENABLED','!STOP_LOSS_ENABLED && !GUARDIAN_RISK_ENABLED',1))
 rep("    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;",
     "    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;\n"
     "    guardianRiskHeartbeat(true);")

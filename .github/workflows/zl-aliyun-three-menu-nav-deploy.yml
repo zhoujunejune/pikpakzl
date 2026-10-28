@@ -31,7 +31,7 @@ jobs:
           assert 'for filename in manual-engine.mjs server.mjs pure-signal.mjs panel.html;do' in text
           assert 'curl -fsS --max-time 5 "$base/api/signals?limit=25&offset=0"' in text
           assert 'for f in manual-engine.mjs server.mjs panel.html;do' in text
-          assert "<<'PYSIGNALS'" in text and '\\nPYSIGNALS\\n' in text
+          assert "<<'PYSIGNALS'" in text and "PYSIGNALS" in text.splitlines()
           PYDEPLOY
           python -m py_compile event10-bot/frontend_nav.py
           node --check event10-bot/server.mjs

@@ -2,7 +2,9 @@ name: Three robot UI actual environment audit
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
-    paths: ['.github/workflows/zl-three-ui-audit.yml']
+    paths:
+      - '.github/workflows/zl-three-ui-audit.yml'
+      - 'ui-theme/aliyun_ui_probe.py'
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

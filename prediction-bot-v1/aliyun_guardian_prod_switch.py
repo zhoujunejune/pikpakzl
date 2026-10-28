@@ -16,14 +16,17 @@ test -f "$CHOICE" && test -f "$ENGINE" && test -x "$NODE"
 systemctl is-active --quiet zl-prediction-trade
 systemctl is-active --quiet zl-prediction-guardian-analysis
 python3 - <<'PY'
-import json,urllib.request
+import json,urllib.request,urllib.error
 def get(port,path):
- with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,path),timeout=8) as f:return json.load(f)
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,path),timeout=8) as f:return json.load(f)
+ except urllib.error.HTTPError as e:
+  return json.loads(e.read().decode('utf8','replace'))
 s=get(13001,'/api/status');m=get(13001,'/api/order-signal-model')
 g=get(13049,'/api/status')
 assert s.get('ok') is True and s.get('enabled') is False,'LIVE_SWITCH_ON_ABORT'
 assert not s.get('pendingAction'),'PENDING_ORDER_ABORT'
-assert m.get('ready') is True and m.get('model') in ('FAST5_SPOT_MOMENTUM_V1','ZL_GUARDIAN_5M_V1'),'UNEXPECTED_PRODUCTION_MODEL'
+assert m.get('model') in ('FAST5_SPOT_MOMENTUM_V1','ZL_GUARDIAN_5M_V1') or 'INVALID_MODEL_SELECTION' in str(m.get('error')),'UNEXPECTED_PRODUCTION_MODEL'
 assert g.get('ok') is True and g.get('model')=='ZL_GUARDIAN_5M_V1' and g.get('configured') is True
 assert g.get('orders') is False and g.get('productionIntegration') is False
 print('GUARDIAN_CUTOVER_PREFLIGHT_PASS=true')

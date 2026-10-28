@@ -62,6 +62,29 @@ for port,endpoint in [(13001,'/api/status'),(13001,'/api/fast5-status'),(13001,'
    else:val={'ok':val.get('ok'),'error':val.get('error'),'keys':list(val.keys())[:18]}
    print('LIVE_PANEL_API',port,endpoint,resp.status,str(val)[:750])
  except Exception as ex:print('LIVE_PANEL_API_ERROR',port,endpoint,type(ex).__name__,str(getattr(ex,'code',''))[:40])
+from pathlib import Path
+import urllib.request,re
+for port in (13001,):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:%s/'%port,timeout=6) as v:
+   h=v.read(900000).decode('utf-8','replace')
+  print('LIVE_ROOT_HTML',port,len(h))
+  for n in ['FAST5生产状态暂无法读取','FAST5 V7','2秒锁定','当前生产模型','实时行情更新延迟','实盘自动跟随','核对行情数据','ZL_HEADER_V2']:
+   q=h.find(n)
+   print('LIVE_ROOT_MATCH',n,q)
+   if q>=0:print('LIVE_ROOT_AROUND',n,repr(h[max(0,q-550):q+550])[:1200])
+  print('LIVE_ROOT_SCRIPTS',re.findall(r'<script[^>]+src=["\']([^"\']+)',h)[:25])
+ except Exception as ex:print('LIVE_ROOT_HTTP_ERROR',str(ex)[:100])
+srcroot=Path('/opt/zl-prediction-live/src')
+found=0
+for p in srcroot.rglob('*.mjs'):
+ if p.stat().st_size>500000:continue
+ try:t=p.read_text()
+ except Exception:continue
+ for token in ['FAST5生产状态暂无法读取','FAST5 V7','实时多空趋势','核对行情数据','FAST5下单方向开关']:
+  if token in t:
+   print('LIVE_FAST5_SOURCE',str(p.relative_to(srcroot)),token,repr(t[max(0,t.index(token)-350):t.index(token)+350])[:790]);found+=1
+ if found>25:break
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

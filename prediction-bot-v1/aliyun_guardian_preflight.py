@@ -30,6 +30,10 @@ for s in ['zl-prediction-trade','zl-prediction-v2','zl-prediction-v3','zl-predic
  print('GUARDIAN_UNIT',s,subprocess.run(['systemctl','is-active',s],capture_output=True,text=True).stdout.strip())
 print('GUARDIAN_NODE',os.path.isfile('/opt/zl-prediction-node/bin/node'))
 print('GUARDIAN_PANEL_FILE',os.path.isfile('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs'))
+model=get(13001,'/api/order-signal-model')
+print('GUARDIAN_CURRENT_MODEL',model.get('model'),'CHOICES',[x.get('id') for x in model.get('models',[])])
+status=get(13049,'/api/status')
+print('GUARDIAN_SHADOW_STATE',status.get('configured'),status.get('latest',{}).get('direction'),status.get('error'))
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

@@ -62,6 +62,7 @@ bash "$s"
         # Archive every confirmed EVENT10 direction in an append-only ledger; show all pages.
         # Restore pagination endpoint /api/signals by deploying the matching server.mjs.
         # Check new ledger endpoint and signal paging before declaring rollout successful.
+        # Keep the original five-minute and event10 trade collector processes untouched.
         # Only replace the independent EVENT10 analysis engine and HTML. All
         # original 5-minute trading processes / Caddy routing stay unchanged.
         cmd=f"""#!/bin/bash

@@ -24,7 +24,14 @@ jobs:
       - name: Unit tests and static non-trading audit
         run: |
           bash -n futures-research-panel/install_nav_bridge.sh
-          bash -n event10-bot/install_aliyun.sh event10-bot/restore_frontend.sh event10-bot/install_current_routes.sh
+          bash -n event10-bot/install_aliyun.sh event10-bot/restore_frontend.sh event10-bot/install_current_routes.sh event10-bot/install_rules_signal.sh
+          python - <<'PYDEPLOY'
+          from pathlib import Path
+          text=Path('event10-bot/install_rules_signal.sh').read_text()
+          assert 'for filename in manual-engine.mjs server.mjs pure-signal.mjs panel.html;do' in text
+          assert 'curl -fsS --max-time 5 "$base/api/signals?limit=25&offset=0"' in text
+          assert 'for f in manual-engine.mjs server.mjs panel.html;do' in text
+          PYDEPLOY
           python -m py_compile event10-bot/frontend_nav.py
           node --check event10-bot/server.mjs
           node --test event10-bot/pure-signal.test.mjs event10-bot/panel-state.test.mjs event10-bot/signal-ledger.test.mjs

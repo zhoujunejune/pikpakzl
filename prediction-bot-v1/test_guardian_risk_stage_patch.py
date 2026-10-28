@@ -27,14 +27,16 @@ function quoteTooCloseToExpiry(quote) {return false}
 function tick() {
   if (workerBusy) return;
   if(!TAKE_PROFIT_ENABLED&&!STOP_LOSS_ENABLED&&!hasDual5Positions())return;
-  health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;
+    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;
   const a = evaluateRisk(targets, quoteResult.quote);
   const b = evaluateRisk(targets, quoteResult.quote);
   const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;
   const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;
-  log('risk_tick_exception', { error: e?.message || String(e) });
+    log('risk_tick_exception', { error: e?.message || String(e) });
 }
-const result = { scope: SCOPE, };
+const result = {
+  scope: SCOPE,
+};
 """
 
 def apply(src):

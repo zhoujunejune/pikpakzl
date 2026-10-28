@@ -215,7 +215,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       }
       const rule=evaluatePureSignal({feed,reference,
         orderBook:filtered.orderBook,aggressiveFlow:filtered.aggressiveFlow});
-      lastCheck={id,checkedAt:clock(),openedAt:reference.observedAt,
+      lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,openedAt:reference.observedAt,
         openPrice:reference.price,expiresAt:reference.observedAt+HORIZON_MS,
         ...rule,featureAvailability:availability};
       lastDataProbe={checkedAt:clock(),available:Object.keys(filtered).length,
@@ -249,7 +249,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // read-only DATA_ERROR result so the UI can stop its loading state.
       const error=String(e?.message||e).slice(0,160);
       lastError=error;
-      lastCheck={id,checkedAt:clock(),openedAt:null,openPrice:null,
+      lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,openedAt:null,openPrice:null,
         status:"DATA_ERROR",signal:"NO_SIGNAL",direction:null,
         reason:"数据检查未完成："+error+"。本次未产生交易方向。",
         error,featureAvailability:lastDataProbe?.availability||null};

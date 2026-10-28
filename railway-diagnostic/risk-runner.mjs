@@ -6,6 +6,7 @@ const CONTROL_FILE = '/tmp/risk-control.json';
 const STATUS_FILE = '/tmp/risk-runtime-status.json';
 const CHECK_MS = 300;
 const STATUS_MS = 2000;
+const GUARDIAN_DYNAMIC_EXIT_ENABLED=/^(1|true)$/i.test(String(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED||'false'));
 
 function envBool(name, fallback = 'false') {
   return !['0', 'false', 'off', 'no'].includes(String(process.env[name] || fallback).toLowerCase());
@@ -63,12 +64,13 @@ let configPersisted = false;
 let lastWorkerStartedAt = null;
 function writeStatus() {
   const config = readConfig();
-  const enabled = config.takeProfitEnabled || config.stopLossEnabled;
+  const enabled = config.takeProfitEnabled || config.stopLossEnabled || GUARDIAN_DYNAMIC_EXIT_ENABLED;
   const running = Boolean(child && !child.killed && child.exitCode === null);
   const payload = {
     at: new Date().toISOString(),
     enabled,
     workerRunning: running,
+    guardianDynamicExitEnabled: GUARDIAN_DYNAMIC_EXIT_ENABLED,
     configApplied: enabled ? running && childKey === configKey(config) : !running,
     controllerPid: process.pid,
     workerPid: running ? child.pid : null,
@@ -108,6 +110,7 @@ function startWorker(cfg) {
     stdio: 'inherit',
   });
   log('risk_runtime_worker_started', {
+    guardianDynamicExitEnabled:GUARDIAN_DYNAMIC_EXIT_ENABLED,
     takeProfitEnabled: cfg.takeProfitEnabled,
     takeProfitPercent: cfg.takeProfitPercent,
     stopLossEnabled: cfg.stopLossEnabled,
@@ -125,7 +128,7 @@ function startWorker(cfg) {
 function reconcile() {
   if (!storageReady) return;
   desired = readConfig();
-  const enabled = desired.takeProfitEnabled || desired.stopLossEnabled;
+  const enabled = desired.takeProfitEnabled || desired.stopLossEnabled || GUARDIAN_DYNAMIC_EXIT_ENABLED;
   const wantedKey = configKey(desired);
   if (child) {
     if (!enabled || childKey !== wantedKey) {

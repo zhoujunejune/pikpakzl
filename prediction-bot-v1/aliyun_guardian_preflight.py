@@ -112,6 +112,20 @@ for p in ['/tmp/risk-runtime-status.json','/tmp/risk-worker-health.json','/tmp/r
 for unit in ['zl-prediction-risk-exits','zl-prediction-trade','zl-prediction-guardian-analysis']:
  out=subprocess.run(['systemctl','show',unit,'-p','ActiveState','-p','SubState','-p','MainPID','-p','PrivateTmp'],text=True,capture_output=True)
  print('GUARDIAN_RISK_UNIT',unit,out.stdout.replace('\\n',' ').strip()[:300])
+import subprocess,pathlib,json
+pid=subprocess.run(['systemctl','show','zl-prediction-risk-exits','--property=MainPID','--value'],text=True,capture_output=True).stdout.strip()
+print('GUARDIAN_RISK_WORKER_PID_PRESENT',pid.isdigit() and int(pid)>0)
+for command in [['systemctl','cat','zl-prediction-risk-exits'],['systemctl','show','zl-prediction-risk-exits','-p','PrivateTmp','-p','WorkingDirectory','-p','ExecStart']]:
+ out=subprocess.run(command,text=True,capture_output=True).stdout
+ for line in out.splitlines():
+  if line.lstrip().startswith(('ExecStart=','WorkingDirectory=','PrivateTmp=','Description=')):print('GUARDIAN_RISK_UNIT_DETAIL',line[:340])
+if pid.isdigit() and int(pid)>0:
+ for fn in ['risk-runtime-status.json','risk-worker-health.json','risk-control.json']:
+  file=pathlib.Path('/proc')/pid/'root/tmp'/fn
+  try:
+   val=json.loads(file.read_text())
+   print('GUARDIAN_RISK_PROC_STATUS',fn,json.dumps({k:v for k,v in val.items() if k not in ('tokenId','orderId','walletAddress','walletId')},ensure_ascii=False)[:1200])
+  except Exception as ex:print('GUARDIAN_RISK_PROC_STATUS',fn,type(ex).__name__)
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

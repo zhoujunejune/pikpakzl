@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {predictionWalletPayment,eligibleSpotFallback,explicitMpcInsufficient} from './payment-source-priority.mjs';
 import crypto from 'node:crypto';
 import { createClient } from 'redis';
 import WebSocket from 'ws';
@@ -500,16 +501,10 @@ async function resolveWallet() {
   return { ok: true, walletAddress: match.walletAddress, walletId: match.walletId };
 }
 
-function paymentRoute(balance) {
-  const items = Array.isArray(balance?.items) ? balance.items.filter(x => x.enabled) : [];
-  const positive = items.filter(x => Number(x.availableBalanceDisplay) > 0);
-  const cedefi = positive.find(x => String(x.accountType).toUpperCase() === 'CEDEFI');
-  const spot = positive.find(x => String(x.accountType).toUpperCase() === 'SPOT');
-  const funding = positive.find(x => String(x.accountType).toUpperCase() === 'FUNDING');
-  if (cedefi) return { displayAccount: 'CeDeFi', accountType: 'SPOT', fundingSource: 'CEX' };
-  if (spot) return { displayAccount: 'SPOT', accountType: 'SPOT', fundingSource: 'CEX' };
-  if (funding) return { displayAccount: 'FUNDING', accountType: 'FUNDING', fundingSource: 'CEX' };
-  return { displayAccount: 'Prediction Wallet', accountType: 'SPOT', fundingSource: 'MPC' };
+function paymentRoute(_balance) {
+  // The payment-options API lists CEX accounts, not the separate MPC wallet.
+  // Do not mistake a positive SPOT balance for a reason to skip MPC.
+  return predictionWalletPayment();
 }
 
 function durationLooks5m(topic) {
@@ -604,16 +599,10 @@ async function prepareIntent(signal) {
     resolveWallet(), discoverTopic(signal.round),
     lastBalance?.ok ? Promise.resolve(lastBalance) : getPaymentBalances(),
   ]);
-  // Do not reject enabling the user's toggle because of insufficient funds.
-  // For each actual round, report the balance error as PREPARE_ERROR instead
-  // of silently changing the payment source or claiming a successful order.
-  if (balance?.ok!==true) return {ok:false,error:balance?.error||'PAYMENT_BALANCE_UNAVAILABLE'};
-  const accounts=Array.isArray(balance.items)?balance.items.filter(x=>x.enabled===true):[];
-  const amount=Number(tradeAmountText);
-  const sufficient=accounts.filter(x=>Number(x.availableBalanceDisplay)>=amount);
-  if(accounts.length&&sufficient.length===0)return {
-    ok:false,error:'INSUFFICIENT_BALANCE',code:'PREDICTION_AVAILABLE_BALANCE_TOO_LOW'
-  };
+  // CEX payment-options cannot establish the separate MPC Prediction balance.
+  // Prepare MPC first even when CEX is empty/unavailable. The actual Binance
+  // rejection is the only authority for falling back to a freshly checked Spot
+  // balance; do not touch Funding or silently split the order.
   if (!wallet.ok) return wallet;
   if (!marketResult.ok) return marketResult;
 
@@ -622,7 +611,7 @@ async function prepareIntent(signal) {
 
   const amountIn = amountToWei(tradeAmountText);
   lastBalance = balance;
-  const payment = paymentRoute({...balance,items:sufficient.length?sufficient:accounts});
+  const payment = paymentRoute(balance);
   const slippageBps = Number(marketResult.topic?.slippageBps || 1200);
   const feeRateBps = Number(marketResult.topic?.feeRateBps || 200);
 
@@ -932,7 +921,7 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
 let currentPending=null;
 let refreshBusy=false;
 function el(id){return document.getElementById(id)}
-async function refresh(){if(refreshBusy)return;refreshBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();el('switch').innerHTML=j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>';const s=j.signal||{};el('round').textContent=s.round??'-';el('status').textContent=s.status??'-';el('direction').textContent=s.direction??'-';el('score').textContent=s.score==null?'-':Number(s.score).toFixed(2);el('amountView').textContent=j.amount??'-';if(document.activeElement!==el('amount')&&j.amount!=null)el('amount').value=j.amount;const b=j.balance||{};const first=(b.items||[]).find(x=>x.enabled&&Number(x.availableBalanceDisplay)>0)||(b.items||[]).find(x=>x.enabled)||(b.items||[])[0];if(b.ok&&first){el('walletBalance').innerHTML='<span class="ok">'+first.availableBalanceDisplay+' USDT</span>';el('walletMeta').textContent='账户：'+first.accountType+' · Binance Prediction 实时可用余额'}else{el('walletBalance').innerHTML='<span class="bad">读取失败</span>';el('walletMeta').textContent=(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':'')}
+async function refresh(){if(refreshBusy)return;refreshBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();el('switch').innerHTML=j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>';const s=j.signal||{};el('round').textContent=s.round??'-';el('status').textContent=s.status??'-';el('direction').textContent=s.direction??'-';el('score').textContent=s.score==null?'-':Number(s.score).toFixed(2);el('amountView').textContent=j.amount??'-';if(document.activeElement!==el('amount')&&j.amount!=null)el('amount').value=j.amount;const b=j.balance||{};const first=(b.items||[]).find(x=>x.enabled&&Number(x.availableBalanceDisplay)>0)||(b.items||[]).find(x=>x.enabled)||(b.items||[])[0];if(b.ok&&first){el('walletBalance').innerHTML='<span class="ok">'+first.availableBalanceDisplay+' USDT</span>';el('walletMeta').textContent='账户：'+first.accountType+' · 交易所可用余额（预测钱包余额单独核算）'}else{el('walletBalance').innerHTML='<span class="bad">读取失败</span>';el('walletMeta').textContent=(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':'')}
 currentPending=j.pendingAction||null;const btn=el('confirmBtn');if(!currentPending){el('pendingTitle').textContent='暂无';el('pendingMeta').textContent=j.enabled?'正在等待下一轮 LOCKED，并准备市场/方向...':'开启后等待下一轮 LOCKED 信号。';btn.classList.add('hidden')}else if(currentPending.state==='READY'){el('pendingTitle').textContent=(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT';el('pendingMeta').textContent='市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · Quote：点击确认后即时获取';btn.textContent='确认 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';btn.disabled=false;btn.classList.remove('hidden')}else if(currentPending.state==='PREPARE_ERROR'){el('pendingTitle').textContent=currentPending.error==='INSUFFICIENT_BALANCE'?'余额不足 · 本轮下单失败':'订单准备失败';el('pendingMeta').textContent=(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':'');btn.classList.add('hidden')}else{el('pendingTitle').textContent=currentPending.state==='QUOTING'?'正在获取最新 Quote...':'正在提交...';el('pendingMeta').textContent='请稍候，不要重复点击。';btn.classList.add('hidden')}
 const o=j.lastOrder;if(o){const filled=o.state==='CONFIRMED_FILLED'||Number(o.fillPercentage||0)>=1||Number(o.filledUsdtAmount||0)>0;const failed=o.state==='CONFIRMED_FAILED'||o.state==='PLACE_ERROR';const unknown=o.state==='SUBMISSION_UNKNOWN'||o.state==='RECONCILIATION_REQUIRED';if(filled){el('orderTitle').innerHTML='<span class="ok">币安已确认成交</span>'}else if(failed){el('orderTitle').innerHTML='<span class="bad">下单失败</span>'}else if(unknown){el('orderTitle').innerHTML='<span class="warn">提交结果未知 · 禁止重复下单</span>'}else{el('orderTitle').innerHTML='<span class="warn">已提交，等待币安确认</span>'}el('orderMeta').textContent='orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:'')}else{el('orderTitle').textContent='暂无';el('orderMeta').textContent='-' }}catch(e){el('switch').textContent='状态读取失败'}finally{refreshBusy=false}}
 async function setV(v){const a=Number(el('amount').value);if(v&&(!Number.isFinite(a)||a<1)){alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准');return}const r=await fetch('/api/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:v,amount:v?el('amount').value:undefined,pin:el('pin').value})});const j=await r.json();if(!r.ok){alert(j.error||'操作失败');return}refresh()}

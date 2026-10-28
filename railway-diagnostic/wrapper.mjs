@@ -123,7 +123,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   // Overlap independent signal revalidation and fresh quote retrieval.
   // A changed/expired signal still rejects the order before any placement call.
   const quoteRequestStartedAt = Date.now();
-  const [current, freshQuote] = await Promise.all([
+  let [current, freshQuote] = await Promise.all([
     getSignal({ forceHttp: true }), getFreshQuote(p._internal),
   ]);
   if (!selectedSignalMatches(p) || !current || current.status !== 'LOCKED' ||
@@ -147,6 +147,21 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     return { status: 409, body: { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' } };
   }
 
+  // Quote rejection is still pre-trade: switch to Spot only on a clear
+  // insufficient-funds response, and get a brand-new CEX quote.
+  if (!freshQuote.ok && p._internal.payment.fundingSource === 'MPC' &&
+      explicitMpcInsufficient(freshQuote)) {
+    const freshBalances=await getPaymentBalances();
+    const spot=eligibleSpotFallback(freshBalances,p.amount);
+    if(spot && enabled && p===pendingAction &&
+       orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice)) {
+      p._internal.payment=spot;
+      p.paymentAccount=spot.displayAccount;
+      freshQuote=await getFreshQuote(p._internal);
+      console.log(JSON.stringify({event:'prediction_wallet_quote_insufficient_spot_fallback',
+        round:p.round,spotQuoteOk:freshQuote.ok}));
+    }
+  }
   if (!freshQuote.ok) {
     p.state = isAuto ? 'AUTO_FAILED' : 'READY';
     p.error = freshQuote.error;
@@ -356,8 +371,25 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
 
   // Retry ONLY explicitly rejected quote/price requests. Ambiguous transport,
   // HTTP 5xx, missing orderId, HTTP 451 and other business errors never POST again.
-  while (!call.ok&&retryableRejectedOrderPost(call)&&
+  let spotFallbackUsed = intent.payment.fundingSource === 'CEX';
+  while (!call.ok &&
+      (retryableRejectedOrderPost(call) ||
+       (!spotFallbackUsed && intent.payment.fundingSource === 'MPC' &&
+        explicitMpcInsufficient(call))) &&
       orderPostClaim.attempt<MAX_ORDER_SUBMIT_ATTEMPTS) {
+    const fallbackRequested = !spotFallbackUsed &&
+      intent.payment.fundingSource === 'MPC' && explicitMpcInsufficient(call);
+    let spot = null;
+    if (fallbackRequested) {
+      // Live CEX balance is checked separately; Funding is never eligible.
+      const freshBalances = await getPaymentBalances();
+      spot = eligibleSpotFallback(freshBalances,p.amount);
+      if (!spot) {
+        console.log(JSON.stringify({event:'prediction_wallet_insufficient_spot_unavailable',
+          round:p.round,reason:freshBalances?.ok?'SPOT_BALANCE_LOW_OR_DISABLED':'SPOT_BALANCE_LOOKUP_FAILED'}));
+        break;
+      }
+    }
     // Release the in-flight Redis marker ONLY after an explicit no-order
     // rejection. A crash, timeout or 5xx retains the in-flight fence.
     try{await releaseRejectedOrderSubmitAttempt(p.round,orderPostClaim.attempt);}
@@ -371,6 +403,16 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       p.state='RETRY_ABORTED';
       p.error='重试前已停止跟随、切换订单或超过本轮时限';
       return {status:409,body:{ok:false,error:p.error,attempts:p.orderAttempts}};
+    }
+    if (spot) {
+      intent.payment=spot;
+      p.paymentAccount=spot.displayAccount;
+      placeBody.accountType=spot.accountType;
+      placeBody.fundingSource=spot.fundingSource;
+      placeBody.fundTransferAmount=intent.amountIn;
+      spotFallbackUsed=true;
+      console.log(JSON.stringify({event:'prediction_wallet_insufficient_spot_fallback',
+        round:p.round,attempt:orderPostClaim.attempt,accountType:'SPOT'}));
     }
     // New quote for each retry. Never reuse a quote rejected by Binance.
     const nextQuote=await getFreshQuote(intent);

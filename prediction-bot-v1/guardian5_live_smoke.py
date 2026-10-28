@@ -44,6 +44,14 @@ def main():
  assert 'FAST5生产状态暂无法读取' not in main_html,'LEGACY_FAST5_BROKEN_CARD_STILL_RENDERED'
  print('GUARDIAN_MAIN_HOMEPAGE_RENDERED=true')
  print('GUARDIAN_LEGACY_FAST5_HOMEPAGE_REMOVED=true')
+ rc,rb=get('/api/risk-control')
+ assert rc==200,('GUARDIAN_RISK_CONFIG_HTTP',rc)
+ risk=json.loads(rb)
+ assert risk.get('ok') and risk.get('persistenceHealthy') is True,'RISK_CONFIG_NOT_PERSISTED'
+ assert all(k in risk for k in ('takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent')),'RISK_CONFIG_MISSING_FIELDS'
+ print('GUARDIAN_RISK_CONFIG_READABLE=true')
+ print('GUARDIAN_REAL_FIXED_TP',risk.get('takeProfitEnabled'),risk.get('takeProfitPercent'))
+ print('GUARDIAN_REAL_FIXED_SL',risk.get('stopLossEnabled'),risk.get('stopLossPercent'))
  print('GUARDIAN_ORIGINAL_SINGLE_PAGE_PRESERVED=true')
  code,body=get('/api/status')
  assert code==200

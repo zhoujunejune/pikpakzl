@@ -7,6 +7,7 @@ on:
       - prediction-bot-v1/guardian5-core.test.mjs
       - prediction-bot-v1/guardian5-service.mjs
       - prediction-bot-v1/aliyun_guardian5_deploy.py
+      - prediction-bot-v1/aliyun_guardian_prod_switch.py
       - .github/workflows/zl-guardian5-single-deploy.yml
   workflow_dispatch:
 permissions: {contents: read}
@@ -29,7 +30,7 @@ jobs:
           node --check prediction-bot-v1/guardian5-service.mjs
           node --check prediction-bot-v1/deepseek-5m-features.mjs
           node --test prediction-bot-v1/guardian5-core.test.mjs
-          python -m py_compile prediction-bot-v1/aliyun_guardian5_deploy.py
+          python -m py_compile prediction-bot-v1/aliyun_guardian5_deploy.py prediction-bot-v1/aliyun_guardian_prod_switch.py
           python - <<'PY'
           import ast,subprocess
           p='prediction-bot-v1/aliyun_guardian5_deploy.py'
@@ -46,3 +47,8 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_guardian5_deploy.py
+      - name: Switch production signal to GUARDIAN only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_prod_switch.py

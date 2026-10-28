@@ -1,9 +1,8 @@
 // Manual EVENT10 analysis engine. Always no real Binance event-contract order endpoints.
 import fs from "node:fs";
 import path from "node:path";
-import {collectPublicFeatures,tenMinuteWindow} from "./market-enrichment.mjs";
-import {buildDecisionReview,REVIEW_VERSION} from "./decision-review.mjs";
-import {compactEvidence,COMPACT_VERSION} from "./compact-evidence.mjs";
+import {tenMinuteWindow} from "./market-enrichment.mjs";
+import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
 import {confirmedPriceStructure} from "./price-structure.mjs";
 export const HORIZON_MS = 600_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
@@ -118,64 +117,7 @@ function store(file,records){
   fs.writeFileSync(tmp,JSON.stringify(records),{mode:0o600});
   fs.renameSync(tmp,file);
 }
-function prompt(session){
- const data=session.compactEvidence||compactEvidence(session);
- return {model:"deepseek-flash",response_format:{type:"json_object"},
-  thinking:{type:"enabled"},reasoning_effort:"high",
-  messages:[
-   {role:"system",content:[
-     "你是BTC未来600秒方向分析器，只分析输入里的五组经过校验的核心证据。",
-     "预测目标是同一公开参考价格在600秒后高于(UP)或低于(DOWN)当前参考价。",
-     "每次有效响应必须二选一 UP/DOWN，不返回 WAIT；如果调用失败就显式失败，不编造。",
-     "决策原则：预测接下来600秒，不是概述过去行情。仅用采样时间不晚于锁定参考价的数据。",
-     "步骤1：先根据短周期1m/5m和最近10分钟价格动量判别趋势/震荡背景，并把变化幅度与ATR相比较。",
-     "动量幅度接近零或远低于ATR时视为弱证据，不能以微小涨跌强行确认未来趋势。",
-     "步骤1a：查看同一参考行情1分钟闭合K线提取的最近支撑区、阻力区、距离ATR、",
-     "过去五根的上涨下跌次数与最近三根方向持续性，辨别区间反弹与趋势突破。",
-     "支撑阻力只是历史价位聚类，并非未来必反弹或必回落。",
-     "价格靠近阻力不必选DOWN、靠近支撑不必选UP；只区分尚未突破/已经有效突破/突破后回落。",
-     "步骤2：看15分钟的趋势方向和RSI，只作为背景，超卖不必然UP，超买不必然DOWN。",
-     "步骤3：看唯一一组完整600秒连续主动成交方向，但600秒净买或净卖不等于未来600秒仍同向。",
-     "步骤3a：检查同市场短期成交量价：卖压强而价格不跌是可能吸收，卖压强且下跌是卖方推进；",
-     "买压强而价格不涨是可能吸收，买压强且上涨是买方推进；均须考虑最新短周期价格是否确认。",
-     "不同长度的买卖统计窗口若相反，优先识别近期是否出现转向，不能单纯把金额大的那边判为未来方向。",
-     "步骤4：若有合格的短期样本，比较同一BTCUSDT永续合约、同一采样窗口内的",
-     "主动买卖压力和成交价格变动；没校验成功就不做吸收或破位结论。",
-     "不同市场的绝对价格不能互相相减；期货成交价不是参考指数价。",
-     "成交量不等于未来方向。时间周期和买卖压力冲突时比较上涨和下跌两种假设。",
-     "支撑阻力、短期动量和持续性基于同一组1分钟K线，不能当成三票独立信号。",
-     "三根K线突破以统一的先前价格区间为基准；即使三根收盘价均处于区间外，也可能逐根回落。",
-     "若三根突破方向与最近三根连续收盘方向相反，先认为突破后的推进不足而非数据自相矛盾。",
-     "若参考价已回到突破区间内，必须识别假突破风险；没有价格站稳证据不得把突破直接判成后续趋势。",
-     "若短期方向没有持续性，不得把单根K线涨跌夸大为确定趋势。",
-     "决策前分别写清UP与DOWN的最强证据和最强反证，不要把RSI、EMA、价格动量重复计票。",
-     "重点审查反向假设：当前判断若错，最可能是阻力未突破、支撑未跌破、卖压衰竭或买压衰竭？",
-     "如果最新价格结构与主动成交或大周期趋势相反，不预设任一方胜出，要比较证据新鲜度、价格响应与期限。",
-     "可以在证据冲突时降低主观confidence，但必须仍给一个更可能的UP或DOWN，不能返回WAIT。",
-     "每个reason说明真正起作用的一条或两条核心原因，并点出一条可能令判断错误的反向因素。",
-     "不要从历史胜率推断新轮次必然成功，不要因为上一轮输了就自动反选方向。",
-     "任何来源缺失都要明确表达不确定性，不能推断缺失数据。",
-     "禁用重复的MACD、多个EMA数值、订单簿、资金费率和持仓变化解释。",
-     "只输出JSON：direction(UP或DOWN)、confidence(0..1主观判断，不是胜率)、",
-     "reason、upCase、downCase、decisiveEvidence、uncertainty，",
-     "所有文字字段必须是简体中文，JSON字段名及UP/DOWN保留英文。",
-     "记录仅是公开市场代理方向研究，不是事件合约真实成交或官方结算。"
-   ].join(" ")},
-   {role:"user",content:JSON.stringify({
-     purpose:"PREDICT_10_MIN_AFTER_MANUAL_CAPTURE",
-     version:COMPACT_VERSION,
-     outputLanguage:"zh-CN",explanationLanguage:"简体中文",
-     referencePrice:session.openPrice,
-     capturedAt:session.openedAt,expiresAt:session.expiresAt,
-     compactEvidence:data,
-     dataQualityWarnings:(session.decisionReview?.warnings||[]).slice(0,6)
-   })}
-  ]};
-}
 export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) {
-  const key=String(env.DEEPSEEK_API_KEY||"");
-  const model=String(env.EVENT10_DEEPSEEK_MODEL||env.DEEPSEEK_MODEL||"deepseek-flash");
-  const endpoint=String(env.DEEPSEEK_API_URL||"https://api.deepseek.com/chat/completions");
   const feedUrl=String(env.EVENT10_READONLY_FEED||"http://127.0.0.1:13003/api/shadow-market-data");
   const streamUrl="http://127.0.0.1:13021/api/features";
   const file=String(env.EVENT10_STATE_FILE||"/var/lib/zl-event10/manual-sessions-v2.json");
@@ -185,6 +127,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   }
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,modelCalls=0,lastError=null;
+  let lastRuleScan=0,lastCheck=null;
   let lastCheckAt=0;
   let lastDataProbe=null;
   const persist=()=>store(file,history);
@@ -199,19 +142,23 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   };
   const status=()=>{
     const h=latest();
-    return {ok:true,bot:"EVENT10",mode:"MANUAL_BUTTON_OPEN_10MIN",
-      providerModel:model,configured:!!key,autoSignalEnabled:false,
-      manualStartEnabled:!!key,autoTradingEnabled:false,executionAvailable:false,
+    const current=history.filter(x=>x.decisionReviewVersion===RULE_VERSION);
+    const settled=current.filter(x=>typeof x.proxyHit==="boolean");
+    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_AUTO_FIRST3M_PLUS_MANUAL",
+      providerModel:"PURE_RULES_V1",configured:true,autoSignalEnabled:true,
+      manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,priceSource:SOURCE,
-      horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls,lastError,
-      enrichmentVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6R1",
-      decisionReviewVersion:REVIEW_VERSION,explanationLanguage:"zh-CN",
-      thinkingMode:"enabled",reasoningEffort:"high",
-      lastReasoningObserved:h?.reasoningObserved??null,
-      lastReasoningTokenCount:h?.reasoningTokenCount??null,
-      lastFeatureCoverage:h?.featureAvailability||null,lastDataProbe,
-      active:h&&["ANALYZING","PREDICTED","FAILED"].includes(h.status)&&clock()<h.expiresAt?h:null,
-      lastSession:h,stats:stats()};
+      horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
+      enrichmentVersion:"EVENT10_EMA_VOLUME_DEPTH_RSI_V1",
+      decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
+      thinkingMode:"disabled",reasoningEffort:null,
+      lastReasoningObserved:null,lastReasoningTokenCount:null,
+      lastFeatureCoverage:lastCheck?.featureAvailability||h?.featureAvailability||null,lastDataProbe,lastCheck,
+      active:h&&["ANALYZING","PREDICTED"].includes(h.status)&&clock()<h.expiresAt?h:null,
+      lastSession:h,stats:stats(),
+      strategyStats:{total:current.length,proxySettled:settled.length,
+        proxyHits:settled.filter(x=>x.proxyHit===true).length,
+        proxyAccuracyPct:settled.length?round(100*settled.filter(x=>x.proxyHit===true).length/settled.length,2):null}};
   };
   const all=(limit=50)=>history.slice(-Math.max(1,Math.min(Number(limit)||50,200))).reverse();
   const readFeed=async()=>{
@@ -220,164 +167,90 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     if(!r.ok)throw Error("MARKET_SOURCE_HTTP_"+r.status);
     return r.json();
   };
-  async function analyze(session){
-    const started=clock();
-    let error=null;
-    for(let i=1;i<=4;i++){
-      session.attempts=i;persist();
-      try{
-        const payload=prompt(session);payload.model=model;
-        const r=await fetcher(endpoint,{method:"POST",signal:AbortSignal.timeout(28000),
-          headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
-          body:JSON.stringify(payload)});
-        modelCalls++;
-        if(!r.ok)throw Error("DEEPSEEK_HTTP_"+r.status);
-        const body=await r.json();
-        if(body?.choices?.[0]?.finish_reason==="length")throw Error("AI_RESPONSE_TRUNCATED");
-        const reply=body?.choices?.[0]?.message;
-        const parsed=parseDirection(reply?.content);
-        // Only persist whether the provider supplied reasoning metadata;
-        // never store or expose any private reasoning_content text.
-        session.reasoningObserved=typeof reply?.reasoning_content==="string"&&
-          reply.reasoning_content.trim().length>0;
-        const tokens=body?.usage?.completion_tokens_details?.reasoning_tokens;
-        session.reasoningTokenCount=Number.isSafeInteger(tokens)&&tokens>=0?tokens:null;
-        session.direction=parsed.direction;
-        session.confidence=parsed.confidence;
-        session.reason=parsed.reason;
-        session.analysisArguments={upCase:parsed.upCase,downCase:parsed.downCase,
-          decisiveEvidence:parsed.decisiveEvidence,uncertainty:parsed.uncertainty};
-        session.modelFinishedAt=clock();
-        session.modelLatencyMs=clock()-started;
-        session.status="PREDICTED";session.error=null;
-        persist();return;
-      }catch(e){error=String(e?.message||e).slice(0,160);}
-    }
-    session.status="FAILED";session.error="NO_VALID_DEEPSEEK_DIRECTION: "+error;
-    session.modelFinishedAt=clock();session.direction=null;
-    persist();
-  }
   async function start(id){
     if(!/^[A-Za-z0-9_-]{12,90}$/.test(String(id)))throw Error("INVALID_IDEMPOTENCY_KEY");
     const existing=history.find(x=>x.id===id);
     if(existing)return existing;
-    if(!key)throw Error("DEEPSEEK_NOT_CONFIGURED");
     if(busyStart)throw Error("CLICK_ALREADY_PROCESSING");
     if(history.some(x=>x.status==="ANALYZING"))throw Error("ANALYSIS_ALREADY_RUNNING");
-    if(history.some(x=>clock()<x.expiresAt && ["ANALYZING","PREDICTED","FAILED"].includes(x.status)))
+    if(history.some(x=>clock()<x.expiresAt&&x.status==="PREDICTED"))
       throw Error("TEN_MINUTE_SESSION_ALREADY_ACTIVE");
     busyStart=true;
     const clickReceivedAt=clock();
     try{
-      // Collect optional public USD-M features BEFORE freezing the reference tick.
-      // This avoids using future information after the claimed entry reference time.
-      const optional=await collectPublicFeatures({fetcher,now:clock});
-      // Freeze a trustworthy reference tick AFTER public REST snapshots.
-      // A tick lagging a just-observed order book can invalidate otherwise-real
-      // depth data. Retry the trusted existing feed briefly; NEVER change
-      // an exchange timestamp or use events newer than the reference tick.
-      const receivedAt=clock();
-      let feed=await readFeed();
-      let snapshot=buildSnapshot(feed,clock());
-      const observedTimes=Object.values(optional.features)
-        .map(v=>v?.observedAt??v?.latestTradeAt??v?.latestClosedAt??null)
-        .filter(Number.isFinite);
-      const target=observedTimes.length?Math.max(...observedTimes):null;
-      if(target!==null&&target>snapshot.observedAt&&
-         target-snapshot.observedAt<=3500){
-        for(let attempt=0;attempt<6&&snapshot.observedAt<target;attempt++){
-          await new Promise(resolve=>setTimeout(resolve,350));
-          const retryFeed=await readFeed();
-          const newer=buildSnapshot(retryFeed,clock());
-          if(newer.observedAt>snapshot.observedAt){
-            feed=retryFeed;snapshot=newer;
-          }
+      // Fetch the order book and aggressive trades BEFORE the reference-price tick;
+      // reject market evidence newer than the frozen spot reference.
+      const market=await collectRuleFeatures({fetcher,now:clock});
+      let feed=await readFeed(),reference=buildSnapshot(feed,clock());
+      const marketTimes=[market.features.orderBook?.observedAt,
+        market.features.aggressiveFlow?.lastTradeAt].filter(Number.isFinite);
+      const target=marketTimes.length?Math.max(...marketTimes):null;
+      if(target!==null&&reference.observedAt<target&&target-reference.observedAt<=3500){
+        for(let i=0;i<6&&reference.observedAt<target;i++){
+          await new Promise(resolve=>setTimeout(resolve,300));
+          const retry=await readFeed();
+          const newer=buildSnapshot(retry,clock());
+          if(newer.observedAt>reference.observedAt){feed=retry;reference=newer;}
         }
       }
-      // Prevent newest candle data from leaking past the reference tick.
-      const rollingTenMinutes=tenMinuteWindow(feed,snapshot.observedAt);
-      const availability={...optional.availability};
-      // Query stream history AS OF the frozen reference tick. The live stream
-      // naturally runs ahead of a slightly delayed spot-price proxy tick.
-      // Compare historical windows instead of wrongly rejecting fresh live
-      // data for being a few milliseconds newer than that reference.
-      let continuous=null,continuousError="COLLECTOR_UNAVAILABLE";
-      try{
-        const cr=await fetcher(streamUrl+"?asof="+snapshot.observedAt,{
-          signal:AbortSignal.timeout(1800),headers:{Accept:"application/json"}});
-        if(!cr.ok)throw Error("COLLECTOR_HTTP_"+cr.status);
-        const cj=await cr.json();
-        if(cj?.ok===true&&cj?.source==="BINANCE_USDM_AGGTRADE_100MS_PUBLIC_WEBSOCKET"&&
-           cj.asOf===snapshot.observedAt)continuous=cj;
-        else throw Error("COLLECTOR_ASOF_NOT_VERIFIED");
-      }catch(e){continuousError=String(e?.message||e).slice(0,80)}
-      let continuousTradeFlow=null;
-      if(continuous){
-        const windows={};
-        for(const [name,w] of Object.entries(continuous.windows||{})){
-          if(w.complete===true&&w.to!==null&&w.to<=snapshot.observedAt&&
-              w.lastStreamReceiveAgeMs!==null&&w.lastStreamReceiveAgeMs<=5000)
-            windows[name]=w;
-        }
-        if(Object.keys(windows).length){
-          continuousTradeFlow={source:continuous.source,asOf:continuous.asOf,
-            windows,missingAggregateIds:continuous.missingAggregateIds,
-            gapCount:continuous.gapCount,reconnectCount:continuous.reconnectCount};
-          availability.continuousAggTrade={available:true,windows:Object.keys(windows)};
-        }else{
-          const issues=Object.entries(continuous.windows||{})
-            .map(([name,w])=>name+":"+(w.issues||[]).join(","));
-          availability.continuousAggTrade={available:false,
-            error:"INCOMPLETE_OR_UNFRESH_STREAM_WINDOW",
-            reasons:issues.slice(0,3)};
-        }
-      }else availability.continuousAggTrade={available:false,error:continuousError};
+      if(clock()-clickReceivedAt>9000)throw Error("SIGNAL_SNAPSHOT_TOO_SLOW");
+      const availability={...market.availability};
       const filtered={};
-      for(const [section,value] of Object.entries(optional.features)){
-        const observed=value.observedAt??value.latestTradeAt??value.latestClosedAt??null;
-        if(observed!==null&&observed>snapshot.observedAt){
-          availability[section]={available:false,error:"NEWER_THAN_REFERENCE_TICK"};
-        }else filtered[section]=value;
+      for(const [k,v] of Object.entries(market.features)){
+        const observed=v.observedAt??v.lastTradeAt;
+        if(!Number.isSafeInteger(observed)||observed>reference.observedAt||
+            reference.observedAt-observed>5000)
+          availability[k]={available:false,error:"SOURCE_NOT_ASOF_REFERENCE"};
+        else filtered[k]=v;
       }
-      const enriched={source:optional.source,features:filtered,
-        available:Object.keys(filtered).length,total:optional.total};
-      lastDataProbe={checkedAt:clock(),available:enriched.available,total:enriched.total,
-        availability};
-      // Signal and reference price are frozen from ONE verified tick near the click.
-      if(clock()-receivedAt>7000)throw Error("CAPTURE_REQUEST_TOO_SLOW");
-      const session={id,clickReceivedAt,openedAt:snapshot.observedAt,
-        clickToCaptureMs:clock()-clickReceivedAt,
-        expiresAt:snapshot.observedAt+HORIZON_MS,openPrice:snapshot.price,
-        openAgeMs:snapshot.observedAgeMs,priceStructure:snapshot.priceStructure,features:snapshot.indicators,
-        rollingTenMinutes,enrichment:enriched,continuousTradeFlow,featureAvailability:availability,
-        sourceWarnings:optional.caveats,
-        featureBundleVersion:"EVENT10_PRICE_STRUCTURE_SOURCES_V6R1",
-        decisionReviewVersion:REVIEW_VERSION,decisionReview:null,compactEvidence:null,analysisArguments:null,
-        source:SOURCE,status:"ANALYZING",direction:null,
-        model,attempts:0,confidence:null,reason:null,modelFinishedAt:null,
-        thinkingRequested:true,reasoningEffort:"high",
+      const rule=evaluatePureSignal({feed,reference,
+        orderBook:filtered.orderBook,aggressiveFlow:filtered.aggressiveFlow});
+      lastCheck={id,checkedAt:clock(),openedAt:reference.observedAt,
+        openPrice:reference.price,expiresAt:reference.observedAt+HORIZON_MS,
+        ...rule,featureAvailability:availability};
+      lastDataProbe={checkedAt:clock(),available:Object.keys(filtered).length,
+        total:market.total,availability};
+      if(!rule.direction)return lastCheck; // Missing ANY mandatory gate = no signal, no prediction record.
+      const session={id,clickReceivedAt,openedAt:reference.observedAt,
+        clickToCaptureMs:clock()-clickReceivedAt,expiresAt:reference.observedAt+HORIZON_MS,
+        openPrice:reference.price,openAgeMs:reference.observedAgeMs,
+        priceStructure:null,features:reference.indicators,
+        rollingTenMinutes:tenMinuteWindow(feed,reference.observedAt),
+        enrichment:{source:market.source,features:filtered,
+          available:Object.keys(filtered).length,total:market.total},
+        featureAvailability:availability,sourceWarnings:market.caveats,
+        featureBundleVersion:RULE_VERSION,decisionReviewVersion:RULE_VERSION,
+        decisionReview:null,compactEvidence:null,analysisArguments:null,
+        source:SOURCE,status:"PREDICTED",direction:rule.direction,
+        ruleChecks:rule,signalCycleStartMs:rule.cycleStartAt,
+        model:"PURE_RULES_V1",attempts:0,confidence:null,reason:rule.reason,
+        modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
+        thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
         closePrice:null,closeObservedAt:null,expirySampleLagMs:null,
         proxyOutcome:null,proxyHit:null,returnPct:null,
         officialEventOutcome:null,officialEventHit:null,
         realOrderPlaced:false,error:null};
-      session.compactEvidence=compactEvidence(session);
-      session.decisionReview=buildDecisionReview(session);
       history.push(session);
       if(history.length>500)history.splice(0,history.length-500);
-      persist();
-      void analyze(session).catch(e=>{
-        session.status="FAILED";session.direction=null;
-        session.error="UNEXPECTED_MODEL_FAILURE: "+String(e?.message||e).slice(0,120);
-        try{persist();}catch{}
-      });
-      return session;
+      persist();return session;
     }catch(e){lastError=String(e?.message||e).slice(0,160);throw e;}
     finally{busyStart=false;}
   }
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
+    // Automatically scan only the first 3 minutes of each aligned UTC 10m block.
+    // No forced direction, no exchange order; at most one accepted signal per block.
+    const nowMs=clock(),cycle=nowMs-Math.floor(nowMs%HORIZON_MS);
+    if(nowMs-cycle<180000&&nowMs-lastRuleScan>=12000&&!busyStart&&
+        !history.some(x=>x.signalCycleStartMs===cycle&&x.direction)&&
+        !history.some(x=>x.status==="PREDICTED"&&x.expiresAt>nowMs)){
+      lastRuleScan=nowMs;
+      void start("auto-rule-"+cycle).catch(e=>{
+        lastError="AUTO_SCAN_"+String(e?.message||e).slice(0,100);
+      });
+    }
     const expiring=history.filter(h=>
       h.status==="PREDICTED" && h.proxyHit===null && h.proxyOutcome===null &&
       clock()>=h.expiresAt && !h.settlementStatus);
@@ -409,7 +282,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   }
   async function probe(){
     // Read-only diagnostics: no session creation and no DeepSeek/model API request.
-    const d=await collectPublicFeatures({fetcher,now:clock});
+    const d=await collectRuleFeatures({fetcher,now:clock});
     lastDataProbe={checkedAt:clock(),available:d.available,total:d.total,
       availability:d.availability};
     return {ok:true,...lastDataProbe,source:d.source,

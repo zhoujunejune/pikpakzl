@@ -67,26 +67,57 @@ assert s.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1'
 assert g.get('automaticTradeEligibility',{}).get('eligible') is False
 print('GUARDIAN_RISK_STAGING_PREFLIGHT=true')
 PY
-for f in risk-worker.mjs risk-runner.mjs guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
+for f in guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
  curl -fsSL --retry 2 --max-time 25 \
   "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$SHA/railway-diagnostic/$f" -o "$STAGE/$f"
  "$NODE" --check "$STAGE/$f"
 done
-for f in risk-worker.mjs risk-runner.mjs;do
- curl -fsSL --retry 2 --max-time 25 \
-  "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$OLD/railway-diagnostic/$f" -o "$STAGE/$f.old"
- if ! cmp -s "$STAGE/$f.old" "$BASE/$f";then
-  echo "GUARDIAN_RISK_SOURCE_DRIFT_ABORT=$f"
-  diff -u "$STAGE/$f.old" "$BASE/$f" | head -n 75 || true
-  exit 31
- fi
-done
-for f in risk-worker.mjs risk-runner.mjs guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
+# Do not replace the live risk worker: it contains independent unknown-SELL
+# reconciliation and mobile optimizations not present in the GitHub baseline.
+# Patch only precisely identified Guardian hooks, preserving all live logic.
+python3 - "$BASE/risk-worker.mjs" "$STAGE/risk-worker.mjs" <<'PY'
+from pathlib import Path
+import sys
+src=Path(sys.argv[1]).read_text()
+assert 'guardianRiskQuote' not in src,'GUARDIAN_RISK_ALREADY_WIRED_ABORT'
+def rep(a,b,n=1):
+ global src
+ got=src.count(a)
+ assert got==n,('GUARDIAN_PATCH_ANCHOR_MISMATCH',a[:90],got,n)
+ src=src.replace(a,b)
+rep("import fs from 'node:fs';",
+    "import fs from 'node:fs';\nimport {GUARDIAN_RISK_ENABLED,guardianRiskQuote,guardianRiskHeartbeat} from './guardian-risk-integration.mjs';")
+rep("function quoteTooCloseToExpiry(quote) {",
+    "// GUARDIAN_DYNAMIC_EXIT_REAL_QUOTE: all other positions retain old risk.\n"
+    "function evaluatePositionRisk(position,targets,quote){\n"
+    "  const guardian=guardianRiskQuote({tokenId:targets.tokenId,\n"
+    "    cost:targets.totalCost,current:weiToDecimal(quote?.amountOut)});\n"
+    "  return guardian??evaluateRisk(targets,quote);\n"
+    "}\nfunction quoteTooCloseToExpiry(quote) {")
+rep("evaluateRisk(targets, quoteResult.quote)",
+    "evaluatePositionRisk(position,targets,quoteResult.quote)",2)
+rep("  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED) || workerBusy) return;",
+    "  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED && !GUARDIAN_RISK_ENABLED) || workerBusy) return;")
+rep("    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;",
+    "    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;\n"
+    "    guardianRiskHeartbeat(true);")
+rep("    log('risk_tick_exception', { error: e?.message || String(e) });",
+    "    try{guardianRiskHeartbeat(false)}catch{}\n"
+    "    log('risk_tick_exception', { error: e?.message || String(e) });")
+rep("const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;",
+    "const targetAmount = evaluation.dynamic ? evaluation.targetAmount :\n"
+    "      (evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget);",2)
+rep("  scope: SCOPE,","  scope: SCOPE,\n  guardianDynamicExitEnabled:GUARDIAN_RISK_ENABLED,")
+Path(sys.argv[2]).write_text(src)
+print('GUARDIAN_LIVE_ADVANCED_SELL_RETRY_PRESERVED=true')
+PY
+"$NODE" --check "$STAGE/risk-worker.mjs"
+for f in risk-worker.mjs guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
  if test -f "$BASE/$f";then cp -p "$BASE/$f" "$BACK/$f";else touch "$BACK/$f.absent";fi
 done
 rollback(){
  echo GUARDIAN_RISK_ROLLBACK_STARTED=true
- for f in risk-worker.mjs risk-runner.mjs guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
+ for f in risk-worker.mjs guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
   if test -f "$BACK/$f";then cp -p "$BACK/$f" "$BASE/$f"
   elif test -f "$BACK/$f.absent";then rm -f "$BASE/$f";fi
  done
@@ -94,7 +125,7 @@ rollback(){
  echo GUARDIAN_RISK_ROLLBACK_COMPLETE=true
 }
 trap rollback ERR
-for f in risk-worker.mjs risk-runner.mjs guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
+for f in risk-worker.mjs guardian-risk-integration.mjs guardian-dynamic-exit.mjs;do
  cp "$STAGE/$f" "$BASE/$f"
  chown "$(stat -c %u "$BACK/risk-worker.mjs")":"$(stat -c %g "$BACK/risk-worker.mjs")" "$BASE/$f"
  chmod 0644 "$BASE/$f"

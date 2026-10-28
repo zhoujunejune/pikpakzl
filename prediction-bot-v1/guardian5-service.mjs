@@ -134,6 +134,7 @@ async function tick(){
   const m=await jsonGet(FEED,6500);
   const f=extractFeatures(m,Date.now());
   local.feedAt=f.observedAt;
+  local.error=null; // Clear a previous boundary mismatch once the current round's feed is valid.
   if(local.records.some(x=>x.round===r)){
    local.latest={direction:'OBSERVED',round:r,reason:'本轮已记录一次AI信号；不重复追单'};
    return;
@@ -167,8 +168,16 @@ async function tick(){
    tradeEligible:false,risk:'无预测市场真实报价与校准，不执行实盘'};
   local.error=null;
  }catch(e){
-  local.error=String(e?.message||e).slice(0,140);
-  local.latest={direction:'WAIT',round:roundOf(Date.now()),reason:'输入/模型错误，安全跳过：'+local.error};
+  const reason=String(e?.message||e).slice(0,140);
+  if(reason==='BTC_ROUND_MISMATCH'){
+   // On a 5m boundary the spot publisher may still advertise the previous round.
+   // A stale reference is never traded; retry with the next observed sample.
+   local.error=null;
+   local.latest={direction:'WAIT',round:roundOf(Date.now()),reason:'轮次切换中：等待实时行情与新轮次对齐'};
+  }else{
+   local.error=reason;
+   local.latest={direction:'WAIT',round:roundOf(Date.now()),reason:'输入/模型错误，安全跳过：'+reason};
+  }
  }finally{local.busy=false}
 }
 const HTML=String.raw`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GUARDIAN · 5分钟策略研究</title><style>

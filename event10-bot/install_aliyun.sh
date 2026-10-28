@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 test "$(id -u)" -eq 0
 [[ "$APP_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 2
-test "$(systemctl is-active zl-prediction-deepseek5)" = active
+# EVENT10 has an independent lifecycle: the retired 5-minute DeepSeek service
+# need not run. Its existing secret file and runtime remain prerequisites.
 test -f /etc/zl-prediction/deepseek5.env
 node=/opt/zl-prediction-node/bin/node
 test -x "$node"

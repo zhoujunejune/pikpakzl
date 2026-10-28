@@ -371,6 +371,16 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   };
   if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
 
+  if(p.signalModelChoice===GUARDIAN_ID) {
+    try {guardianRegisterIntent({round:p.round,tokenId:p._internal?.outcome?.tokenId});}
+    catch(e){
+      p.state='GUARDIAN_RISK_REGISTRY_UNAVAILABLE';
+      p.error='GUARDIAN动态风控登记失败，禁止创建不受保护的仓位';
+      console.error(JSON.stringify({event:'guardian_registry_preflight_failed',round:p.round,
+        reason:String(e?.message||e).slice(0,100)}));
+      return {status:503,body:{ok:false,error:p.error}};
+    }
+  }
   const startedAt = new Date().toISOString();
   let orderPostClaim;
   try {
@@ -608,6 +618,15 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     return { status: 502, body: { ok: false, error: p.error } };
   }
 
+  if(p.signalModelChoice===GUARDIAN_ID) {
+    try{guardianMarkSubmitted({round:p.round,tokenId:p._internal?.outcome?.tokenId},orderId);}
+    catch(e){
+      // The exchange accepted the BUY; never retry, and halt future entries.
+      enabled=false;autoConfirmHalted=true;
+      console.error(JSON.stringify({event:'guardian_exit_registration_failed_after_real_buy',
+        orderId:String(orderId),round:p.round,reason:String(e?.message||e).slice(0,100)}));
+    }
+  }
   submittedRounds.add(String(p.round));
   try{await closeOrderSubmitRound(p.round,'SUBMITTED');}
   catch(error){console.log(JSON.stringify({event:'order_submitted_fence_failed',

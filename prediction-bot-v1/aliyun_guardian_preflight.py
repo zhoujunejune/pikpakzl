@@ -11,7 +11,7 @@ import json,urllib.request,subprocess,os,re
 def get(port,path):
  try:
   with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,path),timeout=7) as r:return json.load(r)
- except Exception as ex:print('GUARDIAN_ENDPOINT_ERROR',port,type(ex).__name__);return {}
+ except Exception as ex:print('GUARDIAN_ENDPOINT_ERROR',port,type(ex).__name__);return {'error':str(getattr(ex,'code','NETWORK_ERROR'))}
 for port,path in [(13001,'/api/status'),(13001,'/api/order-signal-model'),(13003,'/api/shadow-market-data'),(13002,'/api/round-stats'),(13004,'/healthz'),(13005,'/healthz')]:
  d=get(port,path)
  print('GUARDIAN_API',port,path,'ok',d.get('ok'),'keys',sorted(d.keys())[:35])

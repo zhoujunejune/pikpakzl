@@ -156,3 +156,41 @@ export function evaluatePureSignal({feed,reference,orderBook=null,aggressiveFlow
     }
   };
 }
+
+
+// Collect only the two market-data families required by the rule.
+// A missing source is an explicit failed gate, never a fabricated signal.
+export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=3000}={}){
+ const endpoints=[
+  ["orderBook","https://fapi.binance.com/fapi/v1/depth?symbol=BTCUSDT&limit=5",parseTop5Depth],
+  ["aggressiveFlow","https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT&limit=1000",parseAggressiveStreak]
+ ];
+ const results=await Promise.all(endpoints.map(async([name,url,parser])=>{
+   try{
+     const response=await fetcher(url,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeoutMs)});
+     if(!response.ok)throw Error("HTTP_"+response.status);
+     const data=await response.json(),receivedAt=now();
+     return {name,ok:true,value:parser(data,receivedAt),receivedAt};
+   }catch(e){
+     const raw=String(e?.message||e).slice(0,80);
+     const error=/HTTP_451/.test(raw)?"REGION_RESTRICTED_451":
+       /HTTP_418/.test(raw)?"IP_BLOCK_418":
+       /HTTP_\d+/.test(raw)?raw:
+       /Abort|timeout/i.test(raw)?"TIMEOUT":raw;
+     return {name,ok:false,error};
+   }
+ }));
+ const features={},availability={};
+ for(const row of results){
+   availability[row.name]=row.ok?{available:true,receivedAt:row.receivedAt}:
+     {available:false,error:row.error};
+   if(row.ok)features[row.name]=row.value;
+ }
+ return {source:"BINANCE_USDM_PUBLIC_DEPTH_AND_AGGTRADES_NOT_EVENT_INDEX",
+   available:results.filter(x=>x.ok).length,total:results.length,
+   features,availability,caveats:[
+     "订单簿取 BTCUSDT USD-M 永续合约前5档数量，K线与参考价格来自现有BTC公开现货源，市场口径不同。",
+     "只在数据有效且采样早于参考价格时使用，不可用时不臆造。",
+     "仅输出信号，不提供币安事件合约下单或官方结算。"
+   ]};
+}

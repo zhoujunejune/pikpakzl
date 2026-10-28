@@ -27,7 +27,7 @@ jobs:
           bash -n event10-bot/install_aliyun.sh event10-bot/restore_frontend.sh event10-bot/install_current_routes.sh
           python -m py_compile event10-bot/frontend_nav.py
           node --check event10-bot/server.mjs
-          node --test event10-bot/ui-layout.test.mjs event10-bot/server.test.mjs
+          node --test event10-bot/pure-signal.test.mjs
           python - <<'PYTEST'
           import importlib.util
           spec=importlib.util.spec_from_file_location('event10_nav','event10-bot/frontend_nav.py')
@@ -58,6 +58,45 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python futures-research-panel/aliyun_nav_deploy.py
+      - name: Verify strict EVENT10 pure-rule signal production without orders
+        if: contains(github.event.head_commit.message, '[EVENT10-RULE-SWITCH]')
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,json,base64,urllib.request,urllib.error
+          host='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def query(path,authenticated=True):
+              headers={'Cache-Control':'no-store'}
+              if authenticated:headers['Authorization']=auth
+              return urllib.request.urlopen(urllib.request.Request(host+path,headers=headers),timeout=18)
+          try:
+              query('/event10/',False)
+              raise AssertionError('EVENT10_ANONYMOUS_ALLOWED')
+          except urllib.error.HTTPError as exc:assert exc.code==401
+          with query('/event10/api/status') as r: state=json.load(r)
+          assert state['bot']=='EVENT10' and state['ok']
+          assert state['providerModel']=='PURE_RULES_V1'
+          assert state['decisionReviewVersion']=='EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029'
+          assert state['thinkingMode']=='disabled' and state['modelCalls']==0
+          assert state['autoSignalEnabled'] is True
+          assert state['autoTradingEnabled'] is False and state['executionAvailable'] is False
+          assert state['strategyStats']['proxySettled']>=0
+          with query('/event10/') as r:page=r.read().decode('utf8')
+          assert 'BTC 10分钟事件合约 · 纯信号' in page
+          assert '立即检测五项条件' in page
+          assert 'EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029' in page
+          with query('/event10/api/history') as r:history=json.load(r)
+          assert history['ok'] and isinstance(history['records'],list)
+          with query('/') as r:home=r.read().decode('utf8')
+          assert '5分钟 API 实盘确认控制台' in home
+          assert '十分钟事件合约' in home
+          print('EVENT10_PURE_RULES_VERIFIED=true')
+          print('EVENT10_FIVE_MINUTE_PANEL_PRESERVED=true')
+          print('EVENT10_HISTORY_RECORDS_VISIBLE='+str(len(history['records'])))
+          print('EVENT10_LIVE_AUTOTRADING_DISABLED=true')
+          PY
       - name: Verify restored EVENT10 route, existing five-minute dashboard, and login
         if: contains(github.event.head_commit.message, '[EVENT10-FRONTEND-RESTORE]')
         env:
@@ -99,7 +138,7 @@ jobs:
           print('EVENT10_NO_REAL_ORDERS=true')
           PY
       - name: Check both actual authenticated UIs, three-way navigation and original controls
-        if: ${{ !contains(github.event.head_commit.message, '[EVENT10-FRONTEND-RESTORE]') }}
+        if: ${{ !contains(github.event.head_commit.message, '[EVENT10-FRONTEND-RESTORE]') && !contains(github.event.head_commit.message, '[EVENT10-RULE-SWITCH]') }}
         env:
           ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
         run: |

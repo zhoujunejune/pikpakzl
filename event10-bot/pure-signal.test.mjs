@@ -109,3 +109,58 @@ test("failed REST availability is transparent and no hidden AI call",async()=>{
  assert.equal(engine.status().lastCheck.signal,"NO_SIGNAL");
  assert.equal(fs.existsSync(stateFile),false);
 });
+
+
+test("manual click during an automatic first-3m scan shares the result without duplicate capture",async()=>{
+ const stateFile=path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-coalesce-")),"history.json");
+ let resume,requests=0,feedCalls=0;
+ const gate=new Promise(resolve=>{resume=resolve;});
+ const engine=createEngine({clock:()=>NOW,env:{EVENT10_STATE_FILE:stateFile},
+  fetcher:async(url)=>{
+   if(url.startsWith("https://fapi.binance.com/")){
+    requests++;await gate;return {ok:false,status:451};
+   }
+   if(url.includes("shadow-market-data")){
+    feedCalls++;return {ok:true,status:200,json:async()=>fixture("UP")};
+   }
+   throw Error("UNEXPECTED_EXTERNAL_CALL");
+  }});
+ await engine.tick(); // starts auto scan in background
+ assert.equal(engine.status().busyStart,true);
+ const manual=engine.start("manual-concurrent-click-0001");
+ assert.equal(engine.status().busyStart,true);
+ resume();
+ const result=await manual;
+ assert.equal(result.status,"NO_SIGNAL");
+ assert.equal(result.id,"auto-rule-"+NOW);
+ assert.equal(engine.status().busyStart,false);
+ assert.equal(engine.status().lastCheck.status,"NO_SIGNAL");
+ assert.equal(engine.status().lastError,null);
+ assert.equal(requests,2); // ONE pair of depth + trades, not two scans
+ assert.equal(feedCalls,1);
+ assert.equal(engine.status().stats.total,0);
+});
+test("manual retry during an existing valid ten-minute signal reuses that session",async()=>{
+ const stateFile=path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-existing-")),"history.json");
+ let restCalls=0,feedCalls=0;
+ const engine=createEngine({clock:()=>NOW,env:{EVENT10_STATE_FILE:stateFile},
+  fetcher:async url=>{
+   if(url.includes("/fapi/v1/depth")){
+    restCalls++;return {ok:true,status:200,json:async()=>rawBook(true)};
+   }
+   if(url.includes("/fapi/v1/aggTrades")){
+    restCalls++;return {ok:false,status:451};
+   }
+   if(url.includes("shadow-market-data")){
+    feedCalls++;return {ok:true,status:200,json:async()=>fixture("UP")};
+   }
+   throw Error("UNEXPECTED_EXTERNAL_CALL");
+  }});
+ const first=await engine.start("manual-first-success-0001");
+ assert.equal(first.status,"PREDICTED");
+ const second=await engine.start("manual-second-click-0001");
+ assert.equal(second.id,first.id);
+ assert.equal(engine.status().stats.total,1);
+ assert.equal(restCalls,2);
+ assert.equal(feedCalls,1);
+});

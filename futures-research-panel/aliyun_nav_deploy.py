@@ -112,6 +112,22 @@ try:
  print('PRED_HTML_LINKS='+str(re.findall(r'<a[^>]+href=["\\x27]([^"\\x27]+)',page,re.I)[:15]))
 except Exception as exc:print('PRED_HTML_ERROR='+type(exc).__name__)
 PYREAD2
+for port in 13003 13049 13018; do
+  for path in /healthz /api/shadow-market-data /api/market /api/status; do
+    code=$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' "http://127.0.0.1:$port$path" || true)
+    echo "FEED_PORT=$port PATH=$path CODE=$code"
+  done
+done
+echo "UNIT=zl-prediction-deepseek5 state=$(systemctl is-active zl-prediction-deepseek5 2>/dev/null || true)"
+python3 - <<'PYDATA'
+import urllib.request,json
+try:
+ with urllib.request.urlopen('http://127.0.0.1:13003/api/shadow-market-data',timeout=4) as r:x=json.load(r)
+ print('FEED_TOP_KEYS='+','.join(sorted(x.keys())[:25]))
+ for k in ('source','updatedAt','timestamp','symbol','ok','valid','price'):
+  print('FEED_FIELD_'+k+'='+str(x.get(k))[:90])
+except Exception as e:print('FEED_ERROR='+type(e).__name__)
+PYDATA
 echo EVENT10_RESTORE_READONLY_DIAG_DONE=true
 """
     elif restore_event10:

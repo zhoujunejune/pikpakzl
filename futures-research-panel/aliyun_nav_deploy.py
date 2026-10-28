@@ -55,7 +55,84 @@ bash "$s"
     rule_switch=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
                  "[EVENT10-RULE-SWITCH]" in
                  str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
-    if rule_switch:
+    diag_signals=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
+                  "[EVENT10-SIGNAL-DIAG]" in
+                  str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
+    if diag_signals:
+        # Diagnostic only: no code deploy, no process restart, no order placement.
+        cmd="""#!/bin/bash
+set -u
+echo EVENT10_SIGNAL_DIAG_BEGIN=true
+for unit in zl-event10-deepseek zl-event10-trade-stream zl-prediction-trade;do
+ echo "SERVICE_$unit=$(systemctl is-active "$unit" 2>/dev/null || true)"
+done
+python3 - <<'PYSIGNALDIAG'
+import json,urllib.request,urllib.error,datetime,time
+base='http://127.0.0.1:13020'
+def get(path,timeout=5):
+ try:
+  with urllib.request.urlopen(base+path,timeout=timeout) as r:
+   return json.load(r),r.status
+ except urllib.error.HTTPError as exc:return {},exc.code
+ except Exception as exc:
+  print('API_ERROR',path,type(exc).__name__)
+  return {},None
+now=int(time.time()*1000)
+def dt(t):
+ if not isinstance(t,(float,int)) or t<=0:return None
+ return datetime.datetime.fromtimestamp(t/1000,datetime.timezone.utc).isoformat()
+d,sc=get('/api/status')
+print('STATUS_HTTP',sc,'utcNow',dt(now))
+for k in ('ok','providerModel','autoSignalEnabled','autoTradingEnabled','configured',
+          'busyStart','busySettle','lastError','decisionReviewVersion'):
+ print('STATUS',k,str(d.get(k))[:140])
+print('STRATEGY_STATS',json.dumps(d.get('strategyStats',{}),ensure_ascii=False))
+print('ALL_HISTORY_STATS',json.dumps(d.get('stats',{}),ensure_ascii=False))
+c=d.get('lastCheck') or {}
+print('LAST_CHECK_TIME',dt(c.get('checkedAt')),'ageSec',round((now-c['checkedAt'])/1000,2) if isinstance(c.get('checkedAt'),(int,float)) else None)
+for k in ('status','direction','signal','error','reason','checkLatencyMs'):
+ print('LAST_CHECK',k,str(c.get(k))[:230])
+print('LAST_CHECK_UP',json.dumps(c.get('upChecks',{}),ensure_ascii=False))
+print('LAST_CHECK_DOWN',json.dumps(c.get('downChecks',{}),ensure_ascii=False))
+e=c.get('evidence') or {}
+for k in ('volumeRatio','rsi14','bookEvidenceAvailable','aggressiveBuyConfirmed',
+          'bidTop5QtyBtc','askTop5QtyBtc'):
+ print('LAST_CHECK_EVIDENCE',k,str(e.get(k))[:60])
+print('LAST_CHECK_AVAILABILITY',json.dumps(c.get('featureAvailability',{}),ensure_ascii=False)[:800])
+print('LAST_PROBE',json.dumps(d.get('lastDataProbe',{}),ensure_ascii=False)[:850])
+h,hs=get('/api/signals?limit=1&offset=0')
+print('SIGNALS_HTTP',hs,'TOTAL',h.get('total'),'LATEST_AT',dt(((h.get('records') or [{}])[0]).get('openedAt')))
+probe,ps=get('/api/data-health',7)
+print('PROBE_HTTP',ps)
+print('PROBE_AVAILABILITY',json.dumps(probe.get('availability',{}),ensure_ascii=False)[:900])
+for url in ['http://127.0.0.1:13003/api/shadow-market-data','http://127.0.0.1:13021/api/health']:
+ try:
+  with urllib.request.urlopen(url,timeout=5) as r: f=json.load(r)
+  if '13003' in url:
+   print('FEED',f.get('source'),f.get('symbol'),'ok',f.get('ok'),'readOnly',f.get('readOnly'))
+   recent=f.get('latest') or {}
+   print('FEED_TICK',dt(recent.get('eventMs')),'tickAgeMs',now-recent.get('eventMs') if isinstance(recent.get('eventMs'),(int,float)) else None)
+   for interval in ('1m','5m'):
+    raw=(f.get('candles') or {}).get(interval) or []
+    bars=raw if isinstance(raw,list) else (raw.get('rows') or raw.get('items') or raw.get('candles') or [])
+    print('FEED_CANDLES',interval,'rows',len(bars),'closed',sum(x.get('closed')==True for x in bars),'latestClosed',dt(max([int(x.get('startMs',x.get('openTime',0))) for x in bars if x.get('closed')==True],default=0)))
+  else:
+   print('STREAM_CONNECTED',f.get('connected'),'STREAM_LATENCY',f.get('lastEventLatencyMs'),'STREAM_ERRORS',str(f.get('lastError'))[:160])
+ except Exception as e:print('READONLY_SOURCE_ERROR',url.split(':')[-1].split('/')[0],type(e).__name__)
+for name,url in [
+ ('BINANCE_USDM_DEPTH','https://fapi.binance.com/fapi/v1/depth?symbol=BTCUSDT&limit=5'),
+ ('BINANCE_USDM_AGGTRADES','https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT&limit=10'),
+ ('BINANCE_SPOT_DEPTH','https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=5')]:
+ try:
+  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'EVENT10-read-only-health'}),timeout=6) as res:
+   value=json.load(res)
+   print('EXTERNAL',name,'HTTP',res.status,'SHAPE_OK',bool(value.get('bids')) if 'DEPTH' in name else isinstance(value,list))
+ except urllib.error.HTTPError as e:print('EXTERNAL',name,'HTTP',e.code)
+ except Exception as e:print('EXTERNAL',name,'ERROR',type(e).__name__)
+print('EVENT10_SIGNAL_DIAG_END=true')
+PYSIGNALDIAG
+"""
+    elif rule_switch:
         # Strict EMA9/EMA21, volume >=1.3, top5 orderbook, RSI; all gates required.
         # Coalesce manual clicks with the concurrent scheduled read-only scan.
         # Fast terminal UI results; independent live-status poll and limited external fetch waits.

@@ -62,7 +62,9 @@ def patch(name,src,css):
 def validate(name,src):
  # source single has one V2 style literal and one V2 idempotency check;
  # both event/dual have literal inserted markup.
- need=2 if name=="single" else 1
+ # JSON encoding of the JS style string escapes HTML attribute quotes;
+ # the raw token in the single source comes from its idempotency condition.
+ need=1
  if src.count('id="zl-mintech-v2"')!=need:
   raise ValueError("V2_STYLE_NOT_PRESENT_OR_DUPLICATED_"+name)
  if name=="single":

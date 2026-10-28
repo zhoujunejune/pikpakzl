@@ -15,9 +15,11 @@ const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.en
 const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
 const SELECTIVE30_ORDER_DEADLINE_MS = 30000; // New qualified Selective V2 + Edge 30-second policy only.
 const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
+const GUARDIAN_ORDER_DEADLINE_MS = 275000; // Always leave at least 25s before the five-minute settlement.
 const EDGE_ORDER_DEADLINE_MS = 8000; // Edge model strictly ends at T+8 seconds.
 function orderSubmitDeadlineForModel(model) {
-  return model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :
+  return model === GUARDIAN_ID ? GUARDIAN_ORDER_DEADLINE_MS :
+    model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :
     model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS :
     model === EDGE_MODEL ? EDGE_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
 }
@@ -222,6 +224,27 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     p.quoteChance=quotePrice;
     p.edge=buyProbability===null?null:Number((buyProbability-quotePrice-cost).toFixed(6));
     // Non-calibrated models remain explicitly uncalibrated; do not imply 75% accuracy.
+  }
+
+  // GUARDIAN live orders require a real Binance executable quote AND a
+  // conservative forward-calibrated edge. This cannot be bypassed by the
+  // global legacy EV_FILTER_ENABLED=false setting.
+  if (p.signalModelChoice===GUARDIAN_ID) {
+    const decision=guardianQuoteGate(current,quote,{
+      feeBuffer:Number(process.env.GUARDIAN_FEE_BUFFER||0.01),
+      slippageBuffer:Number(process.env.GUARDIAN_SLIPPAGE_BUFFER||0.005),
+      now:Date.now()
+    });
+    if(!decision.ok) {
+      p.state=isAuto?'AUTO_FAILED':'READY';
+      p.blockReason=decision.reason;
+      p.error='GUARDIAN真实报价/独立校准/预期收益条件未通过，禁止下单';
+      console.log(JSON.stringify({event:'guardian_quote_gate_blocked',
+        round:p.round,reason:decision.reason,edge:decision.edge??null,
+        calibrationSamples:current?.calibrationSamples??0}));
+      return {status:409,body:{ok:false,error:p.error,reason:decision.reason}};
+    }
+    p.edge=decision.edge;
   }
 
   if (EV_FILTER_ENABLED) {

@@ -23,6 +23,7 @@ jobs:
           from alibabacloud_swas_open20200601.client import Client
           from alibabacloud_swas_open20200601 import models as sw
           from alibabacloud_tea_openapi import models as api
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
           for start,end in [(174,235),(355,416),(417,479),(480,543),(544,637)]:
               script=("#!/bin/bash\nset -Eeuo pipefail\npython3 - <<'SCAN'\n"
               +"from pathlib import Path\nimport re\np=Path('/opt/zl-prediction-dual5/binance_dual5_pairs.mjs')\n"

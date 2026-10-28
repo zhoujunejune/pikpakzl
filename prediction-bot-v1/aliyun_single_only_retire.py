@@ -10,7 +10,7 @@ SCRIPT=r"""#!/bin/bash
 set -Eeuo pipefail
 test "$(id -u)" -eq 0
 export LC_ALL=C.UTF-8
-ARCHIVE=/var/backups/zl-retired-bots-20261028
+ARCHIVE=/var/backups/zl-retired-bots-$(date -u +%Y%m%dT%H%M%SZ)
 CADDY=/etc/caddy/Caddyfile
 PANEL=/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs
 NODE=/opt/zl-prediction-node/bin/node
@@ -69,7 +69,8 @@ mainhost='47-237-188-69.sslip.io'
 predhost='prediction.47-237-188-69.sslip.io'
 main=site(mainhost); pred=site(predhost)
 assert src.count(mainhost+' {')==1 and src.count(predhost+' {')==1,'AMBIGUOUS_SITES'
-leftover=src.replace(main,'',1).replace(pred,'',1)\nassert all(not z.strip() or z.lstrip().startswith('#') for z in leftover.splitlines()),'UNKNOWN_OTHER_CADDY_CONFIG_ABORT'
+leftover=src.replace(main,'',1).replace(pred,'',1)
+assert all(not z.strip() or z.lstrip().startswith('#') for z in leftover.splitlines()),'UNKNOWN_OTHER_CADDY_CONFIG_ABORT'
 authmain=snippet(main,r'(?m)^\s*basic_auth\s*\{')
 authpred=snippet(pred,r'(?m)^\s*basic_auth\s*\{')
 apiroute=snippet(pred,r'(?m)^\s*handle_path /api-keys/\*\s*\{')

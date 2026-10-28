@@ -37,10 +37,13 @@ def repair(src: str) -> str:
             raise ValueError("INCOMPLETE_BROKEN_V2_GUARD_"+expected[:16])
     rows[index] = broken.replace(r"\n", "\n")
     fixed = "".join(rows)
-    old_gate = "  if(!config.armed||config.blocked||config.lastOrderRound===round)return;"
-    if fixed.count(old_gate) != 1:
+    # Existing production source uses one leading space; do not rely on indentation.
+    gate_pattern=r"^[ \\t]*if\\(!config\\.armed\\|\\|config\\.blocked\\|\\|config\\.lastOrderRound===round\\)return;$"
+    matches=list(re.finditer(gate_pattern,fixed,re.M))
+    if len(matches)!=1:
         raise ValueError("SUBMIT_ENTRY_ANCHOR_NOT_UNIQUE")
-    fixed = fixed.replace(old_gate, old_gate + "\n" + GUARD.rstrip("\n"), 1)
+    anchor=matches[0].group(0)
+    fixed = fixed.replace(anchor, anchor + "\\n" + GUARD.rstrip("\\n"), 1)
     verify(fixed)
     return fixed
 

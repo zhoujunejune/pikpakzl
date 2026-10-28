@@ -46,7 +46,23 @@ bash "$s"
     ui_only=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
              "[EVENT10-CONFIDENCE-UI-ONLY]" in
              str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
-    if ui_only:
+    restore_event10=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
+                     "[EVENT10-FRONTEND-RESTORE]" in
+                     str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
+    if restore_event10:
+        # Restore only EVENT10's existing frontend/navigation, not any other trading worker.
+        # Install independent EVENT10 files only when the old service is genuinely absent.
+        cmd=f"""#!/bin/bash
+set -Eeuo pipefail
+script=$(mktemp /tmp/zl-event10-restore.XXXXXXXX)
+trap 'rm -f "$script"' EXIT
+curl -fsSL --retry 3 --max-time 25 \
+  https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/restore_frontend.sh -o "$script"
+bash -n "$script"
+export APP_SHA={sha}
+bash "$script"
+"""
+    elif ui_only:
         # Only replace the cached EVENT10 HTML view, never deploy model files.
         # The web server reads panel.html at startup, so ONLY this service is restarted.
         cmd="""#!/bin/bash

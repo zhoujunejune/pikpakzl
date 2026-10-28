@@ -52,20 +52,20 @@ x=x[:start]+("export const ORDER_SIGNAL_MODELS=Object.freeze([\n"
  "]);")+x[end:]
 old='const saved=JSON.parse(raw);'
 assert x.count(old)==1,'CHOICE_MIGRATION_ANCHOR_NOT_UNIQUE'
-migration="""const saved=JSON.parse(raw);
+migration='''const saved=JSON.parse(raw);
    if(saved.model!==GUARDIAN_MODEL){
      const migrated=JSON.stringify({model:GUARDIAN_MODEL,revision:crypto.randomUUID(),
        updatedAt:new Date().toISOString(),effectiveAfterRound:roundOf(Date.now())});
      const result=await redis.eval(CAS,{keys:[MODEL_CHOICE_KEY],arguments:[raw,migrated]});
      raw=result==='OK'?migrated:await redis.get(MODEL_CHOICE_KEY);
    }
-"""
+'''
 x=x.replace(old,migration,1)
 y=engine.read_text()
 anchor='if(!selectionPermitsRound(round,choice))return null;'
 assert y.count(anchor)==1,'TRADE_ROUTING_ANCHOR_NOT_UNIQUE'
 if 'GUARDIAN_PRODUCTION_SINGLE_SOURCE_V1' not in y:
- insert="""// GUARDIAN_PRODUCTION_SINGLE_SOURCE_V1: sole selected model.
+ insert='''// GUARDIAN_PRODUCTION_SINGLE_SOURCE_V1: sole selected model.
   // Do not convert subjective AI direction into an order. Until the
   // market-specific official price, *executable* BUY quote, calibrated
   // out-of-sample probability and SELL exit logic are integrated, WAIT.
@@ -82,7 +82,7 @@ if 'GUARDIAN_PRODUCTION_SINGLE_SOURCE_V1' not in y:
     }catch(err){console.error('GUARDIAN_ANALYSIS_UNAVAILABLE',String(err?.message||err).slice(0,90))}
     return null;
   }
-"""
+'''
  y=y.replace(anchor,anchor+'\n  '+insert,1)
 for p,s in [(choice,x),(engine,y)]:
  stage=p.with_name(p.name+'.guardian-prod.stage')

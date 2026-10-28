@@ -4,7 +4,7 @@ import fs from "node:fs";import os from "node:os";import path from "node:path";
 import {evaluatePureSignal,parseTop5Depth,parseAggressiveStreak,
   collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
 import {createEngine} from "./manual-engine.mjs";
-const NOW=Date.parse("2026-10-29T08:00:00Z"),TICK=NOW-1000;
+const NOW=Date.parse("2026-10-29T08:01:00Z"),TICK=NOW-1000;
 function candles(ms,side){
  const end=Math.floor(TICK/ms)*ms;
  return Array.from({length:100},(_,i)=>{
@@ -74,7 +74,7 @@ test("a genuine recent streak of three aggressive buys substitutes UP depth only
 test("no future candle or stale depth may pass; no peeking",()=>{
  const d=fixture("UP");
  d.candles["1m"].at(-1).closed=false;
- assert.equal(score(d).direction,null);
+ assert.throws(()=>score(d),/STALE_1m_CANDLES/);
  assert.equal(score(fixture("UP"),{...book(true),observedAt:TICK+1}).direction,null);
 });
 test("book parser uses quantity, top FIVE, not top20 notional",()=>{

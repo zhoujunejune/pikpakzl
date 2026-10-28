@@ -24,6 +24,18 @@ export function guardianRegisterIntent(intent,{file=GUARDIAN_REGISTRY}={}){
 // A trade-route adapter for the existing BTC five-minute single bot.
 // No Binance credentials or order-writing capability: it may only authorize an
 // existing owner-armed executor when independent evidence is valid.
+export function guardianMarkSubmitted(intent,orderId,{file=GUARDIAN_REGISTRY}={}){
+ const round=Number(intent?.round),tokenId=String(intent?.tokenId||'');
+ if(!Number.isSafeInteger(round)||!tokenId||!orderId)throw Error('GUARDIAN_ORDER_CONFIRMATION_INVALID');
+ const saved=JSON.parse(fs.readFileSync(file,'utf8'));
+ if(saved.model!==GUARDIAN_ID||!Array.isArray(saved.entries))throw Error('GUARDIAN_REGISTRY_INVALID');
+ const entry=saved.entries.find(x=>x.round===round&&x.tokenId===tokenId&&x.status==='INTENT_PREPARED');
+ if(!entry)throw Error('GUARDIAN_PREPARED_INTENT_MISSING');
+ entry.status='SUBMITTED';entry.orderId=String(orderId);entry.submittedAt=Date.now();
+ const tmp=file+'.'+process.pid+'.submit.tmp';
+ fs.writeFileSync(tmp,JSON.stringify(saved),{mode:0o640});fs.renameSync(tmp,file);
+ return true;
+}
 export const GUARDIAN_ID='ZL_GUARDIAN_5M_V1';
 export const GUARDIAN_SOURCE='SELECTIVE_V2_FAST8_PRIMARY'; // Legacy mapping key only; NOT the signal source.
 export const FIVE_MIN=300000;

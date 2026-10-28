@@ -205,3 +205,19 @@ test('generic risk unlock requires two signed read-only snapshots and keeps trad
  assert.match(page,/id="riskUnlockPanel"/);
  assert.match(page,/api\/dual5-reconcile-flat-wallet/);
 });
+
+test('funding source edit reconciles only aged phantom pending entries after two signed empty snapshots',()=>{
+ const src=readFileSync(new URL('./binance_dual5_pairs.mjs',import.meta.url),'utf8');
+ assert.match(src,/async function reconcileStalePendingForFundingChange\(\)/);
+ assert.match(src,/RECENT_PENDING_ORDER_FUNDING_CHANGE_DENIED/);
+ assert.match(src,/FUNDING_PENDING_RECONCILIATION_UNSAFE/);
+ assert.match(src,/await verifyFlatWallet\(wallet\);\s*await new Promise\(resolve=>setTimeout\(resolve,1300\)\);\s*await verifyFlatWallet\(wallet\)/);
+ assert.match(src,/FUNDING_RECONCILIATION_STATE_CHANGED/);
+ assert.match(src,/originalStatus:'ORDER_PENDING'/);
+ assert.match(src,/status:'NO_OPEN_EXPOSURE_VERIFIED'/);
+ assert.match(src,/config\.lastFundingPendingReconciliation=/);
+ assert.match(src,/await reconcileStalePendingForFundingChange\(\)/);
+ assert.match(src,/config\.fundingSource=d\.fundingSource/);
+ assert.match(src,/PENDING_ORDER_PREVENTS_FUNDING_CHANGE/);
+ assert.doesNotMatch(src,/delete config\.tracked\[.*NO_OPEN_EXPOSURE_VERIFIED/);
+});

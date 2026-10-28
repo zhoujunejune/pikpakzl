@@ -42,7 +42,19 @@ for file in manual-engine.mjs panel.html;do cp -p "/opt/zl-event10/$file" "$temp
 if test -f /opt/zl-event10/pure-signal.mjs;then
   cp -p /opt/zl-event10/pure-signal.mjs "$temp/backups/pure-signal.mjs"
 fi
-curl -fsS --max-time 5 "$base/api/status" >"$temp/old-status.json"
+# Auto checks occur every 12 s; wait for an idle handoff, rather than
+# failing deployment just because a routine read-only market scan is running.
+for n in $(seq 1 35);do
+  curl -fsS --max-time 5 "$base/api/status" >"$temp/old-status.json"
+  if python3 - "$temp/old-status.json" <<'PYIDLE'
+import json,sys
+s=json.load(open(sys.argv[1]))
+raise SystemExit(0 if not s.get('busyStart') and not s.get('busySettle') else 1)
+PYIDLE
+  then break;fi
+  if [ "$n" -eq 35 ];then echo EVENT10_RULE_DEPLOY_NO_IDLE_WINDOW=true;exit 44;fi
+  sleep 1
+done
 python3 - "$temp/old-status.json" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))

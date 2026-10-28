@@ -39,6 +39,12 @@ def main():
  assert code==200
  d=json.loads(body);assert d.get('enabled') is False
  print('GUARDIAN_ORIGINAL_LIVE_SWITCH_STILL_OFF=true')
+ sc,body=get('/api/order-signal-model')
+ print('GUARDIAN_PRODUCTION_SELECTOR_HTTP',sc)
+ try:
+  parsed=json.loads(body)
+  print('GUARDIAN_PRODUCTION_SELECTOR_RESULT',str({k:parsed.get(k) for k in ['model','ready','error','models']})[:700])
+ except Exception:print('GUARDIAN_PRODUCTION_SELECTOR_JSON_INVALID')
  for p in ('/dual5','/event10/','/futures-lab/'):
   assert get(p)[0]==404,('RETIRED_ROUTE_RETURNED',p)
  print('GUARDIAN_NO_RETIRED_BOTS_REINTRODUCED=true')

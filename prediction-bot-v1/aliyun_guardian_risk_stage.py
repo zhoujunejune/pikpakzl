@@ -77,7 +77,7 @@ done
 # Patch only precisely identified Guardian hooks, preserving all live logic.
 python3 - "$BASE/risk-worker.mjs" "$STAGE/risk-worker.mjs" <<'PY'
 from pathlib import Path
-import sys
+import sys,re
 src=Path(sys.argv[1]).read_text()
 assert 'guardianRiskQuote' not in src,'GUARDIAN_RISK_ALREADY_WIRED_ABORT'
 def rep(a,b,n=1):
@@ -96,10 +96,22 @@ rep("function quoteTooCloseToExpiry(quote) {",
     "}\nfunction quoteTooCloseToExpiry(quote) {")
 rep("evaluateRisk(targets, quoteResult.quote)",
     "evaluatePositionRisk(position,targets,quoteResult.quote)",2)
-guards=[line for line in src.splitlines() if 'workerBusy' in line and '!STOP_LOSS_ENABLED' in line and 'return' in line]
+# The real production Worker uses two independent guards:
+#   if (workerBusy) return;
+#   if(!TAKE_PROFIT_ENABLED&&!STOP_LOSS_ENABLED&&!hasDual5Positions())return;
+# Preserve the busy guard and dual-position exit path exactly. Never guess.
+assert len(re.findall(r'\\bif\\s*\\(\\s*workerBusy\\s*\\)\\s*return\\s*;',src))==1, \
+    'UNRECOGNIZED_LIVE_WORKER_BUSY_GUARD'
+guard_pattern=(r'[ \\t]*if[ \\t]*\\([ \\t]*![ \\t]*TAKE_PROFIT_ENABLED[ \\t]*&&'
+               r'[ \\t]*![ \\t]*STOP_LOSS_ENABLED[ \\t]*&&'
+               r'[ \\t]*![ \\t]*hasDual5Positions\\(\\)[ \\t]*\\)'
+               r'[ \\t]*return[ \\t]*;[ \\t]*')
+guards=[line for line in src.splitlines() if re.fullmatch(guard_pattern,line)]
 assert len(guards)==1,('UNRECOGNIZED_LIVE_TICK_GUARD',
- [line.strip()[:230] for line in src.splitlines() if 'workerBusy' in line or 'TAKE_PROFIT_ENABLED' in line or 'STOP_LOSS_ENABLED' in line][:20])
-rep(guards[0],guards[0].replace('!STOP_LOSS_ENABLED','!STOP_LOSS_ENABLED && !GUARDIAN_RISK_ENABLED',1))
+ [line.strip()[:230] for line in src.splitlines()
+  if 'workerBusy' in line or 'TAKE_PROFIT_ENABLED' in line or 'STOP_LOSS_ENABLED' in line][:20])
+rep(guards[0],guards[0].replace(
+    '!STOP_LOSS_ENABLED','!STOP_LOSS_ENABLED&&!GUARDIAN_RISK_ENABLED',1))
 rep("    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;",
     "    health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;\n"
     "    guardianRiskHeartbeat(true);")

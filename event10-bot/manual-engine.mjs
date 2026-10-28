@@ -336,6 +336,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         proxyOutcome:null,proxyHit:null,returnPct:null,
         officialEventOutcome:null,officialEventHit:null,
         realOrderPlaced:false,error:null};
+      // Append to independent audit trail before acknowledging this valid direction.
+      signalLedger.add(session);
       history.push(session);
       if(history.length>500)history.splice(0,history.length-500);
       persist();return session;

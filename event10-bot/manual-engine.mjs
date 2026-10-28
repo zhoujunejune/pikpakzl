@@ -108,7 +108,7 @@ export function scoreProxy(openPrice,closePrice,direction) {
 }
 function load(file){
   try{const d=JSON.parse(fs.readFileSync(file,"utf8"));
-    return Array.isArray(d)?d.filter(x=>x&&typeof x.id==="string"&&finite(x.openedAt)&&finite(x.expiresAt)).slice(-500):[]}
+    return Array.isArray(d)?d.filter(x=>x&&typeof x.id==="string"&&finite(x.openedAt)&&finite(x.expiresAt)):[]}
   catch(e){if(e.code==="ENOENT")return [];throw e;}
 }
 function store(file,records){
@@ -215,9 +215,11 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const feedUrl=String(env.EVENT10_READONLY_FEED||"http://127.0.0.1:13003/api/shadow-market-data");
   const streamUrl="http://127.0.0.1:13021/api/features";
   const file=String(env.EVENT10_STATE_FILE||"/var/lib/zl-event10/manual-sessions-v2.json");
-  const history=load(file);
+  const persistedSessions=load(file);
   const ledgerFile=String(env.EVENT10_SIGNAL_LOG_FILE||path.join(path.dirname(file),"rule-signals-v1.ndjson"));
-  const signalLedger=openSignalLedger(ledgerFile,history);
+  const signalLedger=openSignalLedger(ledgerFile,persistedSessions);
+  // Only pending/last 500 full sessions remain hot; the signal ledger retains all.
+  const history=persistedSessions.slice(-500);
   for(const h of history)if(h.status==="ANALYZING"){
     h.status="FAILED";h.error="INTERRUPTED_DURING_AI_ANALYSIS";h.direction=null;
   }

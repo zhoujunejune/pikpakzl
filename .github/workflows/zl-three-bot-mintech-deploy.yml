@@ -29,7 +29,7 @@ jobs:
           src=Path('ui-theme/patch_three_ui.py').read_text()
           deploy=Path('ui-theme/aliyun_theme_deploy.py').read_text()
           assert 'ZL_MINIMAL_TECH_UI_20261028' in css
-          assert 'def patch_single(' in src and 'def patch_html(' in src
+          assert 'def patch(name,s,css):' in src and 'def verify(name,s):' in src
           assert 'SINGLE_FOLLOW_ENABLED_ABORT' in deploy
           assert 'DUAL_LIVE_ACTIVE_ABORT' in deploy
           assert 'EVENT10_ACTIVE_ANALYSIS_ABORT' in deploy

@@ -69,7 +69,7 @@ mainhost='47-237-188-69.sslip.io'
 predhost='prediction.47-237-188-69.sslip.io'
 main=site(mainhost); pred=site(predhost)
 assert src.count(mainhost+' {')==1 and src.count(predhost+' {')==1,'AMBIGUOUS_SITES'
-assert src.strip()==(main+'\n\n'+pred).strip() or src.strip()==(main+'\n'+pred).strip(),'UNKNOWN_OTHER_CADDY_CONFIG_ABORT'
+leftover=src.replace(main,'',1).replace(pred,'',1)\nassert all(not z.strip() or z.lstrip().startswith('#') for z in leftover.splitlines()),'UNKNOWN_OTHER_CADDY_CONFIG_ABORT'
 authmain=snippet(main,r'(?m)^\s*basic_auth\s*\{')
 authpred=snippet(pred,r'(?m)^\s*basic_auth\s*\{')
 apiroute=snippet(pred,r'(?m)^\s*handle_path /api-keys/\*\s*\{')
@@ -181,7 +181,7 @@ for svc in zl-futures-bot-paper zl-futures-shadow-research zl-prediction-dual5 z
  if systemctl is-active --quiet "$svc";then echo "RETIRED_STILL_ACTIVE=$svc";exit 61;fi
 done
 for path in /dual5 /event10/ /futures-lab/ /dashboard/;do
- code=$(curl -sk --resolve "$predhost:443:127.0.0.1" -o /dev/null -w '%{http_code}' --max-time 4 "https://prediction.47-237-188-69.sslip.io$path" || true)
+ code=$(curl -sk --resolve "prediction.47-237-188-69.sslip.io:443:127.0.0.1" -o /dev/null -w '%{http_code}' --max-time 4 "https://prediction.47-237-188-69.sslip.io$path" || true)
  echo "RETIRED_ROUTE=$path STATUS=$code"
 done
 for port in 10000 11000 13019 13020 13021 13048;do

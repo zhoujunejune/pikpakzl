@@ -3,7 +3,7 @@
 # Never touch the 5-minute production process, existing trade stream, wallets or keys.
 set -Eeuo pipefail
 test "$(id -u)" -eq 0
-[[ "\${APP_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || exit 2
+[[ "${APP_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || exit 2
 for svc in caddy zl-prediction-trade zl-event10-deepseek;do
   systemctl is-active --quiet "$svc" || { echo "RULE_DEPLOY_SERVICE_INACTIVE=$svc"; exit 11; }
 done

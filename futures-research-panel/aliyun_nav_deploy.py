@@ -87,6 +87,31 @@ try:
  print('EVENT10_STATUS='+json.dumps({k:x.get(k) for k in ('ok','configured','providerModel','decisionReviewVersion','autoTradingEnabled','executionAvailable')},ensure_ascii=False))
 except Exception as exc:print('EVENT10_STATUS_ERROR='+type(exc).__name__)
 PYREAD
+python3 - <<'PYREAD2'
+from pathlib import Path
+import urllib.request,re,os
+p=Path('/etc/caddy/Caddyfile')
+if p.exists():
+ lines=p.read_text().splitlines()
+ for a,b in ((26,41),(50,65)):
+  for i in range(a-1,min(len(lines),b)):
+   line=lines[i].strip()
+   if 'password' in line.lower() or line.startswith('zl ') or line.startswith('admin '):
+    line='[REDACTED]'
+   print('CADDY_DETAIL',i+1,line[:130])
+for q in ('/etc/zl-prediction/deepseek5.env','/opt/zl-prediction-node/bin/node',
+          '/var/lib/zl-event10/manual-sessions-v2.json','/opt/zl-event10',
+          '/opt/zl-prediction/serve.py','/opt/zl-prediction-trade/serve.py'):
+ print('PROD_FILE',q,Path(q).exists())
+try:
+ with urllib.request.urlopen('http://127.0.0.1:13001/',timeout=4) as r:page=r.read(2000000).decode('utf8','replace')
+ print('PRED_HTML_TITLE='+str(re.findall(r'<title[^>]*>([^<]+)',page,re.I)[:2]))
+ print('PRED_HTML_LEN='+str(len(page)))
+ for term in ['event10','十分钟','EVENT10','dual5','预测机器人','合约机器人','<nav']:
+  print('PRED_HTML_MARKER_'+term+'='+str(term.lower() in page.lower()))
+ print('PRED_HTML_LINKS='+str(re.findall(r'<a[^>]+href=["\\x27]([^"\\x27]+)',page,re.I)[:15]))
+except Exception as exc:print('PRED_HTML_ERROR='+type(exc).__name__)
+PYREAD2
 echo EVENT10_RESTORE_READONLY_DIAG_DONE=true
 """
     elif restore_event10:

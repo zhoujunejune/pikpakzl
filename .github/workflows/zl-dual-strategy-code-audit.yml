@@ -27,7 +27,7 @@ jobs:
               script=("#!/bin/bash\nset -Eeuo pipefail\npython3 - <<'SCAN'\n"
               +"from pathlib import Path\nimport re\np=Path('/opt/zl-prediction-dual5/binance_dual5_pairs.mjs')\n"
               +"ls=p.read_text().splitlines()\n"
-              +f"print('SECTION',${start},${end})\n"
+              +f"print('SECTION',{start},{end})\n"
               +f"for i in range({start},{end}+1):\n"
               +" if i>len(ls):continue\n s=ls[i-1]\n"
               +" if re.search(r'api.?key|secret|password|private.?key|Authorization|Bearer|signature|process\\.env|walletAddress|walletId',s,re.I):s='[REDACTED]'\n"

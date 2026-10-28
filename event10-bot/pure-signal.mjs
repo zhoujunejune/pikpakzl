@@ -103,8 +103,8 @@ export function evaluatePureSignal({feed,reference,orderBook=null,aggressiveFlow
   const positive5=five.slice(-2).every(x=>x.c>x.o);
   const negative5=five.slice(-2).every(x=>x.c<x.o);
   const last1=one.at(-1);
-  // A futures depth snapshot must be sampled BEFORE (or at) the reference tick
-  // and be fresh; never treat a post-reference orderbook as pre-signal evidence.
+  // The reference timestamp is the real decision instant, not the last spot
+  // trade tick. Both market sources are already available by this instant.
   const bookFresh=orderBook&&valid(orderBook.observedAt)&&
     orderBook.observedAt<=at&&at-orderBook.observedAt<=5000;
   const bid=bookFresh?n(orderBook.bidTop5QtyBtc):null;
@@ -184,13 +184,13 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
  for(const row of results){
    availability[row.name]=row.ok?{available:true,receivedAt:row.receivedAt}:
      {available:false,error:row.error};
-   if(row.ok)features[row.name]=row.value;
+   if(row.ok)features[row.name]={...row.value,receivedAt:row.receivedAt};
  }
  return {source:"BINANCE_USDM_PUBLIC_DEPTH_AND_AGGTRADES_NOT_EVENT_INDEX",
    available:results.filter(x=>x.ok).length,total:results.length,
    features,availability,caveats:[
      "订单簿取 BTCUSDT USD-M 永续合约前5档数量，K线与参考价格来自现有BTC公开现货源，市场口径不同。",
-     "只在数据有效且采样早于参考价格时使用，不可用时不臆造。",
+     "仅使用做出决策前实际收到且新鲜的数据，不可用时不臆造。",
      "仅输出信号，不提供币安事件合约下单或官方结算。"
    ]};
 }

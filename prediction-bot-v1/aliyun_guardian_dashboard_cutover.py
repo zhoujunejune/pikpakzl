@@ -52,8 +52,11 @@ old="import {injectFast5Dashboard} from './fast5-dashboard-inject.mjs';"
 new="import {injectGuardianMainDashboard} from './guardian-main-dashboard.mjs';"
 oldcall='html=injectFast5Dashboard(html);'
 newcall='html=injectGuardianMainDashboard(html);'
-assert s.count(old)==1 and s.count(oldcall)==1,'FAST5_WIDGET_HOOK_NOT_UNIQUE'
-s=s.replace(old,new,1).replace(oldcall,newcall,1)
+if s.count(new)==1 and s.count(newcall)==1:
+ print('GUARDIAN_MAIN_UI_ALREADY_WIRED=true')
+else:
+ assert s.count(old)==1 and s.count(oldcall)==1,'FAST5_WIDGET_HOOK_NOT_UNIQUE'
+ s=s.replace(old,new,1).replace(oldcall,newcall,1)
 assert s.count(new)==1 and s.count(newcall)==1
 tmp=p.with_name(p.name+'.guardian-ui.stage')
 tmp.write_text(s);os.chmod(tmp,p.stat().st_mode&0o777);os.chown(tmp,p.stat().st_uid,p.stat().st_gid)

@@ -1,0 +1,37 @@
+name: GUARDIAN risk worker default-off staging
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_risk_stage.py
+      - .github/workflows/zl-guardian-risk-stage.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-guardian-risk-stage
+  cancel-in-progress: false
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check remote script syntax
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_risk_stage.py
+          python - <<'PY'
+          import ast,subprocess
+          t=ast.parse(open('prediction-bot-v1/aliyun_guardian_risk_stage.py').read())
+          s=next(x.value.value for x in t.body if isinstance(x,ast.Assign) and any(isinstance(n,ast.Name) and n.id=='SCRIPT' for n in x.targets))
+          p=subprocess.run(['bash','-n'],input=s,text=True,capture_output=True)
+          print(p.stderr)
+          assert p.returncode==0
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Confirm no Binance ongoing positions and stage Guardian risk code OFF
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_risk_stage.py

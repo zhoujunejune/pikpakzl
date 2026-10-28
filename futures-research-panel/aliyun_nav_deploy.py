@@ -60,6 +60,7 @@ bash "$s"
         # Coalesce manual clicks with the concurrent scheduled read-only scan.
         # Fast terminal UI results; independent live-status poll and limited external fetch waits.
         # Archive every confirmed EVENT10 direction in an append-only ledger; show all pages.
+        # Restore pagination endpoint /api/signals by deploying the matching server.mjs.
         # Only replace the independent EVENT10 analysis engine and HTML. All
         # original 5-minute trading processes / Caddy routing stay unchanged.
         cmd=f"""#!/bin/bash

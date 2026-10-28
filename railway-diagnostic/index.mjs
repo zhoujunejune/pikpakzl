@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {GUARDIAN_ID,guardianOrderSignal,guardianQuoteGate,guardianRegisterIntent,guardianMarkSubmitted} from './guardian-live-bridge.mjs';
 import {predictionWalletPayment,eligibleSpotFallback,explicitMpcInsufficient} from './payment-source-priority.mjs';
 import crypto from 'node:crypto';
 import { createClient } from 'redis';
@@ -349,6 +350,23 @@ async function getSignal({ forceHttp = false } = {}) {
   try{choice=await refreshModelSelection()}catch{return null}
   const round=currentRoundMs();
   if(!selectionPermitsRound(round,choice))return null;
+  // GUARDIAN_LIVE_CONNECTOR_V1: independent, fail-closed model adapter.
+  // A subjective AI label is never a trade authorisation. The source itself
+  // must demonstrate official settlement evidence and forward calibration.
+  if(choice.model===GUARDIAN_ID){
+    try{
+      const response=await fetch('http://127.0.0.1:13049/api/status',{
+        cache:'no-store',signal:AbortSignal.timeout(1800)});
+      if(!response.ok)return null;
+      const signal=guardianOrderSignal(await response.json());
+      if(!signal.ok||signal.executionEligible!==true)return null;
+      return {...signal,status:'LOCKED',model:SIGNAL_MODEL_NAME,
+        rawDirection:signal.direction,transport:'aliyun_guardian5_calibrated'};
+    }catch(error){
+      console.error(JSON.stringify({event:'guardian_feed_unavailable',
+        error:String(error?.message||error).slice(0,100)}));return null;
+    }
+  }
   if(choice.model!==SELECTIVE8_MODEL)return null;
   if(choice.model===SELECTIVE8_MODEL){
     // The user-selected source is the exact original V2 3-tier immutable
@@ -670,6 +688,7 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   if(choice.model===DYNAMIC_MODEL&&signal.upstreamModel!==DYNAMIC_MODEL)return;
   if(choice.model===EDGE_MODEL&&signal.upstreamModel!==EDGE_MODEL)return;
   if(choice.model===SELECTIVE8_MODEL&&signal.upstreamModel!==SELECTIVE8_MODEL)return;
+  if(choice.model===GUARDIAN_ID&&(signal.upstreamModel!==GUARDIAN_ID||signal.executionEligible!==true))return;
   // Reject unverified or stale directional hints; validated genuine previous
   // and current market fallback from Selective8 is distinct and eligible.
   if (signal.executionEligible===false) {

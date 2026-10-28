@@ -113,7 +113,7 @@ assert history['total']==state['strategyStats']['total']
 assert history['stats']['proxySettled']==state['strategyStats']['proxySettled']
 print('EVENT10_ALL_VALID_SIGNALS_PERSISTENT_LEDGER_READY=true')
 print('EVENT10_SAVED_SIGNALS_TOTAL='+str(history['total']))
-PY
+PYSIGNALS
 curl -fsS --max-time 5 "$base/" >"$temp/served.html"
 python3 - "$temp/served.html" <<'PY'
 from pathlib import Path

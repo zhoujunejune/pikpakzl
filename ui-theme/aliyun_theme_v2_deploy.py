@@ -131,7 +131,7 @@ echo THREE_BOT_UI_V2_VERIFIED_SINGLE_ENGINES_UNTOUCHED
     except:out="NO_OUTPUT"
     print("UI_DEPLOY_STATUS",x.invocation_status,"EXIT",x.exit_code)
     print("\n".join(line[:240] for line in out.splitlines() if any(k in line for k in ("UI_","THEME_","Traceback","Error","AssertionError","ROLLBACK")))[-6500:])
-    return 0 if str(x.invocation_status)=="Success" and int(x.exit_code)==0 and "THREE_BOT_UI_RELEASE_VERIFIED_SINGLE_ENGINES_UNTOUCHED" in out else 4
+    return 0 if str(x.invocation_status)=="Success" and int(x.exit_code)==0 and "THREE_BOT_UI_V2_VERIFIED_SINGLE_ENGINES_UNTOUCHED" in out else 4
   print("UI_DEPLOY_PENDING");return 5
  except Exception as e:print("UI_DEPLOY_TOOL_ERROR",type(e).__name__,str(getattr(e,"code","unknown"))[:80]);return 6
 if __name__=="__main__":sys.exit(main())

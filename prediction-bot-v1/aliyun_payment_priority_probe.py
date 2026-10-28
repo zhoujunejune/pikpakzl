@@ -34,6 +34,18 @@ for p in (13005,13004,13001):
   break
  except Exception as e:print('PREDICTION_PORT_UNAVAILABLE',p,type(e).__name__)
 PY
+for p in 13005 13004 13001;do
+ echo "HEALTHZ_PORT:$p:$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:$p/healthz || true)"
+done
+echo "TRADE_SERVICE_RECENT_FAILURES_BEGIN"
+journalctl -u zl-prediction-trade --since '18 minutes ago' --no-pager -o cat 2>/dev/null | python3 -c 'import re,sys
+rows=[]
+for line in sys.stdin:
+ if re.search(r"Error|ERR_|Cannot find|failed|exit|missing|SyntaxError|MODULE_NOT_FOUND|EACCES|address already|ECONNREFUSED",line,re.I):
+  line=re.sub(r"(?i)(key|token|password|secret)[=:]\\s*\\S+",r"\\1=[REDACTED]",line.strip()[:210])
+  rows.append(line)
+print("\\n".join(rows[-17:]))' || true
+echo "TRADE_SERVICE_RECENT_FAILURES_END"
 echo PROBE_END
 '''
 def main():

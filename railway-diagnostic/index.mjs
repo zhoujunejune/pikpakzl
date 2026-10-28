@@ -1,4 +1,3 @@
-import {guardianOrderSignal,guardianQuoteGate,guardianRegisterIntent,guardianMarkSubmitted,GUARDIAN_ID} from './guardian-live-bridge.mjs';
 import http from 'node:http';
 import {predictionWalletPayment,eligibleSpotFallback,explicitMpcInsufficient} from './payment-source-priority.mjs';
 import crypto from 'node:crypto';
@@ -350,20 +349,6 @@ async function getSignal({ forceHttp = false } = {}) {
   try{choice=await refreshModelSelection()}catch{return null}
   const round=currentRoundMs();
   if(!selectionPermitsRound(round,choice))return null;
-  if(choice.model===GUARDIAN_ID) {
-    try {
-      const response=await fetch('http://127.0.0.1:13049/api/status',{cache:'no-store',signal:AbortSignal.timeout(1600)});
-      if(!response.ok)return null;
-      const validated=guardianOrderSignal(await response.json());
-      if(!validated.ok)return null;
-      return {...validated,status:'LOCKED',model:SIGNAL_MODEL_NAME,rawDirection:validated.direction,
-        productionPolicy:'GUARDIAN_FORWARD_CALIBRATED_AND_OFFICIAL_FEED_ONLY',
-        transport:'aliyun_guardian5_local_verified'};
-    } catch(e) {
-      console.error(JSON.stringify({event:'guardian_signal_unavailable',reason:String(e?.message||e).slice(0,110)}));
-      return null;
-    }
-  }
   if(choice.model!==SELECTIVE8_MODEL)return null;
   if(choice.model===SELECTIVE8_MODEL){
     // The user-selected source is the exact original V2 3-tier immutable
@@ -685,7 +670,6 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   if(choice.model===DYNAMIC_MODEL&&signal.upstreamModel!==DYNAMIC_MODEL)return;
   if(choice.model===EDGE_MODEL&&signal.upstreamModel!==EDGE_MODEL)return;
   if(choice.model===SELECTIVE8_MODEL&&signal.upstreamModel!==SELECTIVE8_MODEL)return;
-  if(choice.model===GUARDIAN_ID&&signal.upstreamModel!==GUARDIAN_ID)return;
   // Reject unverified or stale directional hints; validated genuine previous
   // and current market fallback from Selective8 is distinct and eligible.
   if (signal.executionEligible===false) {

@@ -61,6 +61,17 @@ def main():
   raise AssertionError('GUARDIAN_PRODUCTION_SELECTOR_JSON_INVALID')
  for p in ('/dual5','/event10/','/futures-lab/'):
   assert get(p)[0]==404,('RETIRED_ROUTE_RETURNED',p)
+ for n in range(20):
+  sc,raw=get('/api/order-signal-model')
+  assert sc==200,('GUARDIAN_MODEL_UNSTABLE',n,sc)
+  x=json.loads(raw)
+  assert x.get('model')=='ZL_GUARDIAN_5M_V1' and x.get('ready') is True,('GUARDIAN_MODEL_CHANGED',n)
+  sc,raw=get('/api/status')
+  assert sc==200,('GUARDIAN_STATUS_UNSTABLE',n,sc)
+  y=json.loads(raw)
+  assert y.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1' and y.get('orderSignalModelReady') is True
+  assert y.get('enabled') is False and y.get('orderSignal') is None
+ print('GUARDIAN_40_CONSECUTIVE_PRODUCTION_API_READS_PASSED=true')
  print('GUARDIAN_NO_RETIRED_BOTS_REINTRODUCED=true')
  print('GUARDIAN_PUBLIC_SMOKE_PASSED=true')
 if __name__=='__main__':

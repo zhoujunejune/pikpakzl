@@ -172,7 +172,7 @@ python3 - "$STAGE/single.json" "$STAGE/ui.html" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]));ui=open(sys.argv[2]).read()
 assert s['ok'] is True and s['enabled'] is False
-assert 'GUARDIAN' in ui and '影子' in ui
+assert 'GUARDIAN' in ui and '生产信号' in ui
 print('GUARDIAN_SINGLE_LIVE_SWITCH_STILL_OFF=true')
 print('GUARDIAN_CHINESE_UI_READY=true')
 PY

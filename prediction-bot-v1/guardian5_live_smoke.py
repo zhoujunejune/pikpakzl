@@ -34,6 +34,13 @@ def main():
  print('GUARDIAN_CURRENT_SHADOW_SIGNALS',s.get('stats',{}).get('shadowPredictions'))
  code,body=get('/')
  assert code==200 and '5分钟单边预测' in body.decode('utf8','replace')
+ main_html=body.decode('utf8','replace')
+ assert 'id="zlGuardianMain"' in main_html,'GUARDIAN_MAIN_CARD_NOT_RENDERED'
+ assert '/guardian/api/status' in main_html,'GUARDIAN_MAIN_LIVE_STATUS_NOT_WIRED'
+ assert 'id="zlFast5Card"' not in main_html,'LEGACY_FAST5_CARD_STILL_RENDERED'
+ assert 'FAST5生产状态暂无法读取' not in main_html,'LEGACY_FAST5_BROKEN_CARD_STILL_RENDERED'
+ print('GUARDIAN_MAIN_HOMEPAGE_RENDERED=true')
+ print('GUARDIAN_LEGACY_FAST5_HOMEPAGE_REMOVED=true')
  print('GUARDIAN_ORIGINAL_SINGLE_PAGE_PRESERVED=true')
  code,body=get('/api/status')
  assert code==200

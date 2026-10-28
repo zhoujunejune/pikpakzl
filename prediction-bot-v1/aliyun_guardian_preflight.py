@@ -126,6 +126,17 @@ if pid.isdigit() and int(pid)>0:
    val=json.loads(file.read_text())
    print('GUARDIAN_RISK_PROC_STATUS',fn,json.dumps({k:v for k,v in val.items() if k not in ('tokenId','orderId','walletAddress','walletId')},ensure_ascii=False)[:1200])
   except Exception as ex:print('GUARDIAN_RISK_PROC_STATUS',fn,type(ex).__name__)
+for label,command in [('RISK_PROCESSES',['ps','-eo','pid,ppid,comm,args']),('RISK_JOURNAL',['journalctl','-u','zl-prediction-risk-exits','-n','12','--no-pager','--output=cat'])]:
+ out=subprocess.run(command,text=True,capture_output=True).stdout
+ for line in out.splitlines()[-200:]:
+  if label=='RISK_PROCESSES' and not ('risk-worker.mjs' in line or 'risk-runner.mjs' in line):continue
+  if label=='RISK_JOURNAL':
+   try:
+    item=json.loads(line)
+    if 'event' in item:line=str({k:v for k,v in item.items() if k in ('event','controller','worker','at','enabled','workerRunning','takeProfitEnabled','stopLossEnabled','code','signal','error','lastTickFinishedAt','persistenceHealthy')})
+    else:continue
+   except Exception:continue
+  print('GUARDIAN_'+label,line[:550])
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

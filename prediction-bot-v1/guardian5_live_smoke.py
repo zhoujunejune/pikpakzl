@@ -39,6 +39,7 @@ def main():
  assert code==200
  d=json.loads(body);assert d.get('enabled') is False
  print('GUARDIAN_ORIGINAL_LIVE_SWITCH_STILL_OFF=true')
+ print('GUARDIAN_ACTIVE_ROUTING_NAME',d.get('orderSignalModel'))
  assert d.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1','OLD_ORDER_MODEL_RETURNED'
  assert d.get('orderSignal') is None,'LEGACY_ORDER_SIGNAL_STILL_EXPOSED'
  assert d.get('pendingAction') is None,'LEGACY_PENDING_ACTION'

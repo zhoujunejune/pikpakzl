@@ -100,12 +100,12 @@ rep("evaluateRisk(targets, quoteResult.quote)",
 #   if (workerBusy) return;
 #   if(!TAKE_PROFIT_ENABLED&&!STOP_LOSS_ENABLED&&!hasDual5Positions())return;
 # Preserve the busy guard and dual-position exit path exactly. Never guess.
-assert len(re.findall(r'\\bif\\s*\\(\\s*workerBusy\\s*\\)\\s*return\\s*;',src))==1, \
+assert len(re.findall(r'\bif\s*\(\s*workerBusy\s*\)\s*return\s*;',src))==1, \
     'UNRECOGNIZED_LIVE_WORKER_BUSY_GUARD'
-guard_pattern=(r'[ \\t]*if[ \\t]*\\([ \\t]*![ \\t]*TAKE_PROFIT_ENABLED[ \\t]*&&'
-               r'[ \\t]*![ \\t]*STOP_LOSS_ENABLED[ \\t]*&&'
-               r'[ \\t]*![ \\t]*hasDual5Positions\\(\\)[ \\t]*\\)'
-               r'[ \\t]*return[ \\t]*;[ \\t]*')
+guard_pattern=(r'[ \t]*if[ \t]*\([ \t]*![ \t]*TAKE_PROFIT_ENABLED[ \t]*&&'
+               r'[ \t]*![ \t]*STOP_LOSS_ENABLED[ \t]*&&'
+               r'[ \t]*![ \t]*hasDual5Positions\(\)[ \t]*\)'
+               r'[ \t]*return[ \t]*;[ \t]*')
 guards=[line for line in src.splitlines() if re.fullmatch(guard_pattern,line)]
 assert len(guards)==1,('UNRECOGNIZED_LIVE_TICK_GUARD',
  [line.strip()[:230] for line in src.splitlines()

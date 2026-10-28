@@ -20,6 +20,16 @@ for path in ('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.m
  print('STYLE_MARKERS','styleEnd',s.count('</style>'),'headEnd',s.count('</head>'),'backtick',s.count(chr(96)))
  print('UI_MARKERS',[(k,k in s) for k in ('dashboard-layout-stability','id="banner"','id="engine"','class="card"','class="w"','<main','const statsScript','function injectStats')])
  print('TITLES',re.findall(r'<h[12][^>]*>([^<]{1,95})',s)[:7])
+ if p.name=='panel-stats-shell.mjs':
+  lines=s.splitlines()
+  hits=[i for i,line in enumerate(lines) if 'function injectStats(html)' in line]
+  for i in hits:
+   print('SINGLE_INJECT_CONTEXT',[(j+1,lines[j][:240]) for j in range(max(0,i-5),min(len(lines),i+18))])
+ if p.name=='binance_dual5_dashboard.html':
+  lines=s.splitlines()
+  print('DUAL_STYLES',[(i+1,line[:220]) for i,line in enumerate(lines[:30])])
+  print('DUAL_JS_HEALTH',[(i+1,line[:240]) for i,line in enumerate(lines) if 'label(d.health)' in line or 'q.status' in line or "['执行阶段'" in line])
+
 for port,route in ((13001,'/'),(13005,'/'),(13020,'/'),(13048,'/healthz'),(13048,'/api/status')):
  try:
   with urlopen('http://127.0.0.1:%s%s'%(port,route),timeout=3) as r:

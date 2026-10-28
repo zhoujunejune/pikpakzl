@@ -69,6 +69,20 @@ export function serve(engine,{port=Number(process.env.EVENT10_PORT||13020),host=
         active:chineseDisplay.overlay(state.active)});
     }
     if(pathname==="/api/history")return send(200,{ok:true,records:engine.history()});
+    if(pathname==="/api/signals"){
+      const search=new URL(req.url,"http://localhost").searchParams;
+      const bounded=(key,defaultValue,max)=>{
+        const raw=search.get(key);
+        if(raw===null)return defaultValue;
+        if(!/^\\d{1,7}$/.test(raw))return null;
+        const num=Number(raw);
+        return Number.isSafeInteger(num)?Math.min(num,max):null;
+      };
+      const limit=bounded("limit",25,100),offset=bounded("offset",0,1000000);
+      if(limit===null||limit<1||offset===null)
+        return send(400,{ok:false,error:"INVALID_SIGNAL_PAGE"});
+      return send(200,engine.signals(limit,offset));
+    }
     if(pathname==="/api/stream-health"){
       try{
         const r=await fetch("http://127.0.0.1:13021/api/health",{signal:AbortSignal.timeout(1800)});

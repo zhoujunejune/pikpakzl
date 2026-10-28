@@ -85,6 +85,16 @@ for p in srcroot.rglob('*.mjs'):
   if token in t:
    print('LIVE_FAST5_SOURCE',str(p.relative_to(srcroot)),token,repr(t[max(0,t.index(token)-350):t.index(token)+350])[:790]);found+=1
  if found>25:break
+from pathlib import Path
+fast=Path('/opt/zl-prediction-live/src/railway-diagnostic/fast5-dashboard-inject.mjs')
+if fast.exists():
+ t=fast.read_text()
+ print('FAST5_INJECT_FILE_SIZE',len(t))
+ for start in range(0,min(len(t),23000),4500):
+  print('FAST5_INJECT_PART',start,repr(t[start:start+4500]))
+main=Path('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs')
+for line in main.read_text().splitlines():
+ if 'fast5-dashboard' in line or 'injectFast5' in line or 'fast5Dashboard' in line:print('FAST5_MODULE_WIRING',line[:280])
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

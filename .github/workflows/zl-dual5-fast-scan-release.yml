@@ -1,5 +1,5 @@
 name: Release dual5 round-boundary fast scanner
-# Self-service wallet-wide double-snapshot risk audit for owner; trading stays OFF until owner arms.
+# Release iOS self-service wallet risk-audit button fix. Existing lock and real-money trading remain OFF.
 on:
   push:
     branches: [feat/deepseek40-45s-ai-only-prod-20261025]
@@ -66,6 +66,8 @@ jobs:
              'id="firstScanLag"','id="pairExecution"',
              'id="fundingSource"','id="fundingSave"','/api/dual5-funding',
              'id="riskUnlock"','id="riskUnlockPanel"',
+             '请求已发送，正在核实两次币安订单',
+             '后台没有返回有效JSON',
              '/api/dual5-reconcile-flat-wallet'])
           print('DUAL5_FAST_SCAN_TESTS_OK=true')
           PY

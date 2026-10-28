@@ -137,6 +137,26 @@ for label,command in [('RISK_PROCESSES',['ps','-eo','pid,ppid,comm,args']),('RIS
     else:continue
    except Exception:continue
   print('GUARDIAN_'+label,line[:550])
+from pathlib import Path
+base=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for name in ('index.mjs','wrapper.mjs','risk-worker.mjs','guardian-live-bridge.mjs','guardian-dynamic-exit.mjs'):
+ p=base/name
+ if not p.is_file():
+  print('GUARDIAN_LIVE_FILE',name,'MISSING');continue
+ source=p.read_text()
+ print('GUARDIAN_LIVE_FILE',name,'present',
+  'guardianSignalRoute',('GUARDIAN_LIVE_CONNECTOR_V1' in source),
+  'guardianOrderRule',('guardianQuoteGate' in source),
+  'guardianExitTrigger',('guardian_dynamic_exit_triggered' in source),
+  'guardianScope',('registeredGuardianToken' in source),
+  'legacyHardWait',("Do not convert subjective AI direction into an order" in source))
+unit=subprocess.run(['systemctl','show','zl-prediction-risk-exits','-p','Environment'],capture_output=True,text=True).stdout
+print('GUARDIAN_RISK_DYNAMIC_FLAG', 'ENABLED_TRUE' if 'GUARDIAN_DYNAMIC_EXIT_ENABLED=true' in unit else 'NOT_ENABLED')
+state=get(13001,'/api/status')
+guardian=get(13049,'/api/status')
+print('GUARDIAN_LIVE_STATE', 'following',state.get('enabled'),'selected',state.get('orderSignalModel'),'orderSignal',bool(state.get('orderSignal')),
+ 'guardTradeEligible',(guardian.get('automaticTradeEligibility') or {}).get('eligible'),
+ 'guardianExitExecuted',guardian.get('exitExecutionEnabled'))
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """
@@ -150,6 +170,6 @@ def main():
    try:o=base64.b64decode(d.output or '',validate=True).decode('utf8','replace')
    except Exception:o=str(d.output or '')
    print('GUARDIAN_AUDIT_STATUS',d.invocation_status,d.exit_code)
-   print(o[-12000:]);return 0 if str(d.invocation_status)=='Success' and int(d.exit_code)==0 else 4
+   print(o[-18500:]);return 0 if str(d.invocation_status)=='Success' and int(d.exit_code)==0 else 4
  return 5
 if __name__=='__main__':sys.exit(main())

@@ -27,7 +27,7 @@ jobs:
           bash -n event10-bot/install_aliyun.sh event10-bot/restore_frontend.sh event10-bot/install_current_routes.sh
           python -m py_compile event10-bot/frontend_nav.py
           node --check event10-bot/server.mjs
-          node --test event10-bot/pure-signal.test.mjs
+          node --test event10-bot/pure-signal.test.mjs event10-bot/panel-state.test.mjs
           python - <<'PYTEST'
           import importlib.util
           spec=importlib.util.spec_from_file_location('event10_nav','event10-bot/frontend_nav.py')

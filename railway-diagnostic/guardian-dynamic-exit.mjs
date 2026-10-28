@@ -19,5 +19,5 @@ export function registeredGuardianToken(fileContents,tokenId,round){
  if(fileContents?.model!==GUARDIAN_MODEL||!Array.isArray(fileContents.entries)||
     !Number.isSafeInteger(round)||round%300000!==0||!tokenId)return false;
  return fileContents.entries.some(x=>x?.round===round&&x.tokenId===tokenId&&
-  x.status==='INTENT_PREPARED'&&Number.isSafeInteger(x.createdAt)&&x.createdAt>=round);
+  x.status==='SUBMITTED'&&typeof x.orderId==='string'&&x.orderId.length>0&&Number.isSafeInteger(x.createdAt)&&x.createdAt>=round);
 }

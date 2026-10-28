@@ -50,17 +50,10 @@ end=x.index(']);',start)+3
 x=x[:start]+("export const ORDER_SIGNAL_MODELS=Object.freeze([\n"
  " {id:GUARDIAN_MODEL,name:'GUARDIAN 5M · DeepSeek动态分析（风险条件不满足即WAIT）'}\n"
  "]);")+x[end:]
-old='const saved=JSON.parse(raw);'
-assert x.count(old)==1,'CHOICE_MIGRATION_ANCHOR_NOT_UNIQUE'
-migration='''const saved=JSON.parse(raw);
-   if(saved.model!==GUARDIAN_MODEL){
-     const migrated=JSON.stringify({model:GUARDIAN_MODEL,revision:crypto.randomUUID(),
-       updatedAt:new Date().toISOString(),effectiveAfterRound:roundOf(Date.now())});
-     const result=await redis.eval(CAS,{keys:[MODEL_CHOICE_KEY],arguments:[raw,migrated]});
-     raw=result==='OK'?migrated:await redis.get(MODEL_CHOICE_KEY);
-   }
-'''
-x=x.replace(old,migration,1)
+start=x.index('export async function refreshModelSelection(){')
+end=x.index('export async function setModelSelection(',start)
+part=x[start:end].replace('SELECTIVE8_MODEL','GUARDIAN_MODEL')
+x=x[:start]+part+x[end:]
 y=engine.read_text()
 anchor='if(!selectionPermitsRound(round,choice))return null;'
 assert y.count(anchor)==1,'TRADE_ROUTING_ANCHOR_NOT_UNIQUE'

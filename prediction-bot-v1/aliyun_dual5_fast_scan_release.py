@@ -250,13 +250,17 @@ def main():
                        "BINANCE_ACCOUNT_SNAPSHOT_INCOMPLETE",
                        "reconcileStalePendingForFundingChange",
                        "FUNDING_RECONCILIATION_STATE_CHANGED",
-                       "NO_OPEN_EXPOSURE_VERIFIED"):
+                       "NO_OPEN_EXPOSURE_VERIFIED",
+                       "TRADING_NOT_OFF_OR_NOTHING_TO_RECONCILE",
+                       "clearedStalePending:pending.length"):
             if marker not in new_worker:raise RuntimeError('SCANNER_GUARD_MISSING_'+marker)
         for marker in ('id="upAmount"','id="downAmount"','id="riskSave"',
                        'id="firstScanLag"','id="pairExecution"',
                        'id="fundingSource"','id="fundingSave"','/api/dual5-funding',
                        'id="riskUnlock"','id="riskUnlockPanel"',
-                       '/api/dual5-reconcile-flat-wallet'):
+                       '/api/dual5-reconcile-flat-wallet',
+                       'const hasStalePending=Object.values(d.legs||{})',
+                       '核验无持仓并恢复操作'):
             if marker not in new_page:raise RuntimeError('FRONTEND_GUARD_MISSING_'+marker)
         if any(old in new_worker for old in ('if(raw>=1-2*fee-MIN_EDGE/3.2)', 'if(!estimate.feasible)', 'if(!reassess.feasible')):
             raise RuntimeError('PROFIT_FILTER_STILL_BLOCKS_ROUND_OPEN_ORDERS')

@@ -1,0 +1,42 @@
+name: Deploy isolated dual5 arbitration edge strategy V2
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'dual5-strategy/patch_arbitrage.py'
+      - 'dual5-strategy/aliyun_deploy_arbitrage.py'
+      - 'dual5-strategy/test_patch_arbitrage.py'
+      - '.github/workflows/zl-dual-arb-v2-deploy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-dual5-arb-v2-isolated-deploy
+  cancel-in-progress: false
+jobs:
+  deploy-dual-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate isolated patch, reject unknown production baseline
+        run: |
+          python -m py_compile dual5-strategy/patch_arbitrage.py dual5-strategy/aliyun_deploy_arbitrage.py
+          python -m unittest discover -s dual5-strategy -p 'test_*.py' -v
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('dual5-strategy/aliyun_deploy_arbitrage.py').read_text()
+          assert 'systemctl restart zl-prediction-dual5.service' in src
+          assert 'systemctl restart zl-prediction-trade' not in src
+          assert 'systemctl restart zl-prediction-fast5' not in src
+          assert 'DUAL_LIVE_ACTIVE_ABORT' in src
+          assert 'DUAL_ONLY_ROLLBACK_APPLIED' in src
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy dual-only when trading OFF, preserve single services
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python dual5-strategy/aliyun_deploy_arbitrage.py

@@ -52,11 +52,35 @@ done
 curl -fsSL --retry 2 --max-time 25 \
  "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$OLD/railway-diagnostic/wrapper.mjs" \
  -o "$STAGE/wrapper.before"
-if ! cmp -s "$BASE/wrapper.mjs" "$STAGE/wrapper.before";then
- echo GUARDIAN_BRIDGE_WRAPPER_DRIFT_BEGIN=true
- diff -u "$STAGE/wrapper.before" "$BASE/wrapper.mjs" | head -n 155 || true
- echo GUARDIAN_BRIDGE_WRAPPER_DRIFT_ABORT=true;exit 31
-fi
+# Preserve existing live mobile UI/Redis parallelism instead of replacing the entire wrapper.
+python3 - "$STAGE/wrapper.before" "$BASE/wrapper.mjs" "$STAGE/wrapper.mjs" <<'PY'
+from pathlib import Path
+import sys
+ref,live,desired=[Path(x).read_text() for x in sys.argv[1:]]
+begin="const backendPatch = String.raw"+chr(96)
+end="\n"+chr(96)+";\n\nconst prepareMarker ="
+def extract(code):
+ a=code.index(begin);b=code.index(end,a)+len("\n"+chr(96)+";")
+ return a,b,code[a:b]
+ra,rb,old=extract(ref)
+la,lb,current=extract(live)
+da,db,new=extract(desired)
+old1="  try { await refreshModelSelection(); }\n  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'下单信号选择配置不可用'}};}\n"
+old2="  try { await refreshDirectionSettings(); }\n  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'方向配置读取失败，已取消旧订单'}};}\n"
+new1=("  // Both reads are independent Redis lookups. Parallelize network waits,\n"
+      "  // but retain every original model, direction and order state validation.\n"
+      "  try { await Promise.all([refreshModelSelection(),refreshDirectionSettings()]); }\n"
+      "  catch(err){pendingAction=null;return {status:503,body:{ok:false,error:'下单信号选择或方向配置不可用'}};}\n")
+for name,code in [('reference',old),('desired',new)]:
+ assert code.count(old1)==1 and code.count(old2)==1,('WRAPPER_BACKEND_ANCHOR_CHANGED',name)
+updated_baseline=old.replace(old1,new1,1).replace(old2,'',1)
+assert updated_baseline==current,'UNEXPECTED_LIVE_WRAPPER_BACKEND_DIFF'
+updated_target=new.replace(old1,new1,1).replace(old2,'',1)
+final=live[:la]+updated_target+live[lb:]
+Path(sys.argv[3]).write_text(final)
+print('GUARDIAN_WRAPPER_UI_AND_REDIS_OPTIMIZATION_PRESERVED=true')
+PY
+"$NODE" --check "$STAGE/wrapper.mjs"
 python3 - "$BASE/index.mjs" "$STAGE/index.mjs" <<'PY'
 from pathlib import Path
 import sys

@@ -127,7 +127,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   }
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,modelCalls=0,lastError=null;
-  let lastRuleScan=0,lastCheck=null;
+  let lastRuleScan=0,lastCheck=null,inFlightStart=null;
   let lastCheckAt=0;
   let lastDataProbe=null;
   const persist=()=>store(file,history);
@@ -167,14 +167,24 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     if(!r.ok)throw Error("MARKET_SOURCE_HTTP_"+r.status);
     return r.json();
   };
+  // One shared read-only market scan. A manual click during the scheduled
+  // 12-second scan joins the very same result instead of returning a spurious
+  // CLICK_ALREADY_PROCESSING error or duplicating a 10-minute prediction.
   async function start(id){
     if(!/^[A-Za-z0-9_-]{12,90}$/.test(String(id)))throw Error("INVALID_IDEMPOTENCY_KEY");
     const existing=history.find(x=>x.id===id);
     if(existing)return existing;
-    if(busyStart)throw Error("CLICK_ALREADY_PROCESSING");
+    if(inFlightStart)return inFlightStart;
+    const active=history.findLast(x=>x.status==="PREDICTED"&&clock()<x.expiresAt);
+    if(active)return active;
+    const promise=capture(id);
+    inFlightStart=promise;
+    try{return await promise;}
+    finally{if(inFlightStart===promise)inFlightStart=null;}
+  }
+  async function capture(id){
+    if(busyStart)throw Error("INTERNAL_DUPLICATE_SCAN");
     if(history.some(x=>x.status==="ANALYZING"))throw Error("ANALYSIS_ALREADY_RUNNING");
-    if(history.some(x=>clock()<x.expiresAt&&x.status==="PREDICTED"))
-      throw Error("TEN_MINUTE_SESSION_ALREADY_ACTIVE");
     busyStart=true;
     const clickReceivedAt=clock();
     try{

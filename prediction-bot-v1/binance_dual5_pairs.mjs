@@ -301,6 +301,39 @@ async function reconcileFlatWalletLock(){
    verifiedSnapshots:2,preservedTrackedCount:config.lastRecovery.oldTrackedCount};
  }finally{reconciling=false}
 }
+// Saving a funding choice must not be blocked forever by a prior round's
+// phantom ORDER_PENDING reservation after an owner-verified flat wallet.
+// Never erase historical tracking, nor reconcile live/current orders.
+async function reconcileStalePendingForFundingChange(){
+ const pending=Object.entries(config.legs||{}).filter(([,leg])=>leg?.status==='ORDER_PENDING');
+ if(!pending.length)return {reconciled:0};
+ if(config.armed||config.blocked||reconciling||busy)
+  throw Error('FUNDING_PENDING_RECONCILIATION_UNSAFE');
+ const now=Date.now();
+ if(pending.some(([,leg])=>!Number.isFinite(Number(leg.round))||
+   now-Number(leg.round)<ROUND_MS*2))
+  throw Error('RECENT_PENDING_ORDER_FUNDING_CHANGE_DENIED');
+ const before=JSON.stringify(config);
+ const wallet=await walletInfo();
+ await verifyFlatWallet(wallet);
+ await new Promise(resolve=>setTimeout(resolve,1300));
+ await verifyFlatWallet(wallet);
+ if(JSON.stringify(config)!==before||config.armed||config.blocked||busy)
+  throw Error('FUNDING_RECONCILIATION_STATE_CHANGED');
+ const verifiedAt=new Date().toISOString();
+ for(const [side,leg] of pending){
+  config.legs[side]={...leg,originalStatus:'ORDER_PENDING',
+   status:'NO_OPEN_EXPOSURE_VERIFIED',verifiedAt};
+  const key=String(leg.marketTopicId)+':'+String(leg.tokenId);
+  if(config.tracked[key]?.status==='ORDER_PENDING')
+   config.tracked[key]={...config.tracked[key],originalStatus:'ORDER_PENDING',
+    status:'NO_OPEN_EXPOSURE_VERIFIED',verifiedAt};
+ }
+ config.lastFundingPendingReconciliation={at:verifiedAt,
+  method:'TWO_EMPTY_SIGNED_SNAPSHOTS',count:pending.length};
+ persist();
+ return {reconciled:pending.length};
+}
 async function confirmOrder(wallet,id,topic){
  // An order ID proves submission, not execution. Explicit FAILED/zero-fill is
  // different from unknown status; only the latter requires fail-closed lock.
@@ -531,6 +564,8 @@ if(process.env.DUAL5_TEST!=='1')http.createServer(async(req,res)=>{
    const d=JSON.parse(body);
    if(!validFundingSource(d.fundingSource))throw Error('INVALID_FUNDING_SOURCE_MPC_OR_CEX');
    if(config.armed||config.blocked)throw Error('STOP_TRADING_BEFORE_FUNDING_EDIT');
+   if(Object.values(config.legs).some(l=>l?.status==='ORDER_PENDING'))
+    await reconcileStalePendingForFundingChange();
    if(Object.values(config.legs).some(l=>l?.status==='ORDER_PENDING'))
     throw Error('PENDING_ORDER_PREVENTS_FUNDING_CHANGE');
    config.fundingSource=d.fundingSource;

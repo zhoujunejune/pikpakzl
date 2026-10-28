@@ -183,21 +183,27 @@ async function save(armed){
  finally{saving=false;await load();}
 }
 async function unlockAfterRiskAudit(){
- if(saving||!confirm('将查询币安的真实订单与未结持仓。仅全部核实无未结风险时解除保护锁，实盘仍保持关闭。确定开始核验？'))return;
+ // The labelled button is the owner's explicit approval. Some embedded iOS
+ // browsers suppress native confirm(), causing a silent early return.
+ if(saving){el('riskUnlockMsg').textContent='已有操作未完成，请稍后重试。';return;}
  saving=true;el('riskUnlock').disabled=true;
- el('riskUnlockMsg').textContent='正在独立核对币安待处理订单和未结持仓…';
+ el('riskUnlockMsg').textContent='请求已发送，正在核实两次币安订单、未结持仓及机器人状态…';
+ el('feedback').textContent='订单核验正在进行，实盘保持关闭。';
  try{
   const r=await fetch('/api/dual5-reconcile-flat-wallet',{
    method:'POST',credentials:'same-origin',
    headers:{'Content-Type':'application/json'},body:'{}'
   });
-  const d=await r.json();
+  const raw=await r.text();
+  let d;try{d=JSON.parse(raw)}catch{throw Error('后台没有返回有效JSON（HTTP '+r.status+'）')}
   if(!r.ok||d.ok!==true||d.blocked!==false||d.armed!==false||d.verifiedSnapshots!==2)
-   throw Error(d.error||'币安风险核验未通过');
+   throw Error(String(d.error||'币安风险核验未通过')+'（HTTP '+r.status+'）');
   el('riskUnlockMsg').textContent='两次核验确认没有未结订单或持仓，保护锁已解除。实盘依旧关闭。';
   el('feedback').textContent='已解除保护锁。请检查资金来源、两边金额和止损，再由你自行决定是否开启交易。';
  }catch(e){
-  el('riskUnlockMsg').textContent='暂不能解锁：'+String(e.message||e)+'（保护锁已保留）';
+  const message=String(e.message||e);
+  el('riskUnlockMsg').textContent='暂不能解锁：'+message+'（保护锁已保留）';
+  el('feedback').textContent='风险核验失败：'+message+'。请把此错误发给我排查。';
  }finally{saving=false;await load();}
 }
 el('riskUnlock').addEventListener('click',()=>void unlockAfterRiskAudit());

@@ -49,7 +49,47 @@ bash "$s"
     restore_event10=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
                      "[EVENT10-FRONTEND-RESTORE]" in
                      str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
-    if restore_event10:
+    diagnose_event10=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
+                      "[EVENT10-RESTORE-DIAG]" in
+                      str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
+    if diagnose_event10:
+        # Explicitly read only service states, anonymized routes, and EVENT10 readiness.
+        cmd="""#!/bin/bash
+set -eu
+echo EVENT10_RESTORE_READONLY_DIAG_BEGIN=true
+for unit in caddy zl-event10-deepseek zl-event10-trade-stream zl-frontend-nav-bridge zl-futures-bot-paper zl-prediction-trade zl-guardian5; do
+  echo "UNIT=$unit state=$(systemctl is-active "$unit" 2>/dev/null || true)"
+done
+for port in 10000 13001 13019 13020 13021; do
+  for path in / /healthz /api/status; do
+    code=$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' "http://127.0.0.1:$port$path" || true)
+    echo "LOCAL_PORT=$port PATH=$path CODE=$code"
+  done
+done
+python3 - <<'PYREAD'
+from pathlib import Path
+import json,urllib.request
+p=Path('/etc/caddy/Caddyfile')
+print('CADDY_EXISTS='+str(p.exists()))
+if p.exists():
+ for i,line in enumerate(p.read_text().splitlines(),1):
+  s=line.strip()
+  if (s.endswith('sslip.io {') or s.startswith('handle ') or s.startswith('handle_path ') or
+      s.startswith('reverse_proxy ') or s.startswith('redir ') or s.startswith('basic_auth')):
+   print('CADDY_ROUTE',i,s[:150])
+d=Path('/opt/zl-event10')
+print('EVENT10_DIR_EXISTS='+str(d.exists()))
+if d.exists():
+ for q in ('panel.html','manual-engine.mjs','server.mjs','trade-stream-collector.mjs'):
+  print('EVENT10_FILE_'+q+'='+str((d/q).exists()))
+try:
+ with urllib.request.urlopen('http://127.0.0.1:13020/api/status',timeout=3) as r: x=json.load(r)
+ print('EVENT10_STATUS='+json.dumps({k:x.get(k) for k in ('ok','configured','providerModel','decisionReviewVersion','autoTradingEnabled','executionAvailable')},ensure_ascii=False))
+except Exception as exc:print('EVENT10_STATUS_ERROR='+type(exc).__name__)
+PYREAD
+echo EVENT10_RESTORE_READONLY_DIAG_DONE=true
+"""
+    elif restore_event10:
         # Restore only EVENT10's existing frontend/navigation, not any other trading worker.
         # Install independent EVENT10 files only when the old service is genuinely absent.
         cmd=f"""#!/bin/bash

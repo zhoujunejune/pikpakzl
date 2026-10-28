@@ -38,6 +38,9 @@ model=get(13001,'/api/order-signal-model')
 print('GUARDIAN_CURRENT_MODEL',model.get('model'),'CHOICES',[x.get('id') for x in model.get('models',[])])
 status=get(13049,'/api/status')
 print('GUARDIAN_SHADOW_STATE',status.get('configured'),status.get('latest',{}).get('direction'),status.get('error'))
+from pathlib import Path
+p=Path('/opt/zl-prediction-live/src/railway-diagnostic/production-signal-choice.mjs')
+print('GUARDIAN_SELECTOR_SOURCE',p.is_file(),'containsGuardian',('GUARDIAN_MODEL' in p.read_text()) if p.is_file() else False)
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

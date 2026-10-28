@@ -79,7 +79,7 @@ settings1=snippet(pred,r'(?m)^\s*handle /settings/\*\s*\{')
 settings2=snippet(pred,r'(?m)^\s*handle /settings\s*\{')
 proxy=snippet(pred,r'(?m)^\s*reverse_proxy 127\.0\.0\.1:13001\s*\{')
 deny=['/dual5*','/event10*','/api/dual5*','/api/event10*','/dashboard*','/futures-lab*','/research*','/llm*','/deepseek*']
-routes='\n'.join('  handle '+p+' { respond 404 }' for p in deny)
+routes='\n'.join('  handle '+p+' {\n    respond 404\n  }' for p in deny)
 newmain=mainhost+' {\n'+authmain+'\n  redir https://'+predhost+'/ 302\n}'
 newpred=predhost+' {\n'+authpred+'\n'+apiroute+'\n'+apiredir+'\n'+settings1+'\n'+settings2+'\n'+routes+'\n  handle {\n'+proxy+'\n  }\n}'
 newcaddy=newmain+'\n\n'+newpred+'\n'
@@ -116,7 +116,16 @@ if [ "$patch_rc" -ne 0 ];then
   echo SINGLE_ONLY_PATCH_ABORT_AND_REVERTED
   exit 30
 fi
-if ! caddy validate --config "$CADDY" >/dev/null 2>&1 || ! "$NODE" --check "$PANEL";then
+set +e
+caddy validate --config "$CADDY" >"$ARCHIVE/logs/caddy-validation.log" 2>&1
+caddy_rc=$?
+"$NODE" --check "$PANEL" >"$ARCHIVE/logs/panel-syntax.log" 2>&1
+panel_rc=$?
+set -e
+if [ "$caddy_rc" -ne 0 ] || [ "$panel_rc" -ne 0 ];then
+ echo SINGLE_ONLY_VALIDATION_CODES="caddy:$caddy_rc panel:$panel_rc"
+ if [ "$caddy_rc" -ne 0 ];then sed -E 's/\\$2[abxy]\\$[^[:space:]]+/[AUTH_REDACTED]/g' "$ARCHIVE/logs/caddy-validation.log" | tail -15;fi
+ if [ "$panel_rc" -ne 0 ];then tail -15 "$ARCHIVE/logs/panel-syntax.log";fi
  cp -p "$ARCHIVE/source/caddy.original" "$CADDY"
  cp -p "$ARCHIVE/source/panel.original" "$PANEL"
  echo SINGLE_ONLY_SYNTAX_ABORT_AND_REVERTED

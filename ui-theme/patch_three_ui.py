@@ -77,7 +77,9 @@ def patch(name,s,css):
             s=s.replace("UP + DOWN 双边配对","双边套利")
     return s
 def verify(name,s):
-    if s.count('id="zl-mintech-theme"')!=1:raise ValueError("THEME_MARKER_MISSING_"+name)
+    # Single's JS injection embeds the CSS marker plus one idempotency check.
+    expected=2 if name=="single" else 1
+    if s.count('id="zl-mintech-theme"')!=expected:raise ValueError("THEME_MARKER_MISSING_"+name)
     checks={"single":("injectDual5RobotMenu(html)","injectFast5Dashboard(html)","ZL_MINTECH_STYLE"),
             "dual":("/api/dual5-status","/api/dual5-arm","/api/dual5-risk","zlZhStatus(d.health)"),
             "event10":('id="start"','id="records"','id="immediatePrediction"','id="refresh"')}

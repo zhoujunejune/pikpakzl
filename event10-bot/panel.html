@@ -40,7 +40,7 @@ th{color:#a9c6e7}
 <p class="sub">BTCUSDT · EMA9/21 + 成交量 + 盘口前5档 + RSI · 严格满足五项才出方向</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-后台会在每个 UTC 10分钟时间块的前3分钟扫描信号（约每12秒一次），也可手动立即检测。任何一项不满足都显示无信号，不使用 DeepSeek，也不会使用账户余额或提交订单。事件合约的实际开仓价与到期价格由币安官方指数决定，此页面的参考行情未证实等于该指数。下方仅统计公开行情代理命中率，绝不冒充官方结算胜率。
+后台持续扫描：每个 UTC 10分钟周期的前3分钟优先每12秒检查一次，其余7分钟约每30秒检查一次；也可手动立即检测。任何一项不满足都显示无信号，不使用 DeepSeek，也不会使用账户余额或提交订单。事件合约的实际开仓价与到期价格由币安官方指数决定，此页面的参考行情未证实等于该指数。下方仅统计公开行情代理命中率，绝不冒充官方结算胜率。
 </div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
@@ -57,7 +57,7 @@ th{color:#a9c6e7}
  <p class="sub">规则没有主观置信度。当前 1 分钟与 5 分钟 K 线均采用最近已收盘 K 线，避免未收盘数据误判。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
-<p class="sub">自动扫描仅优先覆盖每个 UTC 10 分钟区块的前3分钟；也可随时手动检查。有合格方向才锁定参考价并于10分钟后核对同一公开行情源。</p>
+<p class="sub">自动扫描覆盖整个 UTC 10 分钟周期，优先在前3分钟捕捉方向；也可随时手动检查。有合格方向才锁定参考价并于10分钟后核对同一公开行情源。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -297,14 +297,14 @@ function display(d){
    }
   }
   $("dataQuality").textContent="K线/参考价：公开BTC现货行情代理；盘口/主动成交：币安BTC永续合约。"+
-    "收盘K线才参与趋势/成交量判断，盘口需在锁定价之前且新鲜；此处不是官方事件合约结算。";
+    "收盘K线才参与趋势/成交量判断。现货参考价格与合约盘口均必须在实际决策时间前收到并保持新鲜；此处不是官方事件合约结算。";
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
   $("quickConfidence").textContent="通过条件：—";$("confidence").textContent="—";
   $("quickOpen").textContent="参考价：—";
   $("quickReason").textContent="五项条件同时成立才出信号；其余为无信号。";
-  $("quickTimestamp").textContent="每轮前3分钟自动优先检查；也可手动立即检查。";
+  $("quickTimestamp").textContent="整个10分钟周期自动检查；前3分钟更频繁，也可手动立即检查。";
   $("analysisDetail").replaceChildren();$("phase").textContent="等待检测";
  }
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
@@ -347,7 +347,7 @@ async function refresh(){
     d.active?"已出有效方向，等待10分钟后参考行情核对。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查已完成：五项未同时满足，无信号。":
-    "后台优先扫描每轮前3分钟，也可以手动立即检查。";
+    "后台持续检测整个10分钟周期；前3分钟优先，也可手动立即检测。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";

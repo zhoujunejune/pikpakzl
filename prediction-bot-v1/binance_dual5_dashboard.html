@@ -1,0 +1,216 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>币安五分钟UP/DOWN双边配对</title>
+<style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0d121d;color:#f2f5fa;font:15px/1.6 system-ui,-apple-system,sans-serif}main{max-width:760px;margin:auto;padding:18px}h1{font-size:21px;margin:6px 0 4px}small,.sub{color:#9aa8bb}article{background:#182235;border:1px solid #303e55;border-radius:14px;padding:16px;margin:16px 0}h2{font-size:16px;margin:0 0 12px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metric{background:#101a2a;padding:11px;border-radius:10px}.value{font-size:22px;font-weight:700;margin:4px 0;color:#fff}button{padding:12px 17px;background:#2f65e7;color:#fff;border:0;border-radius:8px;font-weight:700;margin-right:9px}button:disabled{opacity:.4}button.stop{background:#bc414b}code{overflow-wrap:anywhere;color:#c0d4f9}table{width:100%;border-collapse:collapse}td{padding:10px 4px;border-bottom:1px solid #28354a}td:last-child{text-align:right}a{color:#9cc3fc}.warn{color:#ffc06d}.ok{color:#63deac}#banner{font-weight:600}#feedback{min-height:26px}</style></head><body><main>
+<p><a href="/">返回预测机器人首页</a></p><h1>币安 BTC 5分钟 · UP + DOWN 双边配对</h1>
+<p class="sub">BINANCE_DUAL5_PAIR_V1 · 阿里云独立生产服务；不修改 FAST5 的信号、下单或统计</p>
+<article><h2>运行状态</h2><div id="banner">读取中…</div><div class="grid">
+<div class="metric"><small>当前轮次</small><div class="value" id="round">--</div></div>
+<div class="metric"><small>本轮盘口和价</small><div class="value" id="ask">--</div></div>
+<div class="metric"><small>配对净收益估计（仅展示，不拦截买单）</small><div class="value" id="edge">--</div></div>
+<div class="metric"><small>已检查 / 已报价</small><div class="value" id="checks">--</div></div>
+<div class="metric"><small>本轮首次扫描延迟</small><div class="value" id="firstScanLag">--</div></div>
+<div class="metric"><small>双边成交核验耗时</small><div class="value" id="pairExecution">--</div></div>
+</div><p><small id="detail">开轮尽快尝试双边下单；没有盈利筛选，两笔独立订单可能亏损或只成交一边。</small></p></article>
+<article><h2>独立实盘交易开关</h2><p class="warn">两笔独立订单不具有原子性：可能只成交 UP 或 DOWN，造成单边损失。发生未知状态会停机，需人工核对。仅在你主动开启后才发送真实订单。</p>
+<p>UP 和 DOWN 买入金额可单独设置，默认各 <b>1 USDT</b>；<b>已取消每日硬性金额限制</b>。每轮最多尝试一组；不再检查买价之和或预估净收益。必须能获取有效盘口与报价并完成必要的安全核验，交易所拒绝或缺少流动性仍可能无法成交。</p>
+<h2>双边交易资金来源</h2>
+<p class="sub">由你手动选择：预测账户（MPC / CeDeFi）或现货账户（CEX / SPOT）。UP 与 DOWN 两笔订单使用相同来源，余额不足时不会自动从另一账户扣款。切换只影响之后的买单，不会转移资金。</p>
+<div class="metric">
+<label for="fundingSource">选择扣款账户</label>
+<p><select id="fundingSource" style="width:100%;max-width:360px;padding:12px;background:#0d1728;color:#fff;border:1px solid #536680;border-radius:8px">
+<option value="MPC">预测账户钱包（MPC / CeDeFi）</option>
+<option value="CEX">币安现货账户（CEX / SPOT）</option>
+</select></p>
+<button id="fundingSave" type="button" disabled>保存资金来源</button>
+<small id="fundingMsg" role="status">读取中…</small>
+</div>
+<h2>UP / DOWN 各自买入金额</h2>
+<div class="grid">
+ <div class="metric"><label for="upAmount" class="ok">UP 买入金额（USDT）</label><p><input id="upAmount" type="number" min="1" max="1000" step="0.01" value="1" inputmode="decimal" style="width:100%;max-width:165px;padding:9px;background:#0d1728;color:#fff;border:1px solid #536680;border-radius:8px"></p></div>
+ <div class="metric"><label for="downAmount" class="warn">DOWN 买入金额（USDT）</label><p><input id="downAmount" type="number" min="1" max="1000" step="0.01" value="1" inputmode="decimal" style="width:100%;max-width:165px;padding:9px;background:#0d1728;color:#fff;border:1px solid #536680;border-radius:8px"></p></div>
+</div>
+<p><button id="amountSave" type="button" disabled>保存双边金额</button><small id="amountMsg" role="status">正在读取后台金额</small></p>
+<p class="sub">金额是各自投入的 USDT，不是配平的份额数量。即使 UP、DOWN 各买1 USDT，也未必能形成等量配对或获利。保存不等于下单。</p>
+<h2>UP / DOWN 独立止盈止损</h2>
+<p class="sub">按该持仓的<strong>实时可卖出金额相对成本的收益率</strong>计算；与原有机器人的「最大可能利润比例」不同。各边单独判断、独立卖出。市场价格变化快，止盈止损不是保价单。</p>
+<div class="grid">
+ <div class="metric"><h2 class="ok">UP 持仓</h2>
+ <label><input type="checkbox" id="upTpOn" checked> 开启止盈</label><p>止盈 <input type="number" id="upTp" min="1" max="95" step="1" value="30" style="width:68px"> %</p>
+ <label><input type="checkbox" id="upSlOn" checked> 开启止损</label><p>止损 <input type="number" id="upSl" min="1" max="95" step="1" value="30" style="width:68px"> %</p></div>
+ <div class="metric"><h2 class="warn">DOWN 持仓</h2>
+ <label><input type="checkbox" id="downTpOn" checked> 开启止盈</label><p>止盈 <input type="number" id="downTp" min="1" max="95" step="1" value="30" style="width:68px"> %</p>
+ <label><input type="checkbox" id="downSlOn" checked> 开启止损</label><p>止损 <input type="number" id="downSl" min="1" max="95" step="1" value="30" style="width:68px"> %</p></div>
+</div><p><button id="riskSave" type="button" disabled>保存两边止盈止损</button><small id="riskMsg">加载中</small></p>
+<button id="arm" type="button" disabled>启用独立双边实盘</button><button id="stop" class="stop" type="button" disabled>关闭双边实盘</button>
+<div class="metric" id="riskUnlockPanel" hidden style="margin-top:12px">
+<strong>订单结束后的自助解锁</strong>
+<p class="sub">你手动结束订单后，点击下方按钮。系统会核对币安是否已无挂单、无未结持仓；确认本轮结束且结果一致，就解除交易锁并把过期的“待确认”标记更新为已核验。即使锁已经解除但残留待确认标记，也能在此修复。保留历史与止损设置，不会自行买入。</p>
+<button id="riskUnlock" type="button" disabled>核验无持仓并恢复操作</button>
+<small id="riskUnlockMsg" role="status">实盘关闭且存在保护锁或过期待确认记录时可使用。</small>
+</div>
+<p id="feedback" class="sub"></p></article>
+<article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
+<article><h2>为什么会不下单？</h2><p class="sub">典型原因包括选定资金账户余额不足、某一边无流动性或有效报价、盘口过期、市场结果不互补、该轮已尝试、另一机器人正使用相同钱包、币安拒单。预估利润不再是阻止买单的条件。</p></article>
+</main><script>
+const el=id=>document.getElementById(id),label=x=>x==null?'--':String(x),fmt=x=>Number.isFinite(Number(x))?Number(x).toFixed(4):'--';
+let saving=false,riskEditing=false,riskLoaded=false,amountLoaded=false,amountEditing=false,fundingLoaded=false,fundingEditing=false;
+async function load(){
+ try{
+  const r=await fetch('/api/dual5-status',{cache:'no-store'});
+  const d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.error||'STATUS_UNAVAILABLE');
+  el('banner').textContent=(d.active?'已开启实盘':'实盘已关闭')+' · '+label(d.health)+(d.blocked?' · 交易保护锁定':'');
+  el('banner').className=d.active?'ok':'warn';
+  el('round').textContent=d.round?new Date(d.round).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit'}):'--';
+  const q=d.lastOpportunity;
+  el('ask').textContent=q?fmt(q.askSum):'--';
+  el('edge').textContent=q&&q.quoteNetUSDT!=null?fmt(q.quoteNetUSDT)+' USDT':'--';
+  el('checks').textContent=label(d.checked)+' / '+label(d.quoteChecks);
+   el('firstScanLag').textContent=d.firstScanLagMs==null?'--':d.firstScanLagMs+' ms';
+   el('pairExecution').textContent=d.lastOrder?.pairExecutionMs==null?'--':d.lastOrder.pairExecutionMs+' ms';
+  el('detail').textContent='UP卖一 '+(q?fmt(q.upAsk):'--')+' · DOWN卖一 '+(q?fmt(q.downAsk):'--')+
+   ' · 报价状态：'+(q?label(q.status):'等待有效市场')+
+   ' · 今日累计下单尝试金额 '+fmt(d.dailySpend)+' USDT（不设每日硬限制）';
+  el('arm').disabled=saving||d.active||d.blocked;el('stop').disabled=saving||!d.active;
+  const hasStalePending=Object.values(d.legs||{}).some(x=>x?.status==='ORDER_PENDING');
+  const canAudit=d.active===false&&(d.blocked===true||hasStalePending);
+  el('riskUnlockPanel').hidden=!canAudit;
+  el('riskUnlock').disabled=saving||!canAudit;
+  el('riskSave').disabled=saving||d.active||d.blocked;
+  el('amountSave').disabled=saving||d.active||d.blocked;
+  el('fundingSave').disabled=saving||d.active||d.blocked;
+  if(d.fundingSource&&!fundingEditing&&!fundingLoaded){
+   el('fundingSource').value=d.fundingSource;
+   fundingLoaded=true;
+   el('fundingMsg').textContent='后台当前来源：'+(d.fundingSource==='CEX'?'币安现货账户 CEX / SPOT':'预测账户 MPC / CeDeFi');
+  }
+  if(d.amounts&&!amountEditing&&!amountLoaded){
+   el('upAmount').value=d.amounts.UP;
+   el('downAmount').value=d.amounts.DOWN;
+   amountLoaded=true;
+   el('amountMsg').textContent='后台金额：UP '+fmt(d.amounts.UP)+' USDT / DOWN '+fmt(d.amounts.DOWN)+' USDT';
+  }
+  if(d.risk&&!riskEditing&&!riskLoaded){
+   for(const [leg,prefix] of [['UP','up'],['DOWN','down']]){
+    const cfg=d.risk[leg];if(!cfg)continue;
+    el(prefix+'TpOn').checked=cfg.takeProfitEnabled;
+    el(prefix+'SlOn').checked=cfg.stopLossEnabled;
+    el(prefix+'Tp').value=cfg.takeProfitPct;
+    el(prefix+'Sl').value=cfg.stopLossPct;
+   }
+   riskLoaded=true;el('riskMsg').textContent='已读取后台 UP/DOWN 止盈止损设置。';
+  }
+  const o=d.lastOrder;
+  if(o){
+   const rows=[['轮次',new Date(o.round).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})],
+    ['执行阶段',o.phase],['下单资金来源',o.fundingSource==='CEX'?'现货账户 CEX / SPOT':'预测账户 MPC / CeDeFi'],['UP首次提交距开轮',o.firstOrderSubmitAt==null?'未提交':(o.firstOrderSubmitAt-o.round)+' ms'],['双边核验耗时',o.pairExecutionMs==null?'未完成':o.pairExecutionMs+' ms'],['UP订单',o.first?.orderId||'未提交'],
+    ['DOWN订单',o.second?.orderId||'未提交'],['错误',o.error||'无'],
+    ['实际配对保守收益',o.actualPairWorstCaseUSDT==null?'尚未确认':fmt(o.actualPairWorstCaseUSDT)+' USDT']];
+   el('orders').replaceChildren(...rows.map(([k,v])=>{
+     const tr=document.createElement('tr'),td1=document.createElement('td'),td2=document.createElement('td');
+     td1.textContent=k;td2.textContent=v;tr.append(td1,td2);return tr;
+   }));
+  }
+ }catch(e){el('banner').textContent='状态无法核验：'+String(e.message||e);el('arm').disabled=true;el('stop').disabled=true;el('amountSave').disabled=true;el('riskSave').disabled=true;el('fundingSave').disabled=true;el('riskUnlock').disabled=true;}
+}
+async function saveFunding(){
+ if(saving)return;
+ const fundingSource=el('fundingSource').value;
+ if(!['MPC','CEX'].includes(fundingSource)){el('fundingMsg').textContent='无效资金来源';return}
+ saving=true;fundingEditing=true;el('fundingSave').disabled=true;
+ try{
+  const response=await fetch('/api/dual5-funding',{
+   method:'POST',credentials:'same-origin',
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({fundingSource})
+  });
+  const data=await response.json();
+  if(!response.ok||data.ok!==true||data.fundingSource!==fundingSource)
+   throw Error(data.error||'FUNDING_SOURCE_NOT_SAVED');
+  el('fundingMsg').textContent='已保存：'+(fundingSource==='CEX'?'现货账户 CEX / SPOT':'预测账户 MPC / CeDeFi')+'；下一笔UP和DOWN使用此来源。';
+ }catch(e){el('fundingMsg').textContent='保存失败：'+String(e.message||e)}
+ finally{saving=false;fundingEditing=false;await load()}
+}
+async function saveAmounts(){
+ if(saving)return;
+ const up=Number(el('upAmount').value),down=Number(el('downAmount').value);
+ const valid=n=>Number.isFinite(n)&&n>=1&&n<=1000&&Math.abs(Math.round(n*100)-n*100)<1e-7;
+ if(!valid(up)||!valid(down)){
+  el('amountMsg').textContent='输入金额必须是1～1000 USDT，最多两位小数';return;
+ }
+ saving=true;amountEditing=true;el('amountSave').disabled=true;
+ try{
+  const res=await fetch('/api/dual5-amounts',{
+   method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({amounts:{UP:up,DOWN:down}})
+  });
+  const d=await res.json();
+  if(!res.ok||d.ok!==true||d.amounts?.UP!==up||d.amounts?.DOWN!==down)
+   throw Error(d.error||'金额未核实保存');
+  el('amountMsg').textContent='保存成功：UP '+fmt(up)+' USDT / DOWN '+fmt(down)+' USDT；每日无硬性金额上限。';
+ }catch(e){el('amountMsg').textContent='金额保存失败：'+String(e.message||e)}
+ finally{saving=false;amountEditing=false;await load();}
+}
+async function saveRisk(){
+ if(saving)return;
+ const risk={};
+ for(const [leg,p] of [['UP','up'],['DOWN','down']]){
+  const takeProfitPct=Number(el(p+'Tp').value),stopLossPct=Number(el(p+'Sl').value);
+  if(!Number.isFinite(takeProfitPct)||takeProfitPct<1||takeProfitPct>95||
+     !Number.isFinite(stopLossPct)||stopLossPct<1||stopLossPct>95){
+   el('riskMsg').textContent='两边止盈止损必须在1%～95%之间。';return;
+  }
+  risk[leg]={takeProfitEnabled:el(p+'TpOn').checked,takeProfitPct,
+   stopLossEnabled:el(p+'SlOn').checked,stopLossPct};
+ }
+ saving=true;riskEditing=true;el('riskSave').disabled=true;
+ try{
+  const res=await fetch('/api/dual5-risk',{method:'POST',credentials:'same-origin',
+   headers:{'Content-Type':'application/json'},body:JSON.stringify({risk})});
+  const data=await res.json();
+  if(!res.ok||data.ok!==true)throw Error(data.error||'UPDATE_NOT_CONFIRMED');
+  el('riskMsg').textContent='已保存：UP/DOWN分别止盈止损，各自独立触发；仅实际可卖出报价满足条件才提交卖单。';
+ }catch(e){el('riskMsg').textContent='风险参数保存失败：'+String(e.message||e)}
+ finally{saving=false;riskEditing=false;await load();}
+}
+async function save(armed){
+ if(saving)return;
+ if(armed&&!confirm('确认启用真实资金双边交易？每笔为独立订单，一侧可能失败或亏损。'))return;
+ saving=true;el('arm').disabled=true;el('stop').disabled=true;
+ try{
+  const r=await fetch('/api/dual5-arm',{method:'POST',headers:{'Content-Type':'application/json'},
+   credentials:'same-origin',body:JSON.stringify({armed})});
+  const d=await r.json();if(!r.ok||d.ok!==true)throw Error(d.error||'SAVE_FAILED');
+  el('feedback').textContent=d.armed?'独立实盘已开启；每轮尽快尝试买入 UP 和 DOWN，不过滤预估收益':'独立实盘已关闭；已提交订单不会被撤销';
+ }catch(e){el('feedback').textContent='保存失败：'+String(e.message||e)}
+ finally{saving=false;await load();}
+}
+async function unlockAfterRiskAudit(){
+ // The labelled button is the owner's explicit approval. Some embedded iOS
+ // browsers suppress native confirm(), causing a silent early return.
+ if(saving){el('riskUnlockMsg').textContent='已有操作未完成，请稍后重试。';return;}
+ saving=true;el('riskUnlock').disabled=true;
+ el('riskUnlockMsg').textContent='请求已发送，正在核实两次币安订单、未结持仓及机器人状态…';
+ el('feedback').textContent='订单核验正在进行，实盘保持关闭。';
+ try{
+  const r=await fetch('/api/dual5-reconcile-flat-wallet',{
+   method:'POST',credentials:'same-origin',
+   headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  const raw=await r.text();
+  let d;try{d=JSON.parse(raw)}catch{throw Error('后台没有返回有效JSON（HTTP '+r.status+'）')}
+  if(!r.ok||d.ok!==true||d.blocked!==false||d.armed!==false||d.verifiedSnapshots!==2)
+   throw Error(String(d.error||'币安风险核验未通过')+'（HTTP '+r.status+'）');
+  el('riskUnlockMsg').textContent='两次核验确认无挂单、无未结持仓，保护锁及过期待确认记录已核销；实盘仍关闭。';
+  el('feedback').textContent='已解除保护锁。请检查资金来源、两边金额和止损，再由你自行决定是否开启交易。';
+ }catch(e){
+  const message=String(e.message||e);
+  el('riskUnlockMsg').textContent='暂不能解锁：'+message+'（保护锁已保留）';
+  el('feedback').textContent='风险核验失败：'+message+'。请把此错误发给我排查。';
+ }finally{saving=false;await load();}
+}
+el('riskUnlock').addEventListener('click',()=>void unlockAfterRiskAudit());
+el('fundingSave').addEventListener('click',()=>void saveFunding());
+el('amountSave').addEventListener('click',()=>void saveAmounts());
+el('riskSave').addEventListener('click',()=>void saveRisk());
+el('arm').addEventListener('click',()=>void save(true));el('stop').addEventListener('click',()=>void save(false));
+void load();setInterval(load,4500);
+</script></body></html>

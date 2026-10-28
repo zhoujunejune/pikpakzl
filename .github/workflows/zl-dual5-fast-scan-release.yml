@@ -1,0 +1,166 @@
+name: Release dual5 round-boundary fast scanner
+# Fix funding-source editing after stale ORDER_PENDING; require signed wallet-flat validation. Real-money trading remains OFF.
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-dual5-fast-scan-release.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check syntax, trade protections, new timing and scanner tests
+        run: |
+          node --check prediction-bot-v1/binance_dual5_pairs.mjs
+          node --test prediction-bot-v1/binance_dual5_pairs.test.mjs
+          python -m py_compile prediction-bot-v1/aliyun_dual5_fast_scan_release.py
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('prediction-bot-v1/aliyun_dual5_fast_scan_release.py').read_text()
+          assert 'FUNDING_PROXY=r"""' in p
+          assert "'/api/dual5-funding'" in p
+          assert 'FLAT_PROXY=r"""' in p
+          assert 'FLAT_PROXY+ROUTE_ANCHOR' in p
+          assert 'DUAL5_MPC_CEX_OWNER_SELECTOR_LIVE=true' in p
+          assert 'DUAL5_EXISTING_ORDER_LOCK_UNCHANGED=' in p
+          assert 'DUAL5_OWNER_WALLET_RISK_AUDIT_BUTTON_LIVE=true' in p
+          assert 'DUAL5_PENDING_MARKERS_WALLET_FLAT_TWICE_VERIFIED=true' in p
+          assert 'DUAL5_FUNDING_SWITCH_PENDING_RECONCILIATION_PATCH_LIVE=true' in p
+          assert 'DUAL5_FUNDING_PROXY_NOT_ALREADY_INSTALLED' in p
+          assert 'for f in (WORKER,PAGE,PANEL):shutil.copy2(archive/f.name,f)' in p
+          print('DUAL5_FUNDING_PROXY_BACKUP_ROLLBACK_CHECKS_OK=true')
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('prediction-bot-v1/binance_dual5_pairs.mjs').read_text()
+          page=Path('prediction-bot-v1/binance_dual5_dashboard.html').read_text()
+          assert all(s in src for s in [
+             'ROUND_BOUNDARY_FAST_V1','nextScanDelayMs',
+             'record.firstOrderSubmitAt=Date.now()',
+             'record.bothConfirmedAt=Date.now()',
+             'UNHEDGED_OR_UNKNOWN_STOPPED',
+             'profitFilterEnabled:false',
+             "if(!estimate.ok){state.health='INVALID_PAIR_QUOTES';return}",
+             'if(!reassess.ok || Number(down.expireAt)',
+             "if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}",
+             'config.lastOrderRound===round',
+             'const ENTRY_WINDOW_MS=15000,CONFIRM_WINDOW_MS=12000',
+             "record.phase='UP_ZERO_FILL_CONFIRMED'", 
+             'exactOrderResult(orders,id,topic)',
+             'validFundingSource','STOP_TRADING_BEFORE_FUNDING_EDIT',
+             'reconcileStalePendingForFundingChange',
+             'NO_OPEN_EXPOSURE_VERIFIED',
+             "req.url==='/api/funding'",
+             'dailySpendMax:null',
+             'risk:config.risk'])
+          assert all(s not in src for s in ['if(raw>=1-2*fee-MIN_EDGE/3.2)',
+              'if(!estimate.feasible)', 'if(!reassess.feasible'])
+          assert all(s in page for s in [
+             'id="upAmount"','id="downAmount"','id="riskSave"',
+             'id="firstScanLag"','id="pairExecution"',
+             'id="fundingSource"','id="fundingSave"','/api/dual5-funding',
+             'id="riskUnlock"','id="riskUnlockPanel"',
+             '请求已发送，正在核实两次币安订单',
+             '后台没有返回有效JSON',
+             '/api/dual5-reconcile-flat-wallet'])
+          print('DUAL5_FAST_SCAN_TESTS_OK=true')
+          PY
+  deploy:
+    needs: [tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Safe dual5-only rollout when idle, with backup and automatic rollback
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feat/deepseek40-45s-ai-only-prod-20261025'
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/aliyun_dual5_fast_scan_release.py" -o "$tmp/release.py"
+          python3 -m py_compile "$tmp/release.py"
+          python3 "$tmp/release.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+              access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+              instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+              name='zl-dual5-fast-scan-live',type='RunShellScript',
+              working_user='root',command_content=script,timeout=250)).body.invoke_id
+          for _ in range(130):
+            time.sleep(2)
+            r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+              region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+            if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+              print('DUAL5_FAST_SCAN_ALIBABA',r.invocation_status,'EXIT',r.exit_code)
+              try: print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-12000:])
+              except Exception: print('DUAL5_REMOTE_OUTPUT_UNAVAILABLE')
+              if str(r.invocation_status)!='Success' or int(r.exit_code)!=0:raise RuntimeError('DUAL5_FAST_SCAN_RELEASE_NOT_SUCCESSFUL')
+              break
+          else:raise RuntimeError('DUAL5_FAST_SCAN_CLOUD_TIMEOUT')
+          PY
+  verify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check authenticated public scanner and disabled live state
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request
+          origin='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+             req=urllib.request.Request(origin+path,headers={'Authorization':auth,'Cache-Control':'no-store'})
+             with urllib.request.urlopen(req,timeout=17) as r:return r.status,r.read(1300000)
+          status,buf=get('/api/dual5-status')
+          d=json.loads(buf)
+          assert status==200 and d.get('model')=='BINANCE_DUAL5_PAIR_V1'
+          assert d.get('scanMode')=='ROUND_BOUNDARY_FAST_V1'
+          assert d.get('entryMode')=='ROUND_OPEN_VALID_QUOTES_V2'
+          assert d.get('profitFilterEnabled') is False
+          assert d.get('fundingSource') in ('MPC','CEX')
+          assert d.get('active') is False and d.get('blocked') is False
+          status,buf=get('/dual5')
+          html=buf.decode('utf8','replace')
+          assert status==200 and 'id="firstScanLag"' in html and 'id="pairExecution"' in html
+          assert 'id="fundingSource"' in html and 'id="fundingSave"' in html
+          assert '/api/dual5-funding' in html
+          assert 'id="riskUnlock"' in html and '/api/dual5-reconcile-flat-wallet' in html
+          status,buf=get('/api/status')
+          assert json.loads(buf).get('enabled') is False
+          print('DUAL5_FAST_SCAN_PUBLIC_VERIFY=true')
+          print('DUAL5_NO_PROFIT_FILTER_LIVE_VERIFIED=true')
+          print('DUAL5_MPC_CEX_SELECTOR_PUBLIC_VERIFIED=true')
+          print('DUAL5_FUNDING_SOURCE='+str(d.get('fundingSource')))
+          print('DUAL5_LIVE_TRADING_OFF=true')
+          print('DUAL5_MANUAL_REVIEW_LOCK_STAYS_CLEARED=true')
+          print('DUAL5_FUNDING_SOURCE_PENDING_RECONCILIATION_CODE_ONLINE=true')
+          print('DUAL5_OWNER_WALLET_RISK_UNLOCK_BUTTON_LIVE=true')
+          print('DUAL5_FIRST_SCAN_LAG_MS='+str(d.get('firstScanLagMs')))
+          PY

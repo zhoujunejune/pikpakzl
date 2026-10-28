@@ -1,0 +1,75 @@
+name: Verify Binance read-only account and trade tile JS mappings
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-trade-account-check-20261026.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Check signed balance status and actual trade tile scripts only, no orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import urllib.request,json,pathlib,re,subprocess,os
+          def get(p):
+           try:
+            with urllib.request.urlopen('http://127.0.0.1:13001'+p,timeout=9) as r:return r.status,json.load(r)
+           except Exception as e:return getattr(e,'code',0),{'error':type(e).__name__+':'+str(e)[:80]}
+          for name in ['/api/balance','/api/status']:
+           code,d=get(name)
+           if name=='/api/balance':
+            items=d.get('items') or []
+            print('TRADE_READONLY_BALANCE',json.dumps({'code':code,'ok':d.get('ok'),
+              'error':d.get('error'),'network':d.get('network'),'exchangeHttp':d.get('httpStatus'),
+              'items':len(items),'hasEnabledPaymentOption':any(x.get('enabled') is True for x in items),
+              'hasPositiveAvailableBalance':any(float(x.get('availableBalanceDisplay') or 0)>0 for x in items if isinstance(x,dict))}))
+           else:
+            b=d.get('balance') or {}
+            print('TRADE_READONLY_CONFIG',json.dumps({'code':code,
+              'amountConfigured':d.get('amount') is not None,
+              'amountValue':d.get('amount'),'mode':d.get('mode'),
+              'enabled':d.get('enabled'),'autoConfirmEnabled':d.get('autoConfirmEnabled'),
+              'balanceOk':b.get('ok'),'balanceError':b.get('error'),
+              'pendingState':(d.get('pendingAction') or {}).get('state'),
+              'lastOrderStatus':(d.get('lastOrder') or {}).get('status')}))
+          # The browser reads this script for the original control tiles.
+          p=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic/wrapper.mjs')
+          txt=p.read_text()
+          for needle in ["text('round'","text('status'","text('direction'","text('orderDirection'","text('score'","text('amountView'"]:
+           i=txt.find(needle)
+           print('TRADE_PANEL_SCRIPT_BINDING',json.dumps({'key':needle,'exists':i>=0,
+             'source':txt[i:i+110] if i>=0 else None},ensure_ascii=False))
+          output=subprocess.run(['systemctl','show','zl-prediction-trade.service','--property=ExecStart,WorkingDirectory'],
+            capture_output=True,text=True,timeout=6)
+          # Do not log environment/credentials.
+          print('TRADE_SERVICE_EXEC',output.stdout[:1000].strip())
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-account-order-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=90)).body.invoke_id
+          for _ in range(55):
+           time.sleep(2)
+           a=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if a and str(a.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST5_ACCOUNT_READONLY',a.invocation_status,'EXIT',a.exit_code)
+            print(base64.b64decode(a.output or '',validate=True).decode('utf8','replace')[-20500:])
+            if int(a.exit_code)!=0:raise RuntimeError('FAILED_READONLY_INSPECT')
+            break
+          else:raise RuntimeError('INSPECT_TIMEOUT')
+          OUTER

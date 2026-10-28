@@ -1,0 +1,56 @@
+name: Diagnose rolled back official reference sidecar safe read only
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-oracle-sidecar-start-diagnostics.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Safe systemd journal and POSIX path checks; no writes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,base64,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          s=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import os,subprocess,pathlib,urllib.request,json
+          for p in ['/opt','/opt/zl-prediction-live','/opt/zl-prediction-live/deepseek5','/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-core.mjs','/opt/zl-prediction-node','/opt/zl-prediction-node/bin','/opt/zl-prediction-node/bin/node','/var/lib/zl-exchange-api/prediction/binance.env']:
+           x=pathlib.Path(p)
+           if x.exists():
+            t=x.stat();print('SIDE_DIAG_PERM',p,oct(t.st_mode&0o777),'uid',t.st_uid,'gid',t.st_gid)
+          print('SIDE_DIAG_NODE_AS_NOBODY',subprocess.run(['runuser','-u','nobody','--','/opt/zl-prediction-node/bin/node','--version'],capture_output=True,text=True,timeout=8).returncode)
+          cmd=['journalctl','-u','zl-prediction-official-reference.service','--since','2026-10-25 13:20:00 UTC','--no-pager','-o','cat','-n','40']
+          z=subprocess.run(cmd,capture_output=True,text=True,timeout=7)
+          for l in z.stdout.splitlines()[-25:]:
+           if any(x in l.lower() for x in ['secret','api_key','signature','authorization','token','key=']):continue
+           print('SIDE_DIAG_LOG',l[:330])
+          with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=8) as r:d=json.load(r)
+          print('SIDE_DIAG_FOLLOW',d.get('enabled'),'MODEL',d.get('orderSignalModel'))
+          print('SIDE_DIAG_FINISHED=true')
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-official-ref-sidecar-diag-readonly',type='RunShellScript',working_user='root',command_content=s,timeout=110)).body.invoke_id
+          for _ in range(57):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            out=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            print('SIDE_DIAG_REMOTE',r.invocation_status,r.exit_code);print(out[-11000:])
+            if int(r.exit_code)!=0:raise RuntimeError('SIDE_DIAG_FAILED')
+            break
+          else:raise RuntimeError('SIDE_DIAG_TIMEOUT')
+          OUTER

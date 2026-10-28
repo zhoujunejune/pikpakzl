@@ -1,0 +1,120 @@
+name: Optimize live TP SL and BUY confirmation critical path (guarded)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-trade-risk-speed-safe-release-20261027.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate exact patch markers, scheduler semantics, original trading safeguards, syntax
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_order_risk_speed_safe_release_20261027.py
+          python - <<'PY'
+          import importlib.util,pathlib,tempfile,subprocess
+          p=pathlib.Path('prediction-bot-v1/aliyun_order_risk_speed_safe_release_20261027.py')
+          spec=importlib.util.spec_from_file_location('r',p)
+          mod=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          risk=pathlib.Path('railway-diagnostic/risk-worker.mjs').read_text()
+          buy=pathlib.Path('railway-diagnostic/wrapper.mjs').read_text()
+          updatedrisk=mod.unique_replace(risk,mod.OLD_RISK,mod.NEW_RISK,'SELL')
+          updatedbuy=mod.unique_replace(buy,mod.OLD_BUY,mod.NEW_BUY,'BUY')
+          assert 'Math.max(15,POLL_MS-elapsed)' in updatedrisk
+          assert 'await tick();' in updatedrisk
+          assert 'setInterval(tick, POLL_MS)' not in updatedrisk
+          assert 'refreshModelSelection(),refreshDirectionSettings()' in updatedbuy
+          assert 'pendingOrderMatchesProduction(p,current)' in updatedbuy
+          assert "getFreshQuote(p._internal)" in updatedbuy
+          assert "if (stateBlocksSell(previous)) return;" in updatedrisk
+          assert 'risk_sell_submitted' in updatedrisk
+          assert updatedrisk.count('function runPacedRiskTick()')==1
+          assert updatedbuy.count('Promise.all([refreshModelSelection(),refreshDirectionSettings()])')==1
+          with tempfile.TemporaryDirectory() as td:
+           for name,s in [('risk-worker.mjs',updatedrisk),('wrapper.mjs',updatedbuy)]:
+            path=pathlib.Path(td,name);path.write_text(s)
+            subprocess.run(['node','--check',str(path)],check=True)
+          print('SPEED_SOURCE_GUARD_TESTS_PASS=true')
+          PY
+  deploy:
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Atomic production patch through Alibaba Cloud Assistant, no config or order changes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,base64,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feat/deepseek40-45s-ai-only-prod-20261025'
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          curl -fsSL --retry 3 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/aliyun_order_risk_speed_safe_release_20261027.py" -o "$work/release.py"
+          python3 -m py_compile "$work/release.py"
+          python3 "$work/release.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ident=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-trade-risk-completion-paced-buy-parallel-safe',type='RunShellScript',working_user='root',command_content=script,timeout=245)).body.invoke_id
+          for _ in range(125):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('SPEED_RELEASE_CLOUD_STATUS',r.invocation_status,'EXIT',r.exit_code)
+            try:print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-14000:])
+            except Exception:print('REMOTE_OUTPUT_DECODE_FAILED')
+            if r.invocation_status!='Success' or int(r.exit_code)!=0:
+             raise RuntimeError('SPEED_RELEASE_PRODUCTION_FAILED')
+            break
+          else:raise RuntimeError('SPEED_RELEASE_CLOUD_TIMEOUT')
+          OUTER
+  verify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Confirm public original order settings, TP SL and API operational
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,json,urllib.request
+          origin='https://prediction.47-237-188-69.sslip.io'
+          token=base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(origin+path,headers={'Authorization':'Basic '+token,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(req,timeout=17) as r:return r.status,json.load(r)
+          st,trade=get('/api/status')
+          assert st==200 and trade.get('ok')
+          st,risk=get('/api/risk-control')
+          assert st==200 and risk.get('ok')
+          e=risk.get('execution') or {}
+          assert e.get('ready') is True and e.get('workerRunning') is True and e.get('configApplied') is True
+          assert risk.get('persistenceHealthy') is True
+          print('SPEED_RELEASE_PUBLIC_LIVE_HEALTH_OK=true')
+          print('SPEED_RELEASE_RISK_CONFIG',json.dumps({k:risk.get(k) for k in
+           ('takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent')}))
+          print('SPEED_RELEASE_TRADE_CONFIG',json.dumps({k:trade.get(k) for k in
+           ('enabled','orderSignalModel')}))
+          PY

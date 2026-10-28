@@ -1,0 +1,63 @@
+name: Audit FAST5 missing opening tick and prewarm (read-only)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-open-lock-audit-20261026.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read signal and spot feed timing, no changes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sh="""#!/bin/bash
+          set -euo pipefail
+          python3 - <<'INNER'
+          import json,urllib.request,time
+          def get(port,p):
+           with urllib.request.urlopen('http://127.0.0.1:%s%s'%(port,p),timeout=5) as r:return json.load(r)
+          now=int(time.time()*1000);round_=now//300000*300000
+          s=get(13046,'/api/status');market=get(13003,'/api/shadow-market-data');t=get(13001,'/api/status')
+          m=market.get('latest') or {}
+          last=s.get('latest') or {}
+          candles=(market.get('candles') or {}).get('1m',{}).get('rows',[])
+          window=[{k:x.get(k) for k in ('startMs','endMs','open','close','closed')} for x in candles if round_-180000<=x.get('startMs',-1)<=round_][:5]
+          info={'msIntoRound':now-round_,'model':s.get('model'),'version':s.get('strategyVersion'),
+          'enabled':t.get('enabled'),'signal':last.get('direction'),'locked':s.get('locked'),
+          'lastError':s.get('lastError'),'latestError':s.get('latestError'),
+          'provisionalDirection':s.get('provisionalDirection'),'prewarm':s.get('prewarm'),
+          'prewarmTickCount':s.get('prewarmTickCount'),'observedSamples':s.get('observedSamples'),
+          'feedGetMs':s.get('lastRequestMs'),'feedFetchAgeMs':now-s['lastFetchAt'] if isinstance(s.get('lastFetchAt'),int) else None,
+          'marketOk':market.get('ok'),'marketTimeAgeMs':now-m.get('eventMs',0),
+          'marketEventMs':m.get('eventMs'),'marketRoundStartMs':m.get('roundStartMs'),
+          'marketRoundMatches':m.get('roundStartMs')==round_,'marketFeedConnected':m.get('marketFeedConnected'),
+          'spotPrice':m.get('lastPrice'),'spotOpen':m.get('roundOpenPrice'),
+          'recentCandles':window,'firstLastCandle':(candles[-1] if candles else None)}
+          print('FAST5_OPEN_AUDIT',json.dumps(info,ensure_ascii=False,default=str)[:6000])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          invoke=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='FAST5-opening-tick-readonly',type='RunShellScript',working_user='root',command_content=sh,timeout=75)).body.invoke_id
+          for i in range(55):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('FAST5_AUDIT_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-6500:])
+            if int(r.exit_code)!=0:raise RuntimeError('AUDIT_FAILED')
+            break
+          else:raise RuntimeError('AUDIT_TIMEOUT')
+          OUTER

@@ -1,0 +1,67 @@
+name: Inspect live dual-outcome production integration safe metadata
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-binance-dual5-preflight-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read only service environment key names and frontend route markers
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,subprocess,json
+          units=('zl-prediction-trade.service','zl-prediction-risk-exits.service')
+          for unit in units:
+           r=subprocess.run(['systemctl','show',unit,'--property=MainPID,ActiveState,WorkingDirectory,User,EnvironmentFiles,FragmentPath,ExecStart,ExecStartPre'],capture_output=True,text=True)
+           # Sanitized: only names/properties, never environment values.
+           props={}
+           for l in r.stdout.splitlines():
+            k,_,v=l.partition('=')
+            if k=='ExecStart':v=v[:130]
+            if k in ('EnvironmentFiles','FragmentPath'):v=v[:450]
+            props[k]=v
+           pid=props.get('MainPID')
+           if pid and pid.isdigit() and int(pid)>0:
+            env=pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\0')
+            props['secretKeyNames']=[str(x.split(b'=')[0],'utf8','ignore') for x in env
+             if any(w in x.split(b'=')[0] for w in (b'PREDICTION',b'BINANCE',b'REDIS'))]
+           print('DUAL5_UNIT',json.dumps({'unit':unit,'props':props},ensure_ascii=False))
+          root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+          for file in ('panel-stats-shell.mjs','fast5-dashboard-inject.mjs'):
+           p=root/file
+           if p.exists():
+            s=p.read_text()
+            for token in ('/api/fast5-round-stats', '/api/fast5-live-status','injectFast5Dashboard','FAST5 独立统计面板','  if (req.method ==='):
+             i=s.find(token)
+             if i>=0:print('DUAL5_UI_ANCHOR',json.dumps({'file':file,'token':token,'at':i,'snippet':s[max(0,i-180):i+350]},ensure_ascii=False)[:900])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          id=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-binance-binary-pair-readonly-preflight',type='RunShellScript',working_user='root',command_content=script,timeout=110)).body.invoke_id
+          for _ in range(60):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=id)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('DUAL5_PREFLIGHT_RESULT',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-14000:])
+            if int(r.exit_code)!=0:raise RuntimeError('DUAL5_PREFLIGHT_FAILED')
+            break
+          else:raise RuntimeError('DUAL5_PREFLIGHT_TIMEOUT')
+          OUTER

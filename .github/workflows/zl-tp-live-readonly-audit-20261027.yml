@@ -1,0 +1,93 @@
+name: Diagnose production take profit not executing (read-only)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-tp-live-readonly-audit-20261027.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only TP control, risk worker, quote and sell outcomes on Alibaba
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,json,urllib.request,subprocess,datetime,collections
+          def report(tag,obj):print(tag,json.dumps(obj,ensure_ascii=False,default=str)[:10500])
+          for port in (13001,):
+           for endpoint in ('/api/risk-control','/api/take-profit-control','/api/status'):
+            try:
+             with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,endpoint),timeout=7) as r:x=json.load(r)
+             keys=['ok','enabled','takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent','source','updatedAt','persistenceReady','persistenceHealthy','persistenceRestored','orderSignalModel']
+             report('TP_API',{'route':endpoint,'http':200,**{k:x.get(k) for k in keys if k in x}})
+            except Exception as e:report('TP_API_ERROR',{'route':endpoint,'error':type(e).__name__,'http':getattr(e,'code',None)})
+          for path in ('/tmp/risk-control.json','/tmp/risk-runtime-status.json','/tmp/risk-worker-health.json','/tmp/tp50-control.json'):
+           p=pathlib.Path(path)
+           try:
+            data=json.loads(p.read_text())
+            allow=['at','enabled','takeProfitEnabled','takeProfitPercent','stopLossEnabled','stopLossPercent',
+             'workerRunning','configApplied','controllerPid','workerPid','configurationSource',
+             'configUpdatedAt','persistenceHealthy','persistedConfigFound','persistenceError',
+             'transitioning','lastWorkerStartedAt','lastTickStartedAt','lastTickFinishedAt',
+             'lastSuccessfulPositionsAt','positionsSeen','lastQuoteAt','lastQuoteAmount','quoteChecks',
+             'quoteErrors','lastErrorAt','lastError','lastSellEventAt','lastSellEvent','updatedAt','percent','source']
+            report('TP_FILE',{'file':path,'data':{k:data.get(k) for k in allow if k in data}})
+           except Exception as e:report('TP_FILE_MISSING',{'file':path,'error':type(e).__name__})
+          for unit in ('zl-prediction-risk.service','zl-prediction-tp50.service','zl-prediction-trade.service'):
+           p=subprocess.run(['systemctl','show',unit,'--property=Id,LoadState,ActiveState,SubState,MainPID,ExecMainStartTimestamp'],capture_output=True,text=True,timeout=6)
+           report('TP_SERVICE',{'unit':unit,'state':p.stdout.strip(),'exit':p.returncode})
+          # Never print raw journal entries, token IDs, keys, addresses or full payloads.
+          for unit in ('zl-prediction-risk.service','zl-prediction-trade.service'):
+           p=subprocess.run(['journalctl','-u',unit,'--since','3 hours ago','-o','cat','--no-pager','-n','1400'],
+                 capture_output=True,text=True,timeout=13)
+           counts=collections.Counter();events=[]
+           allowed=('risk_check','risk_sell_quote_failed','risk_sell_failed','risk_sell_submitted',
+             'risk_sell_unknown','risk_triggered','risk_positions_error','risk_wallet_error',
+             'risk_invalid_position','risk_tick_exception','risk_sell_exception',
+             'risk_runtime_worker_started','risk_runtime_worker_exited',
+             'risk_runtime_controller_started','risk_config_redis_sync_failed','risk_worker_stopping')
+           allowed_fields=('event','at','takeProfitEnabled','takeProfitPercent','stopLossEnabled',
+             'stopLossPercent','tpTarget','slTarget','currentSellAmount','totalCost',
+             'tpTriggered','slTriggered','error','code','httpStatus',
+             'reason','status','positionsSeen','enabled','pid')
+           for raw in p.stdout.splitlines():
+            try:
+             q=json.loads(raw)
+             if not isinstance(q,dict):continue
+            except Exception:continue
+            ev=q.get('event')
+            if ev not in allowed:continue
+            counts[ev]+=1
+            safe={k:q.get(k) for k in allowed_fields if k in q}
+            if isinstance(safe.get('error'),str):safe['error']=safe['error'][:110]
+            events.append(safe)
+           report('TP_JOURNAL_SUMMARY',{'unit':unit,'counts':counts,'visibleEvents':len(events)})
+           for item in events[-28:]:report('TP_JOURNAL_EVENT',item)
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-tp-live-readonly-why-no-exit',type='RunShellScript',working_user='root',command_content=script,timeout=130)).body.invoke_id
+          for _ in range(70):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('TP_AUDIT_REMOTE_STATUS',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-27000:])
+            if int(r.exit_code)!=0:raise RuntimeError('TP_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('TP_AUDIT_TIMEOUT')
+          OUTER

@@ -18,8 +18,11 @@ const OFFICIAL='http://127.0.0.1:13002/api/round-stats';
 export function buildAdaptive15CompatibleSignal(candidate,at,providerModel){
  const r=candidate?.round,d=candidate?.latest?.direction,quoteAt=candidate?.latest?.marketAt;
  if(!Number.isSafeInteger(r)||r%300000!==0||!['UP','DOWN'].includes(d)||
+    candidate?.latest?.aiVerified!==true||candidate?.latest?.selectedAnalysis!=='current'||
+    !Number.isSafeInteger(candidate?.latest?.analysisAt)||
+    candidate.latest.analysisAt<r+15000||candidate.latest.analysisAt>at||
     !Number.isSafeInteger(quoteAt)||quoteAt<r||quoteAt>at||
-    at<r||at>=r+25000||candidate?.orders!==false||
+    at<r+15000||at>=r+40000||candidate?.orders!==false||
     candidate?.productionIntegration!==false)
   throw Error('FAST10_PROD_INVALID_CANDIDATE');
  const score=Math.abs(Number(candidate.latest.hybridScore||0));
@@ -31,7 +34,9 @@ export function buildAdaptive15CompatibleSignal(candidate,at,providerModel){
     reason:String(candidate.latest.reason||'DEEPSEEK_TWO_PASS_ADAPTIVE15_EXPERIENCE').slice(0,180),
     confidenceIsCalibrated:false,
     selectedModelConfidence:candidate.latest.modelConfidence??null,
-    decisionMethod:'DEEPSEEK_AUTONOMOUS_LIVE25_V1',
+    decisionMethod:'DEEPSEEK_PREWARM120_LIVE40_AI_ONLY',
+    aiVerified:true,analysisPhase:'current',
+    analysisAt:candidate.latest.analysisAt,
     directionalPolicy:'DEEPSEEK_DIRECT_AUTONOMOUS',
     uncertainty:String(candidate.latest.uncertainty||'UNSPECIFIED').slice(0,90),
     prewarmDirection:candidate.latest.firstAnalysis,
@@ -42,7 +47,7 @@ export function buildAdaptive15CompatibleSignal(candidate,at,providerModel){
     earlyObservationCount:candidate.latest.earlySnapshots,
     entry:{direction:d,at,marketAt:quoteAt,score:Number(score.toFixed(4)),
       strength:Number(score.toFixed(4)),modelVersion:ID}},
-   // Existing producer's validation expects this compatibility expiry.
+   // Existing producer expects an immutable compatibility expiry; actual hard AI cutoff is +40s.
    // The decision creation deadline is strictly 25 seconds, never 270 seconds.
    expiryAt:r+270000};
 }
@@ -111,14 +116,14 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
   onLocked:(candidate,raw,at,window)=>{
    if(saved?.round===candidate.round)return; // never duplicate a prior lock
    // Use the ACTUAL clock; an earlier tick timestamp never permits late publishing.
-   if(clock()>=candidate.round+25000)throw Error('LATE_LOCK_EXPIRED_WAIT');
+   if(clock()>=candidate.round+40000)throw Error('LATE_LOCK_EXPIRED_WAIT');
    const signal=buildAdaptive15CompatibleSignal(candidate,at,model);
    const features=extractFeatures(raw,at);
    // Technical integrity only: DeepSeek selects its own indicators; 35-candle readiness
    // is descriptive, not a veto when real BTC ticks are fresh.
    if(features.round!==candidate.round||features.dataQuality.marketAgeMs>4000)
      throw Error('PRODUCTION_MARKET_UNVERIFIED');
-   if(clock()>=candidate.round+25000)throw Error('LATE_PERSIST_EXPIRED_WAIT');
+   if(clock()>=candidate.round+40000)throw Error('LATE_PERSIST_EXPIRED_WAIT');
    persist(signal);saved=signal;
    try{learner.record(signal,features,window?.modelCalls||1)}
    catch(e){settlementError='RECORD_'+String(e?.message||e).slice(0,70)}
@@ -131,19 +136,20 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
   const now=clock(),r=roundOf(now),shadow=runner.status(),learning=stats();
   const lockedThisRound=saved?.round===r&&
    Number.isSafeInteger(saved.latest?.lockedAt)&&saved.latest.lockedAt>=r&&
-   saved.latest.lockedAt<r+25000&&saved.generatedAt<r+25000;
-  const available=lockedThisRound&&now<r+25000;
+   saved.latest.lockedAt>=r+15000&&saved.latest.lockedAt<r+40000&&saved.generatedAt<r+40000&&
+   saved.latest.aiVerified===true&&saved.latest.decisionMethod==='DEEPSEEK_PREWARM120_LIVE40_AI_ONLY';
+  const available=lockedThisRound&&now<r+45000; // immutable AI lock before +40s; order retrieval until +45s
   const activeWindow=shadow.window?.targetRound===r?shadow.window:null;
   const terminalWait=!lockedThisRound&&
-   (now>=r+25000||activeWindow?.status==='WAIT');
+   (now>=r+40000||activeWindow?.status==='WAIT');
   const decisionState=lockedThisRound?'LOCKED':terminalWait?'WAIT':'ANALYZING';
   const decisionReason=terminalWait?(activeWindow?.terminal?.reason||
-    shadow.lastCompleted?.reason||'DEADLINE_25S_EXPIRED'):null;
+    shadow.lastCompleted?.reason||'DEADLINE_40S_EXPIRED'):null;
   return {ok:true,model:ID,providerModel:model,configured:Boolean(key),
    round:r,signal:available?saved:null,
    roundDecision:{round:r,status:decisionState,direction:lockedThisRound?saved.latest.direction:
     terminalWait?'WAIT':null,reason:decisionReason,
-    decisionDeadlineMs:r+25000,lateSignalsRejected:true,
+    decisionDeadlineMs:r+40000,lateSignalsRejected:true,
     lockedAt:lockedThisRound?saved.latest.lockedAt:null},
    lastSignal:saved?{round:saved.round,direction:saved.latest.direction}:null,
    noSignalAfterDeadline:true,
@@ -156,10 +162,10 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    missedRounds:shadow.missedRounds,
    experiencePolicy:'OFFICIAL_SETTLEMENT_FEEDBACK_ONLY_MODEL_DECIDES',
    tries:shadow.window?.targetRound===r?shadow.window.modelCalls??0:0,
-   maxCallsPerRound:6,preRoundMaxCalls:2,currentRoundMaxCalls:4,
-   liveReviewMinIntervalMs:6000,analysisCountLimit:'PRE2_LIVE4_TOTAL6',
-   decisionWindowEndMs:r+25000,decisionRule:'PREWARM_AND_LIVE_DEEPSEEK_AUTONOMOUS_25S',
-   aiDirectionalRequired:false,
+   maxCallsPerRound:5,preRoundMaxCalls:2,currentRoundMaxCalls:3,
+   liveReviewMinIntervalMs:6000,analysisCountLimit:'PRE2_LIVE3_TOTAL5',
+   decisionWindowEndMs:r+40000,decisionRule:'PREWARM120_NEW_ROUND15_LIVE_DEEPSEEK_ONLY40S',
+   aiDirectionalRequired:true,
    skipOnLowConfidence:false,
    skipOnWeakHistoricalDirection:false,
    prewarmStartMs:r-120000,prewarmStatus:Boolean(shadow.window?.firstAnalysis),
@@ -168,11 +174,13 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    analysisFirstDirection:shadow.window?.firstAnalysis??null,
    analysisReviewDirection:shadow.window?.revisedAnalysis??null,
     analysisCurrentDirection:shadow.window?.currentAnalysis??null,
+    officialReference:shadow.officialReference??{available:false},
+     quantSecondOpinion:shadow.quantSecondOpinion??{available:false},
    analysisModelCalls:shadow.window?.modelCalls??0,
    analysisPreviousRoundSnapshots:shadow.window?.priorSamples??0,
    analysisEarlySnapshots:shadow.window?.earlySamples??0,
    analysisLastSkip:shadow.window?.lastSkip??null,
-   strictLockDeadlineMs:r+25000,busy:shadow.inFlight,
+   strictLockDeadlineMs:r+40000,busy:shadow.inFlight,
    error:lastError||shadow.lastError,
    waitReason:shadow.window?.lastSkip||shadow.lastCompleted?.reason||null,
    lastApiLatencyMs:shadow.aiLatencyMs,featuresVersion:'BTC_OHLCV_RSI_MACD_ATR_V2',
@@ -211,7 +219,7 @@ export function createAdaptive15ProductionProvider({env=process.env,clock=()=>Da
    historyRole:'Historical examples are prompt context, not weight updates',
    controlledComparisonVerdict:'NOT_PROVEN',
    additionalApiCalls:0,productionDirectionUnaffected:true,
-   maxCallsPerRound:6,hardDecisionDeadlineMs:25000};
+   maxCallsPerRound:5,hardDecisionDeadlineMs:40000};
  }
  return {tick,status,history:withWaits,quality:()=>quality.summary(),learningEffect};
 }
@@ -233,7 +241,7 @@ export function serveAdaptiveProduction(provider,port=Number(process.env.LLM_SER
     data={ok:false,model:ID,round:current.round,
       direction:current.roundDecision?.status==='WAIT'?'WAIT':null,
       status:current.roundDecision?.status||'WAIT',
-      error:current.roundDecision?.reason||'NO_VALID_LOCK_BEFORE_25S',
+      error:current.roundDecision?.reason||'NO_VALID_CURRENT_ROUND_AI_BEFORE_40S',
       signalAvailable:false,lateOrdersForbidden:true};
    }
   }else{res.writeHead(404);return res.end('Not Found')}

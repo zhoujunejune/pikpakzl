@@ -1,0 +1,117 @@
+name: Release dual5 adjustable UP DOWN amounts, no daily hard budget
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-dual5-amount-settings-prod.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify per-side stakes source, new UI, no daily ceiling and guarded deployment
+        run: |
+          node --check prediction-bot-v1/binance_dual5_pairs.mjs
+          node --test prediction-bot-v1/binance_dual5_pairs.test.mjs
+          python -m py_compile prediction-bot-v1/aliyun_dual5_amounts_release.py
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('prediction-bot-v1/binance_dual5_pairs.mjs').read_text()
+          ui=Path('prediction-bot-v1/binance_dual5_dashboard.html').read_text()
+          assert 'dailySpendMax:null' in src
+          assert 'DAILY_BUDGET_STOP' not in src and 'MAX_DAILY_SPEND' not in src
+          assert "req.url==='/api/amounts'" in src
+          assert 'amounts:config.amounts' in src
+          assert "quoteFor(topic,pair.up,wallet,config.amounts.UP)" in src
+          assert "quoteFor(topic,pair.down,wallet,config.amounts.DOWN)" in src
+          assert all(v in ui for v in ('id="upAmount"','id="downAmount"','id="amountSave"',
+            '/api/dual5-amounts','id="riskSave"','每日硬性金额限制'))
+          print('DUAL5_PER_SIDE_AMOUNT_REGRESSION_OK=true')
+          PY
+  deploy:
+    needs: [tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy per-side inputs and endpoint to Alibaba without enabling trading
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feat/deepseek40-45s-ai-only-prod-20261025'
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/prediction-bot-v1/aliyun_dual5_amounts_release.py" -o "$tmp/release.py"
+          python3 -m py_compile "$tmp/release.py"
+          python3 "$tmp/release.py" COMMIT_SHA
+          """.replace('COMMIT_SHA',sha)
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-dual5-amount-settings-live',type='RunShellScript',working_user='root',command_content=script,timeout=250)).body.invoke_id
+          for _ in range(130):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('DUAL5_AMOUNT_ALIBABA',r.invocation_status,'EXIT',r.exit_code)
+            try:print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-13000:])
+            except Exception:print('DUAL5_AMOUNT_REMOTE_OUTPUT_UNAVAILABLE')
+            if str(r.invocation_status)!='Success' or int(r.exit_code)!=0:raise RuntimeError('DUAL5_AMOUNT_RELEASE_NOT_SUCCESSFUL')
+            break
+          else:raise RuntimeError('DUAL5_AMOUNT_CLOUD_TIMEOUT')
+          OUTER
+  verify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check authenticated public amounts and safety state
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request
+          origin='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(origin+path,headers={'Authorization':auth,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(req,timeout=17) as response:return response.status,response.read(1400000)
+          status,buf=get('/dual5')
+          page=buf.decode('utf8','replace')
+          assert status==200 and 'id="upAmount"' in page and 'id="downAmount"' in page
+          assert 'id="amountSave"' in page and '/api/dual5-amounts' in page
+          assert 'id="riskSave"' in page
+          status,buf=get('/api/dual5-status')
+          d=json.loads(buf)
+          assert status==200 and d.get('model')=='BINANCE_DUAL5_PAIR_V1'
+          assert d.get('dailySpendMax','MISSING') is None
+          assert d.get('amounts')=={'UP':1,'DOWN':1}
+          assert d.get('active') is False
+          status,buf=get('/api/status')
+          base=json.loads(buf)
+          assert base.get('enabled') is False
+          print('DUAL5_UP_USDT=1')
+          print('DUAL5_DOWN_USDT=1')
+          print('DUAL5_NO_DAILY_HARD_LIMIT=true')
+          print('DUAL5_PUBLIC_AMOUNT_SAVE_CONTROL_VISIBLE=true')
+          print('DUAL5_TP_SL_PRESENT=true')
+          print('DUAL5_BOTH_BOTS_FOLLOW_OFF=true')
+          PY

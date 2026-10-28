@@ -1,0 +1,124 @@
+name: Read-only latency and host capacity audit for live order and exits
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-trade-risk-latency-capacity-audit-20261027.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read CPU memory network public RTT and timestamped order/risk events (no orders)
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -euo pipefail
+          python3 - <<'INNER'
+          import os,subprocess,json,datetime,time,statistics,urllib.request
+          def emit(label,v):print(label,json.dumps(v,ensure_ascii=False,default=str)[:6500],flush=True)
+          def cmd(*a):
+           p=subprocess.run(a,capture_output=True,text=True,timeout=14)
+           return p.stdout.strip(),p.returncode
+          cpu,_=cmd('nproc');free,_=cmd('free','-m')
+          load=open('/proc/loadavg').read().split()[:3]
+          uptime,_=cmd('uptime','-p')
+          model,_=cmd('sh','-c',"grep -m1 'model name' /proc/cpuinfo | cut -d : -f 2")
+          disk,_=cmd('df','-h','/')
+          emit('PERF_HOST',{'vcpu':cpu,'cpuModel':model[:160],'loadAvg':load,
+            'freeM':free.splitlines()[:3],'disk':disk.splitlines()[-1:],'uptime':uptime})
+          # Two 1-second CPU snapshots without intrusive stress.
+          def cpusample():
+           x=open('/proc/stat').readline().split()[1:9];a=list(map(int,x));return sum(a),a[3]+a[4]
+          x0=cpusample();time.sleep(1);x1=cpusample()
+          if x1[0]>x0[0]:emit('PERF_CPU',{'busyPercent':round(100*(1-(x1[1]-x0[1])/(x1[0]-x0[0])),1)})
+          out,_=cmd('ps','-eo','pid,comm,pcpu,pmem,rss,etime','--sort=-pcpu')
+          emit('PERF_TOP_PROCESSES',{'rows':out.splitlines()[:11]})
+          # Public GET probes measure connect+DNS+TLS+exchange RTT. They do not
+          # create quotes, query wallet or place trades.
+          network=[]
+          for path in ('/api/v3/time','/api/v3/ping'):
+           for i in range(3):
+            result=subprocess.run(['curl','-sS','-o','/dev/null','--max-time','4',
+             '-w','%{http_code}|%{time_namelookup}|%{time_connect}|%{time_appconnect}|%{time_starttransfer}|%{time_total}',
+             'https://api.binance.com'+path],capture_output=True,text=True,timeout=6)
+            network.append({'endpoint':path,'trace':result.stdout.strip(),'exit':result.returncode})
+          emit('PERF_PUBLIC_API_NETWORK',network)
+          try:
+           with urllib.request.urlopen('http://127.0.0.1:13001/api/risk-control',timeout=8) as r:
+            d=json.load(r)
+           emit('PERF_RISK_CONFIG',{k:d.get(k) for k in ('takeProfitEnabled','takeProfitPercent',
+             'stopLossEnabled','stopLossPercent','updatedAt','persistenceHealthy','execution')})
+          except Exception as e:emit('PERF_RISK_CONFIG_ERROR',str(e)[:100])
+          units=['zl-prediction-risk-exits.service','zl-prediction-trade.service']
+          for unit in units:
+           r=subprocess.run(['journalctl','-u',unit,'--since','-4 hours','-n','9000','--no-pager','-o','cat'],
+             capture_output=True,text=True,timeout=18)
+           counts={};order=[];risk=[];last_events=[]
+           for ln in r.stdout.splitlines():
+            if '"event"' not in ln:continue
+            try:d=json.loads(ln[ln.index('{'):])
+            except Exception:continue
+            event=d.get('event','')
+            if not isinstance(event,str):continue
+            counts[event]=counts.get(event,0)+1
+            stamp=d.get('at')
+            if event in ('risk_check','risk_triggered','risk_sell_submitted',
+               'risk_sell_finality_pending','risk_sell_failed','risk_sell_unknown','risk_sell_quote_failed'):
+             risk.append({'event':event,'time':stamp,'reason':d.get('reason'),
+                'error':d.get('error'),'httpStatus':d.get('httpStatus')})
+            if event in ('auto_submit_triggered','fresh_quote_ready','order_submitted',
+               'order_submit_success','order_status_refreshed','submit_success',
+               'submit_blocked_signal_changed','auto_submit_failed','quote_ready',
+               'sell_quote_ready','quote_connection_prepared'):
+             order.append({'event':event,'time':stamp,
+               'quoteLatencyMs':d.get('quoteLatencyMs'),
+               'triggerToQuoteMs':d.get('triggerToQuoteMs'),
+               'remainingMs':d.get('quoteRemainingMs'),
+               'reason':d.get('reason'),'error':d.get('error')})
+           emits={k:v for k,v in counts.items() if any(t in k for t in
+             ('risk_','quote','submit','order_place','trade','sell','auto_'))}
+           emit('PERF_LOG_COUNTS',{'unit':unit,'counts':dict(sorted(emits.items(),key=lambda x:-x[1])[:35])})
+           if risk:
+            checks=[datetime.datetime.fromisoformat(d['time'].replace('Z','+00:00')).timestamp()*1000
+              for d in risk if d['event']=='risk_check' and isinstance(d['time'],str)]
+            gaps=[b-a for a,b in zip(checks,checks[1:]) if 0<b-a<5000]
+            if gaps:
+             gaps.sort()
+             emit('PERF_RISK_CHECK_GAPS_MS',{'count':len(gaps),
+               'median':round(statistics.median(gaps),1),
+               'p90':round(gaps[int(.9*(len(gaps)-1))],1),
+               'maxWithin5s':round(gaps[-1],1)})
+            emit('PERF_RISK_EXECUTION_EVENTS',risk[-22:])
+           if order:
+            lengths=[x['quoteLatencyMs'] for x in order if isinstance(x['quoteLatencyMs'],(int,float))]
+            emit('PERF_BUY_ORDER_EVENTS',{'recent':order[-23:],
+              'quoteLatencyMsSamples':len(lengths),
+              'quoteLatencyMedianMs':statistics.median(lengths) if lengths else None,
+              'quoteLatencyMaxMs':max(lengths) if lengths else None})
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-live-order-risk-speed-capacity-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=170)).body.invoke_id
+          for _ in range(93):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('PERF_AUDIT_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            try:print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-27000:])
+            except Exception:print('REMOTE_OUTPUT_UNAVAILABLE')
+            if r.invocation_status!='Success' or int(r.exit_code)!=0:raise RuntimeError('PERF_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('PERF_AUDIT_TIMEOUT')
+          OUTER

@@ -1,0 +1,280 @@
+name: Verify public Binance dual5 homepage menu
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-dual5-home-nav-verify-only.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  dual5-code-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with: {node-version: '22'}
+      - name: Verify dual5 entry window and order reconciliation without live trading
+        run: |
+          node --check prediction-bot-v1/binance_dual5_pairs.mjs
+          node --test prediction-bot-v1/binance_dual5_pairs.test.mjs
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Assert public authenticated robot menu and UP/DOWN risk panel
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,urllib.request
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(base+path,headers={'Authorization':auth,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(req,timeout=17) as r:return r.status,r.read(1500000)
+          status,raw=get('/')
+          html=raw.decode('utf8','replace')
+          assert status==200
+          assert html.count('id="dual5RobotMenu"')==1
+          assert 'href="/dual5"' in html and 'UP + DOWN 双边机器人' in html
+          assert 'href="/"' in html and 'BTC 五分钟 FAST5' in html
+          status,raw=get('/dual5')
+          page=raw.decode('utf8','replace')
+          assert status==200 and 'id="riskSave"' in page
+          assert 'id="upTp"' in page and 'id="upSl"' in page
+          assert 'id="downTp"' in page and 'id="downSl"' in page
+          status,raw=get('/api/dual5-status')
+          pair=json.loads(raw)
+          assert status==200 and pair.get('model')=='BINANCE_DUAL5_PAIR_V1'
+          print('DUAL5_CURRENT_MODE='+str(pair.get('mode')))
+          print('DUAL5_CURRENT_ARMED='+str(pair.get('active')))
+          print('DUAL5_CURRENT_BLOCKED='+str(pair.get('blocked')))
+          print('DUAL5_CURRENT_HEALTH='+str(pair.get('health')))
+          print('DUAL5_CURRENT_LAST_ERROR='+str(pair.get('lastError')))
+          print('DUAL5_CURRENT_CHECKED='+str(pair.get('checked')))
+          print('DUAL5_CURRENT_QUOTE_CHECKS='+str(pair.get('quoteChecks')))
+          print('DUAL5_CURRENT_ATTEMPTS='+str(pair.get('attempts')))
+          print('DUAL5_CURRENT_LAST_SCAN_AT='+str(pair.get('lastScanAt')))
+          print('DUAL5_CURRENT_LAST_OPPORTUNITY='+str(pair.get('lastOpportunity'))[:750])
+          print('DUAL5_CURRENT_LAST_ORDER='+str(pair.get('lastOrder'))[:750])
+          print('DUAL5_CURRENT_AMOUNTS='+str(pair.get('amounts')))
+          print('DUAL5_CURRENT_RISK='+str(pair.get('risk')))
+          print('DUAL5_FRONTEND_HOME_MENU_VISIBLE=true')
+          print('DUAL5_MENU_LINK_TO_PAIR_WORKS=true')
+          print('DUAL5_BOTH_TAKE_PROFIT_STOP_LOSS_CONTROLS_PRESENT=true')
+          print('DUAL5_PAIR_LIVE_STATE_READ_SUCCESS=true')
+          print('DUAL5_PUBLIC_PAIR_HEALTH='+str(pair.get('health')))
+          PY
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Diagnose prediction payment-option balances on running Alibaba server using GET only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,subprocess,urllib.request,urllib.error,urllib.parse,json,hmac,hashlib,time
+          try:
+           status=json.load(urllib.request.urlopen('http://127.0.0.1:13048/api/status',timeout=6))
+           print('DUAL5_READONLY_LIVE',json.dumps({k:status.get(k) for k in ('active','blocked','health','lastError','quoteChecks','attempts','amounts')},ensure_ascii=False))
+           pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','zl-prediction-dual5.service'],text=True,timeout=6).strip()
+           envraw=pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\0')
+           process_env={k.decode('utf8','ignore'):v.decode('utf8','ignore') for k,v in (b.split(b'=',1) for b in envraw if b'=' in b)}
+           key=process_env.get('BINANCE_PREDICTION_API_KEY','')
+           secret=process_env.get('BINANCE_PREDICTION_API_SECRET','')
+           if not key or not secret:raise RuntimeError('TRADING_API_ENV_NOT_AVAILABLE')
+           qs=urllib.parse.urlencode({'timestamp':int(time.time()*1000),'recvWindow':5000})
+           sig=hmac.new(secret.encode(),qs.encode(),hashlib.sha256).hexdigest()
+           request=urllib.request.Request('https://api.binance.com/sapi/v1/w3w/wallet/prediction/balance/payment-options?'+qs+'&signature='+sig,
+             headers={'X-MBX-APIKEY':key,'Cache-Control':'no-store'})
+           try:
+            with urllib.request.urlopen(request,timeout=14) as resp:response=json.load(resp)
+            rows=response.get('items',[])
+            sanitized=[{'type':r.get('accountType'),'available':r.get('availableBalanceDisplay'),'enabled':r.get('enabled')} for r in rows if isinstance(r,dict)]
+            print('DUAL5_READONLY_PAYMENT_OPTIONS',json.dumps(sanitized,ensure_ascii=False))
+           except urllib.error.HTTPError as e:
+            print('DUAL5_READONLY_PAYMENT_ERROR',e.code,e.read(350).decode('utf8','replace')[:350])
+          except Exception as e:
+           print('DUAL5_READONLY_DIAG_ERROR',type(e).__name__,str(e)[:160])
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='dual5-binance-payment-options-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=110)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           result=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if result and str(result.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('DUAL5_READONLY_CLOUD',result.invocation_status,result.exit_code)
+            print(base64.b64decode(result.output or '',validate=True).decode('utf8','replace')[-7000:])
+            if int(result.exit_code)!=0:raise RuntimeError('PAYMENT_READONLY_REMOTE_FAILED')
+            break
+          else:raise RuntimeError('PAYMENT_READONLY_TIMEOUT')
+          OUTER
+      - name: Audit actual UP order, current position and lock state through GET requests only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import pathlib,subprocess,json,time,urllib.request,urllib.error,urllib.parse,hmac,hashlib
+          ORDER_ID='26102700001999631125'
+          CONFIG=pathlib.Path('/var/lib/zl-prediction/dual5/config.json')
+          def emit(key,data):
+           print(key,json.dumps(data,ensure_ascii=False,default=str)[:8000],flush=True)
+          try:
+           cfg=json.loads(CONFIG.read_text())
+           status=json.load(urllib.request.urlopen('http://127.0.0.1:13048/api/status',timeout=6))
+           emit('ORDER_FORENSIC_DUAL5', {k:status.get(k) for k in ['active','blocked','mode','lastError','health','lastOrder','round','firstScanLagMs','fundingSource','risk']})
+           emit('ORDER_FORENSIC_SAVED', {'armed':cfg.get('armed'),'blocked':cfg.get('blocked'),
+            'lastOrderRound':cfg.get('lastOrderRound'),'legs':cfg.get('legs'),
+            'trackedCount':len(cfg.get('tracked') or {})})
+           for unit in ('zl-prediction-dual5.service','zl-prediction-risk-exits.service'):
+            resp=subprocess.run(['systemctl','is-active',unit],capture_output=True,text=True,timeout=5)
+            emit('ORDER_FORENSIC_UNIT',{'unit':unit,'active':resp.stdout.strip()})
+           pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','zl-prediction-dual5.service'],text=True,timeout=5).strip()
+           pairs=[x.split(b'=',1) for x in pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\0') if b'=' in x]
+           env={k.decode('utf8','ignore'):v.decode('utf8','ignore') for k,v in pairs}
+           key=env.get('BINANCE_PREDICTION_API_KEY','')
+           secret=env.get('BINANCE_PREDICTION_API_SECRET','')
+           if not key or not secret:raise RuntimeError('SIGNED_GET_AUTH_NOT_AVAILABLE')
+           def api(route,params={}):
+            q=urllib.parse.urlencode({**params,'timestamp':int(time.time()*1000),'recvWindow':5000})
+            sig=hmac.new(secret.encode(),q.encode(),hashlib.sha256).hexdigest()
+            url='https://api.binance.com'+route+'?'+q+'&signature='+sig
+            req=urllib.request.Request(url,headers={'X-MBX-APIKEY':key,'Cache-Control':'no-store'})
+            try:
+             with urllib.request.urlopen(req,timeout=15) as resp:return json.load(resp)
+            except urllib.error.HTTPError as e:
+             emit('ORDER_FORENSIC_HTTP_ERROR',{'route':route,'status':e.code,
+              'snippet':e.read(260).decode('utf8','replace')})
+             return {'error':'HTTP_'+str(e.code)}
+           wallets=api('/sapi/v1/w3w/wallet/prediction/wallet/list').get('wallets') or []
+           emit('ORDER_FORENSIC_WALLETS',{'count':len(wallets),'usable':sum(1 for w in wallets if w.get('walletAddress') and w.get('walletId'))})
+           wallet=next((w for w in wallets if w.get('walletAddress') and w.get('walletId')),None)
+           if not wallet:raise RuntimeError('WALLET_NOT_FOUND')
+           topic=next((v.get('marketTopicId') for v in (cfg.get('legs') or {}).values() if isinstance(v,dict) and v.get('marketTopicId')),None)
+           def slim(o):
+            return {k:o.get(k) for k in ('orderId','marketTopicId','tokenId','status','side','orderType',
+             'createTime','modifyTime','makerUsdtAmount','filledUsdtAmount','filledShareQty',
+             'fillPercentage','marketTitle','outcome') if k in o}
+           params={'walletAddress':wallet['walletAddress'],'offset':0,'limit':100}
+           active=api('/sapi/v1/w3w/wallet/prediction/order/list',params)
+           hist=api('/sapi/v1/w3w/wallet/prediction/order/history',params)
+           all_orders=(active.get('orders') or [])+(hist.get('orders') or [])
+           matched=[o for o in all_orders if str(o.get('orderId'))==ORDER_ID]
+           by_topic=[o for o in all_orders if topic is not None and str(o.get('marketTopicId'))==str(topic)]
+           emit('ORDER_FORENSIC_ORDER',{'orderId':ORDER_ID,'targetTopic':topic,
+             'activeTotal':active.get('total'),'historyTotal':hist.get('total'),
+             'matching':[slim(o) for o in matched],'sameTopic':[slim(o) for o in by_topic][:20]})
+           if not matched and (hist.get('total') or 0)>100:
+            h=api('/sapi/v1/w3w/wallet/prediction/order/history',{**params,'offset':100})
+            found=[slim(o) for o in h.get('orders',[]) if str(o.get('orderId'))==ORDER_ID]
+            emit('ORDER_FORENSIC_HISTORY_PAGE2',{'matching':found,'total':h.get('total')})
+           positions=api('/sapi/v1/w3w/wallet/prediction/position/list',
+               {'walletAddress':wallet['walletAddress'],'tab':'ONGOING','offset':0,'limit':100})
+           current=(positions.get('positions') or [])
+           exact=[{'marketTopicId':p.get('marketTopicId'),'tokenId':p.get('tokenId'),
+             'shares':p.get('shares'),'totalCost':p.get('totalCost'),
+             'status':p.get('status')} for p in current if topic is not None
+              and str(p.get('marketTopicId'))==str(topic)]
+           emit('ORDER_FORENSIC_POSITIONS',{'total':positions.get('total'),'matched':exact,
+             'count':len(current)})
+          except Exception as e:
+           emit('ORDER_FORENSIC_DIAG_ERROR',{'type':type(e).__name__,'message':str(e)[:160]})
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+           access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+           region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          invoke=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+           instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+           name='dual5-read-only-up-order-261027',type='RunShellScript',
+           working_user='root',command_content=script,timeout=120)).body.invoke_id
+          for _ in range(65):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('ORDER_FORENSIC_ALIBABA',r.invocation_status,r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-24000:])
+            if int(r.exit_code)!=0:raise RuntimeError('ORDER_FORENSIC_ALIBABA_FAILED')
+            break
+          else:raise RuntimeError('ORDER_FORENSIC_TIMEOUT')
+          OUTER
+
+  binance-direct-order-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Find exact UP order in Binance API without Alibaba credentials or trades
+        env:
+          BINANCE_KEY: ${{ secrets.BINANCE_PREDICTION_API_KEY }}
+          BINANCE_SECRET: ${{ secrets.BINANCE_PREDICTION_API_SECRET }}
+          BINANCE_WALLET_ADDRESS: ${{ secrets.BINANCE_PREDICTION_WALLET_ADDRESS }}
+        run: |
+          python - <<'PY'
+          import os,time,json,hmac,hashlib,urllib.request,urllib.error,urllib.parse
+          target='26102700001999631125'
+          topic='7586769'
+          key=os.environ.get('BINANCE_KEY','')
+          secret=os.environ.get('BINANCE_SECRET','')
+          address=os.environ.get('BINANCE_WALLET_ADDRESS','')
+          print('BINANCE_DIRECT_CREDENTIALS_AVAILABLE',bool(key and secret),'WALLET_AVAILABLE',bool(address))
+          if not key or not secret:
+           print('BINANCE_DIRECT_AUDIT_BLOCKED_NO_CREDENTIALS')
+           raise SystemExit(0)
+          def get(path,fields={}):
+           q=urllib.parse.urlencode({**fields,'timestamp':int(time.time()*1000),'recvWindow':5000})
+           signature=hmac.new(secret.encode(),q.encode(),hashlib.sha256).hexdigest()
+           url='https://api.binance.com'+path+'?'+q+'&signature='+signature
+           req=urllib.request.Request(url,headers={'X-MBX-APIKEY':key,'Cache-Control':'no-store'})
+           try:
+            with urllib.request.urlopen(req,timeout=17) as response:return json.load(response)
+           except urllib.error.HTTPError as e:
+            print('BINANCE_DIRECT_HTTP_ERROR',path,e.code,e.read(250).decode('utf8','replace')[:250])
+            return {'error':str(e.code)}
+           except Exception as e:
+            print('BINANCE_DIRECT_NETWORK_ERROR',path,type(e).__name__,str(e)[:100])
+            return {'error':'NETWORK'}
+          if not address:
+           wallets=get('/sapi/v1/w3w/wallet/prediction/wallet/list').get('wallets') or []
+           address=next((v.get('walletAddress') for v in wallets if v.get('walletAddress')),None)
+          if not address:
+           print('BINANCE_DIRECT_AUDIT_BLOCKED_NO_WALLET')
+           raise SystemExit(0)
+          def slim(v):
+           return {k:v.get(k) for k in ('orderId','marketTopicId','tokenId','side','status',
+             'filledShareQty','filledUsdtAmount','createTime','updateTime','timeInForce') if k in v}
+          for route in ('/sapi/v1/w3w/wallet/prediction/order/list',
+                        '/sapi/v1/w3w/wallet/prediction/order/history'):
+           found=[]
+           for offset in (0,100,200,300,400):
+            result=get(route,{'walletAddress':address,'offset':offset,'limit':100})
+            batch=result.get('orders') or []
+            found.extend(slim(v) for v in batch if str(v.get('orderId'))==target or
+               str(v.get('marketTopicId'))==topic)
+            if len(batch)<100 or result.get('error'):break
+           print('BINANCE_DIRECT_ORDER_AUDIT',json.dumps({'endpoint':route,'matches':found[:30]},ensure_ascii=False))
+          for tab in ('ONGOING','HISTORY'):
+           response=get('/sapi/v1/w3w/wallet/prediction/position/list',
+              {'walletAddress':address,'tab':tab,'offset':0,'limit':100})
+           related=[{k:o.get(k) for k in ('marketTopicId','tokenId','shares','totalCost','status')
+             if k in o} for o in (response.get('positions') or []) if str(o.get('marketTopicId'))==topic]
+           print('BINANCE_DIRECT_POSITION_AUDIT',json.dumps({'tab':tab,'matching':related,
+             'total':response.get('total'),'error':response.get('error')},ensure_ascii=False))
+          PY

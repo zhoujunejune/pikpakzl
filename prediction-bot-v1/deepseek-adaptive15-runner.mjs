@@ -1,21 +1,23 @@
 // Isolated adaptive DeepSeek runner, no Binance order API or order submission.
-// DeepSeek chooses its own amount of analysis; strict hard +25-second boundary.
+// 120s prior pre-analysis; current-round reasoning after +15s; strict +40s AI boundary.
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {extractFeatures} from './deepseek-5m-features.mjs';
+import {quantSecondOpinion} from './zero-train-quant-companion.mjs';
 import {COLLECT_MS,DEADLINE_MS,roundOf,makeWindow,marketTick,collect,
  analysisRequest,decodeAnalysis,registerAnalysis,finalize,closeExpiredWindow,windowStatus}
  from './deepseek-adaptive15-core.mjs';
 
 const FEED='http://127.0.0.1:13003/api/shadow-market-data';
 const API='https://api.deepseek.com/chat/completions';
+const OFFICIAL_REFERENCE='http://127.0.0.1:13044/api/reference';
 const desc=e=>String(e?.message||e||'UNKNOWN').slice(0,120);
 // Two pre-round passes, up to four evidence-spaced live passes. These are
 // maximums, not quotas. Successful judgments lock immediately.
-export const MAX_AI_CALLS_PER_ROUND=6;
+export const MAX_AI_CALLS_PER_ROUND=5;
 export const MAX_PRE_ROUND_CALLS=2;
-export const MAX_LIVE_CALLS=4;
+export const MAX_LIVE_CALLS=3;
 export const LIVE_REVIEW_MIN_INTERVAL_MS=6000;
 const liveCalls=w=>w.modelCalls-w.attemptedPasses.length;
 export function createAdaptiveRunner({
@@ -30,6 +32,35 @@ export function createAdaptiveRunner({
  let current=null,lastSignal=null,lastError=null,lastFeedAt=null;
  let inFlight=false,feedBusy=false,feedNext=0,aiLatencyMs=null,aiTokens=null;
  let missed=0,skipped=0,lastCompleted=null,lastCountedRound=null;
+ let officialReference=null,refBusy=false,lastRefTryAt=0,lastRefError=null;
+ let lastQuantSecondOpinion=null;
+ // Official reference is supplemental only: never blocks model calls or creates a direction.
+ async function refreshOfficialReference(round){
+  const now=clock();
+  if(refBusy||officialReference?.roundStartMs===round||
+     now<round||now>=round+DEADLINE_MS||
+     now-lastRefTryAt<3500)return;
+  refBusy=true;lastRefTryAt=now;
+  try{
+   const response=await fetcher(String(env.OFFICIAL_REFERENCE_URL||OFFICIAL_REFERENCE)+'?round='+round,
+     {headers:{Accept:'application/json'},signal:AbortSignal.timeout(2800)});
+   if(!response.ok)throw Error('REFERENCE_HTTP_'+response.status);
+   const info=await response.json();
+   if(info?.ok!==true||info?.schema!=='OFFICIAL_PREDICTION_START_CHAINLINK_V1'||
+      info.roundStartMs!==round||info.roundEndMs!==round+300000||
+      info.priceFeedProvider!=='CHAINLINK'||info.priceFeedSymbol!=='BTCUSDT'||
+      info.source!=='BINANCE_PREDICTION_SIGNED_MARKET_DETAIL'||
+      !(Number(info.officialStartPrice)>0)||
+      !Number.isSafeInteger(info.officialPriceObservedAt)||
+      info.officialPriceObservedAt<round||info.officialPriceObservedAt>clock()+1000||
+      info.officialLivePriceAvailable!==false||info.officialLivePrice!==null)
+     throw Error('INVALID_OFFICIAL_REFERENCE');
+   // Do not leak previous, next or post-settlement data into a trading prompt.
+   if(roundOf(clock())===round)officialReference={...info};
+   lastRefError=null;
+  }catch(e){lastRefError='REFERENCE_'+desc(e)}
+  finally{refBusy=false}
+ }
  function completeCurrent(now){
   if(!current)return;
   closeExpiredWindow(current,now);
@@ -40,7 +71,7 @@ export function createAdaptiveRunner({
    }
    lastCountedRound=current.round;
    skipped++;
-   if(current.terminal.reason==='DEADLINE_25S_EXPIRED')missed++;
+   if(current.terminal.reason==='DEADLINE_40S_EXPIRED')missed++;
    lastCompleted={round:current.round,result:'WAIT',direction:'WAIT',
     reason:current.terminal.reason,detail:current.terminal.detail,
     completedAt:current.terminal.at,signalGenerated:false,orders:false};
@@ -59,6 +90,17 @@ export function createAdaptiveRunner({
    aiEnabled:enabled,configured:enabled&&Boolean(key),inFlight,aiLatencyMs,aiTokens,
    lastMarketAt:lastFeedAt,lastError,missedRounds:missed,skippedRounds:skipped,
    lastCompleted,window:current?windowStatus(current,now):null,
+   quantSecondOpinion:lastQuantSecondOpinion?.roundStartMs===roundOf(now)?{
+    available:lastQuantSecondOpinion.available===true,
+    model:lastQuantSecondOpinion.model,
+    bias:lastQuantSecondOpinion.bias,
+    type:lastQuantSecondOpinion.type,
+    observedAt:lastQuantSecondOpinion.observedAt}: {available:false},
+   officialReference:officialReference?.roundStartMs===roundOf(now)?{
+    available:true,priceFeedProvider:officialReference.priceFeedProvider,
+    officialStartPrice:officialReference.officialStartPrice,
+    observedAt:officialReference.officialPriceObservedAt,
+    oracleLiveQuoteAvailable:false}: {available:false,lastError:lastRefError},
    currentDecisionStatus:current?.final?'LOCKED':current?.terminal?'WAIT':'ANALYZING',
    targetRound:target,lastSignal:lastSignal?{round:lastSignal.round,
     direction:lastSignal.latest.direction,lockedAt:lastSignal.latest.lockedAt}:null,
@@ -79,7 +121,7 @@ export function createAdaptiveRunner({
   const remaining=w.round-now;
   if((pass==='initial'&&(remaining>75000||remaining<34000))||
     (pass==='review'&&(remaining>30000||remaining<4000))||
-    (pass==='current'&&(remaining>0||remaining< -(DEADLINE_MS-650))))return;
+    (pass==='current'&&(remaining> -15000||remaining< -(DEADLINE_MS-650))))return;
   // A fresh market observation and meaningful elapsed time must separate
   // live calls; never spend tokens re-analysing the same tick every 400ms.
   if(pass==='current'&&(w.lastLiveRequestAt!=null&&
@@ -88,6 +130,16 @@ export function createAdaptiveRunner({
   let payload;
   try{
    const features=extractFeatures(raw,now);
+   if(pass==='current'&&officialReference?.roundStartMs===w.round&&
+      officialReference.officialPriceObservedAt<=now){
+    features.officialReference={...officialReference};
+   }
+   // Synchronous, zero-I/O auxiliary statistic; cannot delay the model API or submit orders.
+   // It is a numerical opinion only, not a trained LightGBM or calibrated probability.
+   const quant=quantSecondOpinion(raw,now,
+      pass==='current'?features.officialReference||null:null);
+   lastQuantSecondOpinion=quant;
+   features.quantSecondOpinion=quant;
    const feedback=typeof getHistoricalFeedback==='function'?
      getHistoricalFeedback(features):{};
    payload=analysisRequest(w,pass,now,features,feedback);
@@ -143,12 +195,14 @@ export function createAdaptiveRunner({
     completeCurrent(clock());
     collect(w,obs);
     const now=clock(),remaining=w.round-now;
+    if(now>=w.round&&now<w.round+DEADLINE_MS)
+      void refreshOfficialReference(w.round);
     if(now<w.round){
      if(remaining<=75000&&remaining>=34000&&!w.passes.some(x=>x.pass==='initial'))
       void analyze(w,'initial',raw,now);
      else if(remaining<=30000&&remaining>=4000&&!w.passes.some(x=>x.pass==='review'))
       void analyze(w,'review',raw,now);
-    } else if(now>=w.round&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
+    } else if(now>=w.round+15000&&now<w.round+DEADLINE_MS&&!w.final&&!w.terminal){
      // Only DeepSeek decides whether another review improves the evidence.
      // Never hold a finished judgment until an arbitrary 8s/15s milestone.
      const latestCurrent=w.passes.filter(x=>x.pass==='current').at(-1);

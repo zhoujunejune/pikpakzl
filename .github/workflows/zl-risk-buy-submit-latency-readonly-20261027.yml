@@ -1,0 +1,98 @@
+name: Read-only buy and sell end-to-end submission latency audit
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-risk-buy-submit-latency-readonly-20261027.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Audit timestamp differences in systemd journal no network trade calls
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,base64,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          command=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,subprocess,statistics
+          events=('auto_submit_triggered','fresh_quote_ready',
+            'api_order_submit_attempt','api_order_submitted_pending_confirmation',
+            'risk_triggered','risk_sell_submitted','risk_sell_finality_pending','risk_sell_failed',
+            'risk_sell_final_failed_retry_scheduled')
+          for unit in ('zl-prediction-trade.service','zl-prediction-risk-exits.service'):
+           out=subprocess.run(['journalctl','-u',unit,'--since','-5 hours','-n','12000','--no-pager','-o','json'],
+             capture_output=True,text=True,timeout=15)
+           all_=[]
+           for line in out.stdout.splitlines():
+            try:
+             j=json.loads(line);obj=json.loads(j.get('MESSAGE',''))
+             ev=obj.get('event','')
+             if ev not in events:continue
+             t=int(j['__REALTIME_TIMESTAMP'])/1000
+             all_.append({'event':ev,'ms':t,'round':obj.get('round'),
+               'quoteLatencyMs':obj.get('quoteLatencyMs'),
+               'quotedRemainMs':obj.get('quoteRemainingMs')})
+            except Exception:pass
+           if 'trade' in unit:
+            grouped={}
+            for row in all_:
+             if row['round'] is None:continue
+             g=grouped.setdefault(str(row['round']),{})
+             g.setdefault(row['event'],row)
+            pair=[]
+            for k,g in grouped.items():
+             tr=g.get('auto_submit_triggered');q=g.get('fresh_quote_ready')
+             at=g.get('api_order_submit_attempt')
+             sb=g.get('api_order_submitted_pending_confirmation')
+             if not tr and not at:continue
+             record={'roundKeyLast5':k[-5:],
+               'triggerToSubmitMs':round(sb['ms']-tr['ms']) if tr and sb else None,
+               'triggerToPostMs':round(at['ms']-tr['ms']) if tr and at else None,
+               'postToAcceptedMs':round(sb['ms']-at['ms']) if sb and at else None,
+               'quoteLatencyMs':q['quoteLatencyMs'] if q else None}
+             pair.append(record)
+            valid=[p['triggerToSubmitMs'] for p in pair if isinstance(p['triggerToSubmitMs'],int)]
+            summary={'rounds':len(pair),'completedRecords':len(valid),
+              'triggerToSubmitMedianMs':round(statistics.median(valid)) if valid else None,
+              'triggerToSubmitMaxMs':max(valid) if valid else None,
+              'recent':pair[-12:]}
+           else:
+            pairs=[];pending=None
+            for a in all_:
+             if a['event']=='risk_triggered':pending=a
+             elif a['event']=='risk_sell_submitted' and pending:
+              d=round(a['ms']-pending['ms'])
+              if 0<=d<10000:pairs.append(d)
+              pending=None
+            summary={'triggerToSellSubmittedCount':len(pairs),
+              'medianMs':statistics.median(pairs) if pairs else None,
+              'maxMs':max(pairs) if pairs else None,'last10':pairs[-10:],
+              'pendingConfirmationCount':sum(x['event']=='risk_sell_finality_pending' for x in all_),
+              'finalityRetryScheduled':sum(x['event']=='risk_sell_final_failed_retry_scheduled' for x in all_)}
+           print('PERF_EXECUTION_SUBMIT_METRICS',json.dumps({'unit':unit,'metrics':summary},ensure_ascii=False))
+          INNER
+          """
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          i=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-live-risk-buy-submit-time-audit',type='RunShellScript',working_user='root',command_content=command,timeout=100)).body.invoke_id
+          for _ in range(62):
+           time.sleep(2)
+           r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=i)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('PERF_SUBMIT_REMOTE',r.invocation_status,'EXIT',r.exit_code)
+            print(base64.b64decode(r.output or '',validate=True).decode('utf8','replace')[-10500:])
+            if r.invocation_status!='Success' or int(r.exit_code)!=0:raise RuntimeError('PERFORMANCE_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('PERFORMANCE_AUDIT_TIMEOUT')
+          OUTER

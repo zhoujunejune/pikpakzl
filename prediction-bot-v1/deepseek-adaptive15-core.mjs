@@ -1,8 +1,8 @@
-// Autonomous DeepSeek decisions within +25 seconds of opening.
+// 120-second prior-round DeepSeek analysis plus evidence-only current-round decisions before +40s.
 // Never submit orders or invent future market data.
 export const ROUND_MS=300000;
 export const COLLECT_MS=120000;
-export const DEADLINE_MS=25000;
+export const DEADLINE_MS=40000;
 export const roundOf=t=>Math.floor(t/ROUND_MS)*ROUND_MS;
 const number=x=>typeof x==='number'&&Number.isFinite(x);
 const side=x=>x==='UP'||x==='DOWN';
@@ -29,7 +29,7 @@ export function collect(w,tick){
  }
  if(tick.round===w.round&&tick.at>=w.round&&tick.at<w.round+DEADLINE_MS){
    if(w.early.at(-1)?.at>=tick.at)return false;
-   w.early.push(tick);if(w.early.length>25)w.early.shift();return true;
+   w.early.push(tick);if(w.early.length>55)w.early.shift();return true;
  }
  return false;
 }
@@ -76,13 +76,15 @@ export function analysisRequest(w,pass,now,features,feedback={}){
    {role:'system',content:[
     'You are a professional evidence-based BTCUSDT 5m prediction analyst.',
     'Analyse the BTC Prediction 5m target round using real observed causal evidence; current phase includes actual round open and early ticks.',
-    'Before the round starts the opening price is UNKNOWN; in the current phase use only observed round open and fresh ticks. Never invent future prices or official settlement.',
+    'Before the round starts the official opening price is UNKNOWN; in the current phase use only observed prices and verified evidence. Never invent future prices or official settlement.',
+    'Binance Prediction can settle against CHAINLINK. If officialPredictionReference is present, its officialStartPrice is the VERIFIED CURRENT-ROUND Chainlink reference START price, not a live Chainlink quote. Spot lastPrice and its ticks come from BINANCE SPOT; never falsely label spot prices as Chainlink. Assess the spot-vs-official-start difference with this source distinction. If absent, do not infer a missing Chainlink reference or pretend to know oracle price.',
     'Learn from older OFFICIALLY settled comparable cases; explain repeated failure patterns but beware small samples and overfitting.',
+    'If indicators.quantSecondOpinion is available, use it as an UNTRAINED deterministic candle-and-momentum cross-check. It is NOT LightGBM, not a separate trained trading AI, not calibrated probability, and not an order signal. Compare it critically with observed current-round evidence; explicitly consider why its bias could be wrong. It must never override fresh DeepSeek reasoning or force a trade.',
     'Choose indicators, historical examples and analytic methods independently based on their relevance; none is mandatory.',
     'You may revise earlier opinions when new credible evidence supports doing so; do not reverse without evidence.',
-    'You independently select all indicators and reasoning. With authenticated fresh BTC data, the task is to choose the marginally more likely UP or DOWN, even when uncertainty is high; describe uncertainty honestly.',
-    'No fixed indicator weights, statistical vetoes or forced reversals override your direction. WAIT is reserved for genuinely unusable/contradictory market data or technical failures, not weak confidence or noisy markets.',
-    'If earlier passes returned WAIT despite reliable current data, reconsider the genuine current round open and latest ticks instead of repeating WAIT. State uncertainty and risk candidly; do not exaggerate your edge.',
+    'For the CURRENT round, rank UP and DOWN using verified live opening price, tick trend, volatility and the most pertinent causal indicators. If one direction has meaningfully stronger support, make that best-effort UP/DOWN call even when prediction confidence is modest. Do not demand statistical proof from only 15–40 seconds of observations.',
+    'Do not default to WAIT just because short-term BTC outcomes are uncertain. WAIT is appropriate when live data are stale or unusable, the new-round open is missing, directional evidence is genuinely indistinguishable or mutually contradictory, or there is no honest basis for preferring either side. Never invent a directional edge to increase trade volume.',
+    'Any actionable UP/DOWN requires a fresh genuine DeepSeek review after new-round +15 seconds; a prior-round direction never authorizes a trade. In your JSON reason explain which observed evidence favored the chosen direction over the opposite side, and in risk disclose that accuracy is not verified.',
     'Never invent market data or future prices. If the supplied market data cannot be interpreted, do not manufacture an analysis.',
     'Return compact JSON {"direction":"UP","confidence":0.51,"continueAnalysis":false,"reason":"actual evidence","risk":"uncertainty or basis gap","reasonToWait":""}. Choose continueAnalysis=true only if more fresh market observations could improve the decision before the deadline.',
     'Confidence is SUBJECTIVE, not a calibrated win probability; a directional prediction is NOT an instruction to trade or proof of positive expected value.'
@@ -94,8 +96,11 @@ export function analysisRequest(w,pass,now,features,feedback={}){
     currentRoundTicks:pass==='current'?w.early.slice(-25):[],
     decisionDeadlineMs:w.round+DEADLINE_MS,
     indicators:features,
+    officialPredictionReference:pass==='current'?(features?.officialReference||null):null,
+    officialLiveChainlinkQuote:null,
     priorModelAnalysis:latest,
     verifiedHistoricalExperience:feedbackSafe,
+    preferActionableDirectionalRanking:pass==='current',
     requireDirectionalForecast:false,
     technicalFailureMustNotBeGuessed:true
    })}
@@ -112,7 +117,7 @@ export function closeExpiredWindow(w,now){
  if(w.final||w.terminal||now<w.round+DEADLINE_MS)return false;
  const reason=w.provisionalWait||w.skips.at(-1)||w.lastModelError||'NO_CONFIRMED_SIGNAL';
  w.terminal={round:w.round,status:'WAIT',direction:'WAIT',
-  reason:'DEADLINE_25S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
+  reason:'DEADLINE_40S_EXPIRED',detail:reason,at:w.round+DEADLINE_MS,
   signalGenerated:false,orders:false};
  return true;
 }
@@ -127,7 +132,7 @@ function recordWait(w,reason,now){
 export function finalize(w,now,feedback={}){
  if(w.final)throw Error('ALREADY_LOCKED'); 
  if(w.terminal)return {ok:false,skip:true,round:w.round,direction:'WAIT',reason:w.terminal.reason};
- if(now<w.round||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_25S_LOCK_WINDOW');
+ if(now<w.round+15000||now>=w.round+DEADLINE_MS)throw Error('NOT_IN_15_TO_40S_LOCK_WINDOW');
  const prior=w.prior,early=w.early;
  if(prior.length<5||prior.at(-1).at-prior[0].at<20000)
   throw Error('MISSING_LAST_120S');
@@ -144,10 +149,13 @@ export function finalize(w,now,feedback={}){
  // Prefer the fresher valid DeepSeek analysis; if a legacy/errant review
  // chooses WAIT, retain the earlier genuine directional forecast instead.
  // Never fabricate a direction when BOTH model passes are unusable.
- const newest=current||review||first;
- if(newest?.direction==='WAIT')return recordWait(w,'DEEPSEEK_CHOSE_WAIT',now);
- const chosen=[current,review,first].find(x=>x&&(x.direction==='UP'||x.direction==='DOWN'));
- if(!chosen)throw Error('MISSING_DEEPSEEK_ANALYSIS');
+ // A prior-round forecast may help reasoning but can NEVER authorize a trade.
+ // Require a genuine fresh DeepSeek response based on this round after +15s.
+ if(!current||current.at<w.round+15000||current.at>=w.round+DEADLINE_MS)
+   return recordWait(w,'NO_VALID_CURRENT_ROUND_DEEPSEEK_REVIEW',now);
+ if(current.direction==='WAIT')return recordWait(w,'DEEPSEEK_CHOSE_WAIT',now);
+ const chosen=current;
+ if(!side(chosen.direction))return recordWait(w,'NO_ACTIONABLE_LLM_DIRECTION',now);
  const fromOpenBps=(latest.price/open-1)*10000;
  const priorBps=(prior.at(-1).price/prior[0].price-1)*10000;
  // DeepSeek alone decides the direction. No program-side market vote or reversal.
@@ -169,7 +177,8 @@ export function finalize(w,now,feedback={}){
    currentAnalysis:current?.direction||null,selectedAnalysis:chosen.pass,modelConfidence:chosen.confidence,
    confidenceIsCalibrated:false,policy,hybridScore:Number(composite.toFixed(4)),
    historicalPenaltyAppliedAsBlock:false,
-   reason:chosen.reason,earlySamples:early.length,priorSamples:prior.length}};
+   reason:chosen.reason,aiVerified:true,analysisPhase:'current',
+   analysisAt:chosen.at,earlySamples:early.length,priorSamples:prior.length}};
  w.provisionalWait=null;
  w.final=result;return result;
 }

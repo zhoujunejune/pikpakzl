@@ -1,0 +1,26 @@
+name: DeepSeek 120s prewarm + 40s real AI + 45s submit CI, no live orders
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths:
+      - .github/workflows/zl-deepseek40-validation.yml
+      - prediction-bot-v1/deepseek-ai-only40.test.mjs
+      - prediction-bot-v1/deepseek-adaptive15-core.mjs
+      - prediction-bot-v1/deepseek-adaptive15-runner.mjs
+      - prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Syntax check and AI-only causality tests (offline, no exchange keys)
+        run: |
+          node --check prediction-bot-v1/deepseek-adaptive15-core.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-runner.mjs
+          node --check prediction-bot-v1/deepseek-adaptive15-production-adapter.mjs
+          node --test prediction-bot-v1/deepseek-ai-only40.test.mjs

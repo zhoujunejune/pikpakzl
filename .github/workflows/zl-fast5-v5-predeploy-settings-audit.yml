@@ -1,0 +1,64 @@
+name: Audit FAST5 predeployment mode and safeguards (read only)
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-fast5-v5-predeploy-settings-audit.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Verify current auto follow, inverse/forward and journal before any trading model release
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,urllib.request,time,subprocess,os,sqlite3,datetime
+          def get(port,path):
+           with urllib.request.urlopen('http://127.0.0.1:%s%s'%(port,path),timeout=8) as r:return json.load(r)
+          trade=get(13001,'/api/status')
+          mode=get(13001,'/api/direction-mode')
+          f5=get(13046,'/api/status')
+          stats=get(13047,'/api/round-stats')
+          now=int(time.time()*1000)
+          print('V5_PRECHECK',json.dumps({'ts':now,'withinRoundMs':now%300000,
+            'follow':trade.get('enabled'),'pendingState':(trade.get('pendingAction') or {}).get('state'),
+            'selectedModel':trade.get('orderSignalModel'),
+            'autoConfirm':trade.get('autoConfirmEnabled'),
+            'directionReady':mode.get('ready'),'directionModes':(mode.get('modes') or {}).get('FAST5_SPOT_MOMENTUM_V1'),
+            'directionEffectiveAfterRound':mode.get('effectiveAfterRound'),
+            'signalVersion':f5.get('strategyVersion'),'signalModel':f5.get('model'),
+            'statsSchema':stats.get('schema'),'statsSummary':stats.get('summary'),
+            'statsHealth':stats.get('health'),
+            'sqlitePathExists':os.path.isfile('/var/lib/zl-prediction/fast5-stats/rounds.sqlite3'),
+            'sqliteBytes':os.stat('/var/lib/zl-prediction/fast5-stats/rounds.sqlite3').st_size if os.path.isfile('/var/lib/zl-prediction/fast5-stats/rounds.sqlite3') else 0},ensure_ascii=False))
+          INNER
+          """
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          iid=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-fast5-predeploy-v5-config-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=135)).body.invoke_id
+          for _ in range(83):
+           time.sleep(2)
+           result=client.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=iid)).body.invocation_result
+           if result and str(result.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            print('REGIME_AUDIT_REMOTE',result.invocation_status,'EXIT',result.exit_code)
+            try:
+             content=base64.b64decode(result.output or '',validate=True).decode('utf8','replace')
+             print(content[-27000:])
+            except Exception as exc:print('REGIME_AUDIT_OUTPUT_ERROR',str(exc)[:200])
+            if int(result.exit_code)!=0:raise RuntimeError('FAST5_TREND_AUDIT_FAILED')
+            break
+          else:raise RuntimeError('FAST5_TREND_AUDIT_TIMEOUT')
+          OUTER

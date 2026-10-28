@@ -1,0 +1,87 @@
+name: Alibaba DeepSeek AI40/45 frontend only guarded deployment
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths:
+      - .github/workflows/zl-deepseek40-ui-release.yml
+      - prediction-bot-v1/aliyun_deepseek40_ui_deploy.py
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify UI overlay and that trading controls are not replaced
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_deepseek40_ui_deploy.py
+          node --check prediction-bot-v1/ai40-dashboard-inject.mjs
+          node --test prediction-bot-v1/ai40-dashboard-inject.test.mjs
+  deploy:
+    needs: [regression]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Guarded change of only HTML injection and new read-only module
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek40_ui_deploy.py
+  public-check:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Verify password-protected public frontend and DeepSeek endpoint
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request
+          password=os.environ.get('ZL_PANEL_PASSWORD')
+          if not password:raise RuntimeError('PANEL_PASSWORD_SECRET_MISSING')
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          def get(route):
+           req=urllib.request.Request(base+route,headers={'Authorization':auth,'Cache-Control':'no-store'})
+           with urllib.request.urlopen(req,timeout=20) as res:return res.status,res.read(320000)
+          st,content=get('/')
+          page=content.decode('utf8','replace')
+          assert st==200 and 'id="zlDeepSeek40Card"' in page
+          assert '/deepseek/api/status' in page
+          assert 'id="roundResultsOnlyCard"' not in page
+          assert 'zlAi40OldToggle' not in page
+          assert '/api/deepseek-round-results?limit=' not in page
+          st,raw=get('/api/ai40-round-stats')
+          stats=json.loads(raw)
+          assert st==200 and stats.get('ok') is True
+          assert stats.get('schema')=='DEEPSEEK_AI40_INDEPENDENT_FORWARD_V1'
+          assert stats.get('cutoverRound')==1792902300000
+          assert stats.get('summary',{}).get('rounds',0)>=7
+          print('AI40_PUBLIC_OLD_5S_REMOVED=true')
+          print('AI40_PUBLIC_NEW_VERSION_STATS='+json.dumps(stats['summary'],ensure_ascii=False))
+          st,raw=get('/deepseek/api/status')
+          ai=json.loads(raw)
+          assert st==200 and ai.get('decisionRule')=='PREWARM120_NEW_ROUND15_LIVE_DEEPSEEK_ONLY40S'
+          st,raw=get('/deepseek/api/history?limit=2')
+          history=json.loads(raw)
+          assert st==200 and history.get('ok') is True
+          st,raw=get('/api/status')
+          trade=json.loads(raw)
+          assert st==200 and trade.get('enabled') is False
+          print('AI40_PUBLIC_DASHBOARD_UPDATED=true')
+          print('AI40_PUBLIC_DEEPSEEK_STATUS_AND_HISTORY_WORKING=true')
+          print('AI40_PUBLIC_FOLLOW_STILL_OFF=true')
+          PY

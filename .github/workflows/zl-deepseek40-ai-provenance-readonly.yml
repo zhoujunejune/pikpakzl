@@ -1,0 +1,135 @@
+name: Verify live DeepSeek AI provenance of every new 40s UP DOWN signal
+on:
+  push:
+    branches: [feat/deepseek40-45s-ai-only-prod-20261025]
+    paths: [.github/workflows/zl-deepseek40-ai-provenance-readonly.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Production-only non-mutating provenance audit; do not expose API keys
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'OUTER'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'INNER'
+          import json,os,re,urllib.request,pathlib,collections,datetime,hashlib
+          CUT=1792902300000
+          good=lambda x:x in ('UP','DOWN')
+          def get(port,path):
+           with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}',timeout=8) as r:return json.load(r)
+          def read(path):
+           return json.loads(pathlib.Path(path).read_text())
+          trade=get(13001,'/api/status')
+          select=get(13001,'/api/order-signal-model')
+          status=get(13029,'/api/status')
+          history=get(13029,'/api/history?limit=100')
+          stats=get(13001,'/api/ai40-round-stats')
+          print('AUDIT_ACTIVE_SELECTION',json.dumps({'selected':select.get('model'),'tradeModel':trade.get('orderSignalModel'),'follow':trade.get('enabled'),'aiProvider':status.get('providerModel'),'rule':status.get('decisionRule'),'configured':status.get('configured'),'llmEnabled':status.get('aiDirectionalRequired')},ensure_ascii=False))
+          assert select.get('model')=='DEEPSEEK_5M_V1'
+          assert trade.get('orderSignalModel')=='DEEPSEEK_5M_V1'
+          assert status.get('model')=='DEEPSEEK_5M_V1'
+          assert status.get('decisionRule')=='PREWARM120_NEW_ROUND15_LIVE_DEEPSEEK_ONLY40S'
+          assert status.get('configured') is True
+          assert status.get('aiDirectionalRequired') is True
+          assert status.get('providerModel')=='deepseek-flash'
+          assert stats.get('schema')=='DEEPSEEK_AI40_INDEPENDENT_FORWARD_V1'
+          learner=read('/var/lib/zl-prediction/deepseek5/learning.json')
+          rows=sorted((r for r in learner['predictions'] if r.get('round',0)>=CUT),key=lambda x:x['round'])
+          direction=[r for r in rows if good(r.get('direction'))]
+          assert len(direction)>=12,'UNEXPECTED_LOW_NEW_VERSION_ROWS'
+          violations=[]
+          for r in direction:
+           dt=r.get('signalAt',0)-r['round']
+           if not (15000<=dt<40000):violations.append([r['round'],'LOCK_OUT_OF_WINDOW',dt])
+           if r.get('provider')!='deepseek-flash':violations.append([r['round'],'UNEXPECTED_PROVIDER'])
+           if not isinstance(r.get('attemptCount'),int) or r['attemptCount']<1 or r['attemptCount']>5:
+            violations.append([r['round'],'NO_PROVEN_MODEL_ATTEMPT',r.get('attemptCount')])
+          counts=collections.Counter(x['direction'] for x in direction)
+          print('AUDIT_ALL_NEW_DIRECTION_RECORDS',len(direction),'BY_SIDE',dict(counts),'FROM',direction[0]['round'],'TO',direction[-1]['round'])
+          print('AUDIT_40S_LOCK_TIME_PROVIDER_ATTEMPT_VIOLATIONS',len(violations),json.dumps(violations[:10]))
+          print('AUDIT_MATCH_NEW_STATS',len(direction)==stats['summary']['signals'],'STAT_SIGNALS',stats['summary']['signals'])
+          print('AUDIT_RECENT_AI_RESULTS',json.dumps([{'round':x['round'],'direction':x['direction'],'analysisMs':x['signalAt']-x['round'],'modelCalls':x.get('attemptCount'),'provider':x['provider'],'recordedReasonPresent':bool(x.get('reason')),'officialHit':x.get('hit')} for x in direction[-20:]],ensure_ascii=False))
+          signal=read('/var/lib/zl-prediction/deepseek5/signal.json')
+          latest=signal.get('latest') or {}
+          proof={key:latest.get(key) for key in ['direction','lockedAt','analysisAt','aiVerified','analysisPhase','decisionMethod','lastSelectedReview','marketAt','model']}
+          proof.update({'round':signal.get('round'),'providerModel':signal.get('providerModel'),'validLock':isinstance(latest.get('lockedAt'),int) and 15000<=latest['lockedAt']-signal['round']<40000,
+             'realAnalysisAfter15s':isinstance(latest.get('analysisAt'),int) and 15000<=latest['analysisAt']-signal['round']<40000,'sourceFileProviderReal':signal.get('providerModel')=='deepseek-flash'})
+          print('AUDIT_LATEST_SAVED_SIGNAL_PROOF',json.dumps(proof,ensure_ascii=False))
+          assert latest.get('aiVerified') is True and latest.get('analysisPhase')=='current'
+          assert latest.get('decisionMethod')=='DEEPSEEK_PREWARM120_LIVE40_AI_ONLY'
+          assert proof['validLock'] and proof['realAnalysisAfter15s']
+          core=pathlib.Path('/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-core.mjs').read_text()
+          runner=pathlib.Path('/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-runner.mjs').read_text()
+          adapter=pathlib.Path('/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-production-adapter.mjs').read_text()
+          router=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic/production-signal-choice.mjs').read_text()
+          wrapper=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic/wrapper.mjs').read_text()
+          apiurl=os.environ.get('DEEPSEEK_API_URL') # script env may differ from service environment: do not treat absent value as proof.
+          required={
+           'MODEL_REAL_POST':"fetcher(api,{method:'POST'" in runner,
+           'MODEL_RESPONSE_PARSED':"body?.choices?.[0]" in runner and 'decodeAnalysis(choice?.message?.content' in runner,
+           'NO_MOCK_RESPONSE_PATH':'registerAnalysis(w,result)' in runner and "catch(e){w.lastModelError='DEEPSEEK_'" in runner,
+           'MODEL_CREDENTIAL_REQUIRED':"const key=String(env.DEEPSEEK_API_KEY||'')" in runner and "if(!enabled||!key" in runner,
+           'PROD_CURRENT_PASS_ONLY':"candidate?.latest?.selectedAnalysis!=='current'" in adapter,
+           'PROD_PROOF_REQUIRED':"candidate?.latest?.aiVerified!==true" in adapter,
+           'PROD_REAL_NEW_ROUND_AT':"candidate.latest.analysisAt<r+15000" in adapter,
+           'PROD_REQUIRED_DECISION_METHOD':"decisionMethod:'DEEPSEEK_PREWARM120_LIVE40_AI_ONLY'" in adapter,
+           'ORDER_GATE_PROOF':"lock.aiVerified!==true" in router,
+           'ORDER_GATE_CURRENT':"lock.analysisPhase!=='current'" in router,
+           'ORDER_GATE_DEEPSEEK_METHOD':"lock.decisionMethod!=='DEEPSEEK_PREWARM120_LIVE40_AI_ONLY'" in router,
+           'ORDER_GATE_40S':"40000" in router,
+           'ORDER_GATE_45S':"45000" in router or "45000" in wrapper,
+           'NO_PRICE_FALLBACK':'REAL_PRICE_BACKUP' not in core and 'REAL_PRICE_BACKUP' not in runner,
+           'AI_WAIT_REAL':"if(current.direction==='WAIT')return recordWait(w,'DEEPSEEK_CHOSE_WAIT',now);" in core,
+           'PROMPT_TWO_SIDED':"rank UP and DOWN using verified live opening price" in core,
+          }
+          print('AUDIT_RUNTIME_SOURCE_CHECKS',json.dumps(required,ensure_ascii=False))
+          # Older quality store still drops signal lock later than +25s: advisory only.
+          qualityfile=pathlib.Path('/var/lib/zl-prediction/deepseek5/quality-v1.json')
+          if qualityfile.exists():
+           q=read(str(qualityfile));qround={r.get('round') for r in q.get('records',[])}
+           missing=[r for r in direction if r['round'] not in qround]
+           print('AUDIT_QUALITY_AUXILIARY_COVERAGE',len(direction)-len(missing),'OF',len(direction),'MISSING',len(missing),'QUALITY_OLD_25S_GATE_POSSIBLE',('t>=r+25000' in pathlib.Path('/opt/zl-prediction-live/deepseek5/deepseek-adaptive15-quality-store.mjs').read_text()))
+          # Only read status of service environment API endpoint host. NEVER print credentials.
+          proc=pathlib.Path('/proc')
+          service_pid=None
+          try:
+           import subprocess
+           service_pid=int(subprocess.check_output(['systemctl','show','-p','MainPID','--value','zl-prediction-deepseek5.service'],text=True,timeout=5).strip())
+           envtxt=(proc/str(service_pid)/'environ').read_bytes().split(b'\0')
+           api_config=[x for x in envtxt if x.startswith(b'DEEPSEEK_API_URL=')]
+           val=api_config[0].split(b'=',1)[1].decode('utf8','replace') if api_config else 'https://api.deepseek.com/chat/completions'
+           from urllib.parse import urlsplit
+           hostname=urlsplit(val).hostname
+           print('AUDIT_MODEL_ENDPOINT_IS_OFFICIAL',hostname=='api.deepseek.com','CUSTOM_ENDPOINT_SET',bool(api_config))
+          except Exception as e:print('AUDIT_MODEL_ENDPOINT_VALIDATION_UNAVAILABLE',type(e).__name__)
+          print('AUDIT_ALL_SIGNAL_PROVENANCE_CHECK_SUCCESS',len(violations)==0 and all(required.values()))
+          if violations or not all(required.values()) or len(direction)!=stats['summary']['signals']:
+           raise RuntimeError('LIVE_AI_SIGNAL_PROVENANCE_INCOMPLETE')
+          INNER
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-model-signal-proof-readonly',type='RunShellScript',working_user='root',command_content=script,timeout=130)).body.invoke_id
+          for _ in range(64):
+           time.sleep(2)
+           r=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if r and str(r.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+            out=base64.b64decode(r.output or '',validate=True).decode('utf8','replace')
+            print('AUDIT_REMOTE_STATUS',r.invocation_status,'EXIT',r.exit_code);print(out[-17000:])
+            if int(r.exit_code)!=0:raise RuntimeError('LIVE_PROVENANCE_INSPECTION_FAILED')
+            break
+          else:raise RuntimeError('LIVE_PROVENANCE_INSPECTION_TIMEOUT')
+          OUTER

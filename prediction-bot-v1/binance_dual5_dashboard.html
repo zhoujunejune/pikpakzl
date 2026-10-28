@@ -42,10 +42,10 @@
 </div><p><button id="riskSave" type="button" disabled>保存两边止盈止损</button><small id="riskMsg">加载中</small></p>
 <button id="arm" type="button" disabled>启用独立双边实盘</button><button id="stop" class="stop" type="button" disabled>关闭双边实盘</button>
 <div class="metric" id="riskUnlockPanel" hidden style="margin-top:12px">
-<strong>自助风险核验与解锁</strong>
-<p class="sub">不限历史订单。点击后后台会连续两次向币安查询钱包待处理订单和未结持仓，并确认另一机器人未交易。仅当两个检查结果都为空、当前轮次已结束时解除保护锁。查询不完整或存在未结风险，锁定保持不变。历史跟踪数据与止损设置保留。</p>
-<button id="riskUnlock" type="button" disabled>核验风险，无未结交易则解除锁定</button>
-<small id="riskUnlockMsg" role="status">只有在实盘关闭、存在保护锁时可操作。</small>
+<strong>订单结束后的自助解锁</strong>
+<p class="sub">你手动结束订单后，点击下方按钮。系统会核对币安是否已无挂单、无未结持仓；确认本轮结束且结果一致，就解除交易锁并把过期的“待确认”标记更新为已核验。即使锁已经解除但残留待确认标记，也能在此修复。保留历史与止损设置，不会自行买入。</p>
+<button id="riskUnlock" type="button" disabled>核验无持仓并恢复操作</button>
+<small id="riskUnlockMsg" role="status">实盘关闭且存在保护锁或过期待确认记录时可使用。</small>
 </div>
 <p id="feedback" class="sub"></p></article>
 <article><h2>最近一次执行记录</h2><table><tbody id="orders"><tr><td>暂无</td></tr></tbody></table></article>
@@ -70,7 +70,8 @@ async function load(){
    ' · 报价状态：'+(q?label(q.status):'等待有效市场')+
    ' · 今日累计下单尝试金额 '+fmt(d.dailySpend)+' USDT（不设每日硬限制）';
   el('arm').disabled=saving||d.active||d.blocked;el('stop').disabled=saving||!d.active;
-  const canAudit=d.blocked===true&&d.active===false;
+  const hasStalePending=Object.values(d.legs||{}).some(x=>x?.status==='ORDER_PENDING');
+  const canAudit=d.active===false&&(d.blocked===true||hasStalePending);
   el('riskUnlockPanel').hidden=!canAudit;
   el('riskUnlock').disabled=saving||!canAudit;
   el('riskSave').disabled=saving||d.active||d.blocked;
@@ -198,7 +199,7 @@ async function unlockAfterRiskAudit(){
   let d;try{d=JSON.parse(raw)}catch{throw Error('后台没有返回有效JSON（HTTP '+r.status+'）')}
   if(!r.ok||d.ok!==true||d.blocked!==false||d.armed!==false||d.verifiedSnapshots!==2)
    throw Error(String(d.error||'币安风险核验未通过')+'（HTTP '+r.status+'）');
-  el('riskUnlockMsg').textContent='两次核验确认没有未结订单或持仓，保护锁已解除。实盘依旧关闭。';
+  el('riskUnlockMsg').textContent='两次核验确认无挂单、无未结持仓，保护锁及过期待确认记录已核销；实盘仍关闭。';
   el('feedback').textContent='已解除保护锁。请检查资金来源、两边金额和止损，再由你自行决定是否开启交易。';
  }catch(e){
   const message=String(e.message||e);

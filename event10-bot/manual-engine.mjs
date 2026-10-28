@@ -117,11 +117,107 @@ function store(file,records){
   fs.writeFileSync(tmp,JSON.stringify(records),{mode:0o600});
   fs.renameSync(tmp,file);
 }
+
+// Dedicated append-only ledger for EVERY accepted V1 UP/DOWN signal.
+// The legacy session state is bounded for execution/runtime size, but this
+// independent ledger is never trimmed and preserves older signals and outcomes.
+function slimSignal(h) {
+  const evidence=h.ruleChecks?.evidence||{};
+  return {
+    id:h.id,strategyVersion:h.decisionReviewVersion,model:"PURE_RULES_V1",
+    trigger:String(h.id).startsWith("auto-rule-")?"AUTO":"MANUAL",
+    openedAt:h.openedAt,expiresAt:h.expiresAt,
+    direction:h.direction,openPrice:h.openPrice,
+    fiveOfFive:h.ruleChecks?.conditions?Object.values(h.ruleChecks.conditions).every(Boolean):true,
+    volumeRatio:Number.isFinite(evidence.volumeRatio)?evidence.volumeRatio:null,
+    rsi14:Number.isFinite(evidence.rsi14)?evidence.rsi14:null,
+    checks:h.ruleChecks?.conditions||null,
+    closePrice:h.closePrice??null,closeObservedAt:h.closeObservedAt??null,
+    proxyHit:typeof h.proxyHit==="boolean"?h.proxyHit:null,
+    proxyOutcome:h.proxyOutcome??null,
+    settlementStatus:h.settlementStatus??null,
+    status:h.status,realOrderPlaced:false
+  };
+}
+function openSignalLedger(file,sessionHistory) {
+  const all=new Map();
+  if(fs.existsSync(file)){
+    const lines=fs.readFileSync(file,"utf8").split("\n");
+    for(let i=0;i<lines.length;i++){
+      const line=lines[i].trim();
+      if(!line)continue;
+      let event;
+      try{event=JSON.parse(line)}
+      catch{throw Error("EVENT10_SIGNAL_LEDGER_CORRUPTED_LINE_"+(i+1));}
+      if(event?.kind==="SIGNAL"&&event.signal?.id&&
+         ["UP","DOWN"].includes(event.signal.direction)){
+        all.set(event.signal.id,event.signal);
+      }else if(event?.kind==="SETTLEMENT"&&all.has(event.id)){
+        const prior=all.get(event.id);
+        all.set(event.id,{...prior,...event.result});
+      }
+    }
+  }
+  const append=event=>{
+    fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o750});
+    fs.appendFileSync(file,JSON.stringify(event)+"\n",{encoding:"utf8",mode:0o600,flag:"a"});
+  };
+  // Restore rule signals already saved in existing session history before
+  // ledger introduction, including any previously settled outcomes.
+  for(const h of sessionHistory){
+    if(h.decisionReviewVersion!==RULE_VERSION||
+       !["UP","DOWN"].includes(h.direction)||all.has(h.id))continue;
+    const signal=slimSignal(h);
+    append({kind:"SIGNAL",signal});
+    all.set(h.id,signal);
+  }
+  function add(h){
+    if(all.has(h.id))return all.get(h.id);
+    const signal=slimSignal(h);
+    append({kind:"SIGNAL",signal});
+    all.set(h.id,signal);
+    return signal;
+  }
+  function settle(h){
+    const existing=all.get(h.id);
+    if(!existing)return;
+    const result={
+      closePrice:h.closePrice??null,closeObservedAt:h.closeObservedAt??null,
+      proxyHit:typeof h.proxyHit==="boolean"?h.proxyHit:null,
+      proxyOutcome:h.proxyOutcome??null,
+      settlementStatus:h.settlementStatus??null,status:h.status
+    };
+    if(existing.settlementStatus===result.settlementStatus&&
+       existing.closeObservedAt===result.closeObservedAt)return;
+    append({kind:"SETTLEMENT",id:h.id,result});
+    all.set(h.id,{...existing,...result});
+  }
+  function list(limit=25,offset=0){
+    const take=Math.max(1,Math.min(100,Number(limit)||25));
+    const skip=Math.max(0,Math.min(1000000,Number(offset)||0));
+    const ordered=Array.from(all.values()).sort((a,b)=>b.openedAt-a.openedAt||b.id.localeCompare(a.id));
+    const settled=ordered.filter(x=>typeof x.proxyHit==="boolean");
+    const hits=settled.filter(x=>x.proxyHit===true).length;
+    const percentage=n=>n.length?round(n.filter(x=>x.proxyHit===true).length*100/n.length,2):null;
+    return {ok:true,version:RULE_VERSION,
+      total:ordered.length,limit:take,offset:skip,records:ordered.slice(skip,skip+take),
+      stats:{total:ordered.length,validDirections:ordered.length,
+        proxySettled:settled.length,proxyHits:hits,proxyMisses:settled.length-hits,
+        proxyAccuracyPct:settled.length?round(hits*100/settled.length,2):null,
+        last5Pct:percentage(settled.slice(0,5)),
+        last10Pct:percentage(settled.slice(0,10))},
+      officialEventContractResultsAvailable:false,autoTradingEnabled:false};
+  }
+  return {all,add,settle,list};
+}
+
 export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) {
   const feedUrl=String(env.EVENT10_READONLY_FEED||"http://127.0.0.1:13003/api/shadow-market-data");
   const streamUrl="http://127.0.0.1:13021/api/features";
   const file=String(env.EVENT10_STATE_FILE||"/var/lib/zl-event10/manual-sessions-v2.json");
   const history=load(file);
+  const ledgerFile=String(env.EVENT10_SIGNAL_LOG_FILE||path.join(path.dirname(file),"rule-signals-v1.ndjson"));
+  const signalLedger=openSignalLedger(ledgerFile,history);
   for(const h of history)if(h.status==="ANALYZING"){
     h.status="FAILED";h.error="INTERRUPTED_DURING_AI_ANALYSIS";h.direction=null;
   }
@@ -142,8 +238,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   };
   const status=()=>{
     const h=latest();
-    const current=history.filter(x=>x.decisionReviewVersion===RULE_VERSION);
-    const settled=current.filter(x=>typeof x.proxyHit==="boolean");
+    const ledgerStats=signalLedger.list(1,0).stats;
     return {ok:true,bot:"EVENT10",mode:"PURE_RULES_AUTO_FIRST3M_PLUS_MANUAL",
       providerModel:"PURE_RULES_V1",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
@@ -156,9 +251,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       lastFeatureCoverage:lastCheck?.featureAvailability||h?.featureAvailability||null,lastDataProbe,lastCheck,
       active:h&&["ANALYZING","PREDICTED"].includes(h.status)&&clock()<h.expiresAt?h:null,
       lastSession:h,stats:stats(),
-      strategyStats:{total:current.length,proxySettled:settled.length,
-        proxyHits:settled.filter(x=>x.proxyHit===true).length,
-        proxyAccuracyPct:settled.length?round(100*settled.filter(x=>x.proxyHit===true).length/settled.length,2):null}};
+      strategyStats:{total:ledgerStats.total,proxySettled:ledgerStats.proxySettled,
+        proxyHits:ledgerStats.proxyHits,proxyAccuracyPct:ledgerStats.proxyAccuracyPct}};
   };
   const all=(limit=50)=>history.slice(-Math.max(1,Math.min(Number(limit)||50,200))).reverse();
   const readFeed=async()=>{
@@ -174,6 +268,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     if(!/^[A-Za-z0-9_-]{12,90}$/.test(String(id)))throw Error("INVALID_IDEMPOTENCY_KEY");
     const existing=history.find(x=>x.id===id);
     if(existing)return existing;
+    if(signalLedger.all.has(id))return signalLedger.all.get(id);
     if(inFlightStart)return inFlightStart;
     const active=history.findLast(x=>x.status==="PREDICTED"&&clock()<x.expiresAt);
     if(active)return active;
@@ -280,7 +375,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const now=clock();
       for(const h of expiring){
         if(now>h.expiresAt+15000){
-          h.settlementStatus="UNVERIFIABLE_PRICE_NEAR_EXPIRY";persist();
+          h.settlementStatus="UNVERIFIABLE_PRICE_NEAR_EXPIRY";persist();signalLedger.settle(h);
         }
       }
       const pending=expiring.filter(h=>!h.settlementStatus);
@@ -295,7 +390,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
           closeObservedAt:observed.observedAt,
           expirySampleLagMs:observed.observedAt-h.expiresAt,
           settlementStatus:"PUBLIC_MARKET_PROXY_ONLY",
-          ...score});persist();
+          ...score});persist();signalLedger.settle(h);
       }
     }catch(e){lastError="SETTLE_"+String(e?.message||e).slice(0,120);}
     finally{busySettle=false;}
@@ -308,5 +403,5 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     return {ok:true,...lastDataProbe,source:d.source,
       officialEventContractIndex:false,realOrderPlaced:false};
   }
-  return {status,start,tick,probe,history:all};
+  return {status,start,tick,probe,history:all,signals:signalLedger.list};
 }

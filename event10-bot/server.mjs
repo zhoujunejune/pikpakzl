@@ -74,7 +74,7 @@ export function serve(engine,{port=Number(process.env.EVENT10_PORT||13020),host=
       const bounded=(key,defaultValue,max)=>{
         const raw=search.get(key);
         if(raw===null)return defaultValue;
-        if(!/^\\d{1,7}$/.test(raw))return null;
+        if(!/^\d{1,7}$/.test(raw))return null;
         const num=Number(raw);
         return Number.isSafeInteger(num)?Math.min(num,max):null;
       };

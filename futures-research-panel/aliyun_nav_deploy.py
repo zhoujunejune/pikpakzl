@@ -135,6 +135,7 @@ PYSIGNALDIAG
     elif rule_switch:
         # Strict EMA9/EMA21, volume >=1.3, top5 orderbook, RSI; all gates required.
         # Coalesce manual clicks with the concurrent scheduled read-only scan.
+        # Compare Binance evidence with the actual decision instant, not older spot trade timestamps.
         # Fast terminal UI results; independent live-status poll and limited external fetch waits.
         # Archive every confirmed EVENT10 direction in an append-only ledger; show all pages.
         # Restore pagination endpoint /api/signals by deploying the matching server.mjs.

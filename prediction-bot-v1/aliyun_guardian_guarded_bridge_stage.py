@@ -63,7 +63,7 @@ assert 'GUARDIAN_PRODUCTION_SINGLE_SOURCE_V1' in src,'CURRENT_GUARDIAN_BLOCK_MIS
 assert 'GUARDIAN_LIVE_CONNECTOR_V1' not in src,'ALREADY_PATCHED_ABORT'
 start=src.index('// GUARDIAN_PRODUCTION_SINGLE_SOURCE_V1')
 end=src.index('  if(choice.model!==SELECTIVE8_MODEL)return null;',start)
-new="""// GUARDIAN_LIVE_CONNECTOR_V1
+new='''// GUARDIAN_LIVE_CONNECTOR_V1
   // Model evidence must pass official-feed and forward-performance gates.
   // The trade wrapper also requires a live risk heartbeat + current BUY quote.
   if(choice.model===GUARDIAN_ID){
@@ -80,7 +80,7 @@ new="""// GUARDIAN_LIVE_CONNECTOR_V1
         message:String(error?.message||error).slice(0,100)}));return null;
     }
   }
-"""
+'''
 src=src[:start]+new+src[end:]
 anchor="import http from 'node:http';"
 assert src.count(anchor)==1

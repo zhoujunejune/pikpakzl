@@ -345,7 +345,7 @@ async function refresh(){
   if(!r.ok||!h.ok)throw Error("HTTP "+r.status+"/"+h.status);
   const d=await r.json(),log=await h.json();
   display(d);
-  if(d.lastSession)void localizeLegacyLatest(d.lastSession);
+  /* Legacy DeepSeek translation is not called by pure-rule UI. */
   if(!inflight)$("message").textContent=d.active?"当前已出方向，10分钟后按公开行情核对。":
     d.lastCheck?.status==="NO_SIGNAL"?"当前条件不满足：无信号。前3分钟继续自动检测。":"后台前3分钟自动扫描；也可以手动立即检测。";
   const v6Records=onlyV6(log.records);

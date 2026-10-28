@@ -57,7 +57,8 @@ def main():
   d2=json.loads(raw2)
   print('GUARDIAN_RECHECK_MODEL',d2.get('orderSignalModel'),'READY',d2.get('orderSignalModelReady'))
   assert c2==200 and d2.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1' and d2.get('orderSignalModelReady') is True,'TRADE_STATUS_MODEL_NOT_READY'
- except Exception:print('GUARDIAN_PRODUCTION_SELECTOR_JSON_INVALID')
+ except json.JSONDecodeError:
+  raise AssertionError('GUARDIAN_PRODUCTION_SELECTOR_JSON_INVALID')
  for p in ('/dual5','/event10/','/futures-lab/'):
   assert get(p)[0]==404,('RETIRED_ROUTE_RETURNED',p)
  print('GUARDIAN_NO_RETIRED_BOTS_REINTRODUCED=true')

@@ -162,7 +162,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   };
   const all=(limit=50)=>history.slice(-Math.max(1,Math.min(Number(limit)||50,200))).reverse();
   const readFeed=async()=>{
-    const r=await fetcher(feedUrl,{signal:AbortSignal.timeout(4500),
+    const r=await fetcher(feedUrl,{signal:AbortSignal.timeout(2300),
       headers:{Accept:"application/json"}});
     if(!r.ok)throw Error("MARKET_SOURCE_HTTP_"+r.status);
     return r.json();
@@ -190,20 +190,20 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     try{
       // Fetch the order book and aggressive trades BEFORE the reference-price tick;
       // reject market evidence newer than the frozen spot reference.
-      const market=await collectRuleFeatures({fetcher,now:clock});
+      const market=await collectRuleFeatures({fetcher,now:clock,timeoutMs:1200});
       let feed=await readFeed(),reference=buildSnapshot(feed,clock());
       const marketTimes=[market.features.orderBook?.observedAt,
         market.features.aggressiveFlow?.lastTradeAt].filter(Number.isFinite);
       const target=marketTimes.length?Math.max(...marketTimes):null;
       if(target!==null&&reference.observedAt<target&&target-reference.observedAt<=3500){
-        for(let i=0;i<6&&reference.observedAt<target;i++){
-          await new Promise(resolve=>setTimeout(resolve,300));
+        for(let i=0;i<2&&reference.observedAt<target;i++){
+          await new Promise(resolve=>setTimeout(resolve,120));
           const retry=await readFeed();
           const newer=buildSnapshot(retry,clock());
           if(newer.observedAt>reference.observedAt){feed=retry;reference=newer;}
         }
       }
-      if(clock()-clickReceivedAt>9000)throw Error("SIGNAL_SNAPSHOT_TOO_SLOW");
+      if(clock()-clickReceivedAt>5000)throw Error("SIGNAL_SNAPSHOT_TOO_SLOW");
       const availability={...market.availability};
       const filtered={};
       for(const [k,v] of Object.entries(market.features)){
@@ -244,7 +244,17 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       history.push(session);
       if(history.length>500)history.splice(0,history.length-500);
       persist();return session;
-    }catch(e){lastError=String(e?.message||e).slice(0,160);throw e;}
+     }catch(e){
+      // Market-data failures are NOT valid directions. Return a terminal
+      // read-only DATA_ERROR result so the UI can stop its loading state.
+      const error=String(e?.message||e).slice(0,160);
+      lastError=error;
+      lastCheck={id,checkedAt:clock(),openedAt:null,openPrice:null,
+        status:"DATA_ERROR",signal:"NO_SIGNAL",direction:null,
+        reason:"数据检查未完成："+error+"。本次未产生交易方向。",
+        error,featureAvailability:lastDataProbe?.availability||null};
+      return lastCheck;
+    }
     finally{busyStart=false;}
   }
   async function tick(){

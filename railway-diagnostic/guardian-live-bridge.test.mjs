@@ -7,7 +7,7 @@ import {guardianOrderSignal,guardianQuoteGate,guardianRegisterIntent,guardianMar
 import {dynamicExit,registeredGuardianToken} from './guardian-dynamic-exit.mjs';
 test('guardian read-only source cannot authorize trades without independent qualification',()=>{
  const now=1793182500000+72000,round=Math.floor(now/300000)*300000;
- const row={round,at:round+30000,marketAt:now-2000,status:'PREDICTED',predictedDirection:'UP'};
+ const row={round,at:now-1500,marketAt:now-2000,status:'PREDICTED',predictedDirection:'UP'};
  const payload={ok:true,model:GUARDIAN_ID,orders:false,readOnly:true,configured:true,observedAt:now-500,
   latest:{direction:'UP',round,status:'SHADOW_OBSERVATION'},records:[row],
   stats:{settled:0,validated:false,wilsonLower:null},officialPriceFeedVerified:false};
@@ -18,7 +18,7 @@ test('guardian read-only source cannot authorize trades without independent qual
 });
 test('qualified Guardian can only execute if market net edge is positive',()=>{
  const now=1793182500000+72000,round=Math.floor(now/300000)*300000;
- const row={round,at:round+30000,marketAt:now-2000,status:'PREDICTED',predictedDirection:'DOWN'};
+ const row={round,at:now-1500,marketAt:now-2000,status:'PREDICTED',predictedDirection:'DOWN'};
  const payload={ok:true,model:GUARDIAN_ID,orders:false,readOnly:true,configured:true,observedAt:now-500,
   latest:{direction:'DOWN',round,status:'SHADOW_OBSERVATION'},records:[row],
   stats:{settled:600,validated:true,wilsonLower:.80},officialPriceFeedVerified:true};
@@ -45,4 +45,14 @@ test('dynamic exit uses real sell quote and peak, not BTC spot guess',()=>{
  assert.equal(dynamicExit({round:r,now:n,cost:1,current:1.05,peak:1.05}).triggered,false);
  assert.equal(dynamicExit({round:r,now:r+296000,cost:1,current:.98,peak:1}).reason,'GUARDIAN_EXIT_BEFORE_SETTLEMENT');
  assert.equal(dynamicExit({round:r,now:n,cost:1,current:NaN,peak:1}).triggered,false);
+});
+
+test('previous signal cannot be replayed more than 15s later',()=>{
+ const now=1793182500000+72000,round=Math.floor(now/300000)*300000;
+ const row={round,at:now-16000,marketAt:now-17000,status:'PREDICTED',predictedDirection:'UP'};
+ const payload={ok:true,model:GUARDIAN_ID,orders:false,readOnly:true,configured:true,
+   observedAt:now-500,latest:{direction:'UP',round,status:'SHADOW_OBSERVATION'},
+   records:[row],stats:{settled:400,validated:true,wilsonLower:.8},
+   officialPriceFeedVerified:true};
+ assert.equal(guardianOrderSignal(payload,now).ok,false);
 });

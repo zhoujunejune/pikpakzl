@@ -1,0 +1,28 @@
+name: Dual5 V3 negative-edge hotfix (independent trading service)
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-dual5-edge-v3-hotfix.yml']
+permissions: {contents: read}
+concurrency:
+  group: zl-dual5-v3-hotfix
+  cancel-in-progress: false
+jobs:
+  safe-repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Reproduce old escaped-newline bug and test executable rejection
+        run: |
+          python -m py_compile dual5-strategy/repair_edge_v3.py dual5-strategy/aliyun_deploy_edge_v3.py
+          python -m unittest discover -s dual5-strategy -p 'test_repair_edge_v3.py' -v
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Repair idle dual5 only, retain closed trading and existing positions
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python dual5-strategy/aliyun_deploy_edge_v3.py

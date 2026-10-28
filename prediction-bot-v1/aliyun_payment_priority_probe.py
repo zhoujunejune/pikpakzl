@@ -21,6 +21,7 @@ for file in railway-diagnostic/index.mjs railway-diagnostic/wrapper.mjs railway-
  if [ -f "$ROOT/$file" ];then
    echo "FILE:$file:present"
    sha256sum "$ROOT/$file" | cut -d' ' -f1 | sed 's/^/CONTENT_SHA256:/'
+   git hash-object "$ROOT/$file" | sed 's/^/GIT_BLOB_SHA:/'
  else echo "FILE:$file:missing";fi
 done
 python3 - <<'PY'

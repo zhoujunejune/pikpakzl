@@ -25,8 +25,8 @@ function harness({response,historyHangs=true}={}){
   const path=String(url);
   const json=x=>({ok:true,status:200,json:async()=>x});
   if(path==="api/status"){statusCalls++;return json(liveState);}
-  if(path==="api/history"){historyCalls++;if(historyHangs)return new Promise(()=>{});
-    return json({ok:true,records:[]});}
+  if(path.startsWith("api/signals?")){historyCalls++;if(historyHangs)return new Promise(()=>{});
+    return json({ok:true,version:"EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029",records:[],total:0,stats:{total:0,validDirections:0,proxySettled:0}});}
   if(path==="api/stream-health")return json({connected:true,windows:{},totalSinceProcessStart:10});
   if(path==="api/start"){manualCalls++;return json({ok:true,session:response});}
   throw Error("UNEXPECTED_URL "+path);

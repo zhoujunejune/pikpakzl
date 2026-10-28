@@ -102,40 +102,35 @@ th{color:#a9c6e7}
 <div class="metric"><small>新规则最近5轮</small><strong id="v6last5">—</strong></div>
 <div class="metric"><small>新规则最近10轮</small><strong id="v6last10">—</strong></div>
 </div>
-<p class="sub">仅统计新规则版本的实际方向信号，旧 DeepSeek 预测记录仍保留在后台，不混入命中率。当前显示最近50条记录内的滚动窗口。无官方事件合约结算，且这里不显示资金盈亏。</p>
+<p class="sub">全部新规则有效方向均永久追加到独立信号日志，统计所有已保存的新规则信号（不是最近50条的局部统计）。旧版预测历史继续保留且不会混入命中率。命中仅指公开行情代理，非官方事件合约结算。</p>
 </section>
 <section class="card">
-<div class="row"><h2>新规则历史记录</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
+<div class="row"><h2>所有有效信号记录</h2><button type="button" class="secondary" id="refresh">立即刷新</button></div>
+<p class="sub" id="historySummary" aria-live="polite">载入已保存的信号…</p>
 <div class="tablewrap"><table><thead><tr>
-<th>开始时间</th><th>参考价</th><th>规则方向</th><th>通过条件</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
-</tr></thead><tbody id="records"><tr><td colspan="7">读取中…</td></tr></tbody></table></div>
-<p class="sub">页面只筛选展示后台最近50条里的新规则有效信号；无信号不计入胜率。旧版本历史保留，不会删除。用于技术验证，不对应币安实际订单或官方事件合约结算。</p>
+<th>出信号时间</th><th>来源</th><th>方向</th><th>参考价</th><th>五项条件</th><th>放量倍数</th><th>RSI14</th><th>10分钟参考价</th><th>代理结果</th>
+</tr></thead><tbody id="records"><tr><td colspan="9">读取中…</td></tr></tbody></table></div>
+<div class="row" style="margin-top:12px">
+<button type="button" class="secondary" id="newerSignals">上一页</button>
+<span class="sub" id="signalPage">第 1 页</span>
+<button type="button" class="secondary" id="olderSignals">下一页</button>
+</div>
+<p class="sub">每次满足全部五项条件的 Higher/Lower 都自动保存，包括后台无人操作时产生的信号。每页25条，可逐页查看全部记录；到期后补充公开行情代理核对结果。无信号和数据错误不计入有效方向或命中率，也不代表真实事件合约订单。</p>
 </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const V6_VERSION="EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029";
-// Only count actual V6 records returned from the latest 50-session history API.
-// Non-V6 records remain stored but never contribute to these metrics.
-const onlyV6=records=>(Array.isArray(records)?records:[])
-  .filter(s=>s&&s.decisionReviewVersion===V6_VERSION);
-const summarizedV6=records=>{
- const settled=records.filter(s=>typeof s.proxyHit==="boolean");
- const hits=settled.filter(s=>s.proxyHit===true).length;
- const pct=settled.length?(100*hits/settled.length).toFixed(2)+"%":"—";
- return {total:records.length,decided:records.filter(s=>s.direction==="UP"||s.direction==="DOWN").length,
-  settled:settled.length,hits,pct,
-  last5:settled.length?(100*settled.slice(0,5).filter(s=>s.proxyHit===true).length/Math.min(settled.length,5)).toFixed(2)+"%":"—",
-  last10:settled.length?(100*settled.slice(0,10).filter(s=>s.proxyHit===true).length/Math.min(settled.length,10)).toFixed(2)+"%":"—"};
-};
-function displayV6Stats(records){
- const st=summarizedV6(records);
- $("total").textContent=st.total;
- $("decided").textContent=st.decided;
- $("settled").textContent=st.settled;
- $("accuracy").textContent=st.pct;
- $("v6last5").textContent=st.last5;
- $("v6last10").textContent=st.last10;
+const SIGNAL_VERSION="EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029";
+const PAGE_SIZE=25;
+let signalPageOffset=0,signalTotal=0;
+const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
+function displaySignalStats(stats){
+ $("total").textContent=(stats?.total??0).toLocaleString("zh-CN");
+ $("decided").textContent=(stats?.validDirections??0).toLocaleString("zh-CN");
+ $("settled").textContent=(stats?.proxySettled??0).toLocaleString("zh-CN");
+ $("accuracy").textContent=pct(stats?.proxyAccuracyPct);
+ $("v6last5").textContent=pct(stats?.last5Pct);
+ $("v6last10").textContent=pct(stats?.last10Pct);
 }
 let active=null,inflight=false,pendingRequestId=null;
 const attemptedChineseTranslations=new Set();
@@ -363,31 +358,53 @@ async function refresh(){
 async function refreshHistory(){
  if(historyRefreshBusy||inflight)return;
  historyRefreshBusy=true;
+ const requestedOffset=signalPageOffset;
  try{
-  const r=await fetch("api/history",{cache:"no-store",signal:AbortSignal.timeout(4500)});
+  const r=await fetch("api/signals?limit="+PAGE_SIZE+"&offset="+requestedOffset,{
+    cache:"no-store",signal:AbortSignal.timeout(4500)});
   if(!r.ok)throw Error("HTTP "+r.status);
   const log=await r.json();
-  const records=onlyV6(log.records);
-  displayV6Stats(records);
+  if(log.version!==SIGNAL_VERSION||!Array.isArray(log.records))throw Error("INVALID_SIGNAL_HISTORY");
+  if(requestedOffset!==signalPageOffset)return;
+  const records=log.records;
+  signalTotal=log.total;
+  displaySignalStats(log.stats);
+  $("historySummary").textContent="已永久记录 "+signalTotal+" 条有效方向信号；"+
+    "已核对 "+(log.stats?.proxySettled??0)+" 条。每次新信号自动更新。";
+  const page=Math.floor(signalPageOffset/PAGE_SIZE)+1;
+  const totalPages=Math.max(1,Math.ceil(signalTotal/PAGE_SIZE));
+  $("signalPage").textContent="第 "+page+" / "+totalPages+" 页";
+  $("newerSignals").disabled=signalPageOffset===0;
+  $("olderSignals").disabled=signalPageOffset+records.length>=signalTotal;
   const rows=$("records");rows.replaceChildren();
   if(!records.length){
    const tr=document.createElement("tr"),td=document.createElement("td");
-   td.colSpan=7;td.textContent="最近50条历史中暂无新规则有效信号";tr.append(td);rows.append(tr);
+   td.colSpan=9;td.textContent="暂无符合全部五项条件的新规则方向信号";
+   tr.append(td);rows.append(tr);
   }
   for(const s of records){
    const tr=document.createElement("tr");
-   const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
-     s.proxyOutcome==="FLAT"?"持平":s.settlementStatus?"未核验":"待到期";
-   for(const v of [when(s.openedAt),price(s.openPrice),s.direction||"—",displayConfidence(s),
-       price(s.closePrice),res,s.settlementStatus?statusText(s.settlementStatus):phaseText[s.status]||s.status]){
-    const td=document.createElement("td");td.textContent=v;tr.append(td);
+   const outcome=typeof s.proxyHit==="boolean"?
+      (s.proxyHit?"命中":"未命中"):
+      s.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY"?"行情不足，未核验":
+      s.proxyOutcome==="FLAT"?"持平（不计）":"待10分钟到期";
+   const x=s.direction==="UP"?"看涨 Higher":"看跌 Lower";
+   const volume=typeof s.volumeRatio==="number"?s.volumeRatio.toFixed(2)+"×":"—";
+   const rsi=typeof s.rsi14==="number"?s.rsi14.toFixed(1):"—";
+   const cells=[
+     when(s.openedAt),s.trigger==="AUTO"?"自动":"手动",x,price(s.openPrice),
+     s.fiveOfFive?"5/5":"历史记录",volume,rsi,price(s.closePrice),outcome
+   ];
+   for(const [i,v] of cells.entries()){
+    const td=document.createElement("td");td.textContent=v;
+    if(i===2)td.className=s.direction==="UP"?"good":"bad";
+    if(i===8)td.className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
+    tr.append(td);
    }rows.append(tr);
   }
  }catch(e){
-  // An auxiliary history failure must never block the current signal.
-  if($("records").textContent.includes("读取中")){
-   $("records").textContent="历史记录暂不可用，可点刷新重试";
-  }
+  $("historySummary").textContent="信号历史暂无法读取，请点击刷新："+String(e.message||e);
+  // The current live direction is independent of the ledger display.
  }finally{historyRefreshBusy=false;}
 }
 // The POST contains the definitive result. Paint it without any second GET.
@@ -432,7 +449,9 @@ async function startClick(){
  finally{inflight=false;refreshEpoch++;void refresh();void refreshHistory();}
 }
 $("start").addEventListener("click",startClick);
-$("refresh").addEventListener("click",()=>{void refresh();void refreshHistory();});
+$("refresh").addEventListener("click",()=>{signalPageOffset=0;void refresh();void refreshHistory();});
+$("newerSignals").addEventListener("click",()=>{signalPageOffset=Math.max(0,signalPageOffset-PAGE_SIZE);void refreshHistory();});
+$("olderSignals").addEventListener("click",()=>{if(signalPageOffset+PAGE_SIZE<signalTotal){signalPageOffset+=PAGE_SIZE;void refreshHistory();}});
 $("checkDataSources").addEventListener("click",async()=>{
  const btn=$("checkDataSources");btn.disabled=true;
  $("featureSummary").textContent="正在检查币安公开接口连通性和时间戳…";
@@ -444,5 +463,5 @@ $("checkDataSources").addEventListener("click",async()=>{
  }catch(e){$("featureSummary").textContent="数据源检查失败："+String(e);}
  finally{btn.disabled=false;}
 });
-refresh();refreshHistory();refreshCollector();setInterval(refresh,3000);setInterval(refreshHistory,15000);setInterval(refreshCollector,6000);setInterval(updateClock,1000);
+refresh();refreshHistory();refreshCollector();setInterval(refresh,3000);setInterval(refreshHistory,6000);setInterval(refreshCollector,6000);setInterval(updateClock,1000);
 </script></body></html>

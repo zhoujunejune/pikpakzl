@@ -132,7 +132,7 @@ test("manual click during an automatic first-3m scan shares the result without d
  resume();
  const result=await manual;
  assert.equal(result.status,"NO_SIGNAL");
- assert.equal(result.id,"auto-rule-"+NOW);
+ assert.equal(result.id,"auto-rule-"+(NOW-NOW%600000));
  assert.equal(engine.status().busyStart,false);
  assert.equal(engine.status().lastCheck.status,"NO_SIGNAL");
  assert.equal(engine.status().lastError,null);

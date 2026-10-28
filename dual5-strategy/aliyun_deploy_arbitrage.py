@@ -24,14 +24,28 @@ test -f "$TARGET"
 systemctl is-active --quiet zl-prediction-dual5
 pre_single_pid=$(systemctl show zl-prediction-fast5.service -p MainPID --value)
 pre_original_pid=$(systemctl show zl-prediction-trade.service -p MainPID --value)
+DUAL_PORT=$(python3 - <<'FIND_DUAL_PORT'
+import json,urllib.request
+for port in (13048,13046,13045,13044,13042,13021,13020,13005):
+ try:
+  with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/status',timeout=2) as r: d=json.load(r)
+  if d.get('ok') is True and d.get('model')=='BINANCE_DUAL5_PAIR_V1':
+   print(port)
+   break
+ except Exception: pass
+FIND_DUAL_PORT
+)
+if ! [[ "$DUAL_PORT" =~ ^13[0-9]{3}$ ]];then echo DUAL_PORT_NOT_FOUND_ABORTED;exit 11;fi
+export DUAL_PORT
 python3 - <<'PRECHECK'
-import urllib.request,json
-with urllib.request.urlopen('http://127.0.0.1:13042/api/status',timeout=5) as r:
+import urllib.request,json,os
+with urllib.request.urlopen('http://127.0.0.1:'+os.environ['DUAL_PORT']+'/api/status',timeout=5) as r:
  d=json.load(r)
 assert d.get('ok') is True and d.get('model')=='BINANCE_DUAL5_PAIR_V1', 'WRONG_DUAL_STATUS'
 assert d.get('active') is False and d.get('mode')=='PRODUCTION_IDLE', 'DUAL_LIVE_ACTIVE_ABORT'
 assert not any(v.get('status')=='ORDER_PENDING' for v in (d.get('legs') or {}).values()), 'UNKNOWN_PENDING_ORDER_ABORT'
 print('DUAL_OWNER_OFF_AND_NO_PENDING_CONFIRMED')
+print('DUAL_PORT',os.environ['DUAL_PORT'])
 print('DUAL_EXISTING_PROTECTION_LOCK',bool(d.get('blocked')))
 PRECHECK
 mkdir -p -m 700 "$ROOT/backups"
@@ -63,13 +77,13 @@ python3 "$tmp/patch.py" "$TARGET"
 "$NODE" --check "$TARGET"
 systemctl restart zl-prediction-dual5.service
 for _ in $(seq 1 15); do
-  if systemctl is-active --quiet zl-prediction-dual5 && curl -sf --max-time 3 http://127.0.0.1:13042/healthz >/dev/null;then break;fi
+  if systemctl is-active --quiet zl-prediction-dual5 && curl -sf --max-time 3 http://127.0.0.1:$DUAL_PORT/healthz >/dev/null;then break;fi
   sleep 1
 done
 systemctl is-active --quiet zl-prediction-dual5
 python3 - <<'VERIFY'
 import json,urllib.request
-with urllib.request.urlopen('http://127.0.0.1:13042/api/status',timeout=5) as r:d=json.load(r)
+with urllib.request.urlopen('http://127.0.0.1:'+__import__('os').environ['DUAL_PORT']+'/api/status',timeout=5) as r:d=json.load(r)
 assert d.get('ok') is True and d.get('model')=='BINANCE_DUAL5_PAIR_V1'
 assert d.get('active') is False and d.get('mode')=='PRODUCTION_IDLE','DUAL_AUTO_ARM_UNEXPECTED'
 assert not any(v.get('status')=='ORDER_PENDING' for v in (d.get('legs') or {}).values())

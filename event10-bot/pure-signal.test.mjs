@@ -164,3 +164,68 @@ test("manual retry during an existing valid ten-minute signal reuses that sessio
  assert.equal(restCalls,2);
  assert.equal(feedCalls,1);
 });
+
+
+test("cross-market depth newer than last spot trade but received before decision is VALID",async()=>{
+ const stateFile=path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-time-align-")),"history.json");
+ const quote=rawBook(true);
+ quote.T=NOW-300; // spot trade is NOW-1000; exchange quote already received at NOW
+ const engine=createEngine({clock:()=>NOW,env:{EVENT10_STATE_FILE:stateFile},
+  fetcher:async url=>{
+   if(url.includes("/fapi/v1/depth"))
+    return {ok:true,status:200,json:async()=>quote};
+   if(url.includes("/fapi/v1/aggTrades"))return {ok:false,status:451};
+   if(url.includes("shadow-market-data"))
+    return {ok:true,status:200,json:async()=>fixture("UP")};
+   throw Error("UNEXPECTED_EXTERNAL_CALL");
+  }});
+ const out=await engine.start("aligned-price-and-depth-0001");
+ assert.equal(out.status,"PREDICTED");
+ assert.equal(out.direction,"UP");
+ assert.equal(out.openedAt,NOW); // decision time
+ assert.equal(out.referencePriceObservedAt,TICK); // raw spot source timestamp retained
+ assert.equal(out.openAgeMs,1000);
+ assert.equal(out.ruleChecks.upChecks.orderflow,true);
+ assert.equal(out.ruleChecks.evidence.bookEvidenceAvailable,true);
+ assert.equal(out.featureAvailability.orderBook.available,true);
+ assert.equal(engine.signals(10,0).total,1);
+ assert.equal(engine.status().modelCalls,0);
+ assert.equal(engine.status().autoTradingEnabled,false);
+});
+test("depth timestamp genuinely beyond decision time is rejected",async()=>{
+ const stateFile=path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-future-")),"history.json");
+ const quote=rawBook(true);quote.T=NOW+300;
+ const engine=createEngine({clock:()=>NOW,env:{EVENT10_STATE_FILE:stateFile},
+  fetcher:async url=>{
+   if(url.includes("/fapi/v1/depth"))
+    return {ok:true,status:200,json:async()=>quote};
+   if(url.includes("/fapi/v1/aggTrades"))return {ok:false,status:451};
+   if(url.includes("shadow-market-data"))
+    return {ok:true,status:200,json:async()=>fixture("UP")};
+   throw Error("UNEXPECTED_EXTERNAL_CALL");
+  }});
+ const out=await engine.start("future-depth-excluded-0001");
+ assert.equal(out.status,"NO_SIGNAL");
+ assert.equal(out.upChecks.orderflow,false);
+ assert.equal(out.featureAvailability.orderBook.error,"SOURCE_OUTSIDE_DECISION_WINDOW");
+ assert.equal(engine.signals(5,0).total,0);
+});
+test("automatic scans also cover minute 5 of each ten-minute block",async()=>{
+ const clock=()=>Date.parse("2026-10-29T08:05:01Z");
+ let complete;
+ const held=new Promise(resolve=>complete=resolve);
+ const stateFile=path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-priority-")),"history.json");
+ const engine=createEngine({clock,env:{EVENT10_STATE_FILE:stateFile},
+  fetcher:async url=>{
+   if(url.startsWith("https://fapi.binance.com")){await held;return {ok:false,status:451};}
+   if(url.includes("shadow-market-data"))return {ok:false,status:503};
+   throw Error("UNEXPECTED_CALL");
+  }});
+ await engine.tick();
+ assert.equal(engine.status().busyStart,true,"minute-five automatic scan should start");
+ complete();
+ for(let i=0;i<4;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(engine.status().busyStart,false);
+ assert.equal(engine.status().autoTradingEnabled,false);
+ assert.equal(engine.status().strategyStats.total,0);
+});

@@ -33,7 +33,7 @@ from pathlib import Path
 import sys
 s=Path(sys.argv[1]).read_text(encoding='utf8')
 for marker in ('id="start"', 'id="immediatePrediction"', 'id="quickDirection"',
-               'id="quickConfidence"', 'id="historyBody"', 'DeepSeek'):
+               'id="quickConfidence"', 'id="records"', 'DeepSeek'):
     assert marker in s, 'EVENT10_PAGE_MARKER_MISSING_'+marker
 assert s.index('id="start"') < s.index('id="immediatePrediction"')
 print('EVENT10_ORIGINAL_FRONTEND_ASSET_VALID=true')

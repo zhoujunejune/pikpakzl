@@ -41,6 +41,10 @@ print('GUARDIAN_SHADOW_STATE',status.get('configured'),status.get('latest',{}).g
 from pathlib import Path
 p=Path('/opt/zl-prediction-live/src/railway-diagnostic/production-signal-choice.mjs')
 print('GUARDIAN_SELECTOR_SOURCE',p.is_file(),'containsGuardian',('GUARDIAN_MODEL' in p.read_text()) if p.is_file() else False)
+if p.is_file():
+ for idx,line in enumerate(p.read_text().splitlines(),1):
+  if 'saved.model' in line or 'return apply(raw)' in line or 'ORDER_SIGNAL_MODELS=Object.freeze' in line:
+   print('GUARDIAN_SELECTOR_MARKER',idx,line.strip()[:145])
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

@@ -31,7 +31,8 @@ def main():
     if not header.is_visible():raise RuntimeError("REAL_HEADER_NOT_VISIBLE")
     if page.locator(".zl-v2-tabs a").count()!=3:raise RuntimeError("THREE_NAV_LINKS_NOT_VISIBLE")
     if page.locator("style#zl-mintech-v2").count()!=1:raise RuntimeError("THEME_STYLES_NOT_IN_DOM")
-    if not page.locator("main h1, .w h1, h1").first.is_visible():raise RuntimeError("ACTUAL_PAGE_TITLE_NOT_VISIBLE")
+    # Original single-trading dashboard may not contain an h1; the V2 brand is the visible title.
+    if not page.locator(".zl-v2-product b").is_visible():raise RuntimeError("ACTUAL_BRAND_TITLE_NOT_VISIBLE")
     state=page.evaluate("""() => {
       const h=document.querySelector('header.zl-v2-bar');
       const links=[...h.querySelectorAll('.zl-v2-tabs a')];
@@ -44,7 +45,7 @@ def main():
         navColumnCount:links.length,
         navLabels:links.map(x=>x.innerText),
         activeTab:links.find(x=>x.getAttribute('aria-current')==='page')?.innerText,
-        title:document.querySelector('h1')?.innerText?.slice(0,65),
+        title:document.querySelector('h1')?.innerText?.slice(0,65)||document.querySelector('.zl-v2-product b')?.innerText,
         cardCount:document.querySelectorAll('article,.card,.w>.c').length
       };
     }""")

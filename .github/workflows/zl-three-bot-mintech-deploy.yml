@@ -1,0 +1,46 @@
+name: Release three robot minimal-tech dashboards only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-three-bot-mintech-deploy.yml'
+      - 'ui-theme/minimal-tech.css'
+      - 'ui-theme/patch_three_ui.py'
+      - 'ui-theme/aliyun_theme_deploy.py'
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-three-bot-ui-theme-release
+  cancel-in-progress: false
+jobs:
+  safe-ui-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate UI-only scope
+        run: |
+          python -m py_compile ui-theme/patch_three_ui.py ui-theme/aliyun_theme_deploy.py
+          python - <<'PY'
+          from pathlib import Path
+          css=Path('ui-theme/minimal-tech.css').read_text()
+          src=Path('ui-theme/patch_three_ui.py').read_text()
+          deploy=Path('ui-theme/aliyun_theme_deploy.py').read_text()
+          assert 'ZL_MINIMAL_TECH_UI_20261028' in css
+          assert 'def patch_single(' in src and 'def patch_html(' in src
+          assert 'SINGLE_FOLLOW_ENABLED_ABORT' in deploy
+          assert 'DUAL_LIVE_ACTIVE_ABORT' in deploy
+          assert 'EVENT10_ACTIVE_ANALYSIS_ABORT' in deploy
+          assert 'UI_ROLLBACK_PERFORMED' in deploy
+          assert 'systemctl restart zl-prediction-fast5' not in deploy
+          assert 'systemctl restart zl-prediction-dual5' not in deploy
+          PY
+      - name: Install Alibaba SWAS read/command SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy and verify three UI surfaces without trading
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python ui-theme/aliyun_theme_deploy.py

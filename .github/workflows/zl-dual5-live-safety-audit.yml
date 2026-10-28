@@ -52,6 +52,12 @@ jobs:
           p=Path('/opt/zl-prediction-dual5/binance_dual5_pairs.mjs')
           if p.exists():
            s=p.read_text()
+           for i,line in enumerate(s.splitlines()[:14],1):
+            if 'FILE=' in line or 'PORT=' in line:
+             import re
+             cleaned=re.sub(r'process\.env\.[A-Za-z0-9_]+','[ENV_NAME]',line)
+             print('DUAL_CONFIG_PATH_SOURCE',i,cleaned[:240])
+           print('CONFIG_FILES',[(str(q),q.exists()) for q in [Path('/var/lib/zl-prediction-dual5/state.json'),Path('/opt/zl-prediction-dual5/state.json')]])
            print('DUAL_STRATEGY_MARKER_INSTALLED','DUAL5_ARB_EDGE_GATE_V2_20261028' in s)
            print('DUAL_MARKER_COUNT',s.count('DUAL5_ARB_EDGE_GATE_V2_20261028'))
            for ix,line in enumerate(s.splitlines(),1):

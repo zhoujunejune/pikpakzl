@@ -51,7 +51,8 @@ def main():
     }""")
     assert state["viewport"]==390,state
     assert state["barHeight"]>=60,state
-    assert state["barWidth"]>=375,state
+    # Original mobile page carries 18px side padding; visible header width is 354px on 390px phone.
+    assert 320<=state["barWidth"]<=390,state
     assert state["activeTab"],state
     assert state["cardCount"]>=1,state
     print("REAL_PHONE_RENDER_OK",name,state)

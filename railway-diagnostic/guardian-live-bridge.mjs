@@ -1,3 +1,26 @@
+import fs from 'node:fs';
+import path from 'node:path';
+export const GUARDIAN_REGISTRY='/var/lib/zl-prediction/guardian5/guardian-live-orders.json';
+// A record is created BEFORE the owner-armed Binance order POST. It has no
+// write authority: it only permits risk monitoring for this exact token/round.
+export function guardianRegisterIntent(intent,{file=GUARDIAN_REGISTRY}={}){
+ const round=Number(intent?.round),tokenId=String(intent?.tokenId||'');
+ if(!Number.isSafeInteger(round)||round%300000!==0||
+    !/^[A-Za-z0-9_-]{3,200}$/.test(tokenId))
+  throw Error('INVALID_GUARDIAN_INTENT_REGISTRY');
+ const dir=path.dirname(file);
+ fs.mkdirSync(dir,{recursive:true,mode:0o750});
+ let raw={model:GUARDIAN_ID,entries:[]};
+ try{raw=JSON.parse(fs.readFileSync(file,'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
+ if(raw.model!==GUARDIAN_ID||!Array.isArray(raw.entries))throw Error('UNTRUSTED_GUARDIAN_REGISTRY');
+ const entries=raw.entries.filter(x=>Number.isSafeInteger(x.round)&&x.round>=round-600000&&
+   !(x.round===round&&x.tokenId===tokenId)).slice(-90);
+ entries.push({round,tokenId,createdAt:Date.now(),status:'INTENT_PREPARED'});
+ const tmp=file+'.'+process.pid+'.tmp';
+ fs.writeFileSync(tmp,JSON.stringify({model:GUARDIAN_ID,entries}),{mode:0o640});
+ fs.renameSync(tmp,file);
+ return true;
+}
 // A trade-route adapter for the existing BTC five-minute single bot.
 // No Binance credentials or order-writing capability: it may only authorize an
 // existing owner-armed executor when independent evidence is valid.

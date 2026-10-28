@@ -3,7 +3,10 @@ on:
   workflow_dispatch:
   push:
     branches: [feature/zl-futures-bot-v1]
-    paths: ['.github/workflows/zl-dual5-edge-v3-hotfix.yml']
+    paths:
+      - '.github/workflows/zl-dual5-edge-v3-hotfix.yml'
+      - 'dual5-strategy/repair_edge_v3.py'
+      - 'dual5-strategy/test_repair_edge_v3.py'
 permissions: {contents: read}
 concurrency:
   group: zl-dual5-v3-hotfix

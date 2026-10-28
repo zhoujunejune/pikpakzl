@@ -7,6 +7,7 @@ on:
       - 'ui-theme/mintech-v2.css'
       - 'ui-theme/patch_brand_v2.py'
       - 'ui-theme/aliyun_theme_v2_deploy.py'
+      - 'ui-theme/public_verify_v2.py'
   workflow_dispatch:
 permissions: {contents: read}
 concurrency:
@@ -45,3 +46,7 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python ui-theme/aliyun_theme_v2_deploy.py
+      - name: Verify actual authenticated public browser URLs for all three UI pages
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python ui-theme/public_verify_v2.py

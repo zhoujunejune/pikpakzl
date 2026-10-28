@@ -225,7 +225,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   }
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,modelCalls=0,lastError=null;
-  let lastRuleScan=0,lastCheck=null,inFlightStart=null;
+  let lastRuleScan=0,lastRuleScanCycle=null,lastCheck=null,inFlightStart=null;
   let lastCheckAt=0;
   let lastDataProbe=null;
   const persist=()=>store(file,history);
@@ -362,10 +362,14 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // Automatically scan only the first 3 minutes of each aligned UTC 10m block.
-    // No forced direction, no exchange order; at most one accepted signal per block.
+    // The first 3 minutes are priority (12s cadence); continue looking
+    // through the remaining 7 minutes at a slower 30s cadence. "Priority"
+    // must not silently mean "never consider later valid signals".
+    // No forced direction, no order execution; one accepted signal per block.
     const nowMs=clock(),cycle=nowMs-Math.floor(nowMs%HORIZON_MS);
-    if(nowMs-cycle<180000&&nowMs-lastRuleScan>=12000&&!busyStart&&
+    if(lastRuleScanCycle!==cycle){lastRuleScanCycle=cycle;lastRuleScan=0;}
+    const scanInterval=nowMs-cycle<180000?12000:30000;
+    if(nowMs-lastRuleScan>=scanInterval&&!busyStart&&
         !history.some(x=>x.signalCycleStartMs===cycle&&x.direction)&&
         !history.some(x=>x.status==="PREDICTED"&&x.expiresAt>nowMs)){
       lastRuleScan=nowMs;

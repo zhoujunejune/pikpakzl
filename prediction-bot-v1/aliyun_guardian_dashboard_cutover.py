@@ -48,6 +48,7 @@ from pathlib import Path
 import os
 p=Path('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs')
 s=p.read_text()
+s=s.replace('GUARDIAN · 影子策略','GUARDIAN · 生产策略')
 old="import {injectFast5Dashboard} from './fast5-dashboard-inject.mjs';"
 new="import {injectGuardianMainDashboard} from './guardian-main-dashboard.mjs';"
 oldcall='html=injectFast5Dashboard(html);'

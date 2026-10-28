@@ -83,10 +83,24 @@ jobs:
           assert state['autoSignalEnabled'] is True
           assert state['autoTradingEnabled'] is False and state['executionAvailable'] is False
           assert state['strategyStats']['proxySettled']>=0
+          with query('/event10/api/signals?limit=25&offset=0') as r: signals=json.load(r)
+          assert signals['ok'] is True
+          assert signals['version']=='EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029'
+          assert signals['total']==state['strategyStats']['total']
+          assert signals['stats']['proxySettled']==state['strategyStats']['proxySettled']
+          assert signals['autoTradingEnabled'] is False
+          assert len(signals['records'])<=25
+          if signals['total']>25:
+              with query('/event10/api/signals?limit=25&offset=25') as r: older=json.load(r)
+              assert older['ok'] and older['offset']==25 and older['records']
+          print('EVENT10_ALL_SIGNAL_HISTORY_PAGE_VERIFIED=true')
+          print('EVENT10_ALL_SAVED_SIGNALS='+str(signals['total']))
           with query('/event10/') as r:page=r.read().decode('utf8')
           assert 'BTC 10分钟事件合约 · 纯信号' in page
           assert '立即检测五项条件' in page
           assert 'EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029' in page
+          assert 'id="olderSignals"' in page and 'id="newerSignals"' in page
+          assert '所有有效信号记录' in page
           with query('/event10/api/history') as r:history=json.load(r)
           assert history['ok'] and isinstance(history['records'],list)
           with query('/') as r:home=r.read().decode('utf8')

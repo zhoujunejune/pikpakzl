@@ -4,6 +4,7 @@ on:
     branches: [feature/zl-futures-bot-v1]
     paths:
       - '.github/workflows/zl-three-bot-phone-browser-verify.yml'
+      - 'ui-theme/browser_visual_verify_v2.py'
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

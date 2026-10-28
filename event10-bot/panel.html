@@ -202,7 +202,7 @@ const displayConfidence=s=>{
  const down=s.downChecks||s.ruleChecks?.downChecks;
  return checks?"看涨 "+count(checks)+"/5 · 看跌 "+count(down)+"/5":"—";
 };
-const phaseText={ANALYZING:"处理中",PREDICTED:"五项成立，方向已确定",NO_SIGNAL:"条件不满足，无信号",FAILED:"检查失败",COMPLETE:"已核对"};
+const phaseText={ANALYZING:"处理中",PREDICTED:"五项成立，方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
  if(v==="PUBLIC_MARKET_PROXY_ONLY")return "代理行情已核对";
  if(v==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")return "到期时数据不足";
@@ -247,18 +247,18 @@ function showSources(coverage){
 }
 function display(d){
  const recent=d.lastCheck||null,old=d.lastSession||null;
- const showNoSignal=recent?.status==="NO_SIGNAL"&&!d.active&&
+ const showNoSignal=(recent?.status==="NO_SIGNAL"||recent?.status==="DATA_ERROR")&&!d.active&&
     recent.checkedAt>=(old?.modelFinishedAt||old?.openedAt||0);
  const s=showNoSignal?recent:(d.active||old||null);
  active=d.active||null;
  $("engine").textContent=d.configured?"固定五项信号规则已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
- $("start").disabled=inflight||!d.configured||!!d.active||d.busyStart;
+ $("start").disabled=inflight||!d.configured||!!d.active; // Manual joins background scan
  if(s){
-  const noSignal=s.status==="NO_SIGNAL";
+  const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";
   $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
   $("quickPhase").textContent=$("phase").textContent;
-  $("quickDirection").textContent=s.direction==="UP"?"看涨 Higher":s.direction==="DOWN"?"看跌 Lower":noSignal?"无信号":s.direction||"—";
+  $("quickDirection").textContent=s.direction==="UP"?"看涨 Higher":s.direction==="DOWN"?"看跌 Lower":s.status==="DATA_ERROR"?"数据异常·无信号":noSignal?"无信号":s.direction||"—";
   $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
   $("quickConfidence").textContent="通过条件："+displayConfidence(s);
   $("quickOpen").textContent="参考价："+price(s.openPrice)+" USDT";
@@ -272,7 +272,7 @@ function display(d){
   $("direction").textContent=$("quickDirection").textContent;
   $("confidence").textContent=displayConfidence(s);
   directionStyle($("direction"),s.direction);
-  $("latency").textContent=Number.isFinite(s.modelLatencyMs)?(s.modelLatencyMs/1000).toFixed(2)+"秒":"—";
+  $("latency").textContent=Number.isFinite(s.checkLatencyMs??s.modelLatencyMs)?((s.checkLatencyMs??s.modelLatencyMs)/1000).toFixed(2)+"秒":"—";
   $("closePrice").textContent=price(s.closePrice);
   $("result").textContent=noSignal?"无信号（不计统计）":typeof s.proxyHit==="boolean"?
     (s.proxyHit?"代理命中":"代理未命中"):
@@ -336,36 +336,74 @@ async function refreshCollector(){
   $("collectorExplanation").textContent="后台采集服务暂时无法验证，不能宣称采集正常。";
  }
 }
+let statusRefreshBusy=false,historyRefreshBusy=false,refreshEpoch=0;
+// Live status is NEVER blocked by the large 50-record history response.
 async function refresh(){
+ if(inflight||statusRefreshBusy)return;
+ statusRefreshBusy=true;
+ const epoch=refreshEpoch;
  try{
-  const [r,h]=await Promise.all([
-    fetch("api/status",{cache:"no-store"}),
-    fetch("api/history",{cache:"no-store"})
-  ]);
-  if(!r.ok||!h.ok)throw Error("HTTP "+r.status+"/"+h.status);
-  const d=await r.json(),log=await h.json();
+  const r=await fetch("api/status",{cache:"no-store",signal:AbortSignal.timeout(3500)});
+  if(!r.ok)throw Error("HTTP "+r.status);
+  const d=await r.json();
+  if(epoch!==refreshEpoch||inflight)return;
   display(d);
-  /* Legacy DeepSeek translation is not called by pure-rule UI. */
-  if(!inflight)$("message").textContent=d.active?"当前已出方向，10分钟后按公开行情核对。":
-    d.lastCheck?.status==="NO_SIGNAL"?"当前条件不满足：无信号。前3分钟继续自动检测。":"后台前3分钟自动扫描；也可以手动立即检测。";
-  const v6Records=onlyV6(log.records);
-  displayV6Stats(v6Records);
+  $("message").textContent=d.busyStart?"后台正在获取行情，完成后自动更新结果。":
+    d.active?"已出有效方向，等待10分钟后参考行情核对。":
+    d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
+    d.lastCheck?.status==="NO_SIGNAL"?"检查已完成：五项未同时满足，无信号。":
+    "后台优先扫描每轮前3分钟，也可以手动立即检查。";
+ }catch(e){
+  if(epoch===refreshEpoch&&!inflight){
+   $("engine").textContent="状态接口异常";$("engine").className="status bad";
+   $("message").textContent="状态刷新失败："+String(e.message||e);
+  }
+ }finally{statusRefreshBusy=false;}
+}
+async function refreshHistory(){
+ if(historyRefreshBusy||inflight)return;
+ historyRefreshBusy=true;
+ try{
+  const r=await fetch("api/history",{cache:"no-store",signal:AbortSignal.timeout(4500)});
+  if(!r.ok)throw Error("HTTP "+r.status);
+  const log=await r.json();
+  const records=onlyV6(log.records);
+  displayV6Stats(records);
   const rows=$("records");rows.replaceChildren();
-  if(!v6Records.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=7;td.textContent="最近50条历史中暂无新规则有效信号";tr.append(td);rows.append(tr);}
-  for(const s of v6Records){
+  if(!records.length){
+   const tr=document.createElement("tr"),td=document.createElement("td");
+   td.colSpan=7;td.textContent="最近50条历史中暂无新规则有效信号";tr.append(td);rows.append(tr);
+  }
+  for(const s of records){
    const tr=document.createElement("tr");
    const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
      s.proxyOutcome==="FLAT"?"持平":s.settlementStatus?"未核验":"待到期";
    for(const v of [when(s.openedAt),price(s.openPrice),s.direction||"—",displayConfidence(s),
-     price(s.closePrice),res,s.settlementStatus?statusText(s.settlementStatus):phaseText[s.status]||s.status]){
-     const td=document.createElement("td");td.textContent=v;tr.append(td);
+       price(s.closePrice),res,s.settlementStatus?statusText(s.settlementStatus):phaseText[s.status]||s.status]){
+    const td=document.createElement("td");td.textContent=v;tr.append(td);
    }rows.append(tr);
   }
- }catch(e){$("engine").textContent="无法连接";$("message").textContent="读取失败："+String(e);}
+ }catch(e){
+  // An auxiliary history failure must never block the current signal.
+  if($("records").textContent.includes("读取中")){
+   $("records").textContent="历史记录暂不可用，可点刷新重试";
+  }
+ }finally{historyRefreshBusy=false;}
+}
+// The POST contains the definitive result. Paint it without any second GET.
+function showImmediateResult(session){
+ const signal=session?.direction==="UP"||session?.direction==="DOWN";
+ display({configured:true,busyStart:false,active:signal?session:null,
+   lastSession:signal?session:null,lastCheck:session,
+   lastDataProbe:null,lastFeatureCoverage:session?.featureAvailability||null});
+ $("message").textContent=session?.status==="DATA_ERROR"?
+   "本次数据异常，未产生方向。":signal?
+   "五项条件全部成立，已给出方向；10分钟后核对参考行情。":
+   "检查完成：五项未同时满足，无信号。";
 }
 async function startClick(){
  if(inflight)return;
- inflight=true;$("start").disabled=true;$("message").textContent="正在检查最新已收盘K线、成交量和盘口…";
+ inflight=true;refreshEpoch++;$("start").disabled=true;$("message").textContent="正在检查最新已收盘K线、成交量和盘口…";
  $("quickPhase").textContent="正在启动";
  $("quickDirection").textContent="正在检查五项条件…";
  $("quickDirection").className="signal-direction yellow";
@@ -377,13 +415,12 @@ async function startClick(){
   pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
  }
  try{
-  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",
+  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",signal:AbortSignal.timeout(9000),
     headers:{"X-Event10-Action":"manual-open","X-Event10-Request-ID":pendingRequestId}});
   const d=await r.json();
   if(!r.ok||!d.ok)throw Error(d.error||"启动失败");
   pendingRequestId=null;
-  $("message").textContent="规则检查已完成，未满足则为无信号。";
-  await refresh();
+  showImmediateResult(d.session);
  }catch(e){
   $("message").textContent="行情检查未完成："+String(e);
   $("quickPhase").textContent="本次检查未完成";
@@ -392,10 +429,10 @@ async function startClick(){
   $("quickConfidence").textContent="通过条件：—";
   $("quickReason").textContent="行情检查未完成；请以本次实际通过的五项条件为准："+String(e);
  }
- finally{inflight=false;await refresh();}
+ finally{inflight=false;refreshEpoch++;void refresh();void refreshHistory();}
 }
 $("start").addEventListener("click",startClick);
-$("refresh").addEventListener("click",refresh);
+$("refresh").addEventListener("click",()=>{void refresh();void refreshHistory();});
 $("checkDataSources").addEventListener("click",async()=>{
  const btn=$("checkDataSources");btn.disabled=true;
  $("featureSummary").textContent="正在检查币安公开接口连通性和时间戳…";
@@ -407,5 +444,5 @@ $("checkDataSources").addEventListener("click",async()=>{
  }catch(e){$("featureSummary").textContent="数据源检查失败："+String(e);}
  finally{btn.disabled=false;}
 });
-refresh();refreshCollector();setInterval(refresh,4000);setInterval(refreshCollector,5000);setInterval(updateClock,1000);
+refresh();refreshHistory();refreshCollector();setInterval(refresh,3000);setInterval(refreshHistory,15000);setInterval(refreshCollector,6000);setInterval(updateClock,1000);
 </script></body></html>

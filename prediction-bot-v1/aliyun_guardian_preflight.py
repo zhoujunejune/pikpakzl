@@ -18,6 +18,10 @@ for port,path in [(13001,'/api/status'),(13001,'/api/order-signal-model'),(13003
  if port==13001:print('GUARDIAN_STATE',path,'enabled',d.get('enabled'),'model',d.get('model'))
  if port==13003:
   print('GUARDIAN_FEED',d.get('readOnly'),d.get('symbol'),'latestKeys',sorted((d.get('latest') or {}).keys()),'candles',sorted((d.get('candles') or {}).keys()))
+  import time
+  latest=d.get('latest') or {}
+  now=int(time.time()*1000)
+  print('GUARDIAN_FEED_AGE_MS',now-int(latest.get('eventMs') or 0),'ROUND_DELTA_MS',int(latest.get('roundStartMs') or 0)-now//300000*300000)
  if port==13002:
   rows=d.get('records') or []
   print('GUARDIAN_OFFICIAL_ROWS',len(rows),'lastKeys',sorted(rows[-1].keys())[:80] if rows else [])

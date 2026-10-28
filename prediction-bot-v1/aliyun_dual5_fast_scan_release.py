@@ -156,7 +156,7 @@ def check_pending_exposure_readonly():
     """
     pid=run('systemctl','show','-p','MainPID','--value',
         'zl-prediction-dual5.service',timeout=8).stdout.strip()
-    entries=pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\\0')
+    entries=pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(bytes([0]))
     env=dict(z.split('=',1) for z in
         (x.decode('utf8','ignore') for x in entries if b'=' in x))
     key=env.get('BINANCE_PREDICTION_API_KEY','')

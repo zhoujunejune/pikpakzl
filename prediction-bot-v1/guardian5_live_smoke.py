@@ -39,11 +39,19 @@ def main():
  assert code==200
  d=json.loads(body);assert d.get('enabled') is False
  print('GUARDIAN_ORIGINAL_LIVE_SWITCH_STILL_OFF=true')
+ assert d.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1','OLD_ORDER_MODEL_RETURNED'
+ assert d.get('orderSignal') is None,'LEGACY_ORDER_SIGNAL_STILL_EXPOSED'
+ assert d.get('pendingAction') is None,'LEGACY_PENDING_ACTION'
+ print('GUARDIAN_ONLY_ORDER_ROUTING_VERIFIED=true')
  sc,body=get('/api/order-signal-model')
  print('GUARDIAN_PRODUCTION_SELECTOR_HTTP',sc)
  try:
   parsed=json.loads(body)
   print('GUARDIAN_PRODUCTION_SELECTOR_RESULT',str({k:parsed.get(k) for k in ['model','ready','error','models']})[:700])
+  assert sc==200 and parsed.get('model')=='ZL_GUARDIAN_5M_V1'
+  assert parsed.get('ready') is True
+  assert [x.get('id') for x in parsed.get('models',[])]==['ZL_GUARDIAN_5M_V1']
+  print('GUARDIAN_SOLE_PRODUCTION_MODEL_CONFIRMED=true')
  except Exception:print('GUARDIAN_PRODUCTION_SELECTOR_JSON_INVALID')
  for p in ('/dual5','/event10/','/futures-lab/'):
   assert get(p)[0]==404,('RETIRED_ROUTE_RETURNED',p)

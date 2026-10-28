@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0c1421"><title>EVENT10 · 手动10分钟DeepSeek预测</title>
+<meta name="theme-color" content="#0c1421"><title>EVENT10 · BTC 10分钟纯信号</title>
 <style>
 :root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC",sans-serif}
 *{box-sizing:border-box}
@@ -36,34 +36,34 @@ th{color:#a9c6e7}
 <nav aria-label="机器人切换">
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
-<h1>EVENT10 · 手动10分钟 AI 预测</h1>
-<p class="sub">BTCUSDT · 点击时锁定参考价 · DeepSeek 给出 UP/DOWN · 10分钟后自动对比</p>
+<h1>BTC 10分钟事件合约 · 纯信号</h1>
+<p class="sub">BTCUSDT · EMA9/21 + 成交量 + 盘口前5档 + RSI · 严格满足五项才出方向</p>
 <div class="notice">
-<strong>这不是币安事件合约真实开仓。</strong>
-按钮只会记录公开 BTC 行情参考价并触发预测，不会使用账户余额或提交订单。事件合约的实际开仓价与到期价格由币安官方指数决定，此页面的参考行情未证实等于该指数。下方仅统计公开行情代理命中率，绝不冒充官方结算胜率。
+<strong>仅做信号，不会执行交易。</strong>
+后台会在每个 UTC 10分钟时间块的前3分钟扫描信号（约每12秒一次），也可手动立即检测。任何一项不满足都显示无信号，不使用 DeepSeek，也不会使用账户余额或提交订单。事件合约的实际开仓价与到期价格由币安官方指数决定，此页面的参考行情未证实等于该指数。下方仅统计公开行情代理命中率，绝不冒充官方结算胜率。
 </div>
 <section class="card">
-<div class="row"><h2>手动启动新的一轮</h2><span class="status" id="engine">连接中</span></div>
-<button class="primary" id="start" type="button">锁定当前参考价并让 DeepSeek 分析</button>
-<div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时数据服务状态…</div>
+<div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
+<button class="primary" id="start" type="button">立即检测五项条件</button>
+<div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时信号状态…</div>
 <div class="signal-panel" id="immediatePrediction" aria-live="polite" aria-atomic="false">
- <div class="row"><strong>本轮 DeepSeek 分析结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
+ <div class="row"><strong>本轮信号检查结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
  <div class="row" style="margin-top:10px">
   <strong id="quickDirection" class="signal-direction">尚未分析</strong>
-  <strong id="quickConfidence" class="signal-price">主观置信度：—</strong>
+  <strong id="quickConfidence" class="signal-price">通过条件：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
- <div id="quickReason" class="signal-reason">点击上方按钮后，这里会自动显示模型方向和分析原因。</div>
- <p class="sub">置信度来自 DeepSeek 对本轮方向的主观判断，不等于真实胜率或盈利概率。</p>
+ <div id="quickReason" class="signal-reason">只有五项全部成立才显示看涨或看跌，否则为无信号。</div>
+ <p class="sub">规则没有主观置信度。当前 1 分钟与 5 分钟 K 线均采用最近已收盘 K 线，避免未收盘数据误判。</p>
  <p class="sub" id="quickTimestamp">模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。</p>
 </div>
-<p class="sub">只有你点击才会分析；不会按整点或每隔10分钟自动发信号。每次点击后，以服务器成功获取的最新有效 BTC 行情快照为开始时间，10分钟后核对同一数据源。</p>
+<p class="sub">自动扫描仅优先覆盖每个 UTC 10 分钟区块的前3分钟；也可随时手动检查。有合格方向才锁定参考价并于10分钟后核对同一公开行情源。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
 <div class="metric"><small>锁定参考价（非官方开仓价）</small><strong id="openPrice">—</strong></div>
-<div class="metric"><small>DeepSeek 最终方向</small><strong id="direction">—</strong></div>
+<div class="metric"><small>规则判断方向</small><strong id="direction">—</strong></div>
 <div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
 <div class="metric"><small>10分钟后参考价</small><strong id="closePrice">—</strong></div>
 </div>
@@ -71,15 +71,15 @@ th{color:#a9c6e7}
 <div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>计划参考结束时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>模型判断耗时</small><strong id="latency">—</strong></div>
-<div class="metric"><small>DeepSeek 主观置信度</small><strong id="confidence">—</strong></div>
+<div class="metric"><small>五项条件</small><strong id="confidence">—</strong></div>
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
-<p class="sub" id="reason">点击按钮开始分析。</p>
+<p class="sub" id="reason">等待行情检查。</p>
 <div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
 <p id="featureSummary" class="sub">仅在点击或手动检查时读取额外行情；断线和 HTTP 451 将明确标记，不补假数据。</p>
 <div id="featureHealth" class="grid" aria-live="polite"></div>
-<p class="sub">检查按钮不会启动 DeepSeek 或创建预测轮次。15分钟合约K线与指数价属于衍生品公开行情，并非已验证的事件合约官方结算指数。</p>
+<p class="sub">检查按钮只读取订单簿前5档和近期主动成交，不产生新方向记录。K线与参考价来自 BTC 现货行情代理；盘口来自 BTC 永续合约，数据口径不同。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
 </section>
 <section class="card">
@@ -93,28 +93,28 @@ th{color:#a9c6e7}
 <p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
 </section>
 <section class="card">
-<h2>仅 V6 信号统计（公开行情代理）</h2>
+<h2>新规则信号统计（公开行情代理）</h2>
 <div class="grid">
-<div class="metric"><small>V6 轮次</small><strong id="total">0</strong></div>
-<div class="metric"><small>V6 已出方向</small><strong id="decided">0</strong></div>
-<div class="metric"><small>V6 已核对</small><strong id="settled">0</strong></div>
-<div class="metric"><small>V6 代理命中率</small><strong id="accuracy">—</strong></div>
-<div class="metric"><small>V6 最近5轮已核对</small><strong id="v6last5">—</strong></div>
-<div class="metric"><small>V6 最近10轮已核对</small><strong id="v6last10">—</strong></div>
+<div class="metric"><small>新规则出信号</small><strong id="total">0</strong></div>
+<div class="metric"><small>新规则有效方向</small><strong id="decided">0</strong></div>
+<div class="metric"><small>新规则已核对</small><strong id="settled">0</strong></div>
+<div class="metric"><small>新规则代理命中率</small><strong id="accuracy">—</strong></div>
+<div class="metric"><small>新规则最近5轮</small><strong id="v6last5">—</strong></div>
+<div class="metric"><small>新规则最近10轮</small><strong id="v6last10">—</strong></div>
 </div>
-<p class="sub">仅统计版本为 V6 的记录，排除其他所有旧版本；统计范围是后台最近50条历史中的 V6 轮次，属于滚动窗口而非全量历史。无官方事件合约结算，且这里不显示资金盈亏。</p>
+<p class="sub">仅统计新规则版本的实际方向信号，旧 DeepSeek 预测记录仍保留在后台，不混入命中率。当前显示最近50条记录内的滚动窗口。无官方事件合约结算，且这里不显示资金盈亏。</p>
 </section>
 <section class="card">
-<div class="row"><h2>V6 历史记录（仅显示 V6）</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
+<div class="row"><h2>新规则历史记录</h2><button type="button" class="secondary" id="refresh">刷新</button></div>
 <div class="tablewrap"><table><thead><tr>
-<th>开始时间</th><th>参考价</th><th>AI方向</th><th>AI主观置信度</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
+<th>开始时间</th><th>参考价</th><th>规则方向</th><th>通过条件</th><th>10分钟参考价</th><th>代理命中</th><th>状态</th>
 </tr></thead><tbody id="records"><tr><td colspan="7">读取中…</td></tr></tbody></table></div>
-<p class="sub">页面仅筛选展示后台最近50条里的 V6 记录，旧版本数据保留在后台，不会删除。用于技术验证，不对应币安实际订单或官方事件合约结算。</p>
+<p class="sub">页面只筛选展示后台最近50条里的新规则有效信号；无信号不计入胜率。旧版本历史保留，不会删除。用于技术验证，不对应币安实际订单或官方事件合约结算。</p>
 </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const V6_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6_20261024";
+const V6_VERSION="EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029";
 // Only count actual V6 records returned from the latest 50-session history API.
 // Non-V6 records remain stored but never contribute to these metrics.
 const onlyV6=records=>(Array.isArray(records)?records:[])
@@ -194,10 +194,15 @@ const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{
 const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
 // Only display the actual confidence saved in this forecast's model response.
 // Never infer from outcome, history, signal direction or another round.
-const displayConfidence=s=>s&&(s.direction==="UP"||s.direction==="DOWN")&&
-  typeof s.confidence==="number"&&Number.isFinite(s.confidence)&&
-  s.confidence>=0&&s.confidence<=1?(s.confidence*100).toFixed(1)+"%":"—";
-const phaseText={ANALYZING:"DeepSeek 正在分析",PREDICTED:"方向已确定，等待核对",FAILED:"AI分析失败",COMPLETE:"已核对"};
+const displayConfidence=s=>{
+ if(!s)return "—";
+ if(s.direction==="UP"||s.direction==="DOWN")return "5/5";
+ const count=x=>Object.values(x||{}).filter(v=>v===true).length;
+ const checks=s.upChecks||s.ruleChecks?.upChecks;
+ const down=s.downChecks||s.ruleChecks?.downChecks;
+ return checks?"看涨 "+count(checks)+"/5 · 看跌 "+count(down)+"/5":"—";
+};
+const phaseText={ANALYZING:"处理中",PREDICTED:"五项成立，方向已确定",NO_SIGNAL:"条件不满足，无信号",FAILED:"检查失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
  if(v==="PUBLIC_MARKET_PROXY_ONLY")return "代理行情已核对";
  if(v==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")return "到期时数据不足";
@@ -241,77 +246,72 @@ function showSources(coverage){
  }
 }
 function display(d){
- const s=d.lastSession||null;
+ const recent=d.lastCheck||null,old=d.lastSession||null;
+ const showNoSignal=recent?.status==="NO_SIGNAL"&&!d.active&&
+    recent.checkedAt>=(old?.modelFinishedAt||old?.openedAt||0);
+ const s=showNoSignal?recent:(d.active||old||null);
  active=d.active||null;
- const thinkingStatus=d.lastReasoningObserved===true?" · 实际推理已核验":
-   d.lastReasoningObserved===false?" · 未检测到推理内容":" · 等待下次分析验证";
- $("engine").textContent=d.configured?
-   "DeepSeek 已配置 · 深度思考 High 已开启"+thinkingStatus:
-   "DeepSeek 未配置";
+ $("engine").textContent=d.configured?"固定五项信号规则已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured||!!d.active||d.busyStart;
  if(s){
+  const noSignal=s.status==="NO_SIGNAL";
   $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
   $("quickPhase").textContent=$("phase").textContent;
-  $("quickDirection").textContent=s.direction||(s.status==="ANALYZING"?"AI 正在分析…":s.status==="FAILED"?"分析失败":"等待结果");
+  $("quickDirection").textContent=s.direction==="UP"?"看涨 Higher":s.direction==="DOWN"?"看跌 Lower":noSignal?"无信号":s.direction||"—";
   $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
-  $("quickConfidence").textContent="主观置信度："+displayConfidence(s);
-  $("quickOpen").textContent="锁定参考价："+price(s.openPrice)+" USDT";
-  const waitChinese=needsChineseText(s);
-  const explanation=s.displayChinese?.reason||s.reason;
-  $("quickReason").textContent=s.status==="ANALYZING"?"已锁定参考价，DeepSeek 正在比较 UP 与 DOWN 两种方向…":
-    s.error?"分析失败："+s.error:waitChinese?"正在翻译旧版分析理由为简体中文…":
-    (explanation||"模型已给出方向；详细的双向证据请查看下方。");
-  $("quickTimestamp").textContent="开始："+when(s.openedAt)+" ｜ 参考到期："+when(s.expiresAt)+
-    " ｜ 仅供公开行情预测，不是事件合约官方开仓价或成交记录。";
+  $("quickConfidence").textContent="通过条件："+displayConfidence(s);
+  $("quickOpen").textContent="参考价："+price(s.openPrice)+" USDT";
+  $("quickReason").textContent=s.reason||(noSignal?"没有同时满足五项条件。":"等待行情校验。");
+  $("quickTimestamp").textContent="采样："+when(s.openedAt)+" ｜ "+
+    (s.firstThreeMinutes||s.ruleChecks?.firstThreeMinutes?"本轮前3分钟优先窗口":"非优先窗口")+
+    " ｜ 仅供方向参考，非事件合约官方交易记录。";
   $("openPrice").textContent=price(s.openPrice);
   $("openedAt").textContent=when(s.openedAt);
-  $("expiresAt").textContent=when(s.expiresAt);
-  $("direction").textContent=s.direction|| (s.status==="ANALYZING"?"分析中":"无有效方向");
+  $("expiresAt").textContent=noSignal?"—":when(s.expiresAt);
+  $("direction").textContent=$("quickDirection").textContent;
   $("confidence").textContent=displayConfidence(s);
   directionStyle($("direction"),s.direction);
-  $("latency").textContent=Number.isFinite(s.modelLatencyMs)?(s.modelLatencyMs/1000).toFixed(1)+"秒":"—";
+  $("latency").textContent=Number.isFinite(s.modelLatencyMs)?(s.modelLatencyMs/1000).toFixed(2)+"秒":"—";
   $("closePrice").textContent=price(s.closePrice);
-  $("result").textContent=typeof s.proxyHit==="boolean"?(s.proxyHit?"代理命中":"代理未命中"):
+  $("result").textContent=noSignal?"无信号（不计统计）":typeof s.proxyHit==="boolean"?
+    (s.proxyHit?"代理命中":"代理未命中"):
     s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
   $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
-  $("reason").textContent=s.error?"错误："+s.error:(waitChinese?"旧版英文分析说明正在转换为简体中文…":explanation||"正在等待模型给出方向");
+  $("reason").textContent=s.reason||s.error||"等待条件检查";
   const detail=$("analysisDetail");detail.replaceChildren();
-  if(s.decisionReviewVersion){
-   const v=document.createElement("p");
-   v.textContent="分析逻辑：V6 AI价格结构版，新增1分钟动态支撑阻力和趋势持续性；最终UP/DOWN由DeepSeek High分析，尚非已验证胜率模型";
-   detail.append(v);
-  }
-  const args=waitChinese?{}:(s.displayChinese||s.analysisArguments||{});
-  for(const [name,val] of [
-    ["支持UP的证据",args.upCase],["支持DOWN的证据",args.downCase],
-    ["最终决定性依据",args.decisiveEvidence],["不确定性",args.uncertainty]]){
-    if(!val)continue;
+  const rule=s.ruleChecks||s,up=rule.upChecks,down=rule.downChecks;
+  if(up&&down){
+   const labels={trend5m:"5分钟 EMA+连续两根",momentum1m:"1分钟 EMA+K线+价格",
+       volume:"1分钟成交量至少1.3倍",orderflow:"前5档盘口/连续主动买入",rsi:"1分钟 RSI 区间"};
+   for(const [direction,checks] of [["看涨",up],["看跌",down]]){
     const p=document.createElement("p");
-    p.textContent=name+"："+val;detail.append(p);
+    p.textContent=direction+"："+Object.entries(checks).map(([key,val])=>
+      (labels[key]||key)+" "+(val?"✓":"×")).join(" · ");
+    detail.append(p);
+   }
+   const e=rule.evidence;
+   if(e){
+    const p=document.createElement("p");
+    const num=v=>Number.isFinite(v)?Number(v).toFixed(2):"不可用";
+    p.textContent="EMA5m "+num(e.ema5m9)+"/"+num(e.ema5m21)+
+      " | EMA1m "+num(e.ema1m9)+"/"+num(e.ema1m21)+
+      " | 放量倍数 "+num(e.volumeRatio)+" | RSI14 "+num(e.rsi14)+
+      " | 买/卖前5档数量 "+num(e.bidTop5QtyBtc)+"/"+num(e.askTop5QtyBtc);
+    detail.append(p);
+   }
   }
-  const review=s.decisionReview||{};
-  if(review.warnings?.length){
-   const p=document.createElement("p");
-   p.textContent="本轮检测到的证据冲突/数据限制："+review.warnings.slice(0,5).map(readableWarning).join("；");
-   detail.append(p);
-  }
-  $("dataQuality").textContent="点击到参考价采集耗时："+(s.clickToCaptureMs??"—")+"ms；参考行情快照延迟："+(s.openAgeMs??"—")+"ms；数据源：BTC 公开行情代理；"+
-    (s.expirySampleLagMs!=null?"到期采样延迟："+s.expirySampleLagMs+"ms；":"")+
-    "非事件合约官方开仓与结算价格。";
+  $("dataQuality").textContent="K线/参考价：公开BTC现货行情代理；盘口/主动成交：币安BTC永续合约。"+
+    "收盘K线才参与趋势/成交量判断，盘口需在锁定价之前且新鲜；此处不是官方事件合约结算。";
  }else{
-  $("quickPhase").textContent="尚未开始";
-  $("quickDirection").textContent="尚未分析";
+  $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
-  $("quickConfidence").textContent="主观置信度：—";
-  $("confidence").textContent="—";
-  $("quickOpen").textContent="锁定参考价：—";
-  $("quickReason").textContent="点击上方按钮后，这里会自动显示模型方向和分析原因。";
-  $("quickTimestamp").textContent="模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。";
-  $("analysisDetail").replaceChildren();
-  $("phase").textContent="尚未开始";
+  $("quickConfidence").textContent="通过条件：—";$("confidence").textContent="—";
+  $("quickOpen").textContent="参考价：—";
+  $("quickReason").textContent="五项条件同时成立才出信号；其余为无信号。";
+  $("quickTimestamp").textContent="每轮前3分钟自动优先检查；也可手动立即检查。";
+  $("analysisDetail").replaceChildren();$("phase").textContent="等待检测";
  }
- // Version-specific metrics are updated from the same filtered V6 history as the table.
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
  updateClock();
 }
@@ -346,12 +346,12 @@ async function refresh(){
   const d=await r.json(),log=await h.json();
   display(d);
   if(d.lastSession)void localizeLegacyLatest(d.lastSession);
-  if(!inflight)$("message").textContent=d.active?"当前轮次进行中，10分钟后自动核对公开行情。":
-    d.configured?"点击按钮才会捕获新一轮价格并调用 DeepSeek。":"DeepSeek 尚未配置，无法分析。";
+  if(!inflight)$("message").textContent=d.active?"当前已出方向，10分钟后按公开行情核对。":
+    d.lastCheck?.status==="NO_SIGNAL"?"当前条件不满足：无信号。前3分钟继续自动检测。":"后台前3分钟自动扫描；也可以手动立即检测。";
   const v6Records=onlyV6(log.records);
   displayV6Stats(v6Records);
   const rows=$("records");rows.replaceChildren();
-  if(!v6Records.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=7;td.textContent="最近50条历史中暂无 V6 信号";tr.append(td);rows.append(tr);}
+  if(!v6Records.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=7;td.textContent="最近50条历史中暂无新规则有效信号";tr.append(td);rows.append(tr);}
   for(const s of v6Records){
    const tr=document.createElement("tr");
    const res=typeof s.proxyHit==="boolean"?(s.proxyHit?"命中":"未命中"):
@@ -365,12 +365,12 @@ async function refresh(){
 }
 async function startClick(){
  if(inflight)return;
- inflight=true;$("start").disabled=true;$("message").textContent="正在向阿里云请求真实行情并锁定参考价…";
+ inflight=true;$("start").disabled=true;$("message").textContent="正在检查最新已收盘K线、成交量和盘口…";
  $("quickPhase").textContent="正在启动";
- $("quickDirection").textContent="正在锁定参考价…";
+ $("quickDirection").textContent="正在检查五项条件…";
  $("quickDirection").className="signal-direction yellow";
  $("quickConfidence").textContent="主观置信度：—";
- $("quickReason").textContent="准备行情及技术指标后，DeepSeek 会比较看涨与看跌的证据。";
+ $("quickReason").textContent="只有五项都满足才出方向；否则返回无信号。";
  $("quickOpen").textContent="锁定参考价：采集中";
  if(!pendingRequestId){
   const v=new Uint8Array(16);crypto.getRandomValues(v);
@@ -382,7 +382,7 @@ async function startClick(){
   const d=await r.json();
   if(!r.ok||!d.ok)throw Error(d.error||"启动失败");
   pendingRequestId=null;
-  $("message").textContent="已经锁定公开市场参考价，正在获取 DeepSeek 的 UP/DOWN 判断。";
+  $("message").textContent="规则检查已完成，未满足则为无信号。";
   await refresh();
  }catch(e){
   $("message").textContent="未成功开始："+String(e);

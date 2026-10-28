@@ -23,40 +23,27 @@ jobs:
           from alibabacloud_swas_open20200601.client import Client
           from alibabacloud_swas_open20200601 import models as sw
           from alibabacloud_tea_openapi import models as api
-          script=r"""#!/bin/bash
-          set -Eeuo pipefail
-          python3 - <<'SCAN'
-          from pathlib import Path
-          import re,json,urllib.request
-          p=Path('/opt/zl-prediction-dual5/binance_dual5_pairs.mjs')
-          lines=p.read_text().splitlines()
-          print('DUAL_LINES',len(lines))
-          for i,s in enumerate(lines):
-           if re.search(r'^(?:async )?function |^(?:const|let) [\w_]+\s*=\s*(?:async\s*)?\([^)]*\)\s*=>|createServer|\.listen\(|url\.pathname|pathname===|pathname ==|/api/dual5-|^setInterval',s):
-            if re.search(r'secret|password|api.?key|signature|privateKey|Authorization|process\.env',s,re.I):continue
-            print('STRUCT',i+1,s[:130])
-          for i in list(range(52,91))+list(range(100,142))+list(range(145,174)):
-           if 1<=i<=len(lines):
-            s=lines[i-1]
-            if re.search(r'secret|password|api.?key|signature|privateKey|Authorization|process\.env|walletAddress|walletId',s,re.I):s='[REDACTED]'
-            print('CODE',i,s[:165])
-          for port in (13044,13045,13046,13048):
-           try:
-            with urllib.request.urlopen('http://127.0.0.1:%d/api/dual5-status'%port,timeout=2) as r:d=json.load(r)
-            print('STATUS_PORT',port,{'ok':d.get('ok'),'active':d.get('active'),'blocked':d.get('blocked'),'health':d.get('health'),'round':d.get('round'),'funding':d.get('fundingSource'),'lastOrderPhase':(d.get('lastOrder')or{}).get('phase'),'lastOpportunity':(d.get('lastOpportunity')or{}).get('status')})
-           except Exception as e:print('STATUS_PORT_ERR',port,type(e).__name__)
-          print('DUAL_AUDIT_END')
-          SCAN"""
-          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
-          r=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-dual-code-readonly',type='RunShellScript',command_content=script,working_user='root',timeout=95))
-          for _ in range(38):
-              time.sleep(2)
-              x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=r.body.invoke_id)).body.invocation_result
-              if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ClientNotRunning'):
-                  try:out=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
-                  except:out='NO_OUTPUT'
-                  print('REMOTE_STATUS',x.invocation_status,'EXIT',x.exit_code)
-                  print(out[-56000:])
-                  raise SystemExit(0 if str(x.invocation_status)=='Success' and int(x.exit_code)==0 else 3)
-          raise SystemExit('REMOTE_PENDING')
+          for start,end in [(174,235),(355,416),(417,479),(480,543),(544,637)]:
+              script=("#!/bin/bash\nset -Eeuo pipefail\npython3 - <<'SCAN'\n"
+              +"from pathlib import Path\nimport re\np=Path('/opt/zl-prediction-dual5/binance_dual5_pairs.mjs')\n"
+              +"ls=p.read_text().splitlines()\n"
+              +f"print('SECTION',${start},${end})\n"
+              +f"for i in range({start},{end}+1):\n"
+              +" if i>len(ls):continue\n s=ls[i-1]\n"
+              +" if re.search(r'api.?key|secret|password|private.?key|Authorization|Bearer|signature|process\\.env|walletAddress|walletId',s,re.I):s='[REDACTED]'\n"
+              +" print('LINE',i,s[:190])\nSCAN\n")
+              r=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-dual-source-readonly',type='RunShellScript',command_content=script,working_user='root',timeout=90))
+              complete=False
+              for _ in range(30):
+                  time.sleep(2)
+                  x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=r.body.invoke_id)).body.invocation_result
+                  if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ClientNotRunning'):
+                      try:out=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
+                      except:out='NO_OUTPUT'
+                      print('REMOTE_SECTION',start,end,x.invocation_status,x.exit_code)
+                      print(out[-14000:])
+                      if str(x.invocation_status)!='Success' or int(x.exit_code)!=0:raise SystemExit(3)
+                      complete=True
+                      break
+              if not complete:raise SystemExit('REMOTE_PENDING')
           PY

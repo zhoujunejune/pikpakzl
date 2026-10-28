@@ -45,6 +45,23 @@ if p.is_file():
  for idx,line in enumerate(p.read_text().splitlines(),1):
   if 'saved.model' in line or 'return apply(raw)' in line or 'ORDER_SIGNAL_MODELS=Object.freeze' in line:
    print('GUARDIAN_SELECTOR_MARKER',idx,line.strip()[:145])
+from pathlib import Path
+panel=Path('/opt/zl-prediction-live/src/railway-diagnostic/panel-stats-shell.mjs')
+for needle in ['FAST5生产状态暂无法读取','FAST5 V7','2秒锁定','当前生产模型','实时行情更新延迟','实盘自动跟随','FAST5下单方向开关']:
+ src=panel.read_text()
+ pos=src.find(needle)
+ print('LIVE_PANEL_NEEDLE',needle,pos)
+ if pos>=0:print('LIVE_PANEL_CONTEXT',needle,repr(src[max(0,pos-500):pos+700])[:1250])
+for port,endpoint in [(13001,'/api/status'),(13001,'/api/fast5-status'),(13001,'/api/fast5'),(13049,'/api/status'),(13003,'/api/shadow-market-data')]:
+ try:
+  import urllib.request,json
+  with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,endpoint),timeout=4) as resp:
+   val=json.loads(resp.read(800000))
+   if port==13049:val={k:val.get(k) for k in ['model','latest','error','lastTickAt','lastAIAt','stats']}
+   elif endpoint=='/api/status':val={k:val.get(k) for k in ['ok','enabled','orderSignalModel','orderSignalModelReady','signal','productionSignal','signalTransport','modelOriginalSignal','autoConfirmEnabled']}
+   else:val={'ok':val.get('ok'),'error':val.get('error'),'keys':list(val.keys())[:18]}
+   print('LIVE_PANEL_API',port,endpoint,resp.status,str(val)[:750])
+ except Exception as ex:print('LIVE_PANEL_API_ERROR',port,endpoint,type(ex).__name__,str(getattr(ex,'code',''))[:40])
 print('GUARDIAN_AUDIT_COMPLETE=true')
 PY
 """

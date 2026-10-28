@@ -8,6 +8,8 @@ on:
       - prediction-bot-v1/guardian5-service.mjs
       - prediction-bot-v1/aliyun_guardian5_deploy.py
       - prediction-bot-v1/aliyun_guardian_prod_switch.py
+      - prediction-bot-v1/aliyun_guardian_dashboard_cutover.py
+      - railway-diagnostic/guardian-main-dashboard.mjs
       - .github/workflows/zl-guardian5-single-deploy.yml
   workflow_dispatch:
 permissions: {contents: read}
@@ -28,9 +30,10 @@ jobs:
         run: |
           node --check prediction-bot-v1/guardian5-core.mjs
           node --check prediction-bot-v1/guardian5-service.mjs
+          node --check railway-diagnostic/guardian-main-dashboard.mjs
           node --check prediction-bot-v1/deepseek-5m-features.mjs
           node --test prediction-bot-v1/guardian5-core.test.mjs
-          python -m py_compile prediction-bot-v1/aliyun_guardian5_deploy.py prediction-bot-v1/aliyun_guardian_prod_switch.py
+          python -m py_compile prediction-bot-v1/aliyun_guardian5_deploy.py prediction-bot-v1/aliyun_guardian_prod_switch.py prediction-bot-v1/aliyun_guardian_dashboard_cutover.py
           python - <<'PY'
           import ast,subprocess
           p='prediction-bot-v1/aliyun_guardian5_deploy.py'
@@ -52,3 +55,8 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_guardian_prod_switch.py
+      - name: Replace retired FAST5 homepage widget with GUARDIAN monitoring
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_dashboard_cutover.py

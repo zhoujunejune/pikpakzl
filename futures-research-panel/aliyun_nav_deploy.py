@@ -57,6 +57,7 @@ bash "$s"
                  str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
     if rule_switch:
         # Strict EMA9/EMA21, volume >=1.3, top5 orderbook, RSI; all gates required.
+        # Coalesce manual clicks with the concurrent scheduled read-only scan.
         # Only replace the independent EVENT10 analysis engine and HTML. All
         # original 5-minute trading processes / Caddy routing stay unchanged.
         cmd=f"""#!/bin/bash

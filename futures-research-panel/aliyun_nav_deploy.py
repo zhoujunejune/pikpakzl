@@ -131,7 +131,7 @@ PYDATA
 echo EVENT10_RESTORE_READONLY_DIAG_DONE=true
 """
     elif restore_event10:
-        # Restore only EVENT10's existing frontend/navigation, not any other trading worker.
+        # Restore EVENT10 on the current single-panel stack; leave 5-minute engine untouched.
         # Install independent EVENT10 files only when the old service is genuinely absent.
         cmd=f"""#!/bin/bash
 set -Eeuo pipefail

@@ -55,7 +55,7 @@ th{color:#a9c6e7}
  </div>
  <div id="quickReason" class="signal-reason">只有五项全部成立才显示看涨或看跌，否则为无信号。</div>
  <p class="sub">规则没有主观置信度。当前 1 分钟与 5 分钟 K 线均采用最近已收盘 K 线，避免未收盘数据误判。</p>
- <p class="sub" id="quickTimestamp">模型方向只用于本轮10分钟公开行情预测，不代表币安事件合约已成交。</p>
+ <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
 <p class="sub">自动扫描仅优先覆盖每个 UTC 10 分钟区块的前3分钟；也可随时手动检查。有合格方向才锁定参考价并于10分钟后核对同一公开行情源。</p>
 </section>
@@ -70,7 +70,7 @@ th{color:#a9c6e7}
 <div class="grid" style="margin-top:10px">
 <div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>计划参考结束时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
-<div class="metric"><small>模型判断耗时</small><strong id="latency">—</strong></div>
+<div class="metric"><small>规则检查耗时</small><strong id="latency">—</strong></div>
 <div class="metric"><small>五项条件</small><strong id="confidence">—</strong></div>
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
@@ -369,9 +369,9 @@ async function startClick(){
  $("quickPhase").textContent="正在启动";
  $("quickDirection").textContent="正在检查五项条件…";
  $("quickDirection").className="signal-direction yellow";
- $("quickConfidence").textContent="主观置信度：—";
+ $("quickConfidence").textContent="通过条件：—";
  $("quickReason").textContent="只有五项都满足才出方向；否则返回无信号。";
- $("quickOpen").textContent="锁定参考价：采集中";
+ $("quickOpen").textContent="参考价：采集中";
  if(!pendingRequestId){
   const v=new Uint8Array(16);crypto.getRandomValues(v);
   pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
@@ -385,12 +385,12 @@ async function startClick(){
   $("message").textContent="规则检查已完成，未满足则为无信号。";
   await refresh();
  }catch(e){
-  $("message").textContent="未成功开始："+String(e);
-  $("quickPhase").textContent="本次启动失败";
-  $("quickDirection").textContent="没有产生新方向";
+  $("message").textContent="行情检查未完成："+String(e);
+  $("quickPhase").textContent="本次检查未完成";
+  $("quickDirection").textContent="无新信号";
   $("quickDirection").className="signal-direction yellow";
-  $("quickConfidence").textContent="主观置信度：—";
-  $("quickReason").textContent="未成功开始："+String(e);
+  $("quickConfidence").textContent="通过条件：—";
+  $("quickReason").textContent="行情检查未完成；请以本次实际通过的五项条件为准："+String(e);
  }
  finally{inflight=false;await refresh();}
 }

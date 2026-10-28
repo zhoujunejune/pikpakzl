@@ -17,7 +17,7 @@ def main():
  code,body=get('/guardian/')
  assert code==200,('GUARDIAN_UI_HTTP',code)
  html=body.decode('utf8','replace')
- assert 'GUARDIAN' in html and '影子' in html
+ assert 'GUARDIAN' in html and '生产信号' in html and '动态止盈止损' in html
  print('GUARDIAN_PUBLIC_CHINESE_UI_OK=true')
  code,body=get('/guardian/api/status')
  assert code==200,('GUARDIAN_STATUS_HTTP',code)
@@ -36,6 +36,9 @@ def main():
  assert code==200 and '5分钟单边预测' in body.decode('utf8','replace')
  main_html=body.decode('utf8','replace')
  assert 'id="zlGuardianMain"' in main_html,'GUARDIAN_MAIN_CARD_NOT_RENDERED'
+ assert 'id="zlGDynamicSL"' in main_html and 'id="zlGFixedSL"' in main_html,'GUARDIAN_RISK_VISIBILITY_MISSING'
+ assert 'GUARDIAN · 影子策略' not in main_html,'OLD_SHADOW_LABEL_STILL_PRESENT'
+ assert 'GUARDIAN · 生产策略' in main_html,'GUARDIAN_PRODUCTION_HEADER_MISSING'
  assert '/guardian/api/status' in main_html,'GUARDIAN_MAIN_LIVE_STATUS_NOT_WIRED'
  assert 'id="zlFast5Card"' not in main_html,'LEGACY_FAST5_CARD_STILL_RENDERED'
  assert 'FAST5生产状态暂无法读取' not in main_html,'LEGACY_FAST5_BROKEN_CARD_STILL_RENDERED'

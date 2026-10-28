@@ -15,11 +15,9 @@ const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.en
 const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
 const SELECTIVE30_ORDER_DEADLINE_MS = 30000; // New qualified Selective V2 + Edge 30-second policy only.
 const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
-const GUARDIAN_ORDER_DEADLINE_MS = 275000; // Always leave at least 25s before the five-minute settlement.
 const EDGE_ORDER_DEADLINE_MS = 8000; // Edge model strictly ends at T+8 seconds.
 function orderSubmitDeadlineForModel(model) {
-  return model === GUARDIAN_ID ? GUARDIAN_ORDER_DEADLINE_MS :
-    model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :
+  return model === SELECTIVE8_MODEL ? SELECTIVE30_ORDER_DEADLINE_MS :
     model === DYNAMIC_MODEL ? DYNAMIC_ORDER_DEADLINE_MS :
     model === EDGE_MODEL ? EDGE_ORDER_DEADLINE_MS : ORDER_SUBMIT_DEADLINE_MS;
 }
@@ -226,27 +224,6 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     // Non-calibrated models remain explicitly uncalibrated; do not imply 75% accuracy.
   }
 
-  // GUARDIAN live orders require a real Binance executable quote AND a
-  // conservative forward-calibrated edge. This cannot be bypassed by the
-  // global legacy EV_FILTER_ENABLED=false setting.
-  if (p.signalModelChoice===GUARDIAN_ID) {
-    const decision=guardianQuoteGate(current,quote,{
-      feeBuffer:Number(process.env.GUARDIAN_FEE_BUFFER||0.01),
-      slippageBuffer:Number(process.env.GUARDIAN_SLIPPAGE_BUFFER||0.005),
-      now:Date.now()
-    });
-    if(!decision.ok) {
-      p.state=isAuto?'AUTO_FAILED':'READY';
-      p.blockReason=decision.reason;
-      p.error='GUARDIAN真实报价/独立校准/预期收益条件未通过，禁止下单';
-      console.log(JSON.stringify({event:'guardian_quote_gate_blocked',
-        round:p.round,reason:decision.reason,edge:decision.edge??null,
-        calibrationSamples:current?.calibrationSamples??0}));
-      return {status:409,body:{ok:false,error:p.error,reason:decision.reason}};
-    }
-    p.edge=decision.edge;
-  }
-
   if (EV_FILTER_ENABLED) {
     const modelProbability = Number(current?.modelProbability);
     const calibrationSamples = Number(current?.calibrationSamples || 0);
@@ -371,16 +348,6 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   };
   if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
 
-  if(p.signalModelChoice===GUARDIAN_ID) {
-    try {guardianRegisterIntent({round:p.round,tokenId:p._internal?.outcome?.tokenId});}
-    catch(e){
-      p.state='GUARDIAN_RISK_REGISTRY_UNAVAILABLE';
-      p.error='GUARDIAN动态风控登记失败，禁止创建不受保护的仓位';
-      console.error(JSON.stringify({event:'guardian_registry_preflight_failed',round:p.round,
-        reason:String(e?.message||e).slice(0,100)}));
-      return {status:503,body:{ok:false,error:p.error}};
-    }
-  }
   const startedAt = new Date().toISOString();
   let orderPostClaim;
   try {
@@ -618,15 +585,6 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     return { status: 502, body: { ok: false, error: p.error } };
   }
 
-  if(p.signalModelChoice===GUARDIAN_ID) {
-    try{guardianMarkSubmitted({round:p.round,tokenId:p._internal?.outcome?.tokenId},orderId);}
-    catch(e){
-      // The exchange accepted the BUY; never retry, and halt future entries.
-      enabled=false;autoConfirmHalted=true;
-      console.error(JSON.stringify({event:'guardian_exit_registration_failed_after_real_buy',
-        orderId:String(orderId),round:p.round,reason:String(e?.message||e).slice(0,100)}));
-    }
-  }
   submittedRounds.add(String(p.round));
   try{await closeOrderSubmitRound(p.round,'SUBMITTED');}
   catch(error){console.log(JSON.stringify({event:'order_submitted_fence_failed',

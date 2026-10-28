@@ -53,6 +53,8 @@ curl -fsSL --retry 2 --max-time 25 \
  "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$OLD/railway-diagnostic/wrapper.mjs" \
  -o "$STAGE/wrapper.before"
 if ! cmp -s "$BASE/wrapper.mjs" "$STAGE/wrapper.before";then
+ echo GUARDIAN_BRIDGE_WRAPPER_DRIFT_BEGIN=true
+ diff -u "$STAGE/wrapper.before" "$BASE/wrapper.mjs" | head -n 155 || true
  echo GUARDIAN_BRIDGE_WRAPPER_DRIFT_ABORT=true;exit 31
 fi
 python3 - "$BASE/index.mjs" "$STAGE/index.mjs" <<'PY'

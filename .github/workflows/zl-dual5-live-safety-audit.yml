@@ -60,6 +60,11 @@ jobs:
            print('CONFIG_FILES',[(str(q),q.exists()) for q in [Path('/var/lib/zl-prediction-dual5/state.json'),Path('/opt/zl-prediction-dual5/state.json')]])
            print('DUAL_STRATEGY_MARKER_INSTALLED','DUAL5_ARB_EDGE_GATE_V2_20261028' in s)
            print('DUAL_MARKER_COUNT',s.count('DUAL5_ARB_EDGE_GATE_V2_20261028'))
+           assert s.count('DUAL5_ARB_EDGE_GATE_V3_20261028')==1,'V3_MARKER_MISSING'
+           assert not any(r'\n' in line for line in s.splitlines() if 'DUAL5_ARB_EDGE_GATE_V2_20261028' in line or 'DUAL5_ARB_EDGE_GATE_V3_20261028' in line),'COMMENTED_GUARD'
+           assert len([l for l in s.splitlines() if l.lstrip().startswith('const requiredEdge=Math.max(')])==1,'REQUIRED_EDGE_NOT_EXECUTABLE'
+           assert len([l for l in s.splitlines() if l.lstrip().startswith('const minimumEdgeAtSubmit=Math.max(')])==1,'SUBMIT_GATE_NOT_EXECUTABLE'
+           print('DUAL_V3_BOTH_EXECUTABLE_ENTRY_GATES_CONFIRMED')
            for ix,line in enumerate(s.splitlines(),1):
             if any(x in line for x in ['requiredEdge=','ARBITRAGE_EDGE_TOO_LOW','attemptPair(round','if(!config.armed)','estimate.feasible','MIN_EDGE=','ENTRY_WINDOW_MS=','conservativeNet=','const conservativeNet','const feeReserve','quoteNetUSDT:','calcPair(q1,q2']):
              print('DUAL_CODE_CHECK',ix,line[:185])

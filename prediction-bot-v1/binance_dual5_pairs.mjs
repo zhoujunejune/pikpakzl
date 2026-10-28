@@ -271,10 +271,16 @@ async function verifyFlatWallet(wallet){
 }
 async function reconcileFlatWalletLock(){
  if(reconciling)throw Error('RECONCILIATION_ALREADY_RUNNING');
- if(config.armed||!config.blocked)throw Error('TRADING_NOT_OFF_OR_NOT_LOCKED');
- // Do not clear a lock from a round that might still be live or settling.
+ const pending=Object.entries(config.legs||{}).filter(([,leg])=>leg?.status==='ORDER_PENDING');
+ // An already-unlocked bot may still have stale ORDER_PENDING markers left by
+ // a settled round. The same owner button must also be able to reconcile those.
+ if(config.armed||(!config.blocked&&!pending.length))
+  throw Error('TRADING_NOT_OFF_OR_NOTHING_TO_RECONCILE');
+ // Do not reconcile a market whose five-minute round has not ended.
  if(!Number.isFinite(config.lastOrderRound)||!config.lastOrderRound||
-    Date.now()-config.lastOrderRound<ROUND_MS*2)
+    Date.now()-config.lastOrderRound<ROUND_MS||
+    pending.some(([,leg])=>!Number.isFinite(Number(leg.round))||
+      Date.now()-Number(leg.round)<ROUND_MS))
   throw Error('LATEST_ROUND_NOT_YET_SAFE_TO_RECONCILE');
  const baseline=JSON.stringify(config);
  reconciling=true;
@@ -286,19 +292,32 @@ async function reconcileFlatWalletLock(){
   if(main.enabled!==false)throw Error('MAIN_ROBOT_MUST_BE_OFF');
   const wallet=await walletInfo();
   // Two independent signed GET snapshots guard against transient empty replies.
-  const first=await verifyFlatWallet(wallet);
+  await verifyFlatWallet(wallet);
   await new Promise(resolve=>setTimeout(resolve,1300));
-  const second=await verifyFlatWallet(wallet);
-  if(JSON.stringify(config)!==baseline||config.armed||!config.blocked)
+  await verifyFlatWallet(wallet);
+  if(JSON.stringify(config)!==baseline||config.armed||
+     pending.some(([side])=>config.legs[side]?.status!=='ORDER_PENDING'))
    throw Error('STATE_CHANGED_DURING_RECONCILIATION');
+  const verifiedAt=new Date().toISOString();
+  for(const [side,leg] of pending){
+   config.legs[side]={...leg,originalStatus:'ORDER_PENDING',
+    status:'NO_OPEN_EXPOSURE_VERIFIED',verifiedAt};
+   const key=String(leg.marketTopicId)+':'+String(leg.tokenId);
+   if(config.tracked[key]?.status==='ORDER_PENDING')
+    config.tracked[key]={...config.tracked[key],originalStatus:'ORDER_PENDING',
+      status:'NO_OPEN_EXPOSURE_VERIFIED',verifiedAt};
+  }
   config.armed=false;
   config.blocked=false;
-  // Leave tracked and legs untouched for the independent exit risk worker.
-  config.lastRecovery={at:new Date().toISOString(),method:'TWO_EMPTY_SIGNED_SNAPSHOTS',
-   openOrders:0,ongoingPositions:0,oldTrackedCount:Object.keys(config.tracked).length};
+  // Keep order history and risk tracking, but no stale pending marker should
+  // block a subsequent owner-configured funding-source change.
+  config.lastRecovery={at:verifiedAt,method:'TWO_EMPTY_SIGNED_SNAPSHOTS',
+   openOrders:0,ongoingPositions:0,clearedStalePending:pending.length,
+   oldTrackedCount:Object.keys(config.tracked).length};
   persist();state.lastError=null;state.health='WALLET_FLAT_RECONCILED_TRADING_OFF';
   return {ok:true,armed:false,blocked:false,method:config.lastRecovery.method,
-   verifiedSnapshots:2,preservedTrackedCount:config.lastRecovery.oldTrackedCount};
+   verifiedSnapshots:2,clearedStalePending:pending.length,
+   preservedTrackedCount:config.lastRecovery.oldTrackedCount};
  }finally{reconciling=false}
 }
 // Saving a funding choice must not be blocked forever by a prior round's

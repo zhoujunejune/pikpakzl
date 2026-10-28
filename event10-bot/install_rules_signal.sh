@@ -69,7 +69,7 @@ predpid=$(systemctl show zl-prediction-trade -p MainPID --value)
 stream_pid=$(systemctl show zl-event10-trade-stream -p MainPID --value 2>/dev/null || true)
 # Never restart the continuous-trades collector.
 rollback_needed=true
-for filename in manual-engine.mjs pure-signal.mjs panel.html;do
+for filename in manual-engine.mjs server.mjs pure-signal.mjs panel.html;do
   install -o root -g root -m 0644 "$temp/$filename" "/opt/zl-event10/$filename"
 done
 systemctl restart zl-event10-deepseek

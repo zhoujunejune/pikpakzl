@@ -25,12 +25,12 @@ def patch(src: str) -> str:
         ),
         (
             "if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}",
-            "   // " + MARKER + ": never buy two sides without sufficient conservative paired edge.\\n"
-            "   const requiredEdge=Math.max(MIN_EDGE,0.01*(config.amounts.UP+config.amounts.DOWN));\\n"
-            "   state.lastOpportunity.requiredNetEdgeUSDT=Number(requiredEdge.toFixed(4));\\n"
-            "   state.lastOpportunity.strategyMode='ARBITRAGE';\\n"
-            "   state.lastOpportunity.status=(estimate.feasible&&estimate.conservativeNet>=requiredEdge)?'POSITIVE_EDGE':'EDGE_BELOW_REQUIRED';\\n"
-            "   if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}\\n"
+            "   // " + MARKER + ": never buy two sides without sufficient conservative paired edge.\n"
+            "   const requiredEdge=Math.max(MIN_EDGE,0.01*(config.amounts.UP+config.amounts.DOWN));\n"
+            "   state.lastOpportunity.requiredNetEdgeUSDT=Number(requiredEdge.toFixed(4));\n"
+            "   state.lastOpportunity.strategyMode='ARBITRAGE';\n"
+            "   state.lastOpportunity.status=(estimate.feasible&&estimate.conservativeNet>=requiredEdge)?'POSITIVE_EDGE':'EDGE_BELOW_REQUIRED';\n"
+            "   if(!config.armed){state.health='OPPORTUNITY_OBSERVED_TRADING_OFF';return}\n"
             "   if(!estimate.feasible||estimate.conservativeNet<requiredEdge){state.health='ARBITRAGE_EDGE_TOO_LOW_NO_ORDER';return;}",
         ),
     ]

@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import {dynamicExit,registeredGuardianToken} from './guardian-dynamic-exit.mjs';
 
 const API = 'https://api.binance.com';
 const API_KEY = process.env.BINANCE_PREDICTION_API_KEY || '';
@@ -19,9 +18,6 @@ const DEFAULT_FEE_RATE_BPS = Number(process.env.AUTO_TAKE_PROFIT_FEE_RATE_BPS ||
 const SCOPE = String(process.env.AUTO_RISK_SCOPE || process.env.AUTO_TAKE_PROFIT_SCOPE || 'BTC_5M').toUpperCase();
 const QUOTE_MIN_REMAINING_MS = 250;
 const STATE_CLEANUP_MS = 60000;
-const GUARDIAN_DYNAMIC_ENABLED = process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED==='true';
-const GUARDIAN_REGISTRY='/var/lib/zl-prediction/guardian5/guardian-live-orders.json';
-const guardianPeaks=new Map();
 
 let workerBusy = false;
 let walletCache = null;
@@ -465,26 +461,12 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
   }
 }
 
-// Only Binance orders prepared/submitted by GUARDIAN are eligible.
-function registeredGuardianDynamicExit(position,topic,targets,currentSellAmount){
- if(!GUARDIAN_DYNAMIC_ENABLED)return null;
- const token=String(position?.tokenId||''),round=Number(topic?.startDate);
- if(!token||!Number.isSafeInteger(round)||round%300000!==0)return null;
- let registry;
- try{registry=JSON.parse(fs.readFileSync(GUARDIAN_REGISTRY,'utf8'))}catch{return null}
- if(!registeredGuardianToken(registry,token,round))return null;
- const prev=guardianPeaks.get(token)||0;
- const decision=dynamicExit({cost:targets.totalCost,current:currentSellAmount,peak:prev,round});
- if(Number.isFinite(decision.peak)&&decision.peak>prev)guardianPeaks.set(token,decision.peak);
- return decision;
-}
 function cleanupSellState(activeTokenIds) {
   const now = Date.now();
   for (const [tokenId, state] of sellState.entries()) {
     if (activeTokenIds.has(tokenId)) continue;
     const age = now - Number(state.submittedAt || state.lastAttemptAt || 0);
     if (age > STATE_CLEANUP_MS) sellState.delete(tokenId);
-    if (age > STATE_CLEANUP_MS) guardianPeaks.delete(tokenId);
   }
 }
 
@@ -556,26 +538,11 @@ async function tick() {
         continue;
       }
 
-      let evaluation = evaluateRisk(targets, quoteResult.quote);
+      const evaluation = evaluateRisk(targets, quoteResult.quote);
       if (!evaluation.ok) {
         sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: evaluation.error });
         log('risk_sell_quote_failed', { tokenId, marketTopicId: position.marketTopicId, error: evaluation.error });
         continue;
-      }
-
-      let effectiveTargets=targets;
-      const guardianExit=registeredGuardianDynamicExit(position,topic,targets,evaluation.currentSellAmount);
-      if(guardianExit?.triggered===true){
-        effectiveTargets={...targets,
-          tpTarget:guardianExit.kind==='TAKE_PROFIT'?guardianExit.target:targets.tpTarget,
-          slTarget:guardianExit.kind==='STOP_LOSS'?guardianExit.target:targets.slTarget};
-        evaluation={...evaluation,triggered:true,reason:guardianExit.kind,
-          tpTriggered:guardianExit.kind==='TAKE_PROFIT',
-          slTriggered:guardianExit.kind==='STOP_LOSS',
-          guardianDynamicReason:guardianExit.reason};
-        log('guardian_dynamic_exit_triggered',{tokenId,round:Number(topic?.startDate),
-          reason:guardianExit.reason,pnl:guardianExit.pnl,peak:guardianExit.peak,
-          currentSellAmount:evaluation.currentSellAmount});
       }
 
       if (state?.error) sellState.set(tokenId, { ...state, error: null, lastAttemptAt: 0 });
@@ -591,11 +558,11 @@ async function tick() {
       });
 
       if (!evaluation.triggered) continue;
-      const targetAmount = evaluation.reason === 'STOP_LOSS' ? effectiveTargets.slTarget : effectiveTargets.tpTarget;
+      const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;
       log('risk_triggered', { tokenId, reason: evaluation.reason, currentSellAmount: evaluation.currentSellAmount, targetAmount });
       // Payment routing is needed only at the original SELL submission point.
       const payment = await paymentReady;
-      await sellPosition(wallet, payment, position, topic, effectiveTargets, quoteResult, evaluation);
+      await sellPosition(wallet, payment, position, topic, targets, quoteResult, evaluation);
     }
 
     // Preserve the original one-payment-lookup-per-tick error/refresh behavior.
@@ -617,7 +584,6 @@ log('risk_worker_started', {
   pollMs: POLL_MS,
   retryMs: RETRY_MS,
   scope: SCOPE,
-  guardianDynamicEnabled:GUARDIAN_DYNAMIC_ENABLED,
   hasCredentials: Boolean(API_KEY && API_SECRET),
   hasWalletAddress: Boolean(ENV_WALLET_ADDRESS),
   hasWalletId: Boolean(ENV_WALLET_ID),

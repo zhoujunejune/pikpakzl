@@ -285,35 +285,37 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     busyStart=true;
     const clickReceivedAt=clock();
     try{
-      // Fetch the order book and aggressive trades BEFORE the reference-price tick;
-      // reject market evidence newer than the frozen spot reference.
+      // All source data must be known BEFORE the actual decision time.
+      // Binance spot last-trade tick may be earlier than a fresh futures
+      // orderbook snapshot; that does NOT make this already-received depth
+      // future data. The decision clock, not the last spot TRADE time,
+      // defines the information cutoff.
       const market=await collectRuleFeatures({fetcher,now:clock,timeoutMs:1200});
-      let feed=await readFeed(),reference=buildSnapshot(feed,clock());
-      const marketTimes=[market.features.orderBook?.observedAt,
-        market.features.aggressiveFlow?.lastTradeAt].filter(Number.isFinite);
-      const target=marketTimes.length?Math.max(...marketTimes):null;
-      if(target!==null&&reference.observedAt<target&&target-reference.observedAt<=3500){
-        for(let i=0;i<2&&reference.observedAt<target;i++){
-          await new Promise(resolve=>setTimeout(resolve,120));
-          const retry=await readFeed();
-          const newer=buildSnapshot(retry,clock());
-          if(newer.observedAt>reference.observedAt){feed=retry;reference=newer;}
-        }
-      }
-      if(clock()-clickReceivedAt>5000)throw Error("SIGNAL_SNAPSHOT_TOO_SLOW");
+      const feed=await readFeed();
+      const spot=buildSnapshot(feed,clock()); // verifies spot tick freshness
+      const decisionAt=clock();
+      if(decisionAt-clickReceivedAt>5000)throw Error("SIGNAL_SNAPSHOT_TOO_SLOW");
+      const reference={...spot,observedAt:decisionAt,
+        priceObservedAt:spot.observedAt,observedAgeMs:decisionAt-spot.observedAt};
       const availability={...market.availability};
       const filtered={};
       for(const [k,v] of Object.entries(market.features)){
         const observed=v.observedAt??v.lastTradeAt;
-        if(!Number.isSafeInteger(observed)||observed>reference.observedAt||
-            reference.observedAt-observed>5000)
-          availability[k]={available:false,error:"SOURCE_NOT_ASOF_REFERENCE"};
+        // Both market-source samples must have been received by decision time;
+        // require strict exchange-time freshness without using lookahead.
+        const maxAge=k==="aggressiveFlow"?4000:5000;
+        if(!Number.isSafeInteger(observed)||observed>decisionAt||
+            decisionAt-observed>maxAge||
+            !Number.isSafeInteger(v.receivedAt)||v.receivedAt>decisionAt)
+          availability[k]={available:false,error:"SOURCE_OUTSIDE_DECISION_WINDOW"};
         else filtered[k]=v;
       }
       const rule=evaluatePureSignal({feed,reference,
         orderBook:filtered.orderBook,aggressiveFlow:filtered.aggressiveFlow});
-      lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,openedAt:reference.observedAt,
-        openPrice:reference.price,expiresAt:reference.observedAt+HORIZON_MS,
+      lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,
+        openedAt:decisionAt,referencePriceObservedAt:spot.observedAt,
+        openAgeMs:reference.observedAgeMs,
+        openPrice:reference.price,expiresAt:decisionAt+HORIZON_MS,
         ...rule,featureAvailability:availability};
       lastDataProbe={checkedAt:clock(),available:Object.keys(filtered).length,
         total:market.total,availability};
@@ -321,6 +323,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const session={id,clickReceivedAt,openedAt:reference.observedAt,
         clickToCaptureMs:clock()-clickReceivedAt,expiresAt:reference.observedAt+HORIZON_MS,
         openPrice:reference.price,openAgeMs:reference.observedAgeMs,
+        referencePriceObservedAt:spot.observedAt,
         priceStructure:null,features:reference.indicators,
         rollingTenMinutes:tenMinuteWindow(feed,reference.observedAt),
         enrichment:{source:market.source,features:filtered,

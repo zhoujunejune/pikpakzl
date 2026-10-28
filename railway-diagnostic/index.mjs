@@ -1,4 +1,4 @@
-import {guardianOrderSignal,GUARDIAN_ID} from './guardian-live-bridge.mjs';
+import {guardianOrderSignal,guardianQuoteGate,GUARDIAN_ID} from './guardian-live-bridge.mjs';
 import http from 'node:http';
 import {predictionWalletPayment,eligibleSpotFallback,explicitMpcInsufficient} from './payment-source-priority.mjs';
 import crypto from 'node:crypto';

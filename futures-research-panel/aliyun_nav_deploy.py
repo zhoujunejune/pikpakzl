@@ -52,7 +52,23 @@ bash "$s"
     diagnose_event10=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
                       "[EVENT10-RESTORE-DIAG]" in
                       str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
-    if diagnose_event10:
+    rule_switch=(os.environ.get("GITHUB_EVENT_NAME")=="push" and
+                 "[EVENT10-RULE-SWITCH]" in
+                 str((event.get("head_commit") or {}).get("message",""))) if 'event' in locals() else False
+    if rule_switch:
+        # Only replace the independent EVENT10 analysis engine and HTML. All
+        # original 5-minute trading processes / Caddy routing stay unchanged.
+        cmd=f"""#!/bin/bash
+set -Eeuo pipefail
+s=$(mktemp /tmp/event10-rule-switch.XXXXXXXX)
+trap 'rm -f "$s"' EXIT
+curl -fsSL --retry 3 --max-time 30 \
+  https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/install_rules_signal.sh -o "$s"
+bash -n "$s"
+export APP_SHA={sha}
+bash "$s"
+"""
+    elif diagnose_event10:
         # Explicitly read only service states, anonymized routes, and EVENT10 readiness.
         cmd="""#!/bin/bash
 set -eu

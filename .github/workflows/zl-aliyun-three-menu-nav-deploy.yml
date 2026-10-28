@@ -43,7 +43,48 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python futures-research-panel/aliyun_nav_deploy.py
+      - name: Verify restored EVENT10 route, existing five-minute dashboard, and login
+        if: contains(github.event.head_commit.message, '[EVENT10-FRONTEND-RESTORE]')
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,json,urllib.request,urllib.error
+          origin='https://prediction.47-237-188-69.sslip.io'
+          token='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path,authorize):
+              headers={'Cache-Control':'no-cache'}
+              if authorize:headers['Authorization']=token
+              return urllib.request.urlopen(urllib.request.Request(origin+path,headers=headers),timeout=20)
+          for path in ('/','/event10/','/event10/api/status'):
+              try:
+                  get(path,False)
+                  raise AssertionError('EVENT10_UNAUTHENTICATED_ACCESS_'+path)
+              except urllib.error.HTTPError as exc:
+                  assert exc.code==401,(path,exc.code)
+          with get('/',True) as r:
+              html=r.read().decode('utf8')
+              assert r.status==200 and 'zl-event10-restored-nav' in html
+              assert '5分钟 API 实盘确认控制台' in html
+          with get('/event10/',True) as r:
+              html=r.read().decode('utf8')
+              assert r.status==200
+              for key in ('id="start"','id="quickDirection"','id="quickConfidence"','id="records"'):
+                  assert key in html,'EVENT10_PAGE_MISSING_'+key
+          with get('/event10/api/status',True) as r: state=json.load(r)
+          assert state.get('ok') is True and state.get('bot')=='EVENT10'
+          assert state.get('configured') is True
+          assert state.get('autoTradingEnabled') is False and state.get('executionAvailable') is False
+          with get('/event10/api/history',True) as r: history=json.load(r)
+          assert history.get('ok') is True and isinstance(history.get('records'),list)
+          print('EVENT10_FRONTEND_AUTHENTICATED_ROUTE_VERIFIED=true')
+          print('EVENT10_MANUAL_ANALYSIS_API_READY=true')
+          print('EVENT10_HISTORY_RECORDS='+str(len(history['records'])))
+          print('EVENT10_PREDICTION_PANEL_STILL_VISIBLE=true')
+          print('EVENT10_NO_REAL_ORDERS=true')
+          PY
       - name: Check both actual authenticated UIs, three-way navigation and original controls
+        if: ${{ !contains(github.event.head_commit.message, '[EVENT10-FRONTEND-RESTORE]') }}
         env:
           ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
         run: |

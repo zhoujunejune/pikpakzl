@@ -6,6 +6,8 @@ on:
       - "event10-bot/pure-signal.mjs"
       - "event10-bot/pure-signal.test.mjs"
       - "event10-bot/panel-state.test.mjs"
+      - "event10-bot/signal-ledger.test.mjs"
+      - "event10-bot/server.mjs"
       - "event10-bot/manual-engine.mjs"
       - "event10-bot/panel.html"
       - ".github/workflows/event10-pure-rules-ci.yml"
@@ -24,7 +26,7 @@ jobs:
           node --check event10-bot/pure-signal.mjs
           node --check event10-bot/manual-engine.mjs
           node --check event10-bot/server.mjs
-          node --test event10-bot/pure-signal.test.mjs event10-bot/panel-state.test.mjs
+          node --test event10-bot/pure-signal.test.mjs event10-bot/panel-state.test.mjs event10-bot/signal-ledger.test.mjs
       - name: Ensure no event-contract trading calls or AI in signal path
         run: |
           python3 - <<'PY'

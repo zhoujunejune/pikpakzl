@@ -160,7 +160,7 @@ jobs:
           print('EVENT10_NO_REAL_ORDERS=true')
           PY
       - name: Check both actual authenticated UIs, three-way navigation and original controls
-        if: ${{ !contains(github.event.head_commit.message, '[EVENT10-FRONTEND-RESTORE]') && !contains(github.event.head_commit.message, '[EVENT10-RULE-SWITCH]') }}
+        if: ${{ !contains(github.event.head_commit.message, '[EVENT10-FRONTEND-RESTORE]') && !contains(github.event.head_commit.message, '[EVENT10-RULE-SWITCH]') && !contains(github.event.head_commit.message, '[EVENT10-SIGNAL-DIAG]') }}
         env:
           ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
         run: |

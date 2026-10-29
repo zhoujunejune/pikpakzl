@@ -75,6 +75,32 @@ function guardianExitMonitorReady(now=Date.now()) {
 let autoConfirmHalted = false;
 let lastAutoSubmitAt = 0;
 const autoAttemptedRounds = new Set();
+// Retries only before ANY exchange order POST. The Redis POST fence is never released.
+const GUARDIAN_PREPOST_RETRY_MAX=Math.max(0,Math.min(5,Number(process.env.GUARDIAN_PREPOST_RETRY_MAX??2)||0));
+const GUARDIAN_PREPOST_RETRY_DELAY_MS=Math.max(200,Math.min(2000,Number(process.env.GUARDIAN_PREPOST_RETRY_DELAY_MS??600)||600));
+function retryGuardianBeforePost(p,reason){
+  if(!p || p.signalModelChoice!==GUARDIAN_ID || !AUTO_CONFIRM_ENABLED ||
+     !enabled || autoConfirmHalted || p!==pendingAction ||
+     submittedRounds.has(String(p.round)) ||
+     !orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice))return false;
+  const n=Number(p.prePostRetries||0);
+  const ms=GUARDIAN_PREPOST_RETRY_DELAY_MS*(n+1);
+  if(n>=GUARDIAN_PREPOST_RETRY_MAX || Date.now()+ms>=p.round+GUARDIAN_ORDER_DEADLINE_MS)return false;
+  p.prePostRetries=n+1;p.state='AUTO_RETRY_WAIT';
+  console.log(JSON.stringify({event:'guardian_prepost_retry_scheduled',round:p.round,
+    signalId:p.signalId,reason,retry:p.prePostRetries,delayMs:ms}));
+  setTimeout(()=>{
+    if(p!==pendingAction || p.state!=='AUTO_RETRY_WAIT' || !enabled ||
+       autoConfirmHalted || submittedRounds.has(String(p.round)) ||
+       !orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice))return;
+    p.state='READY';
+    void submitPendingOrder(p,{source:'auto',prePostRetry:true}).catch(error=>{
+      p.state='AUTO_FAILED';p.error='重试执行异常：'+String(error?.message||error);
+      console.error(JSON.stringify({event:'guardian_prepost_retry_exception',round:p.round,error:p.error}));
+    });
+  },ms);
+  return true;
+}
 
 async function inspectOrdersAfterUnknown(walletAddress) {
   const [history, active] = await Promise.all([
@@ -91,7 +117,7 @@ async function inspectOrdersAfterUnknown(walletAddress) {
   };
 }
 
-async function submitPendingOrder(p, { source = 'manual' } = {}) {
+async function submitPendingOrder(p, { source = 'manual', prePostRetry = false } = {}) {
   const isAuto = source === 'auto';
   if (!p || p !== pendingAction || p.state !== 'READY') {
     return { status: 409, body: { ok: false, error: '当前没有可提交的 API 订单' } };
@@ -125,16 +151,18 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (isAuto) {
     if (!AUTO_CONFIRM_ENABLED) return { status: 409, body: { ok: false, error: 'AUTO_CONFIRM 未开启' } };
     if (autoConfirmHalted) return { status: 409, body: { ok: false, error: 'AUTO_CONFIRM 已因严重错误停止' } };
-    if (autoAttemptedRounds.has(String(p.round))) {
+    if (autoAttemptedRounds.has(String(p.round)) && !prePostRetry) {
       return { status: 409, body: { ok: false, error: '本轮已经执行过自动提交，不会重复尝试' } };
     }
-    if (Date.now() - lastAutoSubmitAt < AUTO_CONFIRM_COOLDOWN_MS) {
+    if (!prePostRetry && Date.now() - lastAutoSubmitAt < AUTO_CONFIRM_COOLDOWN_MS) {
       return { status: 429, body: { ok: false, error: 'AUTO_CONFIRM 冷却中' } };
     }
-    autoAttemptedRounds.add(String(p.round));
+    if (!prePostRetry) autoAttemptedRounds.add(String(p.round));
     lastAutoSubmitAt = Date.now();
     console.log(JSON.stringify({
       event: 'auto_submit_triggered',
+      prePostRetry,
+      retryCount:p.prePostRetries||0,
       round: p.round,
       productionSignal: p.productionSignal,
       orderSignal: p.orderSignal,
@@ -198,6 +226,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
         (current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
          current.executionEligible!==true||current.direction!==p.productionSignal||
          mappedOrderSignal(current).orderSignal!==p.signal))) {
+    if(isAuto && p.signalModelChoice===GUARDIAN_ID && current==null &&
+       retryGuardianBeforePost(p,'TEMPORARY_SIGNAL_UNAVAILABLE'))
+      return {status:503,body:{ok:false,error:'本轮信号接口暂不可用，已安排有界重读'}};
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',
@@ -233,6 +264,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     p.state = isAuto ? 'AUTO_FAILED' : 'READY';
     p.error = freshQuote.error;
     p.code = freshQuote.code ?? null;
+    p.blockReason='FRESH_QUOTE_FAILED';
+    if(isAuto)retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');
     console.log(JSON.stringify({
       event: 'fresh_quote_failed',
       round: p.round,
@@ -382,6 +415,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if (remainingMs !== null && remainingMs < 1200) {
     p.state = isAuto ? 'AUTO_FAILED' : 'READY';
     p.error = '最新 Quote 剩余有效期不足，未提交。';
+    if(isAuto)retryGuardianBeforePost(p,'QUOTE_TTL_TOO_SHORT_BEFORE_POST');
     console.log(JSON.stringify({
       event: 'fresh_quote_too_close_to_expiry',
       round: p.round,
@@ -438,8 +472,14 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     try{guardianRegisterIntent({round:p.round,tokenId:intent.outcome?.tokenId})}
     catch(error){
       p.state='GUARDIAN_RISK_REGISTRY_UNAVAILABLE';
-      p.error='GUARDIAN无法登记风险监控，不建立无保护仓位';
-      return {status:503,body:{ok:false,error:p.error}};
+      p.blockReason='GUARDIAN_RISK_REGISTRY_UNAVAILABLE';
+      p.error='GUARDIAN订单登记失败，未建立仓位';
+      p.errorCode=String(error?.code||error?.message||'UNKNOWN').slice(0,120);
+      console.error(JSON.stringify({event:'guardian_registry_write_failed',round:p.round,
+        signalId:p.signalId,code:error?.code||null,detail:String(error?.message||error).slice(0,200)}));
+      if(isAuto)retryGuardianBeforePost(p,'REGISTRY_WRITE_FAILED_BEFORE_POST');
+      return {status:503,body:{ok:false,error:p.error,
+        reason:p.blockReason,errorCode:p.errorCode,retryCount:p.prePostRetries||0}};
     }
   }
   const startedAt = new Date().toISOString();
@@ -912,9 +952,16 @@ const clientJs = String.raw`(function(){
           text('pendingMeta',(currentPending.error||'本轮未满足下单条件')+' 未向 Binance 提交订单。');
         }
         if(btn) btn.classList.add('hidden');
-      }else if(currentPending.state==='PREPARE_ERROR'||currentPending.state==='AUTO_FAILED'||currentPending.state==='PLACE_ERROR'){
+      }else if(currentPending.state==='AUTO_RETRY_WAIT'){
+        text('pendingTitle','本轮暂未下单，正在自动重试');
+        text('pendingMeta',(currentPending.error||currentPending.blockReason||'报价/登记异常')+
+          ' · 已安排第 '+(currentPending.prePostRetries||1)+' 次重试');
+        if(btn)btn.classList.add('hidden');
+      }else if(currentPending.state==='PREPARE_ERROR'||currentPending.state==='AUTO_FAILED'||currentPending.state==='PLACE_ERROR'||currentPending.state==='GUARDIAN_RISK_REGISTRY_UNAVAILABLE'){
         text('pendingTitle',currentPending.state==='AUTO_FAILED'?'自动提交失败':'准备/提交失败');
-        text('pendingMeta',(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':''));
+        text('pendingMeta',(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':'')+
+           (currentPending.errorCode?' · '+currentPending.errorCode:'')+
+           (currentPending.prePostRetries?' · 重试 '+currentPending.prePostRetries+' 次':''));
         if(btn) btn.classList.add('hidden');
       }else if(currentPending.state==='SUBMISSION_UNKNOWN'){
         text('pendingTitle','订单状态未知，已停止重复提交');

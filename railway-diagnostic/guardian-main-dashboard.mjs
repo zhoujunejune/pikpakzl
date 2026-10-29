@@ -68,7 +68,7 @@ const SCRIPT=String.raw`<script>(function(){
   }
   guardianToggle={loaded:true,requestedEnabled:d.requestedEnabled===true,
     effectiveEnabled:d.effectiveEnabled===true,canEnable:d.canEnable===true};
-  var label=d.effectiveEnabled?'运行中 · 仍需核对真实成交':
+  var label=d.effectiveEnabled?(d.approvalVerified?'运行中 · 已有SELL验证记录':'监控已启动 · SELL成交未验证'):
     d.requestedEnabled?'开启请求已保存 · 尚未确认生效':
     '已关闭 · 未启用动态止盈止损';
   put('zlGRiskToggleState',label);
@@ -76,10 +76,10 @@ const SCRIPT=String.raw`<script>(function(){
   var btn=el('zlGRiskToggleButton');
   if(btn){btn.disabled=riskBusy;btn.textContent=riskBusy?'正在保存...':
      d.requestedEnabled?'关闭动态止盈止损':'开启动态止盈止损';}
-  put('zlGDynamicTP',d.effectiveEnabled?'已接入 · Worker运行':'未启用');
-  put('zlGDynamicSL',d.effectiveEnabled?'已接入 · Worker运行':'未启用');
+  put('zlGDynamicTP',d.effectiveEnabled?'监控已接入 · SELL未保证成交':'未启用');
+  put('zlGDynamicSL',d.effectiveEnabled?'监控已接入 · SELL未保证成交':'未启用');
   put('zlGRiskExec',d.effectiveEnabled?
-    'Worker健康；真实SELL成交仍需订单核验':
+    (d.approvalVerified?'Worker运行 · 有历史SELL验收记录':'监控运行 · 真实SELL尚未验证'):
     '动态平仓尚未运行 / 未取得交易所成交验证');
  }
  window.zlGuardianToggleRisk=async function(){
@@ -103,7 +103,7 @@ const SCRIPT=String.raw`<script>(function(){
    if(!response.ok||data.ok!==true)throw Error(data.error||'控制接口拒绝操作');
    if(pin)pin.value='';
    renderToggle(data);
-   toggleNote(data.effectiveEnabled?'已确认运行；仍应核对真实SELL成交':
+   toggleNote(data.effectiveEnabled?'监控运行中；真实SELL尚未保证成交':
     enabled?'已保存请求，但风控未确认生效；不可据此假定订单受保护':'关闭请求已保存；存量持仓如有风险仍需监控');
   }catch(e){toggleNote('操作失败：'+String(e.message||e).slice(0,150))}
   finally{riskBusy=false;void load()}

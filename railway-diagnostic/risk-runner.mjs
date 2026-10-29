@@ -7,8 +7,8 @@ const STATUS_FILE = '/tmp/risk-runtime-status.json';
 const CHECK_MS = 300;
 const STATUS_MS = 2000;
 const GUARDIAN_ENV_ENABLED=/^(1|true)$/i.test(String(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED||'false'));
-const GUARDIAN_UI_APPROVED=process.env.GUARDIAN_RISK_UI_ENABLE_APPROVED==='true';
-const GUARDIAN_REGISTRY='/var/lib/zl-prediction/guardian5/guardian-live-orders.json';
+const GUARDIAN_UI_APPROVED=process.env.GUARDIAN_MONITOR_ARM_ALLOWED==='true';
+const GUARDIAN_REGISTRY=(process.env.GUARDIAN_STATE_DIR||'/var/lib/zl-prediction/rounds/guardian5')+'/guardian-live-orders.json';
 let previousGuardianActive=GUARDIAN_ENV_ENABLED;
 function guardianOpenExposure(now=Date.now()){
   try{

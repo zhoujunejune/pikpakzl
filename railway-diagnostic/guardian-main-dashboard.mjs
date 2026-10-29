@@ -21,7 +21,7 @@ const CARD=String.raw`<section class="c" id="zlGuardianMain" style="margin:14px 
  <div class="kv"><div class="k">风控平仓执行验证</div><div class="v" id="zlGRiskExec">核验中</div></div>
 </div>
 <div class="muted" id="zlGDetail" style="margin:12px 0;min-height:2.5em">正在检查实际状态与交易接入情况</div>
-<div class="muted" style="margin:12px 0;padding:10px 12px;border:1px solid #30485e;border-radius:9px">GUARDIAN 已指定为唯一生产信号模型，但它的真实开仓和动态止盈止损执行仍未接通。现有固定比例止盈止损属于另一套风险服务，不能当作 GUARDIAN 动态平仓成功的证明。</div>
+<div class="muted" style="margin:12px 0;padding:10px 12px;border:1px solid #30485e;border-radius:9px">GUARDIAN 分析进程仅输出信号，真实开仓与平仓由独立执行器处理。显示“就绪”仅代表相关进程通过状态检查，不代表交易所已经成交；请以真实订单及 SELL 回执为准。</div>
 <a href="/guardian/" style="display:inline-block;margin:7px 0 3px;padding:10px 13px;color:#a7d8ff;text-decoration:none;border:1px solid #456681;border-radius:9px">查看 GUARDIAN 详细信号与记录</a>
 </section>`;
 const SCRIPT=String.raw`<script>(function(){
@@ -60,19 +60,19 @@ const SCRIPT=String.raw`<script>(function(){
    put('zlGAI',g.lastAIAt?'最近分析 '+fmtTime(g.lastAIAt):g.configured?'已配置 · 等待信号':'未配置');
    var age=g.observedAt==null?null:Math.max(0,Date.now()-Number(g.observedAt));
    put('zlGMarket',age==null?'等待行情':age<60000?Math.round(age/1000)+' 秒': '行情延迟 '+Math.round(age/1000)+' 秒');
-   put('zlGFollow',t.enabled===true?'已开启（当前不可实盘下单）':'关闭');
-   put('zlGDynamicTP',g.exitExecutionEnabled===true?'已接通（须再确认成交）':'未接入');
+   put('zlGFollow',t.enabled===true?(t.guardianRiskReady===true?'已开启 · 风控 worker 已就绪':'已开启 · 风控未就绪'):'已关闭');
+   put('zlGDynamicTP',risk&&risk.dynamicExitEnabled===true?(t.guardianRiskReady===true?'动态已开启 · worker 已就绪':'动态已开启 · worker 未就绪'):'动态已关闭');
    put('zlGDynamicSL',g.exitExecutionEnabled===true?'已接通（须再确认成交）':'未接入');
    put('zlGFixedTP',risk&&risk.ok?(risk.takeProfitEnabled?'开启 · '+Number(risk.takeProfitPercent)+'% 理论盈利空间':'关闭'):'读取失败');
    put('zlGFixedSL',risk&&risk.ok?(risk.stopLossEnabled?'开启 · 亏损 '+Number(risk.stopLossPercent)+'% 触发':'关闭'):'读取失败');
    put('zlGRiskPersistence',risk&&risk.ok?(risk.persistenceHealthy===true?'正常':'未就绪'):'状态未知');
-   put('zlGRiskExec','未取得实时 SELL 报价及成交核验证据');
+   put('zlGRiskExec',t.lastOrder&&t.lastOrder.orderId?'开仓 '+t.lastOrder.orderId+' · '+(t.lastOrder.status||t.lastOrder.state||'状态待核验'):'尚无可核验的订单与 SELL 回执');
    var stats=g.stats||{};
    put('zlGCount',Number.isFinite(stats.shadowPredictions)?stats.shadowPredictions:0);
    put('zlGAccuracy',stats.settled>0&&Number.isFinite(stats.directionAccuracy)?(100*stats.directionAccuracy).toFixed(1)+'%（'+stats.settled+'轮）':'暂无有效结算');
    var errs=g.error?' · 分析异常：'+String(g.error).slice(0,110):'';
-   put('zlGDetail',(g.productionIntegration===false?'已选为生产信号，但真实订单尚未接通 · ':'')+
-      '最新轮次 '+(g.round?fmtTime(g.round):'--')+' · 当前结论仅供观察'+errs);
+   put('zlGDetail',(g.readOnly===true?'信号服务只读；交易路由由独立执行器控制 · ':'')+
+      '最新轮次 '+(g.round?fmtTime(g.round):'--')+' · 下单须以交易所订单回执核验'+errs);
   }catch(e){
    put('zlGMain','GUARDIAN状态读取失败');
    put('zlGReason','状态接口异常：'+String(e.message||e).slice(0,120));

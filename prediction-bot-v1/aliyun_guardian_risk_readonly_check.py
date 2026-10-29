@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only risk readiness diagnosis: no credentials, orders or account data logged."""
+"""Read-only risk readiness diagnosis after guarded cutover rollback; no trades."""
 import base64,os,sys,time
 from alibabacloud_swas_open20200601.client import Client
 from alibabacloud_swas_open20200601 import models as sw

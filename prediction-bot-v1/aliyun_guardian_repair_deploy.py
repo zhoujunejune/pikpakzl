@@ -60,47 +60,75 @@ echo GUARDIAN_REPAIR_BACKUP="$BACK"
 curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE/railway-diagnostic/wrapper.mjs" -o "$TMP/old.mjs"
 curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$REV/railway-diagnostic/wrapper.mjs" -o "$TMP/new.mjs"
 python3 - "$TMP/old.mjs" "$TMP/new.mjs" "$ROOT/wrapper.mjs" "$TMP/wrapper.mjs" <<'PY'
-import difflib,pathlib,sys
+import pathlib,sys
 old,new,live,out=map(pathlib.Path,sys.argv[1:])
-a=old.read_text().splitlines(keepends=True)
-b=new.read_text().splitlines(keepends=True)
-live_text=live.read_text()
-opcodes=[x for x in difflib.SequenceMatcher(None,a,b,autojunk=False).get_opcodes() if x[0]!='equal']
-assert 3<=len(opcodes)<=10,'UNEXPECTED_GUARDIAN_CHANGE_COUNT'
-print('GUARDIAN_SELECTIVE_CHANGE_COUNT',len(opcodes),flush=True)
-for tag,i1,i2,j1,j2 in opcodes:
- old_part=''.join(a[i1:i2])
- new_part=''.join(b[j1:j2])
- left=''.join(a[max(0,i1-1):i1])
- right=''.join(a[i2:i2+1])
- candidates=[(left+old_part+right,left+new_part+right),(old_part,new_part)]
- applied=False
- for needle,replacement in candidates:
-  if needle and live_text.count(needle)==1:
-   live_text=live_text.replace(needle,replacement,1)
-   applied=True
-   break
- if not applied:
-  print('GUARDIAN_PATCH_CONTEXT_MISMATCH',tag,i1,i2,
-        'oldFirstLine',repr(old_part[:130]),'oldCount',live_text.count(old_part),
-        'newCount',live_text.count(new_part),flush=True)
-  old_lines=[z.strip() for z in old_part.splitlines() if z.strip()]
-  new_lines=[z.strip() for z in new_part.splitlines() if z.strip()]
-  if old_lines and new_lines and all(z.startswith('//') for z in old_lines+new_lines):
-   print('GUARDIAN_SKIP_DRIFTED_COMMENT_ONLY_HUNK',i1,flush=True)
-   continue
-  if new_part and live_text.count(new_part)==1:
-   print('GUARDIAN_HUNK_ALREADY_INSTALLED',i1,flush=True)
-   continue
-  for keyword in ('takeProfitEnabled','lastAutoSubmitAt','guardianQuoteGate(current,quote','GUARDIAN_RISK_OR_QUOTE_BLOCKED'):
-   ix=live_text.find(keyword)
-   print('GUARDIAN_LIVE_CONTEXT',keyword,repr(live_text[max(0,ix-150):ix+480])[:760] if ix>=0 else 'MISSING',flush=True)
-  raise AssertionError('LIVE_WRAPPER_CHANGE_REQUIRES_REVIEW')
-assert 'guardian_prepost_retry_scheduled' in live_text,'RETRY_GUARD_LOST'
-assert 'GUARDIAN_FIXED_STOP_LOSS_UNREADY' in live_text,'FIXED_SL_REPAIR_MISSING'
-assert 'p.signalModelChoice!==GUARDIAN_ID' in live_text,'COOLDOWN_REPAIR_MISSING'
-out.write_text(live_text)
-print('GUARDIAN_SELECTIVE_PATCH_PASS=true',flush=True)
+reference=new.read_text()
+assert 'p.signalModelChoice!==GUARDIAN_ID' in reference and 'GUARDIAN_FIXED_STOP_LOSS_UNREADY' in reference
+source=live.read_text()
+# Preserve the production-only fixed exit readiness integration and its risk-worker gate.
+assert 'function guardianExitMonitorReady(){return guardianFixedReadiness().ready;}' in source,'PRODUCTION_FIXED_READINESS_MISSING'
+def change(before,after,label):
+ global source
+ old_count=source.count(before)
+ if old_count==1:
+  source=source.replace(before,after,1)
+  print('GUARDIAN_LIVE_SURGICAL_PATCHED',label,flush=True)
+ elif old_count==0 and source.count(after)==1:
+  print('GUARDIAN_LIVE_ALREADY_PATCHED',label,flush=True)
+ else:
+  print('GUARDIAN_PRODUCTION_DRIFT',label,'before',old_count,'after',source.count(after),flush=True)
+  raise AssertionError('GUARDIAN_PRODUCTION_DRIFT_'+label)
+change(
+ "if (!prePostRetry && Date.now() - lastAutoSubmitAt < AUTO_CONFIRM_COOLDOWN_MS) {",
+ "if (!prePostRetry && p.signalModelChoice!==GUARDIAN_ID &&\n        Date.now() - lastAutoSubmitAt < AUTO_CONFIRM_COOLDOWN_MS) {",
+ 'cross_round_cooldown')
+change(
+ "      p.error='固定止盈止损执行器尚未就绪：'+risk.reason;\n      return {status:503,body:{ok:false,reason:'RISK_NOT_READY',detail:risk.reason,error:p.error}};",
+ "      p.error='固定止盈止损执行器尚未就绪：'+risk.reason;\n      if(isAuto)retryGuardianBeforePost(p,'FIXED_EXIT_TEMPORARILY_UNREADY');\n      return {status:503,body:{ok:false,reason:'RISK_NOT_READY',detail:risk.reason,error:p.error}};",
+ 'fixed_risk_readiness_retry')
+change(
+ """    if(!guardianExitMonitorReady()||!validation.ok){
+      p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
+      p.blockReason=!guardianExitMonitorReady()
+        ?'RISK_NOT_READY':validation.reason;
+      p.error='GUARDIAN真实退出监控未就绪，或交易所报价无效、已过期，未下单';
+      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
+    }""",
+ """    const exitReady=guardianExitMonitorReady();
+    if(!exitReady||!validation.ok){
+      p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
+      p.blockReason=!exitReady?'RISK_NOT_READY':validation.reason;
+      p.error='GUARDIAN固定退出监控未就绪，或交易所报价无效、已过期，未下单';
+      if(isAuto && exitReady && validation.reason==='GUARDIAN_REAL_QUOTE_INVALID_OR_EXPIRED')
+        retryGuardianBeforePost(p,'QUOTE_INVALID_OR_EXPIRED_BEFORE_POST');
+      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
+    }""",
+ 'guardian_real_quote_retry')
+change(
+ """  if(p.signalModelChoice===GUARDIAN_ID&&
+     (!guardianExitMonitorReady()||!guardianQuoteGate(current,quote,{now:Date.now()}).ok)){
+    p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
+    p.error='GUARDIAN提交前风险执行器或报价核验失败，未下单';
+    return {status:409,body:{ok:false,error:p.error}};
+  }""",
+ """  if(p.signalModelChoice===GUARDIAN_ID){
+    const exitReady=guardianExitMonitorReady();
+    const check=guardianQuoteGate(current,quote,{now:Date.now()});
+    if(!exitReady||!check.ok){
+      p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
+      p.blockReason=!exitReady?'RISK_NOT_READY':check.reason;
+      p.error='GUARDIAN提交前固定退出执行器或报价核验失败，未下单';
+      if(isAuto && exitReady && check.reason==='GUARDIAN_REAL_QUOTE_INVALID_OR_EXPIRED')
+        retryGuardianBeforePost(p,'QUOTE_EXPIRED_BEFORE_ORDER_POST');
+      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
+    }
+  }""",
+ 'guardian_final_quote_retry')
+assert 'guardian_prepost_retry_scheduled' in source,'RETRY_HELPER_LOST'
+assert 'guardianFixedReadiness().ready' in source,'FIXED_RISK_GATE_LOST'
+assert "p.signalModelChoice!==GUARDIAN_ID" in source,'COOLDOWN_FIX_MISSING'
+out.write_text(source)
+print('GUARDIAN_LIVE_SURGICAL_PATCH_ALL_PASS=true',flush=True)
 PY
 for f in guardian-live-bridge.mjs guardian-risk-integration.mjs;do
  python3 - "$ROOT/$f" "$TMP/$f" <<'PY'

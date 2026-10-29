@@ -1,0 +1,40 @@
+name: GUARDIAN5 non-disruptive Alibaba staging
+on:
+  push:
+    branches:
+      - fix/guardian5-live-execution-20261029
+    paths:
+      - prediction-bot-v1/aliyun_guardian5_isolated_stage.py
+      - .github/workflows/zl-guardian5-inert-stage.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: guardian5-inert-stage-only
+  cancel-in-progress: false
+jobs:
+  stage-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check isolated staging code
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian5_isolated_stage.py
+          node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-live-risk-readiness.test.mjs
+      - name: Install cloud API client
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Stage candidate only; never restart production or submit orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian5_isolated_stage.py

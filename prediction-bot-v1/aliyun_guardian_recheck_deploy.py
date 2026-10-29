@@ -72,7 +72,7 @@ helper='  // GUARDIAN_RECHECK_V2: retry only a missing fresh read;'
 marker='  // Overlap independent signal revalidation and fresh quote retrieval.'
 assert new.count(helper)==1 and new.count(marker)==1,'REFERENCE_HELPER_NOT_FOUND'
 print('GUARDIAN_RECHECK_LIVE_MARKER_COUNTS',live.count(marker),live.count(helper),flush=True)
-assert live.count(marker)==1 and live.count(helper)==0,'LIVE_WRAPPER_UNEXPECTED'
+assert live.count(marker)==1 and live.count(helper) in (0,1),'LIVE_WRAPPER_UNEXPECTED'
 chunk=new[new.index(helper):new.index(marker)]
 old_call='''  let [current, freshQuote] = await Promise.all([
     getSignal({ forceHttp: true }), getFreshQuote(p._internal),
@@ -96,13 +96,18 @@ new_log='''      currentStatus: current?.status ?? null,
 for key in ('current.upstreamModel!==GUARDIAN_ID','submit_blocked_signal_changed','currentStatus: current?.status'):
  ix=live.find(key)
  print('GUARDIAN_RECHECK_LIVE_CONTEXT',key,repr(live[max(0,ix-290):ix+490])[:1200] if ix>=0 else 'NOT_PRESENT')
-for text,expected in [(old_call,1),(old_log,1),(new_guard,1),(new_log,0)]:
- assert live.count(text)==expected,('LIVE_ANCHOR_MISMATCH',text[:45],live.count(text))
 assert new.count(new_guard)==1 and new.count(new_log)==1
-patched=live.replace(marker,chunk+marker,1)
-patched=patched.replace(old_call,call_new,1)
-patched=patched.replace(old_log,new_log,1)
-assert 'guardianRetryMissingSignal' in patched and 'signalIdMatches' in patched,'PATCH_INCOMPLETE'
+if live.count(helper)==1:
+ assert live.count(call_new)==1 and live.count(new_guard)==1 and live.count(new_log)==1,'ALREADY_PATCHED_CONTENT_DRIFT'
+ patched=live
+ print('GUARDIAN_RECHECK_ALREADY_ON_DISK=true')
+else:
+ for text,expected in [(old_call,1),(old_log,1),(new_guard,1),(new_log,0)]:
+  assert live.count(text)==expected,('LIVE_ANCHOR_MISMATCH',text[:45],live.count(text))
+ patched=live.replace(marker,chunk+marker,1)
+ patched=patched.replace(old_call,call_new,1)
+ patched=patched.replace(old_log,new_log,1)
+ assert 'guardianRetryMissingSignal' in patched and 'signalIdMatches' in patched,'PATCH_INCOMPLETE'
 Path(sys.argv[3]).write_text(patched)
 print('GUARDIAN_RECHECK_STAGE_PATCH_OK=true')
 PY

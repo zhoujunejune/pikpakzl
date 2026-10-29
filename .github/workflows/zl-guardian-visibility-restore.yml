@@ -75,7 +75,7 @@ jobs:
             diagnostic=next((p for p in pats if any(p in x for x in lines)), '')
             if not diagnostic:
               last=next((x for x in reversed(lines) if 'ZGV_REMOTE_RESULT ' in x),'')
-              m=re.search(r'ZGV_REMOTE_RESULT\\s+(\\w+)\\s+(\\d+)',last)
+              m=re.search(r'ZGV_REMOTE_RESULT\s+(\w+)\s+(\d+)',last)
               diagnostic=('REMOTE_'+m.group(1)+'_'+m.group(2)) if m else ''
             if not diagnostic:
               last=next((x for x in reversed(lines) if re.match(r'^(?:RuntimeError|AssertionError|SyntaxError|TypeError|FileNotFoundError):',x)), '')

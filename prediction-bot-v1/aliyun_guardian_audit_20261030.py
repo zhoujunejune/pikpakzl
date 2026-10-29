@@ -61,6 +61,43 @@ for line in q.stdout:
 q.wait(timeout=12)
 print('EVENT_COUNTS',json.dumps(counts,ensure_ascii=False,separators=(',',':')))
 for row in recent:print('EVENT',json.dumps(row,ensure_ascii=False,separators=(',',':')))
+import os,stat
+service='zl-prediction-trade'
+vals={}
+for key in ('User','Group','MainPID','ProtectSystem','ReadWritePaths','StateDirectory','DynamicUser','RootDirectory'):
+ x=subprocess.run(['systemctl','show',service,'--property='+key,'--value'],capture_output=True,text=True)
+ vals[key]=x.stdout.strip()[:200]
+print('SERVICE_SANDBOX',json.dumps(vals,ensure_ascii=False))
+pid=vals.get('MainPID','0')
+rootpath='/var/lib/zl-prediction/guardian5/guardian-live-orders.json'
+if pid.isdigit() and int(pid)>0:
+ try:
+  raw=pathlib.Path('/proc')/pid/'environ'
+  for entry in raw.read_bytes().split(b'\0'):
+   if entry.startswith(b'GUARDIAN_REGISTRY_FILE='):rootpath=entry.split(b'=',1)[1].decode('utf8','replace')[:200]
+ except Exception as e:print('REGISTRY_ENV_READ_ERROR',type(e).__name__)
+pfile=pathlib.Path(rootpath)
+print('REGISTRY_PATH',rootpath)
+for pp in (pfile,pfile.parent,pfile.parent.parent,pfile.parent.parent.parent):
+ try:
+  st=pp.stat()
+  print('REGISTRY_PATH_STAT',str(pp),oct(stat.S_IMODE(st.st_mode)),st.st_uid,st.st_gid,'dir',pp.is_dir())
+ except Exception as e:print('REGISTRY_PATH_STAT',str(pp),type(e).__name__)
+u=vals.get('User') or 'root'
+base=next((z for z in pfile.parents if z.exists()),None)
+if base:
+ cmd=['test','-w',str(base)]
+ if u!='root':cmd=['runuser','-u',u,'--']+cmd
+ v=subprocess.run(cmd,capture_output=True,text=True)
+ print('REGISTRY_NEAREST_EXISTING_PARENT_WRITABLE',str(base),u,v.returncode==0)
+ if pfile.parent.exists():
+  cmd=['test','-w',str(pfile.parent)]
+  if u!='root':cmd=['runuser','-u',u,'--']+cmd
+  v=subprocess.run(cmd,capture_output=True,text=True)
+  print('REGISTRY_PARENT_WRITABLE',u,v.returncode==0)
+if pfile.exists():
+ print('REGISTRY_FILE_EXISTS',True,'size',pfile.stat().st_size)
+else:print('REGISTRY_FILE_EXISTS',False)
 print('READ_ONLY_AUDIT_FINISHED=true')
 PY
 """

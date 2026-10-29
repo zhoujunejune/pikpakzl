@@ -93,14 +93,17 @@ for k in ['signal','pendingAction','lastOrder']:
    a:x.get(a) for a in ['round','status','state','direction','productionSignal','upstreamModel','error','blockReason','code','at'] if a in x},ensure_ascii=False))
 pid=cmd(['systemctl','show','-p','MainPID','--value','zl-prediction-trade']).strip()
 try:
- env=open('/proc/'+str(int(pid))+'/environ','rb').read().split(b'\\x00')
+ env=open('/proc/'+str(int(pid))+'/environ','rb').read().split(bytes([0]))
  for key in [b'AUTO_CONFIRM_ENABLED',b'AUTO_CONFIRM_STOP_ON_ERROR']:
   name=key.decode();v=next((a.split(b'=',1)[1].decode('ascii','replace') for a in env if a.startswith(key+b'=')),'NOT_SET')
   print('GUARDIAN_INCIDENT_ENV',name,v)
 except Exception as ex:print('GUARDIAN_INCIDENT_ENV_ERROR',type(ex).__name__)
+print('GUARDIAN_INCIDENT_MACHINE_TZ',cmd(['date','+%Y-%m-%dT%H:%M:%S%z']).strip())
+print('GUARDIAN_INCIDENT_STATUS_KEYS',sorted(s.keys()))
 for unit in ['zl-prediction-trade','zl-prediction-guardian-analysis']:
  raw=cmd(['journalctl','-u',unit,'--since','2026-10-29 11:59:30 UTC',
           '--until','2026-10-29 12:05:30 UTC','-o','cat','--no-pager'])
+ print('GUARDIAN_INCIDENT_JOURNAL_TOTAL',unit,len(raw.splitlines()))
  rows=[]
  for line in raw.splitlines():
   pos=line.find('{')

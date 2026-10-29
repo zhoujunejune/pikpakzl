@@ -743,6 +743,12 @@ const newConfirmRoute = String.raw`  if (req.method === 'POST' && url.pathname =
   }`;
 source = source.slice(0, confirmStartIndex) + newConfirmRoute + source.slice(notFoundIndex);
 
+// GUARDIAN live execution is only allowed through this protected wrapper.
+const guardianExecutorFields = "      guardianExecutionReady: false,\n      guardianExecutionBlockReason: 'GUARDIAN_WRAPPER_REQUIRED',";
+if (source.split(guardianExecutorFields).length !== 2) throw new Error('GUARDIAN_EXECUTOR_STATUS_ANCHOR_MISMATCH');
+source = source.replace(guardianExecutorFields,
+  "      guardianExecutionReady: guardianRuntimeReadiness.ready,\n      guardianExecutionBlockReason: guardianRuntimeReadiness.reason,");
+
 // Readiness is exported directly by index.mjs; no fragile status-response injection.
 if (!source.includes('guardianRiskReady: guardianRuntimeReadiness.ready') ||
     !source.includes('guardianRiskBlockReason: guardianRuntimeReadiness.reason'))

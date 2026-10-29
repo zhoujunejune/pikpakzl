@@ -125,6 +125,34 @@ else:
  os.replace(st,p)
  print("ZGV_PATCH_STAGED=true")
 PY
+python3 - <<'PY'
+from pathlib import Path
+import json,os
+p=Path('/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs')
+src=p.read_text()
+if 'ZGV_FALLBACK_SCRIPT' in src:
+ print('ZGV_INDEPENDENT_FALLBACK_ALREADY_STAGED=true')
+else:
+ needle=' if(start<0)return html;'
+ assert src.count(needle)==1,'GUARDIAN_OLD_CARD_FALLBACK_ANCHOR_CHANGED'
+ matches=[l for l in src.splitlines() if l.startswith(" return out.replace('</body>',SCRIPT+")]
+ assert len(matches)==1,'GUARDIAN_RENDER_RETURN_UNEXPECTED'
+ old=matches[0]
+ quoted=old.split('SCRIPT+',1)[1].rsplit("+'</body>');",1)[0]
+ fragment=json.loads(quoted)
+ assert 'zlGuardianVisibilityRestoreV1' in fragment and fragment.startswith('<script>')
+ declaration='export function injectGuardianMainDashboard(html){'
+ assert src.count(declaration)==1
+ src=src.replace(declaration,'const ZGV_FALLBACK_SCRIPT='+quoted+';\n'+declaration,1)
+ src=src.replace(needle," if(start<0)return html.replace('</body>',ZGV_FALLBACK_SCRIPT+'</body>');",1)
+ src=src.replace(old," return out.replace('</body>',SCRIPT+ZGV_FALLBACK_SCRIPT+'</body>');",1)
+ stage=p.with_name(p.name+'.zgv-fallback')
+ stage.write_text(src)
+ os.chmod(stage,p.stat().st_mode&0o777)
+ os.chown(stage,p.stat().st_uid,p.stat().st_gid)
+ os.replace(stage,p)
+ print('ZGV_INDEPENDENT_FALLBACK_STAGED=true')
+PY
 "$NODE" --check "$PANEL"
 STATE=$(python3 - <<'PY'
 import urllib.request,json
@@ -146,7 +174,7 @@ if ! systemctl restart zl-prediction-trade;then
  exit 8
 fi
 READY=0
-for i in $(seq 1 18);do
+for i in $(seq 1 62);do
  if curl -fsS --max-time 4 http://127.0.0.1:13001/ -o "$BACK/page.html" && grep -q 'zlGuardianVisibilityRestoreV1' "$BACK/page.html";then READY=1;break;fi
  sleep 2
 done
@@ -171,8 +199,8 @@ def main():
  invoke=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
   instance_id='b67374069bb3457ba6a3a2ede9305d3f',
   name='restore-guardian-main-readonly-visibility',type='RunShellScript',
-  command_content=REMOTE,working_user='root',timeout=150)).body.invoke_id
- for _ in range(84):
+  command_content=REMOTE,working_user='root',timeout=230)).body.invoke_id
+ for _ in range(132):
   time.sleep(2)
   r=client.describe_invocation_result(sw.DescribeInvocationResultRequest(
    region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',

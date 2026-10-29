@@ -10,9 +10,9 @@ if(!helper)throw Error('GUARDIAN_RUNTIME_PATH_HELPER_NOT_FOUND');
 
 const now=1800000000000;
 function evaluate({dynamic=true,fixed=false,worker=true,updated=now-1000,
-  lastPositions=now-1500,guardian=true}={}){
+  lastPositions=now-1500,guardian=true,legacy=false}={}){
  const data={
-  '/tmp/risk-control.json':{dynamicExitEnabled:dynamic,stopLossEnabled:fixed,takeProfitEnabled:false},
+  '/tmp/risk-control.json':{dynamicExitEnabled:legacy?undefined:dynamic,stopLossEnabled:fixed,takeProfitEnabled:false},
   '/tmp/risk-runtime-status.json':{workerRunning:worker,configApplied:true,
    guardianDynamicExitEnabled:guardian,at:new Date(updated).toISOString()},
   '/tmp/risk-worker-health.json':{lastSuccessfulPositionsAt:new Date(lastPositions).toISOString()},
@@ -35,4 +35,6 @@ test('dynamic exit requires functioning worker and a real guardian sell quote mo
 test('dynamic OFF explicitly requires active fixed position protection',()=>{
  assert.equal(evaluate({dynamic:false,fixed:true,guardian:false}),true);
  assert.equal(evaluate({dynamic:false,fixed:false}),false);
+ assert.equal(evaluate({legacy:true,guardian:true}),true);
+ assert.equal(evaluate({legacy:true,guardian:false}),false);
 });

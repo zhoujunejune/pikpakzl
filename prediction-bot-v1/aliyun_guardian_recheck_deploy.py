@@ -91,6 +91,9 @@ new_log='''      currentStatus: current?.status ?? null,
       currentUpstreamModel:current?.upstreamModel??null,
       recheckRetries:guardianRecheckRetries,
       source,'''
+for key in ('current.upstreamModel!==GUARDIAN_ID','submit_blocked_signal_changed','currentStatus: current?.status'):
+ ix=live.find(key)
+ print('GUARDIAN_RECHECK_LIVE_CONTEXT',key,repr(live[max(0,ix-290):ix+490])[:1200] if ix>=0 else 'NOT_PRESENT')
 for text,expected in [(old_call,1),(old_guard,1),(old_log,1),
                       (new_guard,0),(new_log,0)]:
  assert live.count(text)==expected,('LIVE_ANCHOR_MISMATCH',text[:45],live.count(text))

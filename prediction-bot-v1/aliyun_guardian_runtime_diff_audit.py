@@ -62,6 +62,18 @@ for name,needles in patterns.items():
  except Exception:continue
  print('GUARDIAN_RUNTIME_PATCH_ANCHORS',name,{n:s.count(n) for n in needles})
 PY
+python3 - <<'PY'
+from pathlib import Path
+p=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for name in ['guardian-live-bridge.mjs','order-direction-policy.mjs','index.mjs']:
+ try:s=(p/name).read_text()
+ except Exception as e:print('SOURCE_READ_FAILURE',name,type(e).__name__);continue
+ for i,line in enumerate(s.splitlines(),1):
+  if ('GUARDIAN_SOURCE=' in line or 'ORDER_SOURCES=' in line or
+      'function mappedOrderSignal(' in line or 'function orderDirectionForProduction(' in line or
+      "choice.model===GUARDIAN_ID" in line):
+   print('GUARDIAN_2125_SOURCE_ANCHOR',name,i,line.strip()[:210])
+PY
 echo GUARDIAN_2125_INCIDENT_START=true
 python3 - <<'PY'
 import json,datetime,subprocess,urllib.request,collections

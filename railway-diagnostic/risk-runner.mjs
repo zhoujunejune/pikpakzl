@@ -1,9 +1,11 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { hydrateRiskConfig } from './risk-config-storage.mjs';
 
-const CONTROL_FILE = process.env.RISK_CONTROL_FILE || '/tmp/risk-control.json';
-const STATUS_FILE = process.env.RISK_STATUS_FILE || '/tmp/risk-runtime-status.json';
+const RISK_DIR = process.env.RISK_DATA_DIR || '/var/lib/zl-prediction/rounds';
+const CONTROL_FILE = process.env.RISK_CONTROL_FILE || path.join(RISK_DIR,'risk-control.json');
+const STATUS_FILE = process.env.RISK_STATUS_FILE || path.join(RISK_DIR,'risk-runtime-status.json');
 const CHECK_MS = 300;
 const STATUS_MS = 2000;
 // Guardian dynamic exits retired; runtime uses only user-enabled fixed TP and SL.
@@ -85,6 +87,7 @@ function writeStatus() {
     transitioning: enabled && (!running || childKey !== configKey(config)),
   };
   try {
+    fs.mkdirSync(path.dirname(STATUS_FILE),{recursive:true,mode:0o750});
     const temp = STATUS_FILE + '.tmp-' + process.pid;
     fs.writeFileSync(temp, JSON.stringify(payload), 'utf8');
     fs.renameSync(temp, STATUS_FILE);
@@ -109,6 +112,7 @@ function startWorker(cfg) {
       AUTO_STOP_LOSS_ENABLED: cfg.stopLossEnabled ? 'true' : 'false',
       AUTO_STOP_LOSS_PERCENT: String(cfg.stopLossPercent),
       GUARDIAN_DYNAMIC_EXIT_ENABLED:'false',
+      RISK_WORKER_HEALTH_FILE:process.env.RISK_WORKER_HEALTH_FILE||path.join(RISK_DIR,'risk-worker-health.json'),
     },
     stdio: 'inherit',
   });

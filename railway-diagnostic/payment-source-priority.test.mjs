@@ -32,3 +32,14 @@ test('Fallback only on explicit MPC 4xx insufficient-funds rejection',()=>{
   assert.equal(explicitMpcInsufficient(call),false,JSON.stringify(call));
  }
 });
+
+test('Binance Prediction MPC quote HTTP400 -9000 wording triggers Spot-only fallback',()=>{
+ const call={ok:false,httpStatus:400,code:-9000,error:'Please ensure your account has enough USDT.'};
+ assert.equal(explicitMpcInsufficient(call),true);
+ assert.deepEqual(eligibleSpotFallback(balances(10),1),{displayAccount:'SPOT',accountType:'SPOT',fundingSource:'CEX'});
+ for (const c of [
+  {...call,httpStatus:500},{...call,httpStatus:451},{...call,network:true},
+  {...call,code:-9001},{...call,error:'invalid account'},
+  {...call,ok:true}
+ ]) assert.equal(explicitMpcInsufficient(c),false,JSON.stringify(c));
+});

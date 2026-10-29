@@ -43,7 +43,7 @@ test('risk config is Redis authoritative, validated, atomic locally and no succe
 });
 
 test('internal worker telemetry may continue but redundant status endpoint and UI are retired',()=>{
- assert.match(runner,/const STATUS_FILE = '\/tmp\/risk-runtime-status\.json'/);
+ assert.match(runner,/const STATUS_FILE = process\.env\.RISK_STATUS_FILE \|\| '\/tmp\/risk-runtime-status\.json'/);
  assert.match(runner,/workerRunning: running/);
  assert.match(runner,/configApplied:/);
  assert.match(runner,/persistenceHealthy: storageHealthy/);

@@ -15,7 +15,7 @@ const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.en
 const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
 const SELECTIVE30_ORDER_DEADLINE_MS = 30000; // New qualified Selective V2 + Edge 30-second policy only.
 const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
-const GUARDIAN_ORDER_DEADLINE_MS = 275000; // Leave 25s for exit and settlement.
+const GUARDIAN_ORDER_DEADLINE_MS = 300000; // No arbitrary 25s gate; exchange availability decides.
 const EDGE_ORDER_DEADLINE_MS = 8000; // Edge model strictly ends at T+8 seconds.
 function orderSubmitDeadlineForModel(model) {
   return model === GUARDIAN_ID ? GUARDIAN_ORDER_DEADLINE_MS :
@@ -33,7 +33,7 @@ function rejectExpiredOrderWindow(p, stage) {
   const elapsedMs = Date.now() - Number(p?.round);
   p.state = 'ORDER_WINDOW_EXPIRED';
   p.error = p?.signalModelChoice===GUARDIAN_ID
-    ? 'GUARDIAN距离结算不足25秒，本轮不再下单'
+    ? 'GUARDIAN本轮已结束，不再下单'
     : p?.signalModelChoice===SELECTIVE8_MODEL
     ? '30秒策略本轮第30秒订单提交窗口已截止，未发送下单请求'
     : p?.signalModelChoice===DYNAMIC_MODEL ? '动态模型本轮交易窗口已截止，未发送下单请求'
@@ -47,16 +47,32 @@ function rejectExpiredOrderWindow(p, stage) {
 const EV_FILTER_ENABLED = false; // EV 仅保留计算/展示，不再作为实盘下单拦截条件
 const EV_FILTER_REQUIRE_CALIBRATED = !/^(0|false|no|off)$/i.test(String(process.env.PREDICTION_EV_REQUIRE_CALIBRATED || 'true'));
 const EV_MIN_EDGE = Math.max(0, Math.min(0.50, Number(process.env.PREDICTION_EV_MIN_EDGE || 0.04)));
+function guardianRiskState(paths) {
+  for(const name of paths){
+    if(!name)continue;
+    try{return JSON.parse(fs.readFileSync(name,'utf8'))}catch{}
+  }
+  return null;
+}
 function guardianExitMonitorReady(now=Date.now()) {
-  if(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED!=='true')return false;
-  try{
-    const stat=fs.statSync('/tmp/guardian-risk-ready.json');
-    if(now-stat.mtimeMs>4000||stat.mtimeMs>now+500)return false;
-    const p=JSON.parse(fs.readFileSync('/tmp/guardian-risk-ready.json','utf8'));
-    return p?.model===GUARDIAN_ID&&p?.enabled===true&&
-      p?.realSellQuote===true&&p?.orderRegistry===true&&
-      Number.isFinite(p.at)&&now-p.at>=0&&now-p.at<=4000;
-  }catch{return false}
+  const root='/var/lib/zl-prediction/rounds/';
+  const config=guardianRiskState([process.env.RISK_CONTROL_FILE,root+'risk-control.json','/tmp/risk-control.json']);
+  const runtime=guardianRiskState([process.env.RISK_STATUS_FILE,root+'risk-runtime-status.json','/tmp/risk-runtime-status.json']);
+  const health=guardianRiskState([process.env.RISK_WORKER_HEALTH_FILE,root+'risk-worker-health.json','/tmp/risk-worker-health.json']);
+  if(!config||!runtime||!health)return false;
+  if(runtime.workerRunning!==true||runtime.configApplied!==true||
+     !Number.isFinite(Date.parse(runtime.at))||now-Date.parse(runtime.at)>6000||
+     !Number.isFinite(Date.parse(health.lastSuccessfulPositionsAt))||
+     now-Date.parse(health.lastSuccessfulPositionsAt)>10000)return false;
+  const dynamicOn=config.dynamicExitEnabled===true ||
+    (config.dynamicExitEnabled===undefined&&runtime.guardianDynamicExitEnabled===true);
+  if(!dynamicOn)return config.stopLossEnabled===true||config.takeProfitEnabled===true;
+  if(runtime.guardianDynamicExitEnabled!==true)return false;
+  const marker=guardianRiskState([process.env.GUARDIAN_RISK_READY_FILE,
+    root+'guardian5/guardian-risk-ready.json','/tmp/guardian-risk-ready.json']);
+  return marker?.model===GUARDIAN_ID&&marker.enabled===true&&
+    marker.realSellQuote===true&&marker.orderRegistry===true&&
+    Number.isFinite(marker.at)&&now-marker.at>=0&&now-marker.at<=4000;
 }
 let autoConfirmHalted = false;
 let lastAutoSubmitAt = 0;
@@ -224,7 +240,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
       p.blockReason=!guardianExitMonitorReady()
         ?'GUARDIAN_DYNAMIC_SELL_MONITOR_UNVERIFIED':validation.reason;
-      p.error='GUARDIAN动态卖出监控未验收，或真实盘口优势不足，未下单';
+      p.error='GUARDIAN真实退出监控未就绪，或交易所报价无效、已过期，未下单';
       return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
     }
     p.edge=validation.edge;p.quoteChance=Number(quote.chance);
@@ -364,7 +380,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if(p.signalModelChoice===GUARDIAN_ID&&
      (!guardianExitMonitorReady()||!guardianQuoteGate(current,quote,{now:Date.now()}).ok)){
     p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
-    p.error='GUARDIAN提交前动态风控或盘口校验失败，未下单';
+    p.error='GUARDIAN提交前风险执行器或报价核验失败，未下单';
     return {status:409,body:{ok:false,error:p.error}};
   }
   // Deadline applies at the irreversible Binance POST, not when the signal was generated.
@@ -499,7 +515,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
            Number(nextQuote.quote.chance)>=1))||
        (p.signalModelChoice===GUARDIAN_ID&&
          (currentRetry.upstreamModel!==GUARDIAN_ID||currentRetry.signalId!==p.signalId||
-          currentRetry.direction!==p.signal||!guardianExitMonitorReady()||
+          currentRetry.direction!==p.productionSignal||!guardianExitMonitorReady()||
           !guardianQuoteGate(currentRetry,nextQuote.quote,{now:Date.now()}).ok))||
        rejectExpiredOrderWindow(p,'before_retry_place_order')){
       p.state='RETRY_ABORTED';
@@ -744,7 +760,7 @@ source = source.slice(0, confirmStartIndex) + newConfirmRoute + source.slice(not
 
 source = source.replace(
   "      enabled,\n      amount: tradeAmountText,",
-  "      enabled,\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n      amount: tradeAmountText,"
+  "      enabled,\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n      guardianRiskReady: guardianExitMonitorReady(),\n      amount: tradeAmountText,"
 );
 source = source.replace(
   "      hasWalletId: Boolean(ENV_WALLET_ID),",

@@ -23,6 +23,13 @@ for name in wrapper.mjs risk-worker.mjs risk-runner.mjs control-shell.mjs;do
     if grep -Fq "$mark" "$file";then echo "GUARDIAN_RUNTIME_MARKER $name $mark yes";fi
   done
 done
+for name in risk-runner.mjs risk-worker.mjs guardian-risk-integration.mjs; do
+  file="$BASE/$name"
+  if test -r "$file";then
+    grep -nE '^(const (STATUS_FILE|WORKER_HEALTH_FILE|CONTROL_FILE|READY|REGISTRY)|let storageReady)|risk_runtime_status_write_failed|risk_health_write_failed' "$file" | cut -c1-210 || true
+  fi
+done
+find /var/lib/zl-prediction -maxdepth 4 -type f \( -name '*risk*json' -o -name '*guardian*ready*' \) 2>/dev/null | head -25 || true
 systemctl show zl-prediction-risk-exits -p MainPID -p ActiveState -p PrivateTmp
 systemctl show zl-prediction-trade -p MainPID -p ActiveState -p PrivateTmp
 echo GUARDIAN_RUNTIME_DIAG_COMPLETE=true

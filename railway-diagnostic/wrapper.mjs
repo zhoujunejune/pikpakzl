@@ -50,9 +50,9 @@ const EV_MIN_EDGE = Math.max(0, Math.min(0.50, Number(process.env.PREDICTION_EV_
 function guardianExitMonitorReady(now=Date.now()) {
   if(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED!=='true')return false;
   try{
-    const stat=fs.statSync('/tmp/guardian-risk-ready.json');
+    const stat=fs.statSync((process.env.GUARDIAN_STATE_DIR||'/var/lib/zl-prediction/rounds/guardian5')+'/guardian-risk-ready.json');
     if(now-stat.mtimeMs>4000||stat.mtimeMs>now+500)return false;
-    const p=JSON.parse(fs.readFileSync('/tmp/guardian-risk-ready.json','utf8'));
+    const p=JSON.parse(fs.readFileSync((process.env.GUARDIAN_STATE_DIR||'/var/lib/zl-prediction/rounds/guardian5')+'/guardian-risk-ready.json','utf8'));
     return p?.model===GUARDIAN_ID&&p?.enabled===true&&
       p?.realSellQuote===true&&p?.orderRegistry===true&&
       Number.isFinite(p.at)&&now-p.at>=0&&now-p.at<=4000;

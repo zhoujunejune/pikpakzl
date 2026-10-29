@@ -8,7 +8,7 @@ from alibabacloud_tea_openapi import models as api
 REMOTE=r'''#!/bin/bash
 set -u
 python3 - <<'PY'
-import json,os,subprocess,urllib.request,datetime,pathlib,hashlib,collections
+import json,os,subprocess,urllib.request,datetime,pathlib,hashlib,collections,time,stat
 now=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
 print('AUDIT_TIME_SHANGHAI',now.isoformat(timespec='seconds'))
 def get(port,path):
@@ -69,6 +69,23 @@ for fn in ('wrapper.mjs','index.mjs','guardian-live-bridge.mjs','payment-source-
     'MPC_FALLBACK',('please ensure your account has enough usdt' in t),
     'GUARDIAN_BRANCH',('GUARDIAN_ID' in t))
  except Exception as e:print('AUDIT_SOURCE_ERROR',fn,type(e).__name__)
+print('AUDIT_REGISTRY_BEGIN')
+u=subprocess.run(['systemctl','show','zl-prediction-trade','-p','User','-p','Group','-p','ProtectSystem','-p','ReadWritePaths','-p','StateDirectory','-p','DynamicUser','-p','RootDirectory'],capture_output=True,text=True,timeout=4)
+for line in u.stdout.splitlines():print('AUDIT_TRADE_UNIT_PROP',line[:150])
+for reg in ('/var/lib/zl-prediction','/var/lib/zl-prediction/guardian5','/var/lib/zl-prediction/guardian5/guardian-live-orders.json'):
+ try:
+  st=os.stat(reg)
+  print('AUDIT_REGISTRY_PATH',reg,'exists',True,'mode',oct(stat.S_IMODE(st.st_mode)),'uid',st.st_uid,'gid',st.st_gid,'directory',stat.S_ISDIR(st.st_mode))
+  if reg.endswith('.json'):
+   try:
+    raw=json.loads(pathlib.Path(reg).read_text())
+    print('AUDIT_REGISTRY_JSON','model',raw.get('model'),'entries_count',len(raw.get('entries') or []) if isinstance(raw.get('entries'),list) else 'INVALID','valid_type',isinstance(raw,dict))
+   except Exception as e:print('AUDIT_REGISTRY_JSON_ERROR',type(e).__name__)
+ except Exception as e:print('AUDIT_REGISTRY_PATH',reg,'exists',False,'error',type(e).__name__)
+check=subprocess.run(['runuser','-u','zl-pred','--','python3','-c',
+ "import os,json; p='/var/lib/zl-prediction/guardian5';print(json.dumps({'dirTraverse':os.access(p,os.X_OK),'dirWrite':os.access(p,os.W_OK),'fileWrite':os.access(p+'/guardian-live-orders.json',os.W_OK)}))"],capture_output=True,text=True,timeout=6)
+print('AUDIT_REGISTRY_AS_SERVICE_ACCOUNT','exit',check.returncode,'access',check.stdout.strip()[:250],'errorType',check.stderr.strip()[:120])
+print('AUDIT_REGISTRY_END')
 # Limit journal to selected structured, relevant events. No wallet IDs, order IDs, token IDs or keys.
 rx='api_intent_ready|auto_submit_triggered|guardian_signal_recheck_completed|submit_blocked_signal_changed|fresh_quote_failed|fresh_quote_ready|order_submit_attempt_denied|api_order_submit_attempt|api_order_submitted_pending_confirmation|prediction_wallet_quote_insufficient_spot_fallback|intent_prepare_failed|guardian_order_registration_failed_after_buy|order_submit_deadline_expired|guardian_feed_unavailable|order_submission_unknown|auto_confirm_failed|order_post_failed|risk_|guardian_'
 cmd=['journalctl','-u','zl-prediction-trade','--since','6 hours ago','-g',rx,'--no-pager','-o','json','-n','3000']

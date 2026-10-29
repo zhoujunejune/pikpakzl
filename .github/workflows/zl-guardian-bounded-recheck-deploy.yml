@@ -4,6 +4,8 @@ on:
     branches: [feature/zl-futures-bot-v1]
     paths:
       - prediction-bot-v1/aliyun_guardian_recheck_deploy.py
+      - railway-diagnostic/wrapper.mjs
+      - railway-diagnostic/guardian-submit-recheck.test.mjs
       - .github/workflows/zl-guardian-bounded-recheck-deploy.yml
   workflow_dispatch:
 permissions: {contents: read}

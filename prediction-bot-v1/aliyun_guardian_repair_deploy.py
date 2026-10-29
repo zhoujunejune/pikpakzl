@@ -84,9 +84,17 @@ for tag,i1,i2,j1,j2 in opcodes:
   print('GUARDIAN_PATCH_CONTEXT_MISMATCH',tag,i1,i2,
         'oldFirstLine',repr(old_part[:130]),'oldCount',live_text.count(old_part),
         'newCount',live_text.count(new_part),flush=True)
+  old_lines=[z.strip() for z in old_part.splitlines() if z.strip()]
+  new_lines=[z.strip() for z in new_part.splitlines() if z.strip()]
+  if old_lines and new_lines and all(z.startswith('//') for z in old_lines+new_lines):
+   print('GUARDIAN_SKIP_DRIFTED_COMMENT_ONLY_HUNK',i1,flush=True)
+   continue
   if new_part and live_text.count(new_part)==1:
    print('GUARDIAN_HUNK_ALREADY_INSTALLED',i1,flush=True)
    continue
+  for keyword in ('takeProfitEnabled','lastAutoSubmitAt','guardianQuoteGate(current,quote','GUARDIAN_RISK_OR_QUOTE_BLOCKED'):
+   ix=live_text.find(keyword)
+   print('GUARDIAN_LIVE_CONTEXT',keyword,repr(live_text[max(0,ix-150):ix+480])[:760] if ix>=0 else 'MISSING',flush=True)
   raise AssertionError('LIVE_WRAPPER_CHANGE_REQUIRES_REVIEW')
 assert 'guardian_prepost_retry_scheduled' in live_text,'RETRY_GUARD_LOST'
 assert 'GUARDIAN_FIXED_STOP_LOSS_UNREADY' in live_text,'FIXED_SL_REPAIR_MISSING'

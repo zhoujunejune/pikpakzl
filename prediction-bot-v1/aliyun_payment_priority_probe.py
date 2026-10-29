@@ -376,7 +376,7 @@ def main():
     try:output=base64.b64decode(output,validate=True).decode("utf8","replace")
     except Exception:pass
     print("PROBE_STATUS",x.invocation_status,"EXIT",x.exit_code)
-    print(output[-6000:])
+    print(output[-16000:])
     return 0 if str(x.invocation_status)=="Success" and int(x.exit_code)==0 else 4
   print("PROBE_PENDING");return 5
  except Exception as e:print("PROBE_ERROR",type(e).__name__,str(getattr(e,'code','unknown'))[:80]);return 6

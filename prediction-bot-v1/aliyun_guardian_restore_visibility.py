@@ -103,7 +103,7 @@ ROOT=/opt/zl-prediction-live/ui-sidecar
 DEST=$ROOT/guardian-visibility-sidecar.mjs
 UNIT=/etc/systemd/system/zl-prediction-ui-visibility.service
 HOST=prediction.47-237-188-69.sslip.io
-SHA=c5db4aa955ef063156ecc991fe4454bffa5b108e
+SHA=6869d9e4b39ffe4e7a2c018c899eb79e1825d289
 test -x "$NODE" && test -r "$CADDY"
 systemctl is-active --quiet zl-prediction-trade
 systemctl is-active --quiet caddy
@@ -128,6 +128,20 @@ rollback(){
 trap rollback ERR
 curl -fsSL --retry 2 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$SHA/prediction-bot-v1/guardian-visibility-sidecar.mjs" -o "$BACK/sidecar.stage.mjs"
 "$NODE" --check "$BACK/sidecar.stage.mjs"
+"$NODE" --input-type=module - "$BACK/sidecar.stage.mjs" <<'JS'
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const source=fs.readFileSync(process.argv[2],'utf8');
+const marker='const SCRIPT = ';
+const begin=source.indexOf(marker),end=source.indexOf(';\\nconst htmlHeaders',begin);
+assert.ok(begin>=0&&end>begin,'INLINE_SCRIPT_NOT_FOUND');
+const code=JSON.parse(source.slice(begin+marker.length,end));
+assert.ok(code.startsWith('<script>')&&code.endsWith('</script>'),'INLINE_SCRIPT_WRAPPER_INVALID');
+new vm.Script(code.slice(8,-9));
+for(const key of ['zgv2OrderState','zgv2OrderReason','zgv2MpcBalance','zgv2SpotBalance','zgv2FundingBalance'])assert.ok(code.includes(key),'MISSING_UI_FIELD_'+key);
+console.log('ZGV_ORDER_AUDIT_UI_SYNTAX_OK=true');
+JS
 install -o zl-pred -g zl-pred -m 0644 "$BACK/sidecar.stage.mjs" "$DEST"
 cat > "$UNIT" <<'EOF'
 [Unit]

@@ -119,7 +119,7 @@ tz=datetime.timezone(datetime.timedelta(hours=8))
 lo=datetime.datetime(2026,10,29,23,19,tzinfo=tz)
 hi=datetime.datetime(2026,10,29,23,26,tzinfo=tz)
 roundms=1793287200000
-wanted=('event','round','state','enabled','amount','productionSignal','orderSignal','mappingMode','signal','direction','rawDirection','source','code','httpStatus','error','reason','blockReason','spotQuoteOk','accountType','paymentAccount','attempt','attempts','orderId','orderStatus','quoteRemainingMs','signalGeneratedAt','autoConfirmEnabled')
+wanted=('event','round','currentRound','currentDirection','currentStatus','state','enabled','amount','productionSignal','orderSignal','mappingMode','signal','direction','rawDirection','source','code','httpStatus','error','reason','blockReason','spotQuoteOk','accountType','paymentAccount','attempt','attempts','orderId','orderStatus','quoteRemainingMs','signalGeneratedAt','autoConfirmEnabled')
 for unit in ('zl-prediction-trade','zl-prediction-guardian-analysis'):
  p=subprocess.run(['journalctl','-u',unit,'--since','2026-10-29 15:19:00 UTC','--until','2026-10-29 15:27:00 UTC','-o','json','--no-pager'],capture_output=True,text=True,timeout=18)
  out=[]

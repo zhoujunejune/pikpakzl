@@ -46,6 +46,34 @@ for line in sys.stdin:
   rows.append(line)
 print("\\n".join(rows[-17:]))' || true
 echo "TRADE_SERVICE_RECENT_FAILURES_END"
+echo GUARDIAN_INCIDENT_AUDIT_BEGIN
+python3 - <<'PY'
+import json,subprocess,datetime,re
+tz=datetime.timezone(datetime.timedelta(hours=8))
+start='2026-10-29 14:05:00 UTC'; end='2026-10-29 14:25:00 UTC'
+proc=subprocess.run(['journalctl','-u','zl-prediction-trade','--since',start,'--until',end,'-o','json','--no-pager'],capture_output=True,text=True,timeout=15)
+watch={'api_confirm_control','api_intent_ready','auto_submit_triggered','fresh_quote_failed','prediction_wallet_quote_insufficient_spot_fallback','prediction_wallet_insufficient_spot_unavailable','fresh_quote_ready','order_post_attempt','order_submit_attempt','order_confirmed','order_submission_unknown','submit_blocked_signal_changed','auto_confirm_failed','guardian_signal_locked','order_submit_blocked'}
+events=[]
+for raw in proc.stdout.splitlines():
+ try:
+  j=json.loads(raw); m=json.loads(j.get('MESSAGE',''))
+  if not isinstance(m,dict) or m.get('event') not in watch:continue
+  timestamp=int(j['__REALTIME_TIMESTAMP'])/1000000
+  local=datetime.datetime.fromtimestamp(timestamp,tz)
+  rd=m.get('round')
+  fields={k:m[k] for k in ('enabled','round','productionSignal','orderSignal','mappingMode','code','httpStatus','state','source','reason','paymentAccount','spotQuoteOk','orderSignalModel') if k in m and isinstance(m[k],(str,int,float,bool))}
+  fields={k:(str(v)[:80] if isinstance(v,str) else v) for k,v in fields.items()}
+  events.append((local, m['event'], fields))
+ except (ValueError,TypeError,KeyError,OverflowError):continue
+print('AUDIT_JOURNAL_RETURN',proc.returncode)
+for a,b in [('22:10','22:15'),('22:15','22:20')]:
+ lo=datetime.datetime.fromisoformat('2026-10-29T'+a+':00').replace(tzinfo=tz)
+ hi=datetime.datetime.fromisoformat('2026-10-29T'+b+':00').replace(tzinfo=tz)
+ rows=[(t,ev,fields) for t,ev,fields in events if lo<=t<hi]
+ print('AUDIT_WINDOW',a,b,'matched_events',len(rows))
+ for t,ev,fields in rows[-30:]:print('AUDIT_EVENT',t.isoformat(timespec='seconds'),ev,json.dumps(fields,ensure_ascii=False,separators=(',',':')))
+print('GUARDIAN_INCIDENT_AUDIT_END')
+PY
 echo PROBE_END
 '''
 def main():

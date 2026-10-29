@@ -507,7 +507,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
            Number(nextQuote.quote.chance)>=1))||
        (p.signalModelChoice===GUARDIAN_ID&&
          (currentRetry.upstreamModel!==GUARDIAN_ID||currentRetry.signalId!==p.signalId||
-          currentRetry.direction!==p.signal||!guardianExitMonitorReady()||
+          currentRetry.direction!==p.productionSignal||!guardianExitMonitorReady()||
           !guardianQuoteGate(currentRetry,nextQuote.quote,{now:Date.now()}).ok))||
        rejectExpiredOrderWindow(p,'before_retry_place_order')){
       p.state='RETRY_ABORTED';

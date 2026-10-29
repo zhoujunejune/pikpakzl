@@ -48,7 +48,16 @@ const EV_FILTER_ENABLED = false; // EV 仅保留计算/展示，不再作为实�
 const EV_FILTER_REQUIRE_CALIBRATED = !/^(0|false|no|off)$/i.test(String(process.env.PREDICTION_EV_REQUIRE_CALIBRATED || 'true'));
 const EV_MIN_EDGE = Math.max(0, Math.min(0.50, Number(process.env.PREDICTION_EV_MIN_EDGE || 0.04)));
 function guardianExitMonitorReady(now=Date.now()) {
-  if(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED!=='true')return false;
+  // The dedicated UI switch is the authority. The trade process does not own
+  // the risk child ENV and must verify the shared controller's fresh state.
+  try{
+    const runtime=JSON.parse(fs.readFileSync(process.env.RISK_STATUS_FILE||
+      '/var/lib/zl-prediction/rounds/risk-runtime-status.json','utf8'));
+    if(runtime?.guardianDynamicExitEnabled!==true||runtime?.workerRunning!==true||
+       runtime?.configApplied!==true||runtime?.persistenceHealthy!==true||
+       !Number.isFinite(Date.parse(runtime.at))||now-Date.parse(runtime.at)>5000)
+      return false;
+  }catch{return false}
   try{
     const stat=fs.statSync((process.env.GUARDIAN_STATE_DIR||'/var/lib/zl-prediction/rounds/guardian5')+'/guardian-risk-ready.json');
     if(now-stat.mtimeMs>4000||stat.mtimeMs>now+500)return false;

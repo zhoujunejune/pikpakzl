@@ -9,6 +9,7 @@ on:
       - railway-diagnostic/guardian-risk-integration.test.mjs
       - railway-diagnostic/risk-runner.mjs
       - railway-diagnostic/guardian-live-bridge.test.mjs
+      - railway-diagnostic/guardian-prepost-retry-regression.test.mjs
       - railway-diagnostic/index.mjs
       - railway-diagnostic/wrapper.mjs
       - railway-diagnostic/risk-worker.mjs
@@ -32,4 +33,4 @@ jobs:
           node --check railway-diagnostic/wrapper.mjs
           node --check railway-diagnostic/risk-worker.mjs
       - name: Run deterministic entry, quote and token-scoped exit tests
-        run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs
+        run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-prepost-retry-regression.test.mjs

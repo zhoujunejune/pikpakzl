@@ -101,6 +101,15 @@ for phrase in ('GUARDIAN 专属动态风控','关闭动态止盈止损','动态�
   sample=ui[max(0,p-320):min(len(ui),p+850)]
   sample=sample.replace('\n','↵')
   print('GUARDIAN_UI_REMOVE_CONTEXT',phrase,repr(sample))
+# Structural view of the dynamic-only JavaScript block to avoid modifying unrelated handlers.
+from pathlib import Path
+t=Path('/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs').read_text()
+for key in ('guardianToggle','var riskBusy','function renderToggle','window.zlGuardianToggleRisk','/api/guardian-dynamic-risk','var loading=false','async function load()','const SCRIPT'):
+ print('GUARDIAN_UI_SCRIPT_MARKER',key,t.count(key),t.find(key))
+ls=t.splitlines()
+for n,line in enumerate(ls):
+ if any(k in line for k in ('guardianToggle','riskBusy','renderToggle','zlGuardianToggleRisk','/api/guardian-dynamic-risk','function loadRisk','var loading','async function load()','zlGDynamicTP','zlGDynamicSL')):
+  print('GUARDIAN_UI_SCRIPT_LINE',n+1,line.strip()[:190])
 PY
 """
 def main():

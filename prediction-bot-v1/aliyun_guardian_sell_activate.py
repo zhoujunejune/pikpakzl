@@ -162,7 +162,7 @@ pid=subprocess.check_output(['systemctl','show','zl-prediction-risk-exits','-p',
 assert pid.isdigit() and int(pid)>0,'RISK_CONTROLLER_NOT_RUNNING'
 env=dict((a.decode(),b.decode()) for a,b in (row.split(b'=',1) for row in pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\0') if b'=' in row))
 assert env.get('RISK_CONTROL_FILE') and env.get('SIGNAL_REDIS_URL'),'RISK_PERSISTENCE_CONFIG_MISSING'
-node=r"""import fs from 'node:fs';
+node=r'''import fs from 'node:fs';
 const m=await import('file:///opt/zl-prediction-live/src/railway-diagnostic/risk-config-storage.mjs');
 await m.hydrateRiskConfig();
 const file=process.env.RISK_CONTROL_FILE;
@@ -173,7 +173,7 @@ const result=await m.persistRiskConfig(next);
 await m.closeRiskStorage();
 if(result.guardianDynamicEnabled!==true)throw Error('PERSISTENCE_DID_NOT_APPLY');
 process.stdout.write(JSON.stringify(old));
-"""
+'''
 user=pwd.getpwnam('zl-pred')
 p=subprocess.run(['/opt/zl-prediction-node/bin/node','--input-type=module','-e',node],
  capture_output=True,text=True,env=env,cwd='/opt/zl-prediction-live/src/railway-diagnostic',

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Fresh read-only trade/exit eligibility verification; does not place orders.
 import os,time,base64
 from alibabacloud_swas_open20200601.client import Client
 from alibabacloud_swas_open20200601 import models as sw

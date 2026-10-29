@@ -358,10 +358,14 @@ async function getSignal({ forceHttp = false } = {}) {
       const response=await fetch('http://127.0.0.1:13049/api/status',{
         cache:'no-store',signal:AbortSignal.timeout(1800)});
       if(!response.ok)return null;
-      const signal=guardianOrderSignal(await response.json());
+      const signal=guardianOrderSignal(await response.json(),Date.now(),{
+        ownerAllowsUncalibrated:process.env.GUARDIAN_OWNER_UNCALIBRATED_TRADING==='true'
+      });
       if(!signal.ok||signal.executionEligible!==true)return null;
       return {...signal,status:'LOCKED',model:SIGNAL_MODEL_NAME,
-        rawDirection:signal.direction,transport:'aliyun_guardian5_calibrated'};
+        rawDirection:signal.direction,
+        transport:signal.riskMode==='OWNER_UNCALIBRATED'?
+          'aliyun_guardian5_owner_uncalibrated':'aliyun_guardian5_calibrated'};
     }catch(error){
       console.error(JSON.stringify({event:'guardian_feed_unavailable',
         error:String(error?.message||error).slice(0,100)}));return null;

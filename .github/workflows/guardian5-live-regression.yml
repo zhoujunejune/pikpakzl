@@ -27,7 +27,7 @@ jobs:
           node --check railway-diagnostic/wrapper.mjs
           node --check railway-diagnostic/risk-runner.mjs
           node --check railway-diagnostic/risk-worker.mjs
-      - run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-live-risk-readiness.test.mjs
+      - run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-live-risk-readiness.test.mjs railway-diagnostic/risk-controls-ui.test.mjs railway-diagnostic/risk-persistence-status.test.mjs
 
   aliyun-readonly-preflight:
     runs-on: ubuntu-latest

@@ -112,6 +112,47 @@ for ts,ev,data in selected[-35:]:
  print('RECENT_TRADE_EVENT',ts,ev,json.dumps(data,ensure_ascii=False,separators=(',',':')))
 print('GUARDIAN_RECENT_TRADE_DIAGNOSTIC_END')
 PY
+echo GUARDIAN_2320_AUDIT_BEGIN
+python3 - <<'PY'
+import subprocess,json,datetime,urllib.request
+tz=datetime.timezone(datetime.timedelta(hours=8))
+lo=datetime.datetime(2026,10,29,23,19,tzinfo=tz)
+hi=datetime.datetime(2026,10,29,23,26,tzinfo=tz)
+roundms=1793287200000
+wanted=('event','round','state','enabled','amount','productionSignal','orderSignal','mappingMode','signal','direction','rawDirection','source','code','httpStatus','error','reason','blockReason','spotQuoteOk','accountType','paymentAccount','attempt','attempts','orderId','orderStatus','quoteRemainingMs','signalGeneratedAt','autoConfirmEnabled')
+for unit in ('zl-prediction-trade','zl-prediction-guardian-analysis'):
+ p=subprocess.run(['journalctl','-u',unit,'--since','2026-10-29 15:19:00 UTC','--until','2026-10-29 15:27:00 UTC','-o','json','--no-pager'],capture_output=True,text=True,timeout=18)
+ out=[]
+ for line in p.stdout.splitlines():
+  try:
+   obj=json.loads(line);at=datetime.datetime.fromtimestamp(int(obj['__REALTIME_TIMESTAMP'])/1e6,tz)
+   if not lo<=at<hi:continue
+   m=json.loads(obj.get('MESSAGE',''))
+   if not isinstance(m,dict) or not m.get('event'):continue
+   fields={k:m[k] for k in wanted if k in m and isinstance(m[k],(str,int,float,bool))}
+   for k,v in list(fields.items()):
+    if k=='orderId': fields[k]='PRESENT' if v else None
+    elif k=='error' or k=='reason' or k=='blockReason': fields[k]=str(v)[:120]
+    elif isinstance(v,str):fields[k]=v[:100]
+   out.append((at.isoformat(timespec='seconds'),fields))
+  except (ValueError,KeyError,TypeError,OverflowError):continue
+ print('TARGET_UNIT',unit,'journal_ok',p.returncode==0,'events',len(out))
+ for at,fields in out[-75:]:print('TARGET_EVENT',at,json.dumps(fields,ensure_ascii=False,separators=(',',':')))
+for port in (13001,13005,13049):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:%d/api/status'%port,timeout=5) as r:s=json.load(r)
+  pending=s.get('pendingAction') or {}; last=s.get('lastOrder') or {}
+  records=s.get('records') or []
+  matched=[{k:x.get(k) for k in ('round','at','predictedDirection','status','subjectiveConfidence')} for x in records if isinstance(x,dict) and x.get('round')==roundms]
+  msg={'port':port,'ok':s.get('ok'),'enabled':s.get('enabled'),'model':s.get('orderSignalModel') or s.get('model'),
+    'round':s.get('round'),'latestDirection':(s.get('latest') or {}).get('direction'),'latestReason':str((s.get('latest') or {}).get('reason',''))[:110],
+    'pending':{k:pending.get(k) for k in ('round','state','code','error','blockReason','paymentAccount')},
+    'last':{k:last.get(k) for k in ('round','state','code','error','blockReason','paymentAccount')},
+    'targetRecords':matched[:4]}
+  print('TARGET_API',json.dumps(msg,ensure_ascii=False,default=str))
+ except Exception as e:print('TARGET_API_ERROR',port,type(e).__name__)
+print('GUARDIAN_2320_AUDIT_END')
+PY
 echo PROBE_END
 '''
 def main():

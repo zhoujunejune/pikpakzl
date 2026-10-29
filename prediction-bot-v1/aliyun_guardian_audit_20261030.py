@@ -45,6 +45,17 @@ for name in ('wrapper.mjs','guardian-live-bridge.mjs','index.mjs','payment-sourc
  if p.exists():
   t=p.read_text()
   print('LIVE_SOURCE',name,hashlib.sha256(t.encode()).hexdigest()[:16],int('GUARDIAN_RECHECK_V2' in t),int('takeProfitEnabled===true&&config.stopLossEnabled===true' in t))
+# Examine trade-gate drift without printing any runtime secrets or entire source.
+for name in ('wrapper.mjs','index.mjs'):
+ try:
+  src=(pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')/name).read_text()
+  lines=src.splitlines()
+  for keyword in ('guardianFixedReadiness','AUTO_CONFIRM_COOLDOWN_MS','GUARDIAN_RISK_OR_QUOTE_BLOCKED','guardianQuoteGate(current,quote'):
+   loc=[i for i,line in enumerate(lines) if keyword in line]
+   for i in loc[:2]:
+    excerpt='\\n'.join(lines[max(0,i-4):min(len(lines),i+9)])
+    print('GUARDIAN_RUNTIME_GATE_SOURCE',name,keyword,i+1,excerpt[:1150])
+ except Exception as e:print('GUARDIAN_RUNTIME_GATE_READ_FAILED',name,type(e).__name__)
 events=set('api_confirm_control api_intent_ready auto_submit_triggered guardian_signal_recheck_completed submit_blocked_signal_changed fresh_quote_failed fresh_quote_ready intent_prepare_failed api_order_submit_attempt order_submit_attempt_denied order_status_updated order_status_conflict_auto_halted order_retry_requote_failed prediction_wallet_quote_insufficient_spot_fallback prediction_wallet_insufficient_spot_unavailable order_submit_deadline_expired auto_confirm_failed api_order_submitted api_order_failed guardian_feed_unavailable'.split())
 q=subprocess.Popen(['journalctl','-u','zl-prediction-trade','--since','8 hours ago','--no-pager','-o','cat'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,errors='replace')
 counts=collections.Counter();recent=[]

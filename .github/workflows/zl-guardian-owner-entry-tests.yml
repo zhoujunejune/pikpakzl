@@ -1,0 +1,40 @@
+name: GUARDIAN owner-authorized live entry safety tests
+on:
+  push:
+    branches: [feature/guardian-owner-live-entry]
+    paths:
+      - railway-diagnostic/guardian-live-bridge.mjs
+      - railway-diagnostic/guardian-live-bridge.test.mjs
+      - railway-diagnostic/index.mjs
+      - .github/workflows/zl-guardian-owner-entry-tests.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Check syntax and owner-only opt-in gate
+        run: |
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --test railway-diagnostic/guardian-live-bridge.test.mjs
+          node --test railway-diagnostic/guardian-risk-integration.test.mjs
+      - name: Verify Binance live SELL readiness safeguard remains
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          idx=Path('railway-diagnostic/index.mjs').read_text()
+          wrapper=Path('railway-diagnostic/wrapper.mjs').read_text()
+          bridge=Path('railway-diagnostic/guardian-live-bridge.mjs').read_text()
+          assert "GUARDIAN_OWNER_UNCALIBRATED_TRADING==='true'" in idx
+          assert "if(!signal.ok||signal.executionEligible!==true)return null" in idx
+          assert 'guardianExitMonitorReady()' in wrapper
+          assert 'GUARDIAN_RISK_OR_QUOTE_BLOCKED' in wrapper
+          assert 'GUARDIAN_REAL_QUOTE_INVALID' in bridge
+          assert 'GUARDIAN_UNCALIBRATED_QUOTE_TOO_EXPENSIVE' in bridge
+          print('GUARDIAN_OWNER_RELEASE_ONLY_RESEARCH_GATE=true')
+          PY

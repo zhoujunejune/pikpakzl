@@ -92,6 +92,15 @@ for port,url in ((13001,'/'),(13001,'/guardian/')):
    html=response.read(300000).decode('utf-8','replace')
   print('GUARDIAN_UI_LIVE_HTML',url,{key:html.count(key) for key in terms})
  except Exception as e:print('GUARDIAN_UI_HTML_ERROR',url,type(e).__name__)
+# Read narrow public presentation-only snippets to identify obsolete cards.
+from pathlib import Path
+ui=Path('/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs').read_text()
+for phrase in ('GUARDIAN 专属动态风控','关闭动态止盈止损','动态移动止盈','zlGDynamicTP'):
+ p=ui.find(phrase)
+ if p>=0:
+  sample=ui[max(0,p-320):min(len(ui),p+850)]
+  sample=sample.replace('\n','↵')
+  print('GUARDIAN_UI_REMOVE_CONTEXT',phrase,repr(sample))
 PY
 """
 def main():

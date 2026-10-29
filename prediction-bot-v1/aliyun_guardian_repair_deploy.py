@@ -78,8 +78,15 @@ old='/var/lib/zl-prediction/guardian5/guardian-live-orders.json'
 new='/var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json'
 print('GUARDIAN_REGISTRY_LIVE_SOURCE',sys.argv[1], 'old',s.count(old),'new',s.count(new),
       'registryLines',[x[:200] for x in s.splitlines() if 'REGISTRY' in x or 'guardian-live-orders.json' in x][:8],flush=True)
-assert s.count(old)+s.count(new)>=1,'REGISTRY_PATH_UNEXPECTED'
-Path(sys.argv[2]).write_text(s.replace(old,new))
+if s.count(old)+s.count(new)==0 and sys.argv[1].endswith('guardian-risk-integration.mjs'):
+ legacy="const REGISTRY=path.join(GUARDIAN_STATE_DIR,'guardian-live-orders.json');"
+ assert s.count(legacy)==1,'GUARDIAN_RISK_REGISTRY_ANCHOR_MISSING'
+ s=s.replace(legacy,"const REGISTRY=process.env.GUARDIAN_REGISTRY_FILE || '"+new+"';")
+else:
+ assert s.count(old)+s.count(new)>=1,'REGISTRY_PATH_UNEXPECTED'
+ s=s.replace(old,new)
+assert new in s,'REGISTRY_PATCH_NOT_APPLIED'
+Path(sys.argv[2]).write_text(s)
 PY
 done
 for f in wrapper.mjs guardian-live-bridge.mjs guardian-risk-integration.mjs;do "$NODE" --check "$TMP/$f";done

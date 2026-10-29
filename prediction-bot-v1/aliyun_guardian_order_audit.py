@@ -57,6 +57,34 @@ for x in p.stdout.splitlines():
  except Exception:pass
 print('CHAIN_JOURNAL_STATUS',p.returncode,'COUNTS',json.dumps(count,ensure_ascii=False))
 for x in events[-20:]: print('CHAIN_EVENT',json.dumps(x,ensure_ascii=False,default=str)[:380])
+print('CHAIN_RISK_REGISTRY_DIAG_BEGIN')
+import os,stat,pwd
+service=subprocess.run(['systemctl','show','zl-prediction-trade','-p','User','-p','Group','-p','Environment','--no-pager'],capture_output=True,text=True).stdout
+user=next((v.split('=',1)[1].strip() for v in service.splitlines() if v.startswith('User=')),'')
+if not user:user='root'
+print('REG_SERVICE_USER',user)
+env=next((v.split('=',1)[1].strip() for v in service.splitlines() if v.startswith('Environment=')),'')
+import shlex
+overrides=[x.split('=',1)[1] for x in shlex.split(env) if x.startswith('GUARDIAN_REGISTRY_FILE=')]
+target=pathlib.Path(overrides[0] if overrides else '/var/lib/zl-prediction/guardian5/guardian-live-orders.json')
+print('REG_TARGET',str(target))
+for d in (target.parent.parent,target.parent,target):
+ try:
+  st=d.stat()
+  mode=stat.filemode(st.st_mode)
+  try:owner=pwd.getpwuid(st.st_uid).pw_name
+  except KeyError:owner='uid'+str(st.st_uid)
+  print('REG_PATH',str(d),'exists',True,'mode',mode,'owner',owner,'size',st.st_size)
+ except FileNotFoundError:print('REG_PATH',str(d),'exists',False)
+ except Exception as e:print('REG_PATH_ERROR',str(d),type(e).__name__)
+p=subprocess.run(['runuser','-u',user,'--','test','-w',str(target.parent if target.parent.exists() else target.parent.parent)],capture_output=True,text=True)
+print('REG_USER_CAN_WRITE_DIRECTORY',p.returncode==0)
+if target.exists():
+ try:
+  raw=json.loads(target.read_text())
+  print('REG_JSON_VALID',True,'modelMatches',raw.get('model')=='ZL_GUARDIAN_5M_V1','entriesIsArray',isinstance(raw.get('entries'),list),'entriesCount',len(raw.get('entries') or []))
+ except Exception as e:print('REG_JSON_VALID',False,'reason',type(e).__name__)
+print('CHAIN_RISK_REGISTRY_DIAG_END')
 print('CHAIN_READONLY_DONE=true')
 PY
 '''

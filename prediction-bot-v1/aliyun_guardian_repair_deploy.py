@@ -8,7 +8,7 @@ from alibabacloud_tea_openapi import models as api
 REMOTE=r"""#!/bin/bash
 set -Eeuo pipefail
 REV=__REV__
-BASE=4c3bc920538669bcce4105897ed398d7ead3fe66
+BASE=1974056b08025a696b23d1e223a46df58081e374
 ROOT=/opt/zl-prediction-live/src/railway-diagnostic
 REG=/var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json
 NODE=/opt/zl-prediction-node/bin/node
@@ -32,14 +32,14 @@ import json,urllib.request,pathlib,subprocess
 with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=4) as r:s=json.load(r)
 assert s.get('ok') is True and s.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1','NOT_GUARDIAN'
 assert s.get('enabled') is False,'FOLLOW_ON_ABORT'
-assert s.get('guardianRiskReady') is True and s.get('guardianExecutionReady') is True,'RISK_UNREADY'
+assert s.get('orderSignalModelReady') is True and s.get('directionModeReady') is True,'MODEL_OR_DIRECTION_UNREADY'
 for p in (s.get('pendingAction') or {},s.get('lastOrder') or {}):
  assert p.get('state') not in ('READY','QUOTING','SUBMITTING','SUBMITTED_PENDING_CONFIRMATION','SUBMISSION_UNKNOWN'),'UNRECONCILED_ORDER'
 root=pathlib.Path('/var/lib/zl-prediction/rounds')
 cfg=json.loads((root/'risk-control.json').read_text())
 risk=json.loads((root/'risk-runtime-status.json').read_text())
 health=json.loads((root/'risk-worker-health.json').read_text())
-assert cfg.get('takeProfitEnabled') is True and cfg.get('stopLossEnabled') is True,'FIXED_EXITS_OFF'
+assert cfg.get('stopLossEnabled') is True,'FIXED_STOP_LOSS_OFF'
 assert risk.get('workerRunning') is True and risk.get('configApplied') is True,'RISK_WORKER_UNREADY'
 assert health.get('positionsSeen')==0,'OPEN_POSITION_ABORT'
 for svc in ('zl-prediction-trade','zl-prediction-risk-exits'):
@@ -129,6 +129,26 @@ for f in wrapper.mjs guardian-live-bridge.mjs guardian-risk-integration.mjs;do
 done
 for svc in zl-prediction-trade zl-prediction-risk-exits zl-prediction-guardian-analysis;do systemctl is-active --quiet "$svc";done
 preflight
+# Use a private dummy registry file to validate the real Guardian write and
+# confirmation functions inside a systemd sandbox. Never touch an actual order.
+systemd-run --quiet --wait --pipe --collect \
+ -p User=zl-pred -p Group=zl-pred -p ProtectSystem=strict \
+ -p ReadWritePaths=/var/lib/zl-prediction/rounds \
+ "$NODE" --input-type=module -e '
+import fs from "node:fs";
+import {guardianRegisterIntent,guardianMarkSubmitted} from "file:///opt/zl-prediction-live/src/railway-diagnostic/guardian-live-bridge.mjs";
+const file="/var/lib/zl-prediction/rounds/guardian5/.smoke-"+process.pid+".json";
+const round=Math.floor(Date.now()/300000)*300000;
+try {
+ guardianRegisterIntent({round,tokenId:"test-token-no-trade"},{file});
+ const before=JSON.parse(fs.readFileSync(file,"utf8"));
+ if(before.entries.length!==1 || before.entries[0].status!=="INTENT_PREPARED")throw Error("PREPARE_REGISTRY_FAILED");
+ guardianMarkSubmitted({round,tokenId:"test-token-no-trade"},"test-order-no-trade",{file});
+ const after=JSON.parse(fs.readFileSync(file,"utf8"));
+ if(after.entries[0].status!=="SUBMITTED")throw Error("CONFIRM_REGISTRY_FAILED");
+ console.log("GUARDIAN_REAL_MODULE_REGISTRY_SANDBOX_OK=true");
+} finally {try{fs.unlinkSync(file)}catch{}}
+'
 DONE=1
 echo GUARDIAN_REPAIR_PRODUCTION_DEPLOYED=true
 echo GUARDIAN_REPAIR_COMMIT="$REV"

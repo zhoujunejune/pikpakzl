@@ -85,6 +85,26 @@ for p in ['/var/lib/zl-prediction','/var/lib/zl-prediction/guardian5','/run/zl-p
   print('SHARED_DIRECTORY',p,oct(stat.S_IMODE(v.st_mode)),v.st_uid,v.st_gid)
  else:print('SHARED_DIRECTORY',p,'MISSING')
 
+# Confirm *actual* shared state and worker health after production deployment.
+live_paths=[
+ '/var/lib/zl-prediction/rounds/risk-runtime-status.json',
+ '/var/lib/zl-prediction/rounds/guardian5/guardian-risk-ready.json',
+ '/var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json',
+ '/var/lib/zl-prediction/rounds/guardian5/guardian-sell-peaks.json',
+]
+for path in live_paths:
+ try:
+  obj=json.loads(pathlib.Path(path).read_text())
+  if path.endswith('guardian-live-orders.json'):
+   entries=obj.get('entries') or []
+   print('SHARED_STATE',path,{'exists':True,'model':obj.get('model'),'orders':len(entries),'submitted':sum(x.get('status')=='SUBMITTED' for x in entries)})
+  elif path.endswith('guardian-sell-peaks.json'):
+   print('SHARED_STATE',path,{'exists':True,'count':len(obj.get('entries') or [])})
+  else:
+   keep=['model','at','enabled','guardianDynamicExitEnabled','guardianDynamicExitDesired','guardianOpenPositionsRetained','workerRunning','configApplied','persistenceHealthy','realSellQuote','orderRegistry','positionsPollVerified','actualSellFillVerified','lastSuccessfulPositionsAt','quoteChecks','quoteErrors']
+   print('SHARED_STATE',path,{k:obj.get(k) for k in keep if k in obj})
+ except Exception as e: print('SHARED_STATE',path,'MISSING_OR_UNREADABLE',type(e).__name__)
+
 print('SIGNAL_AUDIT_COMPLETE')
 PY
 """

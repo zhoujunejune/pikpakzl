@@ -6,7 +6,7 @@ const CONTROL_FILE = process.env.RISK_CONTROL_FILE || '/tmp/risk-control.json';
 const STATUS_FILE = process.env.RISK_STATUS_FILE || '/tmp/risk-runtime-status.json';
 const CHECK_MS = 300;
 const STATUS_MS = 2000;
-// Guardian dynamic exit now follows the persisted UI setting, defaulting OFF.
+// Guardian dynamic exits retired; runtime uses only user-enabled fixed TP and SL.
 
 function envBool(name, fallback = 'false') {
   return !['0', 'false', 'off', 'no'].includes(String(process.env[name] || fallback).toLowerCase());
@@ -23,7 +23,7 @@ function defaultConfig() {
     takeProfitPercent: envPercent('AUTO_TAKE_PROFIT_PERCENT', 50),
     stopLossEnabled: envBool('AUTO_STOP_LOSS_ENABLED', 'false'),
     stopLossPercent: envPercent('AUTO_STOP_LOSS_PERCENT', 50),
-    dynamicExitEnabled: envBool('GUARDIAN_DYNAMIC_EXIT_ENABLED', 'false'),
+    dynamicExitEnabled: false,
     source: 'env',
     updatedAt: null,
   };
@@ -39,7 +39,7 @@ function readConfig() {
       takeProfitEnabled: Boolean(parsed?.takeProfitEnabled),
       takeProfitPercent: Number.isFinite(tp) && tp >= 1 && tp <= 100 ? tp : fallback.takeProfitPercent,
       stopLossEnabled: Boolean(parsed?.stopLossEnabled),
-      dynamicExitEnabled: parsed?.dynamicExitEnabled===undefined?fallback.dynamicExitEnabled:Boolean(parsed.dynamicExitEnabled),
+      dynamicExitEnabled: false,
       stopLossPercent: Number.isFinite(sl) && sl >= 1 && sl <= 100 ? sl : fallback.stopLossPercent,
       source: 'runtime',
       updatedAt: parsed?.updatedAt || null,
@@ -108,7 +108,7 @@ function startWorker(cfg) {
       AUTO_TAKE_PROFIT_PERCENT: String(cfg.takeProfitPercent),
       AUTO_STOP_LOSS_ENABLED: cfg.stopLossEnabled ? 'true' : 'false',
       AUTO_STOP_LOSS_PERCENT: String(cfg.stopLossPercent),
-      GUARDIAN_DYNAMIC_EXIT_ENABLED:cfg.dynamicExitEnabled?'true':'false',
+      GUARDIAN_DYNAMIC_EXIT_ENABLED:'false',
     },
     stdio: 'inherit',
   });

@@ -62,6 +62,7 @@ function defaultRiskConfig() {
     takeProfitPercent: envPercent('AUTO_TAKE_PROFIT_PERCENT', 50),
     stopLossEnabled: envBool('AUTO_STOP_LOSS_ENABLED', 'false'),
     stopLossPercent: envPercent('AUTO_STOP_LOSS_PERCENT', 50),
+    guardianDynamicEnabled: false,
     source: 'env',
     updatedAt: null,
   };
@@ -78,6 +79,7 @@ function readRiskConfig() {
       takeProfitPercent: Number.isFinite(tp) && tp >= 1 && tp <= 100 ? tp : fallback.takeProfitPercent,
       stopLossEnabled: Boolean(parsed?.stopLossEnabled),
       stopLossPercent: Number.isFinite(sl) && sl >= 1 && sl <= 100 ? sl : fallback.stopLossPercent,
+      guardianDynamicEnabled: parsed?.guardianDynamicEnabled === true,
       source: persistenceHealthy && persistenceRestored ? 'redis' : 'runtime',
       updatedAt: parsed?.updatedAt || null,
     };
@@ -93,6 +95,7 @@ async function writeRiskConfig(next) {
     takeProfitPercent: Number(next.takeProfitPercent),
     stopLossEnabled: Boolean(next.stopLossEnabled),
     stopLossPercent: Number(next.stopLossPercent),
+    guardianDynamicEnabled: next.guardianDynamicEnabled === true,
     updatedAt: new Date().toISOString(),
   };
   const persisted = await persistRiskConfig(payload);
@@ -101,6 +104,41 @@ async function writeRiskConfig(next) {
   persistenceError = null;
   log('risk_control_updated', payload);
   return persisted;
+}
+
+
+// Distinguish owner preference, live worker activation and proven SELL execution.
+function guardianRiskToggleStatus(now=Date.now()){
+  const config=readRiskConfig();
+  let runtime=null,heart=null,proof=null;
+  try{runtime=JSON.parse(fs.readFileSync(typeof RISK_RUNTIME_STATUS_FILE==='string'?RISK_RUNTIME_STATUS_FILE:'/tmp/risk-runtime-status.json','utf8'))}catch{}
+  try{heart=JSON.parse(fs.readFileSync('/tmp/guardian-risk-ready.json','utf8'))}catch{}
+  try{proof=JSON.parse(fs.readFileSync('/var/lib/zl-prediction/guardian5/guardian-sell-execution-verified.json','utf8'))}catch{}
+  const approved=process.env.GUARDIAN_RISK_UI_ENABLE_APPROVED==='true' &&
+    proof?.model==='ZL_GUARDIAN_5M_V1' && proof?.realSellConfirmed===true &&
+    proof?.unknownSellReconciled===true && proof?.riskRestartTested===true &&
+    Number.isFinite(proof?.verifiedAt) && now-proof.verifiedAt>=0 &&
+    now-proof.verifiedAt<7*24*3600000;
+  const live=runtime?.guardianDynamicExitEnabled===true && runtime?.workerRunning===true &&
+    runtime?.configApplied===true && runtime?.persistenceHealthy===true &&
+    Date.parse(runtime?.at||'')>now-5000 &&
+    heart?.model==='ZL_GUARDIAN_5M_V1' && heart?.enabled===true &&
+    Number.isFinite(heart?.at) && now-heart.at>=0 && now-heart.at<5000;
+  const requestedEnabled=config.guardianDynamicEnabled===true;
+  const effectiveEnabled=Boolean(live);
+  const protectedOpenPositions=runtime?.guardianOpenPositionsRetained===true;
+  return {
+    ok:true,model:'ZL_GUARDIAN_5M_V1',
+    requestedEnabled,effectiveEnabled,canEnable:Boolean(approved&&persistenceReady&&persistenceHealthy),
+    protectedOpenPositions,approvalVerified:Boolean(approved),
+    state:effectiveEnabled?'RUNNING':requestedEnabled?'PENDING_NOT_VERIFIED':'OFF',
+    reason:effectiveEnabled?'风控Worker正在运行；实际成交还需核对交易所订单':
+      !approved?'GUARDIAN真实SELL报价、成交、异常恢复和重启验收尚未完成，禁止开启':
+      !persistenceHealthy?'配置持久化不可用':
+      requestedEnabled?'已保存开启请求，等待风控Worker确认':'动态止盈止损已关闭',
+    persistenceHealthy,updatedAt:config.updatedAt,
+    workerHeartbeatAt:heart?.at??null,workerRunning:runtime?.workerRunning===true,
+  };
 }
 
 function validPercent(n) {
@@ -176,6 +214,28 @@ startInner();
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
+
+  if (req.method === 'GET' && url.pathname === '/api/guardian-dynamic-risk') {
+    return sendJson(res, 200, guardianRiskToggleStatus());
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/guardian-dynamic-risk') {
+    const body=await readJsonBody(req);
+    if (!pinOK(body.pin, req)) return sendJson(res, 401, {ok:false,error:'站点登录未通过或控制 PIN 错误'});
+    if (typeof body.enabled!=='boolean')return sendJson(res,400,{ok:false,error:'动态止盈止损开关必须是布尔值'});
+    if (!persistenceReady||!persistenceHealthy)
+      return sendJson(res,503,{ok:false,error:'Redis持久化不可用；未更改动态止盈止损设置'});
+    if (body.enabled && !guardianRiskToggleStatus().canEnable)
+      return sendJson(res,409,{...guardianRiskToggleStatus(),ok:false,error:'真实SELL平仓及异常恢复未完成生产验收，动态止盈止损暂不能开启'});
+    try{
+      await serializedRiskWrite(async()=>writeRiskConfig({...readRiskConfig(),guardianDynamicEnabled:body.enabled}));
+      log('guardian_dynamic_risk_user_switch',{requestedEnabled:body.enabled});
+      return sendJson(res,200,guardianRiskToggleStatus());
+    }catch(error){
+      return sendJson(res,503,{ok:false,error:'动态风控配置保存失败，保持原状态：'+String(error?.message||error)});
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/risk-control') {
     return sendJson(res, 200, { ok: true, ...readRiskConfig(), persistenceReady, persistenceHealthy, persistenceRestored });
   }
@@ -192,6 +252,7 @@ http.createServer(async (req, res) => {
           takeProfitPercent: body.takeProfitPercent === undefined ? current.takeProfitPercent : Number(body.takeProfitPercent),
           stopLossEnabled: body.stopLossEnabled === undefined ? current.stopLossEnabled : Boolean(body.stopLossEnabled),
           stopLossPercent: body.stopLossPercent === undefined ? current.stopLossPercent : Number(body.stopLossPercent),
+          guardianDynamicEnabled: current.guardianDynamicEnabled, // dedicated authenticated Guardian route only
         };
         if (!validPercent(next.takeProfitPercent)) throw new RangeError('止盈百分比必须在 1% - 100% 之间');
         if (!validPercent(next.stopLossPercent)) throw new RangeError('止损百分比必须在 1% - 100% 之间');

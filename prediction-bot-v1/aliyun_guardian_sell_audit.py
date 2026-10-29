@@ -67,6 +67,24 @@ for line in rr.stdout.splitlines():
 print('RISK_JOURNAL_COUNT',len(ev))
 for e in ev[-20:]:print('RISK_JOURNAL',e)
 
+import stat
+for unit in ['zl-prediction-risk-exits','zl-prediction-trade']:
+ out=subprocess.run(['systemctl','show',unit,'-p','User','-p','Group','-p','PrivateTmp','-p','WorkingDirectory','-p','EnvironmentFiles','-p','ReadWritePaths','-p','StateDirectory','-p','DynamicUser'],capture_output=True,text=True).stdout.strip()
+ print('UNIT_SANDBOX',unit,out.replace('\\n',';')[:800])
+ pid=subprocess.run(['systemctl','show',unit,'-p','MainPID','--value'],capture_output=True,text=True).stdout.strip()
+ if pid.isdigit() and int(pid)>0:
+  try:
+   env=dict(v.split(b'=',1) for v in pathlib.Path('/proc/'+pid+'/environ').read_bytes().split(b'\\0') if b'=' in v)
+   print('UNIT_CONFIG',unit,{k:(env.get(k.encode()) or b'').decode('utf8','replace') for k in ['RISK_CONTROL_FILE','RISK_STATUS_FILE','GUARDIAN_READY_FILE','GUARDIAN_DYNAMIC_EXIT_ENABLED','GUARDIAN_RISK_UI_ENABLE_APPROVED']})
+   print('UNIT_IDS',unit,pathlib.Path('/proc/'+pid+'/status').read_text().split('Uid:')[1].splitlines()[0].strip())
+  except Exception as e: print('UNIT_CONFIG',unit,'NOT_READABLE',type(e).__name__)
+for p in ['/var/lib/zl-prediction','/var/lib/zl-prediction/guardian5','/run/zl-prediction','/run/zl-prediction/guardian5']:
+ q=pathlib.Path(p)
+ if q.exists():
+  v=q.stat()
+  print('SHARED_DIRECTORY',p,oct(stat.S_IMODE(v.st_mode)),v.st_uid,v.st_gid)
+ else:print('SHARED_DIRECTORY',p,'MISSING')
+
 print('SIGNAL_AUDIT_COMPLETE')
 PY
 """

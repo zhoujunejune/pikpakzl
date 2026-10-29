@@ -63,7 +63,7 @@ python3 - "$TMP/old.mjs" "$TMP/new.mjs" "$ROOT/wrapper.mjs" "$TMP/wrapper.mjs" <
 import difflib,pathlib,subprocess,sys
 old,new,live,out=map(pathlib.Path,sys.argv[1:])
 diff=''.join(difflib.unified_diff(old.read_text().splitlines(keepends=True),new.read_text().splitlines(keepends=True),fromfile='a/wrapper.mjs',tofile='b/wrapper.mjs',n=3))
-assert 'guardian_prepost_retry_scheduled' in diff,'GUARDIAN_RETRY_PATCH_MISSING'
+assert 'GUARDIAN_FIXED_STOP_LOSS_UNREADY' in diff and 'p.signalModelChoice!==GUARDIAN_ID' in diff,'GUARDIAN_LATEST_FIX_MISSING'
 r=subprocess.run(['patch','--batch','--fuzz=0','--forward','--output',str(out),str(live)],input=diff,text=True,capture_output=True)
 print('GUARDIAN_WRAPPER_PATCH',r.returncode,r.stdout[:300],r.stderr[:300],flush=True)
 assert r.returncode==0,'LIVE_WRAPPER_DRIFT_REQUIRES_REVIEW'

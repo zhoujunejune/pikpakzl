@@ -64,9 +64,9 @@ function guardianExitMonitorReady(now=Date.now()) {
      !Number.isFinite(Date.parse(runtime.at))||now-Date.parse(runtime.at)>6000||
      !Number.isFinite(Date.parse(health.lastSuccessfulPositionsAt))||
      now-Date.parse(health.lastSuccessfulPositionsAt)>10000)return false;
-  if(config.dynamicExitEnabled!==true){
-    return config.stopLossEnabled===true||config.takeProfitEnabled===true;
-  }
+  const dynamicOn=config.dynamicExitEnabled===true ||
+    (config.dynamicExitEnabled===undefined&&runtime.guardianDynamicExitEnabled===true);
+  if(!dynamicOn)return config.stopLossEnabled===true||config.takeProfitEnabled===true;
   if(runtime.guardianDynamicExitEnabled!==true)return false;
   const marker=guardianRiskState([process.env.GUARDIAN_RISK_READY_FILE,
     root+'guardian5/guardian-risk-ready.json','/tmp/guardian-risk-ready.json']);

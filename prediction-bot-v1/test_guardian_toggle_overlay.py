@@ -14,6 +14,9 @@ class OverlayTests(unittest.TestCase):
             live=old+'\n// ALIBABA_LIVE_ONLY_NO_REPLACE\n'
             if p=='risk-runner.mjs':
                 live=live.replace("const GUARDIAN_DYNAMIC_EXIT_ENABLED=/^(1|true)$/i.test(String(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED||'false'));\n",'')
+                live=live.replace(" || GUARDIAN_DYNAMIC_EXIT_ENABLED","")
+                live=live.replace("    guardianDynamicExitEnabled: GUARDIAN_DYNAMIC_EXIT_ENABLED,\n","")
+                live=live.replace("    guardianDynamicExitEnabled:GUARDIAN_DYNAMIC_EXIT_ENABLED,\n","")
                 live=live.replace("import fs from 'node:fs';",
                   "import fs from 'node:fs';\n// live risk-sandbox optimization")
             if p=='control-shell.mjs':

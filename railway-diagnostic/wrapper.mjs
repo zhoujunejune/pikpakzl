@@ -15,7 +15,7 @@ const AUTO_CONFIRM_STOP_ON_ERROR = !/^(0|false|no|off)$/i.test(String(process.en
 const ORDER_SUBMIT_DEADLINE_MS = 15000; // BASELINE/NOVICE remain unchanged.
 const SELECTIVE30_ORDER_DEADLINE_MS = 30000; // New qualified Selective V2 + Edge 30-second policy only.
 const DYNAMIC_ORDER_DEADLINE_MS = 285000; // Keep a 15s pre-settlement buffer.
-const GUARDIAN_ORDER_DEADLINE_MS = 275000; // Leave 25s for exit and settlement.
+const GUARDIAN_ORDER_DEADLINE_MS = 300000; // No arbitrary 25s gate; exchange availability decides.
 const EDGE_ORDER_DEADLINE_MS = 8000; // Edge model strictly ends at T+8 seconds.
 function orderSubmitDeadlineForModel(model) {
   return model === GUARDIAN_ID ? GUARDIAN_ORDER_DEADLINE_MS :
@@ -33,7 +33,7 @@ function rejectExpiredOrderWindow(p, stage) {
   const elapsedMs = Date.now() - Number(p?.round);
   p.state = 'ORDER_WINDOW_EXPIRED';
   p.error = p?.signalModelChoice===GUARDIAN_ID
-    ? 'GUARDIAN距离结算不足25秒，本轮不再下单'
+    ? 'GUARDIAN本轮已结束，不再下单'
     : p?.signalModelChoice===SELECTIVE8_MODEL
     ? '30秒策略本轮第30秒订单提交窗口已截止，未发送下单请求'
     : p?.signalModelChoice===DYNAMIC_MODEL ? '动态模型本轮交易窗口已截止，未发送下单请求'
@@ -224,7 +224,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
       p.blockReason=!guardianExitMonitorReady()
         ?'GUARDIAN_DYNAMIC_SELL_MONITOR_UNVERIFIED':validation.reason;
-      p.error='GUARDIAN动态卖出监控未验收，或真实盘口优势不足，未下单';
+      p.error='GUARDIAN真实退出监控未就绪，或交易所报价无效、已过期，未下单';
       return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
     }
     p.edge=validation.edge;p.quoteChance=Number(quote.chance);
@@ -364,7 +364,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   if(p.signalModelChoice===GUARDIAN_ID&&
      (!guardianExitMonitorReady()||!guardianQuoteGate(current,quote,{now:Date.now()}).ok)){
     p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
-    p.error='GUARDIAN提交前动态风控或盘口校验失败，未下单';
+    p.error='GUARDIAN提交前风险执行器或报价核验失败，未下单';
     return {status:409,body:{ok:false,error:p.error}};
   }
   // Deadline applies at the irreversible Binance POST, not when the signal was generated.

@@ -73,24 +73,24 @@ marker='  // Overlap independent signal revalidation and fresh quote retrieval.'
 assert new.count(helper)==1 and new.count(marker)==1,'REFERENCE_HELPER_NOT_FOUND'
 assert live.count(marker)==1 and live.count(helper)==0,'LIVE_WRAPPER_UNEXPECTED'
 chunk=new[new.index(helper):new.index(marker)]
-old_call="""  let [current, freshQuote] = await Promise.all([
+old_call='''  let [current, freshQuote] = await Promise.all([
     getSignal({ forceHttp: true }), getFreshQuote(p._internal),
   ]);
-"""
+'''
 call_end="  if (!selectedSignalMatches(p) || !current || current.status !== 'LOCKED'"
 assert new.count(old_call)==1 and new.count(call_end)==1
 call_new=new[new.index(old_call):new.index(call_end)]
-old_guard="""(current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
-         current.executionEligible!==true||current.direction!==p.signal))) {"""
-new_guard="""(current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
-         current.executionEligible!==true||current.direction!==p.productionSignal))) {"""
-old_log="""      currentStatus: current?.status ?? null,
-      source,"""
-new_log="""      currentStatus: current?.status ?? null,
+old_guard='''(current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
+         current.executionEligible!==true||current.direction!==p.signal))) {'''
+new_guard='''(current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
+         current.executionEligible!==true||current.direction!==p.productionSignal))) {'''
+old_log='''      currentStatus: current?.status ?? null,
+      source,'''
+new_log='''      currentStatus: current?.status ?? null,
       currentSignalIdMatches:current?.signalId===p.signalId,
       currentUpstreamModel:current?.upstreamModel??null,
       recheckRetries:guardianRecheckRetries,
-      source,"""
+      source,'''
 for text,expected in [(old_call,1),(old_guard,1),(old_log,1),
                       (new_guard,0),(new_log,0)]:
  assert live.count(text)==expected,('LIVE_ANCHOR_MISMATCH',text[:45],live.count(text))

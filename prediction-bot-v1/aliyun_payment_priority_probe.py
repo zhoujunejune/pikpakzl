@@ -293,6 +293,72 @@ print('AUDIT_EVENTS_READ_OK',p.returncode==0,'counts',json.dumps(by,ensure_ascii
 for e in events[-30:]:print('AUDIT_EVENT',json.dumps(e,ensure_ascii=False,default=str)[:450])
 print('AUDIT_FULL_COMPLETE=true')
 PY
+echo GUARDIAN_FULL_READONLY_AUDIT_BEGIN
+python3 - <<'PY'
+import json,datetime,time,urllib.request,subprocess,pathlib,collections,hashlib
+utc=datetime.timezone.utc
+print('AUDIT_TIME_UTC',datetime.datetime.now(utc).isoformat(timespec='seconds'))
+def get(port,path,timeout=3):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,path),timeout=timeout) as response:return json.load(response)
+ except Exception as e:return {'error':type(e).__name__}
+s=get(13001,'/api/status')
+g=get(13049,'/api/status')
+feed=get(13003,'/api/shadow-market-data')
+for port in (13001,13002,13003,13004,13005,13049,13051):
+ d=get(port,'/healthz')
+ print('AUDIT_HEALTH',port,bool(d.get('ok')),d.get('error'))
+print('AUDIT_TRADE',json.dumps({k:s.get(k) for k in ('ok','enabled','orderSignalModel','orderSignalModelReady','guardianExecutionReady','guardianRiskReady','autoConfirmEnabled','autoConfirmHalted','directionModeReady','amount','orderSignal','mode')},ensure_ascii=False,separators=(',',':')))
+for name,x in [('pending',s.get('pendingAction') or {}),('last',s.get('lastOrder') or {})]:
+ print('AUDIT_ORDER',name,json.dumps({k:x.get(k) for k in ('state','round','code','error','blockReason','paymentAccount','orderAttempts','maxOrderAttempts','status')},ensure_ascii=False,separators=(',',':'))[:430])
+print('AUDIT_GUARDIAN',json.dumps({'ok':g.get('ok'),'configured':g.get('configured'),'model':g.get('model'),'round':g.get('round'),'latestDirection':(g.get('latest') or {}).get('direction'),'latestReason':str((g.get('latest') or {}).get('reason',''))[:80],'error':str(g.get('error') or '')[:80],'signalAgeSec':round((time.time()*1000-float(g.get('observedAt') or 0))/1000,1),'lastAIAt':g.get('lastAIAt'),'records':(g.get('stats') or {}).get('shadowPredictions')},ensure_ascii=False,separators=(',',':')))
+latest=feed.get('latest') or {}
+print('AUDIT_FEED',json.dumps({'ok':feed.get('ok'),'symbol':feed.get('symbol'),'readOnly':feed.get('readOnly'),'eventAgeSec':round((time.time()*1000-float(latest.get('eventMs') or 0))/1000,1),'roundAligned':int(latest.get('roundStartMs') or 0)==int(time.time()*1000)//300000*300000},separators=(',',':')))
+root=pathlib.Path('/var/lib/zl-prediction/rounds')
+objs={}
+for short,fn in [('cfg','risk-control.json'),('runtime','risk-runtime-status.json'),('health','risk-worker-health.json')]:
+ try:objs[short]=json.loads((root/fn).read_text())
+ except Exception as e:objs[short]={};print('AUDIT_RISK_READ_ERROR',short,type(e).__name__)
+c,run,h=(objs.get('cfg',{}),objs.get('runtime',{}),objs.get('health',{}))
+print('AUDIT_RISK',json.dumps({'tpEnabled':c.get('takeProfitEnabled'),'slEnabled':c.get('stopLossEnabled'),'slPercent':c.get('stopLossPercent'),'workerRunning':run.get('workerRunning'),'runtimeEnabled':run.get('enabled'),'configApplied':run.get('configApplied'),'dynamicExitEnabled':run.get('guardianDynamicExitEnabled'),'transitioning':run.get('transitioning'),'positionsSeen':h.get('positionsSeen'),'runtimeAt':run.get('at'),'positionsAt':h.get('lastSuccessfulPositionsAt')},separators=(',',':')))
+def ms(v):
+ if not v:return None
+ try:
+  if isinstance(v,(int,float)):return v if v>1e11 else v*1000
+  return datetime.datetime.fromisoformat(str(v).replace('Z','+00:00')).timestamp()*1000
+ except:return None
+now=time.time()*1000;ra=ms(run.get('at'));pa=ms(h.get('lastSuccessfulPositionsAt'))
+riskPass=(c.get('takeProfitEnabled') is True and c.get('stopLossEnabled') is True and run.get('enabled') is True and run.get('workerRunning') is True and run.get('configApplied') is True and run.get('guardianDynamicExitEnabled') is False and run.get('transitioning') is not True and ra is not None and 0<=now-ra<=6000 and pa is not None and 0<=now-pa<=10000 and isinstance(h.get('positionsSeen'),int) and h.get('positionsSeen')>=0)
+print('AUDIT_RECALCULATED_GUARDIAN_EXIT_MONITOR_READY',riskPass,'riskAgeMs',None if ra is None else round(now-ra),'positionAgeMs',None if pa is None else round(now-pa))
+for name in ('zl-prediction-trade','zl-prediction-v2','zl-prediction-v3','zl-prediction-risk-exits','zl-prediction-guardian-analysis'):
+ q=subprocess.run(['systemctl','is-active',name],capture_output=True,text=True)
+ print('AUDIT_UNIT',name,q.stdout.strip())
+for name in ('wrapper.mjs','index.mjs','guardian-live-bridge.mjs','payment-source-priority.mjs'):
+ p=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')/name
+ if p.is_file():
+  v=p.read_text()
+  print('AUDIT_LIVE_CODE',name,'sha256',hashlib.sha256(v.encode()).hexdigest()[:16],'retryMarker',('GUARDIAN_RECHECK_V2' in v),'bothExitsGate',('config.takeProfitEnabled===true&&config.stopLossEnabled===true' in v))
+ else:print('AUDIT_LIVE_CODE_MISSING',name)
+# Aggregate only recognized execution events, never raw order records or credentials.
+watch={'api_confirm_control','api_intent_ready','auto_submit_triggered','guardian_signal_recheck_completed','submit_blocked_signal_changed','fresh_quote_failed','fresh_quote_ready','prediction_wallet_quote_insufficient_spot_fallback','prediction_wallet_insufficient_spot_unavailable','intent_prepare_failed','order_submit_attempt_denied','api_order_submit_attempt','api_order_submitted','api_order_failed','order_status_updated','order_status_conflict_auto_halted','order_retry_requote_failed','order_submit_deadline_expired','auto_confirm_failed','guardian_live_connector_error','guardian_feed_unavailable','direction_mode_refresh_failed','production_signal_choice_hydrate_failed'}
+p=subprocess.Popen(['journalctl','-u','zl-prediction-trade','--since','8 hours ago','-o','cat','--no-pager'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,errors='replace')
+matches=[]
+for line in p.stdout:
+ try:
+  m=json.loads(line)
+  if not isinstance(m,dict) or m.get('event') not in watch:continue
+  e=m.get('event')
+  fields={k:m.get(k) for k in ('round','code','httpStatus','source','retries','signalRecovered','signalIdMatches','state','paymentAccount','reason','error') if k in m}
+  if 'error' in fields:fields['error']=str(fields['error'])[:85]
+  if 'reason' in fields:fields['reason']=str(fields['reason'])[:65]
+  matches.append({'event':e,'fields':fields})
+ except (ValueError,TypeError):continue
+p.wait(timeout=15)
+counter=collections.Counter(x['event'] for x in matches)
+print('AUDIT_8H_EVENT_COUNTS',json.dumps(counter,separators=(',',':')))
+for item in matches[-16:]:print('AUDIT_RECENT_EVENT',json.dumps(item,ensure_ascii=False,separators=(',',':')))
+print('GUARDIAN_FULL_READONLY_AUDIT_END')
+PY
 echo PROBE_END
 '''
 def main():

@@ -55,8 +55,8 @@ function guardianRiskState(paths) {
   return null;
 }
 function guardianExitMonitorReady(now=Date.now()) {
-  // Fixed-only GUARDIAN mode: never treat an unverified dynamic SELL monitor
-  // as a substitute for the user's two enabled, live fixed exit controls.
+  // GUARDIAN requires an enabled and healthy fixed stop-loss monitor.
+  // Take-profit is optional: an owner setting TP off must not suppress valid entries.
   const root='/var/lib/zl-prediction/rounds/';
   const config=guardianRiskState([process.env.RISK_CONTROL_FILE,root+'risk-control.json','/tmp/risk-control.json']);
   const runtime=guardianRiskState([process.env.RISK_STATUS_FILE,root+'risk-runtime-status.json','/tmp/risk-runtime-status.json']);
@@ -64,7 +64,7 @@ function guardianExitMonitorReady(now=Date.now()) {
   if(!config||!runtime||!health)return false;
   const statusAge=now-Date.parse(runtime.at);
   const positionAge=now-Date.parse(health.lastSuccessfulPositionsAt);
-  return config.takeProfitEnabled===true&&config.stopLossEnabled===true&&
+  return config.stopLossEnabled===true&&
     runtime.enabled===true&&runtime.workerRunning===true&&runtime.configApplied===true&&
     runtime.guardianDynamicExitEnabled===false&&runtime.transitioning!==true&&
     Number.isFinite(statusAge)&&statusAge>=0&&statusAge<=6000&&
@@ -154,7 +154,8 @@ async function submitPendingOrder(p, { source = 'manual', prePostRetry = false }
     if (autoAttemptedRounds.has(String(p.round)) && !prePostRetry) {
       return { status: 409, body: { ok: false, error: '本轮已经执行过自动提交，不会重复尝试' } };
     }
-    if (!prePostRetry && Date.now() - lastAutoSubmitAt < AUTO_CONFIRM_COOLDOWN_MS) {
+    if (!prePostRetry && p.signalModelChoice!==GUARDIAN_ID &&
+        Date.now() - lastAutoSubmitAt < AUTO_CONFIRM_COOLDOWN_MS) {
       return { status: 429, body: { ok: false, error: 'AUTO_CONFIRM 冷却中' } };
     }
     if (!prePostRetry) autoAttemptedRounds.add(String(p.round));
@@ -302,11 +303,14 @@ async function submitPendingOrder(p, { source = 'manual', prePostRetry = false }
 
   if(p.signalModelChoice===GUARDIAN_ID){
     const validation=guardianQuoteGate(current,quote,{now:Date.now()});
-    if(!guardianExitMonitorReady()||!validation.ok){
+    const fixedExitReady=guardianExitMonitorReady();
+    if(!fixedExitReady||!validation.ok){
       p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
-      p.blockReason=!guardianExitMonitorReady()
-        ?'GUARDIAN_DYNAMIC_SELL_MONITOR_UNVERIFIED':validation.reason;
-      p.error='GUARDIAN真实退出监控未就绪，或交易所报价无效、已过期，未下单';
+      p.blockReason=!fixedExitReady?'GUARDIAN_FIXED_STOP_LOSS_UNREADY':validation.reason;
+      p.error='GUARDIAN固定止损监控未就绪，或交易所报价无效、已过期，未下单';
+      if(isAuto && fixedExitReady &&
+         validation.reason==='GUARDIAN_REAL_QUOTE_INVALID_OR_EXPIRED')
+        retryGuardianBeforePost(p,'QUOTE_INVALID_OR_EXPIRED_BEFORE_POST');
       return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
     }
     p.edge=validation.edge;p.quoteChance=Number(quote.chance);
@@ -444,11 +448,18 @@ async function submitPendingOrder(p, { source = 'manual', prePostRetry = false }
     pendingAction=null;
     return {status:409,body:{ok:false,error:'方向配置已经变化，已取消旧订单'}};
   }
-  if(p.signalModelChoice===GUARDIAN_ID&&
-     (!guardianExitMonitorReady()||!guardianQuoteGate(current,quote,{now:Date.now()}).ok)){
-    p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
-    p.error='GUARDIAN提交前风险执行器或报价核验失败，未下单';
-    return {status:409,body:{ok:false,error:p.error}};
+  if(p.signalModelChoice===GUARDIAN_ID){
+    const fixedExitReady=guardianExitMonitorReady();
+    const quoteCheck=guardianQuoteGate(current,quote,{now:Date.now()});
+    if(!fixedExitReady||!quoteCheck.ok){
+      p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
+      p.blockReason=!fixedExitReady?'GUARDIAN_FIXED_STOP_LOSS_UNREADY':quoteCheck.reason;
+      p.error='GUARDIAN提交前固定止损或报价核验失败，未下单';
+      if(isAuto && fixedExitReady &&
+         quoteCheck.reason==='GUARDIAN_REAL_QUOTE_INVALID_OR_EXPIRED')
+        retryGuardianBeforePost(p,'QUOTE_EXPIRED_BEFORE_POST');
+      return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
+    }
   }
   // Deadline applies at the irreversible Binance POST, not when the signal was generated.
   if (rejectExpiredOrderWindow(p, 'before_place_order')) {

@@ -20,3 +20,5 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: python prediction-bot-v1/aliyun_site_diagnose.py
+
+# Read-only follow-up for GUARDIAN visibility restart 502 on 2026-10-29.

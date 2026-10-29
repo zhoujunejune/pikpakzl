@@ -76,3 +76,36 @@ test('GUARDIAN unknown POST states keep replay fences and no blind retry',()=>{
   assert.ok(wrapper.includes("retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST')"));
   assert.ok(wrapper.includes("current.signalId!==p.signalId"));
 });
+
+test('healthy fixed SL alone suffices; TP-off must not silently block GUARDIAN BUY',()=>{
+  const a=wrapper.indexOf('function guardianRiskState(');
+  const b=wrapper.indexOf('\nlet autoConfirmHalted',a);
+  assert.ok(a>=0&&b>a,'GUARDIAN_FIXED_EXIT_HELPER_MISSING');
+  const source=wrapper.slice(a,b);
+  const now=Date.now();
+  const config={takeProfitEnabled:false,stopLossEnabled:true};
+  const runtime={at:new Date(now).toISOString(),enabled:true,workerRunning:true,
+    configApplied:true,guardianDynamicExitEnabled:false,transitioning:false};
+  const health={lastSuccessfulPositionsAt:new Date(now).toISOString(),positionsSeen:0};
+  const fsMock={readFileSync:(p)=>{
+    if(String(p).includes('risk-control'))return JSON.stringify(config);
+    if(String(p).includes('risk-runtime'))return JSON.stringify(runtime);
+    if(String(p).includes('risk-worker-health'))return JSON.stringify(health);
+    throw new Error('MISSING');
+  }};
+  const ready=vm.runInNewContext(source+'\n guardianExitMonitorReady',
+    {fs:fsMock,process:{env:{}},Date,Number,JSON});
+  assert.equal(ready(now),true,'GUARDIAN must allow SL-only');
+  config.stopLossEnabled=false;
+  assert.equal(ready(now),false,'GUARDIAN must still require fixed SL');
+  config.stopLossEnabled=true;
+  runtime.workerRunning=false;
+  assert.equal(ready(now),false,'GUARDIAN must still require a live monitor');
+});
+
+test('cross-round auto cooldown cannot abandon an otherwise valid GUARDIAN signal',()=>{
+  assert.ok(wrapper.includes("p.signalModelChoice!==GUARDIAN_ID &&\n        Date.now() - lastAutoSubmitAt < AUTO_CONFIRM_COOLDOWN_MS"));
+  assert.ok(wrapper.includes("retryGuardianBeforePost(p,'QUOTE_EXPIRED_BEFORE_POST')"));
+  assert.ok(wrapper.includes("retryGuardianBeforePost(p,'QUOTE_INVALID_OR_EXPIRED_BEFORE_POST')"));
+  assert.ok(wrapper.includes("p.blockReason=!fixedExitReady?'GUARDIAN_FIXED_STOP_LOSS_UNREADY'"));
+});

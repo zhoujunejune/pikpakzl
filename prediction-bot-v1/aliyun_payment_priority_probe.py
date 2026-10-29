@@ -46,6 +46,11 @@ for line in sys.stdin:
   rows.append(line)
 print("\\n".join(rows[-17:]))' || true
 echo "TRADE_SERVICE_RECENT_FAILURES_END"
+python3 - <<'PY'
+import subprocess
+r=subprocess.run(['runuser','-u','zl-pred','--','journalctl','-u','zl-prediction-trade','--since','2 minutes ago','-n','1','-o','json','--no-pager'],capture_output=True,text=True,timeout=10)
+print('ZL_PRED_JOURNAL_ACCESS',r.returncode==0 and bool(r.stdout.strip()),'rc',r.returncode,'rows',len(r.stdout.splitlines()))
+PY
 echo GUARDIAN_INCIDENT_AUDIT_BEGIN
 python3 - <<'PY'
 import json,subprocess,datetime,re

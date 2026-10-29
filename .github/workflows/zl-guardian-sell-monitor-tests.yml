@@ -1,0 +1,50 @@
+name: GUARDIAN SELL monitor shared state and fail-closed tests
+on:
+  push:
+    branches: [feature/guardian-sell-runtime-fix]
+    paths:
+      - railway-diagnostic/guardian-live-bridge.mjs
+      - railway-diagnostic/guardian-risk-integration.mjs
+      - railway-diagnostic/guardian-risk-integration.test.mjs
+      - railway-diagnostic/guardian-dynamic-exit.mjs
+      - railway-diagnostic/risk-runner.mjs
+      - railway-diagnostic/control-shell.mjs
+      - railway-diagnostic/wrapper.mjs
+      - railway-diagnostic/guardian-main-dashboard.mjs
+      - .github/workflows/zl-guardian-sell-monitor-tests.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Check syntax and Guardian exit behavior
+        run: |
+          node --check railway-diagnostic/guardian-risk-integration.mjs
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --check railway-diagnostic/risk-runner.mjs
+          node --check railway-diagnostic/control-shell.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --check railway-diagnostic/guardian-main-dashboard.mjs
+          node --test railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-live-bridge.test.mjs
+      - name: Verify shared storage and no unverified fill claim
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          bridge=Path('railway-diagnostic/guardian-live-bridge.mjs').read_text()
+          risk=Path('railway-diagnostic/guardian-risk-integration.mjs').read_text()
+          runner=Path('railway-diagnostic/risk-runner.mjs').read_text()
+          control=Path('railway-diagnostic/control-shell.mjs').read_text()
+          wrapper=Path('railway-diagnostic/wrapper.mjs').read_text()
+          for s in [bridge,risk,runner,control,wrapper]:
+           assert '/var/lib/zl-prediction/rounds/guardian5' in s
+          assert 'realSellQuote:opts.realSellQuote===true' in risk
+          assert 'actualSellFillVerified:false' in risk
+          assert "GUARDIAN_MONITOR_ARM_ALLOWED==='true'" in control
+          assert "GUARDIAN_MONITOR_ARM_ALLOWED==='true'" in runner
+          print('GUARDIAN_SELL_MONITOR_SHARED_STATE_TESTED=true')
+          PY

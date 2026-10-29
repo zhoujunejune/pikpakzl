@@ -68,6 +68,30 @@ try:
    'currentOrderSignalEligible':(d.get('orderSignal') or {}).get('executionEligible') if isinstance(d.get('orderSignal'),dict) else None,
  },sort_keys=True))
 except Exception as e:print('GUARDIAN_TRADE_STATUS_ERROR',type(e).__name__)
+# Read exact deploy preconditions (safe, no credentials).
+from pathlib import Path
+import hashlib
+base=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for filename in ('wrapper.mjs','guardian-live-bridge.mjs','risk-runner.mjs'):
+ try:
+  raw=(base/filename).read_bytes()
+  print('GUARDIAN_CUTOVER_FILE',filename,hashlib.sha256(raw).hexdigest(),len(raw))
+  src=raw.decode('utf-8')
+  markers=(
+    'const GUARDIAN_ORDER_DEADLINE_MS = 275000;',
+    'const GUARDIAN_ORDER_DEADLINE_MS = 300000;',
+    'currentRetry.direction!==p.signal',
+    'currentRetry.direction!==p.productionSignal',
+    'stats.settled>=300',
+    'round+FIVE_MIN-now<25000',
+    'function guardianExitMonitorReady(now=Date.now()) {',
+    'function guardianRiskState(paths) {',
+    "GUARDIAN_DYNAMIC_EXIT_ENABLED: cfg.dynamicExitEnabled ? 'true' : 'false'",
+    "GUARDIAN_DYNAMIC_EXIT_ENABLED:'false'",
+  )
+  print('GUARDIAN_CUTOVER_MARKERS',filename,{m:src.count(m) for m in markers if m in src})
+ except Exception as e:print('GUARDIAN_CUTOVER_FILE_ERROR',filename,type(e).__name__)
+
 # Print small, filtered code context around sell-quote readiness, without credentials.
 src=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
 for name in ('guardian-risk-integration.mjs','risk-worker.mjs','risk-runner.mjs','risk-config-storage.mjs'):

@@ -957,6 +957,10 @@ async function readBody(req) {
 
 
 async function processOrderConfirmation(res,body,{automatic=false}={}){
+  // Base index lacks the GUARDIAN fixed-exit protected order state machine.
+  // Only wrapper.mjs may activate GUARDIAN live submissions.
+  if(modelSelectionSnapshot().model===GUARDIAN_ID)
+    return send(res,503,{ok:false,reason:'GUARDIAN_WRAPPER_REQUIRED',error:'GUARDIAN固定风控交易入口尚未加载，已停止下单'});
   if(automatic && (!enabled || !deploymentAllowsLiveFollowing() ||
      process.env.AUTO_CONFIRM_ENABLED!=='true')){
     return send(res,409,{ok:false,error:'自动跟随已经关闭'});
@@ -1259,6 +1263,8 @@ http.createServer(async (req, res) => {
       enabled,
       guardianRiskReady: guardianRuntimeReadiness.ready,
       guardianRiskBlockReason: guardianRuntimeReadiness.reason,
+      guardianExecutionReady: false,
+      guardianExecutionBlockReason: 'GUARDIAN_WRAPPER_REQUIRED',
       guardianRiskRuntime: {workerRunning:guardianRuntimeReadiness.workerRunning,
         configApplied:guardianRuntimeReadiness.configApplied,
         dynamicExitEnabled:guardianRuntimeReadiness.dynamicExitEnabled,

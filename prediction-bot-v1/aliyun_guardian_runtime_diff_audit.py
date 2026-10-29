@@ -71,66 +71,6 @@ for name,needles in patterns.items():
  except Exception:continue
  print('GUARDIAN_RUNTIME_PATCH_ANCHORS',name,{n:s.count(n) for n in needles})
 PY
-echo GUARDIAN_INCIDENT_2000_READONLY_START=true
-python3 - <<'PY'
-import json, subprocess, urllib.request
-from datetime import datetime
-def cmd(argv):
- try:return subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=12).stdout
- except Exception as exc:return ''
-def get_status(port=13001):
- try:
-  with urllib.request.urlopen('http://127.0.0.1:%s/api/status'%port,timeout=3) as resp:
-   return json.load(resp)
- except Exception as exc:return {'error':type(exc).__name__}
-s=get_status()
-print('GUARDIAN_INCIDENT_LIVE_STATUS',json.dumps({
- k:s.get(k) for k in ['ok','enabled','autoConfirmEnabled','autoConfirmHalted','orderSignalModel','guardianRiskReady','guardianExecutionReady','guardianExecutionBlockReason','guardianRiskBlockReason','orderSignalModelReady','orderSignal','mode','amount','startAfterRound']},ensure_ascii=False))
-for k in ['signal','pendingAction','lastOrder']:
- x=s.get(k)
- if isinstance(x,dict):
-  print('GUARDIAN_INCIDENT_LIVE_'+k.upper(),json.dumps({
-   a:x.get(a) for a in ['round','status','state','direction','productionSignal','upstreamModel','error','blockReason','code','at'] if a in x},ensure_ascii=False))
-pid=cmd(['systemctl','show','-p','MainPID','--value','zl-prediction-trade']).strip()
-try:
- env=open('/proc/'+str(int(pid))+'/environ','rb').read().split(bytes([0]))
- for key in [b'AUTO_CONFIRM_ENABLED',b'AUTO_CONFIRM_STOP_ON_ERROR']:
-  name=key.decode();v=next((a.split(b'=',1)[1].decode('ascii','replace') for a in env if a.startswith(key+b'=')),'NOT_SET')
-  print('GUARDIAN_INCIDENT_ENV',name,v)
-except Exception as ex:print('GUARDIAN_INCIDENT_ENV_ERROR',type(ex).__name__)
-print('GUARDIAN_INCIDENT_MACHINE_TZ',cmd(['date','+%Y-%m-%dT%H:%M:%S%z']).strip())
-print('GUARDIAN_INCIDENT_STATUS_KEYS',sorted(s.keys()))
-for unit in ['zl-prediction-trade','zl-prediction-guardian-analysis']:
- raw=cmd(['journalctl','-u',unit,'--since','2026-10-29 11:59:30 UTC',
-          '--until','2026-10-29 12:05:30 UTC','-o','cat','--no-pager'])
- print('GUARDIAN_INCIDENT_JOURNAL_TOTAL',unit,len(raw.splitlines()))
- parsed=0;found=[]
- for line in raw.splitlines():
-  try: v=json.loads(line[line.index('{'):])
-  except (ValueError,TypeError):continue
-  if not isinstance(v,dict):continue
-  parsed+=1
-  event=v.get('event')
-  if isinstance(event,str) and event not in found:found.append(event)
- print('GUARDIAN_INCIDENT_JOURNAL_STRUCTURED',unit,parsed,'EVENT_NAMES',found[:35])
- rows=[]
- for line in raw.splitlines():
-  pos=line.find('{')
-  if pos<0:continue
-  try: o=json.loads(line[pos:])
-  except Exception:continue
-  if not isinstance(o,dict):continue
-  event=o.get('event')
-  if not isinstance(event,str):continue
-  if not any(t in event.lower() for t in ['guardian','signal','submit','order','quote','intent','prepare','risk','auto','market']):continue
-  keys=['event','round','at','status','state','direction','productionSignal','currentDirection',
-        'currentRound','upstreamModel','blockReason','reason','code','httpStatus','source']
-  safe={k:o.get(k) for k in keys if k in o and isinstance(o[k],(str,int,float,bool,type(None)))}
-  rows.append(safe)
- print('GUARDIAN_INCIDENT_EVENTS',unit,'count',len(rows))
- for row in rows[-35:]:print('GUARDIAN_INCIDENT_EVENT',unit,json.dumps(row,ensure_ascii=False)[:260])
-PY
-echo GUARDIAN_INCIDENT_2000_READONLY_DONE=true
 echo GUARDIAN_RUNTIME_DIAG_COMPLETE=true
 """
 c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],

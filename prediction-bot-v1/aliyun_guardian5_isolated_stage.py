@@ -73,7 +73,7 @@ echo "GUARDIAN5_NO_REAL_ORDERS_SUBMITTED=true"
 """
 def main():
  sha=os.getenv('GITHUB_SHA','')
- if os.getenv('GITHUB_REF_NAME')!='fix/guardian5-live-execution-20261029' or not re.fullmatch('[0-9a-f]{40}',sha):
+ if os.getenv('GITHUB_REF_NAME') not in ('fix/guardian5-live-execution-20261029','feature/zl-futures-bot-v1') or not re.fullmatch('[0-9a-f]{40}',sha):
   print('GUARDIAN_STAGE_BAD_REVISION');return 2
  c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
  access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],

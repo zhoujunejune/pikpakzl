@@ -1,13 +1,13 @@
-name: Deploy GUARDIAN saved-signal OBSERVED lock fix to Alibaba
+name: Deploy GUARDIAN MPC -9000 Spot fallback to Alibaba
 on:
   pull_request:
     paths:
-      - prediction-bot-v1/aliyun_guardian_observed_deploy.py
+      - prediction-bot-v1/aliyun_guardian_mpc9000_deploy.py
       - .github/workflows/zl-guardian-observed-deploy.yml
   push:
     branches: [feature/zl-futures-bot-v1]
     paths:
-      - prediction-bot-v1/aliyun_guardian_observed_deploy.py
+      - prediction-bot-v1/aliyun_guardian_mpc9000_deploy.py
       - .github/workflows/zl-guardian-observed-deploy.yml
 permissions:
   contents: read
@@ -28,18 +28,18 @@ jobs:
           node-version: '22'
       - name: Syntax and regression
         run: |
-          python -m py_compile prediction-bot-v1/aliyun_guardian_observed_deploy.py
+          python -m py_compile prediction-bot-v1/aliyun_guardian_mpc9000_deploy.py
           python - <<'PY'
           import ast,subprocess
-          src=open('prediction-bot-v1/aliyun_guardian_observed_deploy.py').read()
+          src=open('prediction-bot-v1/aliyun_guardian_mpc9000_deploy.py').read()
           tree=ast.parse(src)
           shell=next(node.value.value for node in tree.body if isinstance(node,ast.Assign) and any(getattr(t,'id',None)=='REMOTE' for t in node.targets))
           r=subprocess.run(['bash','-n'],input=shell,text=True,capture_output=True)
           print(r.stderr)
           assert r.returncode==0,'REMOTE_SHELL_SYNTAX_INVALID'
           PY
-          node --check railway-diagnostic/guardian-live-bridge.mjs
-          node --test railway-diagnostic/guardian-live-bridge.test.mjs
+          node --check railway-diagnostic/payment-source-priority.mjs
+          node --test railway-diagnostic/payment-source-priority.test.mjs
   deploy:
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/feature/zl-futures-bot-v1'
@@ -59,4 +59,4 @@ jobs:
         run: |
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
-          python prediction-bot-v1/aliyun_guardian_observed_deploy.py
+          python prediction-bot-v1/aliyun_guardian_mpc9000_deploy.py

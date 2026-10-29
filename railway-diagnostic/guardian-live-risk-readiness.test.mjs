@@ -5,6 +5,8 @@ import fs from 'node:fs';
 const source=fs.readFileSync(new URL('./wrapper.mjs',import.meta.url),'utf8');
 const match=source.match(/function guardianExitMonitorReady\(now=Date\.now\(\)\) \{[\s\S]*?\n\}/);
 if(!match)throw Error('GUARDIAN_EXIT_READY_FUNCTION_NOT_FOUND');
+const helper=source.match(/function guardianRiskState\\(paths\\) \\{[\\s\\S]*?\\n\\}/);
+if(!helper)throw Error('GUARDIAN_RUNTIME_PATH_HELPER_NOT_FOUND');
 
 const now=1800000000000;
 function evaluate({dynamic=true,fixed=false,worker=true,updated=now-1000,
@@ -19,7 +21,7 @@ function evaluate({dynamic=true,fixed=false,worker=true,updated=now-1000,
  };
  const fake={readFileSync(name){if(!(name in data))throw Error('missing');
   return JSON.stringify(data[name]);}};
- const ready=new Function('fs','GUARDIAN_ID','return ('+match[0].replace(/^function /,'function ')+')')(
+ const ready=new Function('fs','GUARDIAN_ID',helper[0]+'\nreturn ('+match[0]+')')(
   fake,'ZL_GUARDIAN_5M_V1');
  return ready(now);
 }

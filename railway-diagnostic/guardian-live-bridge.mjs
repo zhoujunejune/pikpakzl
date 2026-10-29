@@ -40,7 +40,7 @@ export function guardianMarkSubmitted(intent,orderId,{file=GUARDIAN_REGISTRY}={}
 // Signal-service readOnly/orders:false mean it cannot submit orders itself.
 // They MUST NOT be confused with the executor's independently authenticated live switch.
 export const GUARDIAN_ID='ZL_GUARDIAN_5M_V1';
-export const GUARDIAN_SOURCE='SELECTIVE_V2_FAST8_PRIMARY'; // Legacy mapping key only.
+export const GUARDIAN_SOURCE='FAST5_SPOT_MOMENTUM_V1'; // Match current Alibaba production direction-mode source key.
 export const FIVE_MIN=300000;
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const roundOf=t=>Math.floor(t/FIVE_MIN)*FIVE_MIN;

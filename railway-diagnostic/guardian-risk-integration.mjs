@@ -6,9 +6,10 @@ import path from 'node:path';
 import {dynamicExit,registeredGuardianToken,GUARDIAN_MODEL} from './guardian-dynamic-exit.mjs';
 
 export const GUARDIAN_RISK_ENABLED=/^(1|true)$/i.test(String(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED||'false'));
-const REGISTRY='/var/lib/zl-prediction/guardian5/guardian-live-orders.json';
-const PEAKS='/var/lib/zl-prediction/guardian5/guardian-sell-peaks.json';
-const READY='/tmp/guardian-risk-ready.json';
+export const GUARDIAN_STATE_DIR=process.env.GUARDIAN_STATE_DIR||'/var/lib/zl-prediction/rounds/guardian5';
+const REGISTRY=path.join(GUARDIAN_STATE_DIR,'guardian-live-orders.json');
+const PEAKS=path.join(GUARDIAN_STATE_DIR,'guardian-sell-peaks.json');
+export const READY=path.join(GUARDIAN_STATE_DIR,'guardian-risk-ready.json');
 
 function readPeaks(file){
   try{

@@ -53,6 +53,20 @@ try:
    'pendingAction':d.get('pendingAction') is not None,
  },sort_keys=True))
 except Exception as e:print('GUARDIAN_TRADE_STATUS_ERROR',type(e).__name__)
+# Print small, filtered code context around sell-quote readiness, without credentials.
+src=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for name in ('guardian-risk-integration.mjs','risk-worker.mjs'):
+ try:
+  lines=(src/name).read_text().splitlines()
+  for i,line in enumerate(lines):
+   if any(x in line for x in ('guardianRiskHeartbeat(', 'realSellQuote:', 'guardianRiskQuote(')):
+    print('GUARDIAN_RISK_SOURCE',name,'line',i+1)
+    for j in range(max(0,i-4),min(len(lines),i+8)):
+     ss=lines[j].strip()
+     if len(ss)>220:ss=ss[:220]
+     if not any(t in ss.lower() for t in ('api_key','secret','authorization','token=')):
+      print('GUARDIAN_RISK_SOURCE_LINE',j+1,ss)
+ except Exception as e:print('GUARDIAN_RISK_SOURCE_ERROR',name,type(e).__name__)
 PY
 """
 def main():

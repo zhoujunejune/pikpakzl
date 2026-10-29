@@ -196,7 +196,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
          current.executionEligible!==true))||
       (p.signalModelChoice===GUARDIAN_ID&&
         (current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
-         current.executionEligible!==true||current.direction!==p.productionSignal))) {
+         current.executionEligible!==true||current.direction!==p.productionSignal||
+         mappedOrderSignal(current).orderSignal!==p.signal))) {
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',

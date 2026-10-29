@@ -79,6 +79,39 @@ for a,b in [('22:10','22:15'),('22:15','22:20')]:
  for t,ev,fields in rows[-30:]:print('AUDIT_EVENT',t.isoformat(timespec='seconds'),ev,json.dumps(fields,ensure_ascii=False,separators=(',',':')))
 print('GUARDIAN_INCIDENT_AUDIT_END')
 PY
+echo GUARDIAN_RECENT_TRADE_DIAGNOSTIC_BEGIN
+python3 - <<'PY'
+import json,subprocess,datetime,urllib.request,re
+tz=datetime.timezone(datetime.timedelta(hours=8))
+try:
+ with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=4) as r:s=json.load(r)
+ p=s.get('pendingAction') or {}; last=s.get('lastOrder') or {}
+ print('TRADE_13001_STATUS',json.dumps({'ok':s.get('ok'),'enabled':s.get('enabled'),'model':s.get('orderSignalModel'),'pending':{k:p.get(k) for k in ('round','state','error','code','paymentAccount','blockReason')},'last':{k:last.get(k) for k in ('round','state','error','code','paymentAccount','blockReason')}},ensure_ascii=False,default=str)[:1200])
+except Exception as e:print('TRADE_13001_STATUS_ERROR',type(e).__name__)
+cmd=['journalctl','-u','zl-prediction-trade','--since','2 hours ago','-n','8000','-o','json','--no-pager']
+p=subprocess.run(cmd,capture_output=True,text=True,timeout=18)
+selected=[]
+watch={'api_confirm_control','api_intent_ready','auto_submit_triggered','fresh_quote_failed','fresh_quote_ready','prediction_wallet_quote_insufficient_spot_fallback','prediction_wallet_insufficient_spot_unavailable','prediction_wallet_insufficient_spot_fallback','order_retry_requote_failed','order_post_attempt','order_submit_attempt','order_confirmed','order_submission_unknown','order_submit_result','order_confirmed_filled','order_retry_rejected','order_failed','auto_confirm_failed','api_order_submitted','api_order_failed'}
+for line in p.stdout.splitlines():
+ try:
+  obj=json.loads(line); raw=obj.get('MESSAGE','');m=json.loads(raw)
+  if not isinstance(m,dict):continue
+  ev=m.get('event','')
+  if ev not in watch and not ('liquidity' in str(m.get('error','')).lower() or str(m.get('code',''))=='-9000'):continue
+  ts=datetime.datetime.fromtimestamp(int(obj['__REALTIME_TIMESTAMP'])/1e6,tz).isoformat(timespec='seconds')
+  data={}
+  for k in ('round','state','productionSignal','orderSignal','mappingMode','code','httpStatus','source','spotQuoteOk','paymentAccount','reason','error','amount','attempt','attempts','status'):
+   if k in m and isinstance(m[k],(str,int,float,bool)):
+    v=m[k]
+    if isinstance(v,str):v=re.sub(r'(?i)(api.?key|secret|token|password)[=:][^\s,]+',r'\1=[REDACTED]',v)[:150]
+    data[k]=v
+  selected.append((ts,ev,data))
+ except (ValueError,KeyError,TypeError,OverflowError):continue
+print('RECENT_JOURNAL_OK',p.returncode==0,'matches',len(selected))
+for ts,ev,data in selected[-35:]:
+ print('RECENT_TRADE_EVENT',ts,ev,json.dumps(data,ensure_ascii=False,separators=(',',':')))
+print('GUARDIAN_RECENT_TRADE_DIAGNOSTIC_END')
+PY
 echo PROBE_END
 '''
 def main():

@@ -1,0 +1,24 @@
+name: Guardian latest signal read-only diagnosis
+on:
+  push:
+    branches: [feature/guardian-dynamic-risk-ui-toggle]
+    paths:
+      - prediction-bot-v1/aliyun_latest_signal_readonly.py
+      - .github/workflows/zl-guardian-latest-signal-audit.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/aliyun_latest_signal_readonly.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read latest Guardian production status
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_latest_signal_readonly.py

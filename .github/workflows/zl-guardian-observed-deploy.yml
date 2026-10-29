@@ -1,5 +1,9 @@
 name: Deploy GUARDIAN saved-signal OBSERVED lock fix to Alibaba
 on:
+  pull_request:
+    paths:
+      - prediction-bot-v1/aliyun_guardian_observed_deploy.py
+      - .github/workflows/zl-guardian-observed-deploy.yml
   push:
     branches: [feature/zl-futures-bot-v1]
     paths:
@@ -11,7 +15,7 @@ concurrency:
   group: zl-guardian-observed-production-deploy
   cancel-in-progress: false
 jobs:
-  deploy:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -36,6 +40,16 @@ jobs:
           PY
           node --check railway-diagnostic/guardian-live-bridge.mjs
           node --test railway-diagnostic/guardian-live-bridge.test.mjs
+  deploy:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/zl-futures-bot-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Install Alibaba SWAS SDK
         run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
       - name: Deploy narrow fix to Alibaba with rollback

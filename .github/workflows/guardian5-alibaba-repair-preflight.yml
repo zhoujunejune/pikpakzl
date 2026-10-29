@@ -1,0 +1,32 @@
+name: GUARDIAN5 Alibaba production preflight READ ONLY
+on:
+  push:
+    branches:
+      - fix/guardian5-fixed-only-readiness-20261029
+    paths:
+      - prediction-bot-v1/aliyun_guardian_repair_preflight.py
+      - .github/workflows/guardian5-alibaba-repair-preflight.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax check
+        run: python -m py_compile prediction-bot-v1/aliyun_guardian_repair_preflight.py
+      - name: Install Alibaba Cloud server client
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect production service commands and sanitized state (no writes)
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_repair_preflight.py

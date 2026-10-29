@@ -752,7 +752,7 @@ source = source.slice(0, confirmStartIndex) + newConfirmRoute + source.slice(not
 
 source = source.replace(
   "      enabled,\n      amount: tradeAmountText,",
-  "      enabled,\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n      amount: tradeAmountText,"
+  "      enabled,\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n      guardianRiskReady: guardianExitMonitorReady(),\n      amount: tradeAmountText,"
 );
 source = source.replace(
   "      hasWalletId: Boolean(ENV_WALLET_ID),",

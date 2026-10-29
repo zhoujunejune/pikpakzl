@@ -149,12 +149,43 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
   p.error = null;
   p.code = null;
 
+  // GUARDIAN_RECHECK_V2: retry only a missing fresh read; never reuse a stale
+  // locked decision and never retry a different/explicitly rejected signal.
+  // Every recovered response must still pass the full round, direction,
+  // immutable signalId, model and live risk/quote gates below.
+  async function guardianRetryMissingSignal(readSignal, initial, canRetry,
+      sleep=(ms)=>new Promise(resolve=>setTimeout(resolve,ms))) {
+    let signal=initial, retries=0;
+    if(signal != null)return {signal,retries};
+    for(const delayMs of [160,260]){
+      if(!canRetry())break;
+      await sleep(delayMs);
+      if(!canRetry())break;
+      retries++;
+      signal=await readSignal();
+      if(signal != null)break;
+    }
+    return {signal,retries};
+  }
+
   // Overlap independent signal revalidation and fresh quote retrieval.
   // A changed/expired signal still rejects the order before any placement call.
   const quoteRequestStartedAt = Date.now();
   let [current, freshQuote] = await Promise.all([
     getSignal({ forceHttp: true }), getFreshQuote(p._internal),
   ]);
+  let guardianRecheckRetries=0;
+  if(p.signalModelChoice===GUARDIAN_ID && current==null){
+    const result=await guardianRetryMissingSignal(
+      ()=>getSignal({forceHttp:true}), current,
+      ()=>enabled && p===pendingAction && selectedSignalMatches(p) &&
+          orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice));
+    current=result.signal;guardianRecheckRetries=result.retries;
+    console.log(JSON.stringify({event:'guardian_signal_recheck_completed',
+      round:p.round,retries:guardianRecheckRetries,
+      signalRecovered:current?.status==='LOCKED',
+      signalIdMatches:current?.signalId===p.signalId}));
+  }
   if (!selectedSignalMatches(p) || !current || current.status !== 'LOCKED' ||
       String(current.round) !== String(p.round) || !pendingOrderMatchesProduction(p,current) ||
       (p.signalModelChoice===NOVICE_MODEL&&current.upstreamModel!==NOVICE_MODEL) ||
@@ -165,7 +196,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
          current.executionEligible!==true))||
       (p.signalModelChoice===GUARDIAN_ID&&
         (current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
-         current.executionEligible!==true||current.direction!==p.signal))) {
+         current.executionEligible!==true||current.direction!==p.productionSignal))) {
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',
@@ -174,6 +205,9 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
       currentRound: current?.round ?? null,
       currentDirection: current?.direction ?? null,
       currentStatus: current?.status ?? null,
+      currentSignalIdMatches:current?.signalId===p.signalId,
+      currentUpstreamModel:current?.upstreamModel??null,
+      recheckRetries:guardianRecheckRetries,
       source,
     }));
     return { status: 409, body: { ok: false, error: '当前信号或轮次已经变化，已阻止旧订单提交' } };

@@ -5,27 +5,43 @@ import os from 'node:os';
 import path from 'node:path';
 import {guardianOrderSignal,guardianQuoteGate,guardianRegisterIntent,guardianMarkSubmitted,GUARDIAN_ID} from './guardian-live-bridge.mjs';
 import {dynamicExit,registeredGuardianToken} from './guardian-dynamic-exit.mjs';
-test('guardian read-only source cannot authorize trades without independent qualification',()=>{
- const now=1793182500000+72000,round=Math.floor(now/300000)*300000;
- const row={round,at:now-1500,marketAt:now-2000,status:'PREDICTED',predictedDirection:'UP'};
- const payload={ok:true,model:GUARDIAN_ID,orders:false,readOnly:true,configured:true,observedAt:now-500,
-  latest:{direction:'UP',round,status:'SHADOW_OBSERVATION'},records:[row],
-  stats:{settled:0,validated:false,wilsonLower:null},officialPriceFeedVerified:false};
+function fixture(now,direction='UP',statistics={settled:0,validated:false,wilsonLower:null}){
+ const round=Math.floor(now/300000)*300000;
+ return {ok:true,model:GUARDIAN_ID,orders:false,readOnly:true,configured:true,observedAt:now-500,
+  latest:{direction,round,status:'SHADOW_OBSERVATION'},
+  records:[{round,at:now-1500,marketAt:now-2000,status:'PREDICTED',predictedDirection:direction}],
+  stats:statistics,officialPriceFeedVerified:false};
+}
+test('TC-01/02: valid Guardian signal may pass with zero samples and low confidence',()=>{
+ const now=1793182500000+72000;
+ const signal=guardianOrderSignal(fixture(now),now);
+ assert.equal(signal.ok,true);
+ assert.equal(signal.executionEligible,true);
+ assert.equal(signal.modelProbability,null);
+ assert.equal(signal.calibrationReady,false);
+ assert.equal(guardianQuoteGate(signal,{quoteId:'binance-quote',chance:.98,expireAt:now+8000},{now}).ok,true);
+});
+test('no invented quote or expired quote can authorize a real BUY',()=>{
+ const now=1793182500000+72000,signal=guardianOrderSignal(fixture(now),now);
+ for(const quote of [{quoteId:'q',chance:.2},{quoteId:'q',chance:0,expireAt:now+6000},
+  {quoteId:'q',chance:.2,expireAt:now+500},{quoteId:null,chance:.2,expireAt:now+6000}]){
+  assert.equal(guardianQuoteGate(signal,quote,{now}).ok,false);
+ }
+});
+test('TC-07: no arbitrary 15s replay or 25s end-of-round cutoff',()=>{
+ const round=1793182200000,now=round+299000,payload=fixture(now,'DOWN');
+ payload.records[0].at=round+1000;
+ payload.records[0].marketAt=round+1000;
  const signal=guardianOrderSignal(payload,now);
  assert.equal(signal.ok,true);
- assert.equal(signal.executionEligible,false);
- assert.equal(guardianQuoteGate(signal,{quoteId:'q',chance:.2},{now}).ok,false);
+ assert.equal(guardianQuoteGate(signal,{quoteId:'q',chance:.98,expireAt:now+5000},{now}).ok,true);
+ assert.equal(guardianQuoteGate(signal,{quoteId:'q',chance:.98,expireAt:now+5000},{now:round+300000}).ok,false);
 });
-test('qualified Guardian can only execute if market net edge is positive',()=>{
- const now=1793182500000+72000,round=Math.floor(now/300000)*300000;
- const row={round,at:now-1500,marketAt:now-2000,status:'PREDICTED',predictedDirection:'DOWN'};
- const payload={ok:true,model:GUARDIAN_ID,orders:false,readOnly:true,configured:true,observedAt:now-500,
-  latest:{direction:'DOWN',round,status:'SHADOW_OBSERVATION'},records:[row],
-  stats:{settled:600,validated:true,wilsonLower:.80},officialPriceFeedVerified:true};
- const signal=guardianOrderSignal(payload,now);
- assert.equal(signal.executionEligible,true);
- assert.equal(guardianQuoteGate(signal,{quoteId:'q',chance:.60},{now}).ok,true);
- assert.equal(guardianQuoteGate(signal,{quoteId:'q',chance:.79},{now}).ok,false);
+test('malformed or untrusted source and stale live feed fail closed',()=>{
+ const now=1793182500000+72000,payload=fixture(now);
+ assert.equal(guardianOrderSignal({...payload,orders:true},now).ok,false);
+ assert.equal(guardianOrderSignal({...payload,observedAt:now-12000},now).ok,false);
+ assert.equal(guardianOrderSignal({...payload,latest:{...payload.latest,direction:'WAIT'}},now).ok,false);
 });
 test('registry only enables dynamic exits for order IDs accepted by Binance',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'guardian-registry-')),file=path.join(dir,'r.json');
@@ -47,12 +63,3 @@ test('dynamic exit uses real sell quote and peak, not BTC spot guess',()=>{
  assert.equal(dynamicExit({round:r,now:n,cost:1,current:NaN,peak:1}).triggered,false);
 });
 
-test('previous signal cannot be replayed more than 15s later',()=>{
- const now=1793182500000+72000,round=Math.floor(now/300000)*300000;
- const row={round,at:now-16000,marketAt:now-17000,status:'PREDICTED',predictedDirection:'UP'};
- const payload={ok:true,model:GUARDIAN_ID,orders:false,readOnly:true,configured:true,
-   observedAt:now-500,latest:{direction:'UP',round,status:'SHADOW_OBSERVATION'},
-   records:[row],stats:{settled:400,validated:true,wilsonLower:.8},
-   officialPriceFeedVerified:true};
- assert.equal(guardianOrderSignal(payload,now).ok,false);
-});

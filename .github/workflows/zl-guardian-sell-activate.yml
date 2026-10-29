@@ -1,0 +1,41 @@
+name: GUARDIAN production SELL monitor guarded activation
+on:
+  push:
+    branches: [feature/guardian-sell-runtime-fix]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_sell_activate.py
+      - prediction-bot-v1/guardian_sell_patch.py
+      - .github/workflows/zl-guardian-sell-activate.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian-sell-monitor-activate
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 11
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 50}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check offline Guardian SELL, patch and production script syntax
+        run: |
+          node --test railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-live-bridge.test.mjs
+          python -m py_compile prediction-bot-v1/guardian_sell_patch.py prediction-bot-v1/aliyun_guardian_sell_activate.py
+          python - <<'PY'
+          import ast,subprocess
+          t=ast.parse(open('prediction-bot-v1/aliyun_guardian_sell_activate.py').read())
+          v=next(n.value.value for n in t.body if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='SCRIPT' for x in n.targets))
+          p=subprocess.run(['bash','-n'],input=v,capture_output=True,text=True)
+          assert p.returncode==0,p.stderr
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Check no live Binance positions; stage and activate monitored SELL only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_sell_activate.py

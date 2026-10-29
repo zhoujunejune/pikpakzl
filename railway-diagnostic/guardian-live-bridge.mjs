@@ -48,14 +48,21 @@ const roundOf=t=>Math.floor(t/FIVE_MIN)*FIVE_MIN;
 export function guardianOrderSignal(status,now=Date.now()){
  const round=roundOf(now),latest=status?.latest||{},
        records=Array.isArray(status?.records)?status.records:[];
- const record=records.find(r=>r?.round===round&&r.predictedDirection===latest.direction);
+ // The analysis service changes latest.direction to OBSERVED on its next 5s tick.
+ // Restore the same-round persisted decision instead of silently losing the trade lock.
+ // Never recover a WAIT/error/cross-round decision; current fresh-feed checks still apply.
+ const retainedObservation=latest.round===round&&latest.direction==='OBSERVED'&&latest.status==null;
+ const record=records.find(r=>r?.round===round&&r.status==='PREDICTED'&&
+   ['UP','DOWN'].includes(r.predictedDirection)&&
+   (retainedObservation||r.predictedDirection===latest.direction));
+ const direction=retainedObservation?record?.predictedDirection:latest.direction;
  // Trust a specific configured source with an exact, current-round observation.
  // No statistical sample size, Wilson score or historical price-feed gate here.
  if(status?.ok!==true||status?.model!==GUARDIAN_ID||
     status?.readOnly!==true||status?.orders!==false||status?.configured!==true)
    return {ok:false,reason:'UNTRUSTED_GUARDIAN_SOURCE'};
- if(!['UP','DOWN'].includes(latest.direction)||latest.round!==round||
-    latest.status!=='SHADOW_OBSERVATION'||!record||record.status!=='PREDICTED'||
+ if(!['UP','DOWN'].includes(direction)||latest.round!==round||
+    !(retainedObservation||latest.status==='SHADOW_OBSERVATION')||!record||record.status!=='PREDICTED'||
     !Number.isSafeInteger(record.at)||record.at<round||record.at>now+300||
     !Number.isSafeInteger(record.marketAt)||record.marketAt>now+500||
     now-record.marketAt>FIVE_MIN||
@@ -64,9 +71,9 @@ export function guardianOrderSignal(status,now=Date.now()){
     now<round||now>=round+FIVE_MIN)
    return {ok:false,reason:'GUARDIAN_DECISION_NOT_CURRENT'};
  const stats=status.stats||{};
- return {ok:true,round,direction:latest.direction,source:GUARDIAN_SOURCE,
+ return {ok:true,round,direction,source:GUARDIAN_SOURCE,
    upstreamModel:GUARDIAN_ID,generatedAt:record.at,lockedAt:record.at,
-   signalId:GUARDIAN_ID+':'+round+':'+record.at+':'+latest.direction,
+   signalId:GUARDIAN_ID+':'+round+':'+record.at+':'+direction,
    confidence:record.subjectiveConfidence??null,
    modelProbability:null, // Do not treat observed win rate as market probability.
    executionEligible:true,calibrationReady:stats.validated===true,

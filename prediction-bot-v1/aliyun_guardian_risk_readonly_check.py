@@ -135,7 +135,10 @@ def main():
    try:o=base64.b64decode(d.output or '',validate=True).decode('utf8','replace')
    except Exception:o='OUTPUT_NOT_UTF8'
    print('GUARDIAN_RISK_READONLY_RUN',d.invocation_status,d.exit_code)
-   print(o[-6500:])
+   print('GUARDIAN_DIAGNOSTIC_BEGIN')
+   print(o[:2800])
+   print('GUARDIAN_DIAGNOSTIC_TAIL')
+   print(o[-5000:])
    return 0 if str(d.invocation_status)=='Success' and int(d.exit_code)==0 else 4
  return 5
 if __name__=='__main__':sys.exit(main())

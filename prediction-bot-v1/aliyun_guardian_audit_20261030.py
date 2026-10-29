@@ -7,7 +7,7 @@ from alibabacloud_tea_openapi import models as api
 SHELL=r"""#!/bin/bash
 set -uo pipefail
 python3 - <<'PY'
-import json,subprocess,urllib.request,time,datetime,pathlib,collections,hashlib
+import json,subprocess,urllib.request,time,datetime,pathlib,collections,hashlib,re
 now=time.time()*1000
 print('AUDIT_TIME',datetime.datetime.now(datetime.timezone.utc).isoformat())
 def get(port,path):
@@ -70,6 +70,16 @@ for key in ('User','Group','MainPID','ProtectSystem','ReadWritePaths','StateDire
 print('SERVICE_SANDBOX',json.dumps(vals,ensure_ascii=False))
 pid=vals.get('MainPID','0')
 rootpath='/var/lib/zl-prediction/guardian5/guardian-live-orders.json'
+# Read the actual deployed registry defaults. The previous hardcoded fallback
+# incorrectly reported an OLD path even after deployment changed the source.
+for module in ('guardian-live-bridge.mjs','guardian-risk-integration.mjs'):
+ try:
+  content=(pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')/module).read_text()
+  match=re.search(r"(?:GUARDIAN_REGISTRY|REGISTRY)\\s*=\\s*process\\.env\\.GUARDIAN_REGISTRY_FILE\\s*\\|\\|\\s*['\"]([^'\"]+)",content)
+  derived=match.group(1) if match else None
+  print('REGISTRY_MODULE_DEFAULT',module,derived)
+  if module=='guardian-live-bridge.mjs' and derived:rootpath=derived
+ except Exception as e:print('REGISTRY_MODULE_READ_ERROR',module,type(e).__name__)
 if pid.isdigit() and int(pid)>0:
  try:
   raw=pathlib.Path('/proc')/pid/'environ'

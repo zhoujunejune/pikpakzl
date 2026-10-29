@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - fix/guardian5-live-execution-20261029
+      - feature/zl-futures-bot-v1
     paths:
       - prediction-bot-v1/aliyun_guardian5_isolated_stage.py
       - .github/workflows/zl-guardian5-inert-stage.yml

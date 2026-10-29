@@ -41,7 +41,7 @@ export const GUARDIAN_SOURCE='SELECTIVE_V2_FAST8_PRIMARY'; // Legacy mapping key
 export const FIVE_MIN=300000;
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 const roundOf=t=>Math.floor(t/FIVE_MIN)*FIVE_MIN;
-export function guardianOrderSignal(status, now=Date.now()){
+export function guardianOrderSignal(status, now=Date.now(), {ownerAllowsUncalibrated=false}={}){
  const round=roundOf(now),latest=status?.latest||{},records=Array.isArray(status?.records)?status.records:[];
  const record=records.find(r=>r?.round===round&&r.predictedDirection===latest.direction);
  if(status?.ok!==true||status.model!==GUARDIAN_ID||status.orders!==false||
@@ -60,24 +60,44 @@ export function guardianOrderSignal(status, now=Date.now()){
    finite(stats.wilsonLower)&&stats.wilsonLower>=0.70&&
    status.officialPriceFeedVerified===true;
  const p=qualified&&finite(stats.wilsonLower)?stats.wilsonLower:null;
+ // Owner's explicit, separately gated permission removes only research sample requirements.
+ // It never asserts a win probability, trading edge, or verified settlement feed.
+ const ownerMode=ownerAllowsUncalibrated===true&&!qualified;
  return {ok:true,round,direction:latest.direction,source:GUARDIAN_SOURCE,
    upstreamModel:GUARDIAN_ID,generatedAt:record.at,lockedAt:record.at,
    signalId:GUARDIAN_ID+':'+round+':'+record.at+':'+latest.direction,
    confidence:record.subjectiveConfidence??null, modelProbability:p,
-   executionEligible:qualified,calibrationReady:qualified,calibrationSamples:stats.settled??0,
-   qualityGate:qualified?'GUARDIAN_REAL_PRICE_AND_FORWARD_CALIBRATION_VERIFIED':'GUARDIAN_RESEARCH_UNCALIBRATED',
+   executionEligible:qualified||ownerMode,calibrationReady:qualified,calibrationSamples:stats.settled??0,
+   riskMode:ownerMode?'OWNER_UNCALIBRATED':qualified?'CALIBRATED':'RESEARCH_ONLY',
+   qualityGate:qualified?'GUARDIAN_REAL_PRICE_AND_FORWARD_CALIBRATION_VERIFIED':ownerMode?'OWNER_AUTHORIZED_UNCALIBRATED_NO_KNOWN_EDGE':'GUARDIAN_RESEARCH_UNCALIBRATED',
    marketAt:status.observedAt};
 }
-export function guardianQuoteGate(signal,quote,{feeBuffer=0.01,slippageBuffer=0.005,now=Date.now()}={}){
+export function guardianQuoteGate(signal,quote,{feeBuffer=0.01,slippageBuffer=0.005,now=Date.now(),maxUncalibratedChance=0.90}={}){
  if(signal?.upstreamModel!==GUARDIAN_ID||signal?.executionEligible!==true||
-    signal?.calibrationReady!==true||signal?.calibrationSamples<300||
-    !finite(signal.modelProbability)||signal.modelProbability<0.70||
     !Number.isSafeInteger(signal.round)||now>=signal.round+FIVE_MIN-25000)
-   return {ok:false,reason:'GUARDIAN_SIGNAL_NOT_VALIDATED'};
+  return {ok:false,reason:'GUARDIAN_SIGNAL_NOT_ELIGIBLE_OR_TOO_LATE'};
  const q=Number(quote?.chance);
- if(!Number.isFinite(q)||q<=0||q>=1||!quote?.quoteId||
+ const expireAt=Number(quote?.expireAt);
+ if(!Number.isFinite(q)||q<=0||q>=1||
+    typeof quote?.quoteId!=='string'||!quote.quoteId||
+    !Number.isSafeInteger(expireAt)||expireAt-now<=500||
     !finite(feeBuffer)||feeBuffer<0||!finite(slippageBuffer)||slippageBuffer<0)
-   return {ok:false,reason:'GUARDIAN_REAL_QUOTE_INVALID'};
+  return {ok:false,reason:'GUARDIAN_REAL_QUOTE_INVALID'};
+ if(signal.riskMode==='OWNER_UNCALIBRATED'){
+   // There is no statistically supported probability or net positive EV.
+   // Restrict extremely expensive outcome shares without pretending there is edge.
+   if(!finite(maxUncalibratedChance)||maxUncalibratedChance<=0||maxUncalibratedChance>=1)
+     return {ok:false,reason:'INVALID_OWNER_QUOTE_LIMIT'};
+   if(q>maxUncalibratedChance)
+     return {ok:false,reason:'GUARDIAN_UNCALIBRATED_QUOTE_TOO_EXPENSIVE',quoteChance:q};
+   return {ok:true,edge:null,riskMode:'OWNER_UNCALIBRATED',validatedProbability:false,
+     quoteChance:q,estimatedCostBuffer:feeBuffer+slippageBuffer};
+ }
+ if(signal.riskMode!=='CALIBRATED'||signal?.calibrationReady!==true||
+    signal?.calibrationSamples<300||!finite(signal.modelProbability)||
+    signal.modelProbability<0.70)
+   return {ok:false,reason:'GUARDIAN_SIGNAL_NOT_VALIDATED'};
  const edge=signal.modelProbability-q-feeBuffer-slippageBuffer;
- return edge>=0.05?{ok:true,edge}:{ok:false,reason:'GUARDIAN_NET_EDGE_BELOW_5PP',edge};
+ return edge>=0.05?{ok:true,edge,riskMode:'CALIBRATED'}:
+   {ok:false,reason:'GUARDIAN_NET_EDGE_BELOW_5PP',edge};
 }

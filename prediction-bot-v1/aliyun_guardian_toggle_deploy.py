@@ -21,6 +21,24 @@ trap 'rm -rf "$STAGE"' EXIT
 exec 9>/tmp/guardian-dynamic-toggle-deploy.lock
 flock -n 9
 test -x "$NODE"
+# Repeat runs must not restart an already verified installation.
+if curl -fsS --max-time 4 http://127.0.0.1:13001/api/guardian-dynamic-risk -o "$STAGE/current-toggle.json" 2>/dev/null &&
+   curl -fsSL --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$SHA/railway-diagnostic/guardian-main-dashboard.mjs" -o "$STAGE/expected-dashboard.mjs" &&
+   cmp -s "$ROOT/guardian-main-dashboard.mjs" "$STAGE/expected-dashboard.mjs";then
+ if python3 - "$STAGE/current-toggle.json" <<'PY'
+import sys,json
+s=json.load(open(sys.argv[1]))
+assert s.get('ok') and s.get('model')=='ZL_GUARDIAN_5M_V1'
+assert s.get('requestedEnabled') is False and s.get('effectiveEnabled') is False
+assert s.get('canEnable') is False
+PY
+ then
+   echo GUARDIAN_TOGGLE_ALREADY_DEPLOYED=true
+   echo GUARDIAN_TOGGLE_UI_DEPLOYED=true
+   echo GUARDIAN_TOGGLE_LIVE_TRADING_STILL_OFF=true
+   exit 0
+ fi
+fi
 for unit in zl-prediction-trade zl-prediction-risk-exits zl-prediction-guardian-analysis;do
  systemctl is-active --quiet "$unit"
 done

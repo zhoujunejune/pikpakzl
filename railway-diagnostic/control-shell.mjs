@@ -111,7 +111,7 @@ async function writeRiskConfig(next) {
 function guardianRiskToggleStatus(now=Date.now()){
   const config=readRiskConfig();
   let runtime=null,heart=null,proof=null;
-  try{runtime=JSON.parse(fs.readFileSync('/tmp/risk-runtime-status.json','utf8'))}catch{}
+  try{runtime=JSON.parse(fs.readFileSync(typeof RISK_RUNTIME_STATUS_FILE==='string'?RISK_RUNTIME_STATUS_FILE:'/tmp/risk-runtime-status.json','utf8'))}catch{}
   try{heart=JSON.parse(fs.readFileSync('/tmp/guardian-risk-ready.json','utf8'))}catch{}
   try{proof=JSON.parse(fs.readFileSync('/var/lib/zl-prediction/guardian5/guardian-sell-execution-verified.json','utf8'))}catch{}
   const approved=process.env.GUARDIAN_RISK_UI_ENABLE_APPROVED==='true' &&

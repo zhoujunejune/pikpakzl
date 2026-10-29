@@ -75,6 +75,23 @@ for name in ('guardian-risk-integration.mjs','risk-worker.mjs','risk-runner.mjs'
      if not any(t in ss.lower() for t in ('api_key','secret','authorization','token=')):
       print('GUARDIAN_RISK_SOURCE_LINE',j+1,ss)
  except Exception as e:print('GUARDIAN_RISK_SOURCE_ERROR',name,type(e).__name__)
+# Identify obsolete dynamic-risk widgets on live HTML; no account data logged.
+import pathlib,urllib.request
+root=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
+names=('guardian-main-dashboard.mjs','control-shell.mjs','panel-stats-shell.mjs')
+terms=('zlGDynamicTP','zlGDynamicSL','gdCard','GUARDIAN 专属动态风控',
+ 'GUARDIAN 动态止盈止损','关闭动态止盈止损','动态移动止盈','动态止损','现有固定止盈','现有固定止损')
+for name in names:
+ try:
+  text=(root/name).read_text()
+  print('GUARDIAN_UI_LIVE_SOURCE',name,{key:text.count(key) for key in terms})
+ except Exception as e:print('GUARDIAN_UI_LIVE_ERROR',name,type(e).__name__)
+for port,url in ((13001,'/'),(13001,'/guardian/')):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:'+str(port)+url,timeout=6) as response:
+   html=response.read(300000).decode('utf-8','replace')
+  print('GUARDIAN_UI_LIVE_HTML',url,{key:html.count(key) for key in terms})
+ except Exception as e:print('GUARDIAN_UI_HTML_ERROR',url,type(e).__name__)
 PY
 """
 def main():

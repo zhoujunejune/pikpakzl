@@ -134,7 +134,7 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 const source=fs.readFileSync(process.argv[2],'utf8');
 const marker='const SCRIPT = ';
-const begin=source.indexOf(marker),end=source.indexOf(';\\nconst htmlHeaders',begin);
+const begin=source.indexOf(marker),end=source.indexOf(';'+String.fromCharCode(10)+'const htmlHeaders',begin);
 assert.ok(begin>=0&&end>begin,'INLINE_SCRIPT_NOT_FOUND');
 const code=JSON.parse(source.slice(begin+marker.length,end));
 assert.ok(code.startsWith('<script>')&&code.endsWith('</script>'),'INLINE_SCRIPT_WRAPPER_INVALID');

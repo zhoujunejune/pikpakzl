@@ -58,7 +58,14 @@ try:
    'ok':d.get('ok'),
    'followingEnabled':d.get('enabled'),
    'selectedModel':d.get('orderSignalModel'),
+   'orderSignalModelReady':d.get('orderSignalModelReady'),
+   'autoConfirmEnabled':d.get('autoConfirmEnabled'),
+   'autoConfirmHalted':d.get('autoConfirmHalted'),
+   'guardianRiskReady':d.get('guardianRiskReady'),
    'pendingAction':d.get('pendingAction') is not None,
+   'pendingActionState':(d.get('pendingAction') or {}).get('state') if isinstance(d.get('pendingAction'),dict) else None,
+   'currentOrderSignalStatus':(d.get('orderSignal') or {}).get('status') if isinstance(d.get('orderSignal'),dict) else None,
+   'currentOrderSignalEligible':(d.get('orderSignal') or {}).get('executionEligible') if isinstance(d.get('orderSignal'),dict) else None,
  },sort_keys=True))
 except Exception as e:print('GUARDIAN_TRADE_STATUS_ERROR',type(e).__name__)
 # Print small, filtered code context around sell-quote readiness, without credentials.

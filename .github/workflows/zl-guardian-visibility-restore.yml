@@ -1,0 +1,53 @@
+name: Restore GUARDIAN read-only homepage visibility
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_restore_visibility.py
+      - .github/workflows/zl-guardian-visibility-restore.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian5-visibility-repair-only
+  cancel-in-progress: false
+jobs:
+  ui-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate Python, embedded JS and remote shell before touching Alibaba
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_restore_visibility.py
+          python - <<'PY'
+          import ast, pathlib, subprocess
+          p=pathlib.Path('prediction-bot-v1/aliyun_guardian_restore_visibility.py')
+          tree=ast.parse(p.read_text())
+          strs={x.targets[0].id:x.value.value for x in tree.body if isinstance(x,ast.Assign) and len(x.targets)==1 and isinstance(x.targets[0],ast.Name) and isinstance(x.value,ast.Constant) and isinstance(x.value.value,str)}
+          fragment=strs['VIS']
+          assert '<script>' in fragment and '</script>' in fragment
+          js=fragment.split('<script>',1)[1].split('</script>',1)[0]
+          test=subprocess.run(['node','--check'],input=js,text=True,capture_output=True)
+          print(test.stderr)
+          assert test.returncode==0,'READONLY_WIDGET_JS_SYNTAX_FAILURE'
+          shell=subprocess.run(['bash','-n'],input=strs['REMOTE'],text=True,capture_output=True)
+          print(shell.stderr)
+          assert shell.returncode==0,'REMOTE_SHELL_INVALID'
+          assert 'ZGV_RESTART_SKIPPED_TO_PROTECT_ACTIVE_TRADES=true' in strs['REMOTE']
+          print('GUARDIAN_READONLY_VISIBILITY_PATCH_VALID=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Stage UI-only patch on Alibaba and restart only if following is idle
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_restore_visibility.py

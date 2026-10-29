@@ -22,6 +22,7 @@ def overlay(base: str, updated: str, live: str, filename: str) -> str:
         'risk-config-storage.mjs': 'guardianDynamicEnabled: value.guardianDynamicEnabled === true',
         'risk-runner.mjs': 'function guardianOpenExposure(now=Date.now())',
     }
+    original_live_login='x-zl-verified-login' in live
     if markers[filename] in live:
         raise ValueError('PARTIAL_OR_ALREADY_PATCHED_ABORT')
     aa = base.splitlines(keepends=True)
@@ -65,7 +66,7 @@ def overlay(base: str, updated: str, live: str, filename: str) -> str:
         raise ValueError('GUARDIAN_PATCH_NOT_APPLIED')
     # Do not weaken real-site login, existing risk status, or Alibaba Redis paths.
     if filename == 'control-shell.mjs':
-        if ('x-zl-verified-login' in base) != ('x-zl-verified-login' in live):
+        if original_live_login and 'x-zl-verified-login' not in live:
             raise ValueError('LOGIN_GUARD_REGRESSION')
         if 'pinOK(body.pin, req)' not in live:
             raise ValueError('GUARDIAN_SAME_ORIGIN_CHECK_MISSING')

@@ -75,7 +75,7 @@ rootpath='/var/lib/zl-prediction/guardian5/guardian-live-orders.json'
 for module in ('guardian-live-bridge.mjs','guardian-risk-integration.mjs'):
  try:
   content=(pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')/module).read_text()
-  match=re.search(r"(?:GUARDIAN_REGISTRY|REGISTRY)\\s*=\\s*process\\.env\\.GUARDIAN_REGISTRY_FILE\\s*\\|\\|\\s*['\"]([^'\"]+)",content)
+  match=re.search(r"(?:GUARDIAN_REGISTRY|REGISTRY)\s*=\s*process\.env\.GUARDIAN_REGISTRY_FILE\s*\|\|\s*['\"]([^'\"]+)",content)
   derived=match.group(1) if match else None
   print('REGISTRY_MODULE_DEFAULT',module,derived)
   if module=='guardian-live-bridge.mjs' and derived:rootpath=derived

@@ -153,6 +153,16 @@ for port in (13001,13005,13049):
  except Exception as e:print('TARGET_API_ERROR',port,type(e).__name__)
 print('GUARDIAN_2320_AUDIT_END')
 PY
+python3 - <<'PY'
+from pathlib import Path
+import hashlib
+root=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for name in ('guardian-live-bridge.mjs','wrapper.mjs'):
+ p=root/name
+ if not p.exists():print('RECHECK_LIVE_CODE',name,'MISSING');continue
+ s=p.read_text()
+ print('RECHECK_LIVE_CODE',name,'sha256',hashlib.sha256(s.encode()).hexdigest(),'retainedObservation',('retainedObservation' in s),'GUARDIAN_RECHECK_V2',('GUARDIAN_RECHECK_V2' in s),'sameRoundStatusGuard',("latest.status==null" in s))
+PY
 echo PROBE_END
 '''
 def main():

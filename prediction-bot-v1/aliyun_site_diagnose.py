@@ -312,6 +312,28 @@ for tag,url in [
  except Exception as e:print('GUARDIAN_VIS_ERROR',tag,type(e).__name__)
 PY
 echo "GUARDIAN_VISIBILITY_READONLY_END"
+echo "GUARDIAN_VISIBILITY_ROUTE_PROBE_BEGIN"
+python3 - <<'PY'
+import re
+from pathlib import Path
+from urllib.request import urlopen
+for name in ['panel-stats-shell.mjs','wrapper.mjs','index.mjs','guardian-main-dashboard.mjs']:
+ p=Path('/opt/zl-prediction-live/src/railway-diagnostic')/name
+ try:
+  x=p.read_text()
+  keys=['injectGuardianMainDashboard','guardian-main-dashboard','roundResultsOnlyCard','zlGuardianMain','zlGuardianVisibilityRestoreV1','5分钟单边预测','GUARDIAN · 生产策略']
+  print('GUARDIAN_VIS_SOURCE',name,'bytes',len(x),'marks',{k:(k in x) for k in keys})
+ except Exception as e:print('GUARDIAN_VIS_SOURCE_ERR',name,type(e).__name__)
+for port in [13001,13005,13007,10000]:
+ try:
+  with urlopen(f'http://127.0.0.1:{port}/',timeout=5) as r:
+   html=r.read(450000).decode('utf8','replace')
+   t=re.search(r'<title[^>]*>(.*?)</title>',html,re.I|re.S)
+   keys=['zlGuardianMain','zlGuardianVisibilityRestoreV1','roundResultsOnlyCard','GUARDIAN · 生产策略','5分钟单边预测','LIVE MARKET CONTROL','<main','<div class="w"']
+   print('GUARDIAN_VIS_ROUTE',port,r.status,'length',len(html),'title',t.group(1)[:90] if t else None,'marks',{k:(k in html) for k in keys})
+ except Exception as e: print('GUARDIAN_VIS_ROUTE_ERR',port,type(e).__name__)
+PY
+echo "GUARDIAN_VISIBILITY_ROUTE_PROBE_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

@@ -51,3 +51,4 @@ jobs:
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
           python prediction-bot-v1/aliyun_guardian_restore_visibility.py
+# Manual rollout requested after following was stopped; preserve order state and all history.

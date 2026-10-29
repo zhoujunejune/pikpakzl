@@ -26,4 +26,4 @@ jobs:
           node --check railway-diagnostic/wrapper.mjs
           node --check railway-diagnostic/risk-runner.mjs
           node --check railway-diagnostic/risk-worker.mjs
-      - run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs
+      - run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-live-risk-readiness.test.mjs

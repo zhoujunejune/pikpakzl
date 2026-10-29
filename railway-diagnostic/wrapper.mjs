@@ -48,14 +48,22 @@ const EV_FILTER_ENABLED = false; // EV 仅保留计算/展示，不再作为实�
 const EV_FILTER_REQUIRE_CALIBRATED = !/^(0|false|no|off)$/i.test(String(process.env.PREDICTION_EV_REQUIRE_CALIBRATED || 'true'));
 const EV_MIN_EDGE = Math.max(0, Math.min(0.50, Number(process.env.PREDICTION_EV_MIN_EDGE || 0.04)));
 function guardianExitMonitorReady(now=Date.now()) {
-  if(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED!=='true')return false;
-  try{
-    const stat=fs.statSync('/tmp/guardian-risk-ready.json');
-    if(now-stat.mtimeMs>4000||stat.mtimeMs>now+500)return false;
-    const p=JSON.parse(fs.readFileSync('/tmp/guardian-risk-ready.json','utf8'));
-    return p?.model===GUARDIAN_ID&&p?.enabled===true&&
-      p?.realSellQuote===true&&p?.orderRegistry===true&&
-      Number.isFinite(p.at)&&now-p.at>=0&&now-p.at<=4000;
+  try {
+    const config=JSON.parse(fs.readFileSync('/tmp/risk-control.json','utf8'));
+    const runtime=JSON.parse(fs.readFileSync('/tmp/risk-runtime-status.json','utf8'));
+    const health=JSON.parse(fs.readFileSync('/tmp/risk-worker-health.json','utf8'));
+    if(runtime.workerRunning!==true||runtime.configApplied!==true||
+       !Number.isFinite(Date.parse(runtime.at))||now-Date.parse(runtime.at)>6000||
+       !Number.isFinite(Date.parse(health.lastSuccessfulPositionsAt))||
+       now-Date.parse(health.lastSuccessfulPositionsAt)>10000) return false;
+    if(config.dynamicExitEnabled!==true) {
+      return config.stopLossEnabled===true||config.takeProfitEnabled===true;
+    }
+    if(runtime.guardianDynamicExitEnabled!==true)return false;
+    const marker=JSON.parse(fs.readFileSync('/tmp/guardian-risk-ready.json','utf8'));
+    return marker.model===GUARDIAN_ID&&marker.enabled===true&&
+      marker.realSellQuote===true&&marker.orderRegistry===true&&
+      Number.isFinite(marker.at)&&now-marker.at>=0&&now-marker.at<=4000;
   }catch{return false}
 }
 let autoConfirmHalted = false;

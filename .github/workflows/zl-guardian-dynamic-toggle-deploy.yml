@@ -1,0 +1,42 @@
+name: GUARDIAN five-minute dynamic exit UI guarded production deployment
+on:
+  push:
+    branches: [feature/guardian-dynamic-risk-ui-toggle]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_toggle_deploy.py
+      - .github/workflows/zl-guardian-dynamic-toggle-deploy.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian-five-minute-dynamic-toggle-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 60}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Test controller and production overlay with no exchange writes
+        run: |
+          npm install --prefix railway-diagnostic --no-audit --no-fund --ignore-scripts
+          node --test railway-diagnostic/guardian-dynamic-toggle-ui.test.mjs railway-diagnostic/risk-controls-ui.test.mjs
+          python -m unittest discover -s prediction-bot-v1 -p 'test_guardian_toggle_overlay.py' -v
+          python -m py_compile prediction-bot-v1/aliyun_guardian_toggle_deploy.py
+          python - <<'PY'
+          import ast,subprocess
+          tree=ast.parse(open('prediction-bot-v1/aliyun_guardian_toggle_deploy.py').read())
+          script=next(n.value.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='SCRIPT' for x in n.targets))
+          out=subprocess.run(['bash','-n'],input=script,text=True,capture_output=True)
+          assert out.returncode==0,out.stderr
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy safe OFF-by-default GUARDIAN UI to existing Alibaba host
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_toggle_deploy.py

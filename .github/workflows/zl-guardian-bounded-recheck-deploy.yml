@@ -1,0 +1,55 @@
+name: Guarded GUARDIAN missing-signal recheck fix for Alibaba
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_recheck_deploy.py
+      - .github/workflows/zl-guardian-bounded-recheck-deploy.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian-missing-signal-recheck-deploy
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Compile patch and test finite, fail-closed signal revalidation
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_recheck_deploy.py
+          python - <<'PY'
+          import ast,subprocess
+          s=open('prediction-bot-v1/aliyun_guardian_recheck_deploy.py').read()
+          t=ast.parse(s)
+          remote=next(x.value.value for x in t.body if isinstance(x,ast.Assign) and any(getattr(y,'id',None)=='REMOTE' for y in x.targets))
+          p=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          print(p.stderr)
+          assert p.returncode==0,'REMOTE_SHELL_INVALID'
+          PY
+          node --check railway-diagnostic/wrapper.mjs
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --test railway-diagnostic/guardian-submit-recheck.test.mjs railway-diagnostic/guardian-live-bridge.test.mjs
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/feature/zl-futures-bot-v1' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install Alibaba SWAS SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Safely deploy with preflight, backup, rollback and health check
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID" && test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_recheck_deploy.py

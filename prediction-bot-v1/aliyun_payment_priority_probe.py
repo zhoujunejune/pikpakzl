@@ -128,7 +128,7 @@ for unit in ('zl-prediction-trade','zl-prediction-guardian-analysis'):
    obj=json.loads(line);at=datetime.datetime.fromtimestamp(int(obj['__REALTIME_TIMESTAMP'])/1e6,tz)
    if not lo<=at<hi:continue
    m=json.loads(obj.get('MESSAGE',''))
-   if not isinstance(m,dict) or not m.get('event'):continue
+   if not isinstance(m,dict) or not m.get('event') or str(m.get('event')).startswith(('stats_','market_','feed_','heartbeat_','poll_')):continue
    fields={k:m[k] for k in wanted if k in m and isinstance(m[k],(str,int,float,bool))}
    for k,v in list(fields.items()):
     if k=='orderId': fields[k]='PRESENT' if v else None

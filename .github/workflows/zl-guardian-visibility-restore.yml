@@ -53,7 +53,8 @@ jobs:
         run: |
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
-          python prediction-bot-v1/aliyun_guardian_restore_visibility.py
+          set -o pipefail
+          python prediction-bot-v1/aliyun_guardian_restore_visibility.py 2>&1 | tee /tmp/zgv-deploy.log
       - name: Publish auditable deployment result
         if: always()
         continue-on-error: true
@@ -64,12 +65,26 @@ jobs:
           ZGV_DEPLOY: ${{ steps.deploy.outcome }}
         run: |
           python - <<'PY'
-          import os,json,urllib.request
+          import os,json,urllib.request,re
           state='success' if os.getenv('ZGV_JOB_STATUS')=='success' else 'failure'
           phase='verify' if state=='success' else ('validation' if os.getenv('ZGV_VALIDATE')!='success' else 'aliyun-deploy')
+          diagnostic=''
+          try:
+            lines=open('/tmp/zgv-deploy.log',encoding='utf-8',errors='replace').read().splitlines()
+            pats=['PREDICTION_CADDY_HOST_MISSING','PREDICTION_FALLBACK_NOT_MATCHED','EXISTING_ROOT_PROXY_DRIFT','AUTH_MUST_BE_PRESERVED','STALE_OR_INVALID_MARKET','GUARDIAN_INJECTION_ANCHOR_CHANGED','ZGV_ROLLBACK_DONE','REMOTE_TIMEOUT','NODE_MODULE_NOT_FOUND','HTTP_404','ERR_UNKNOWN_FILE_EXTENSION','SECRET_MISSING']
+            diagnostic=next((p for p in pats if any(p in x for x in lines)), '')
+            if not diagnostic:
+              last=next((x for x in reversed(lines) if 'ZGV_REMOTE_RESULT ' in x),'')
+              m=re.search(r'ZGV_REMOTE_RESULT\\s+(\\w+)\\s+(\\d+)',last)
+              diagnostic=('REMOTE_'+m.group(1)+'_'+m.group(2)) if m else ''
+            if not diagnostic:
+              last=next((x for x in reversed(lines) if re.match(r'^(?:RuntimeError|AssertionError|SyntaxError|TypeError|FileNotFoundError):',x)), '')
+              diagnostic=re.sub('[^A-Z0-9_]+','_',last.upper())[:45]
+          except (OSError,ValueError): pass
+          context='guardian-ui-'+phase+('-'+diagnostic if state=='failure' and diagnostic else '')
           body=json.dumps({
             'state':state,
-            'context':'guardian-ui-'+phase,
+            'context':context[:100],
             'description':'Read-only visibility deploy '+state+'; trading engine not restarted'
           }).encode()
           url='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/statuses/'+os.environ['GITHUB_SHA']

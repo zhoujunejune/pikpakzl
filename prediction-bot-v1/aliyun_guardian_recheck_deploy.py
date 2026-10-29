@@ -83,7 +83,8 @@ call_new=new[new.index(old_call):new.index(call_end)]
 old_guard='''(current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
          current.executionEligible!==true||current.direction!==p.signal))) {'''
 new_guard='''(current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
-         current.executionEligible!==true||current.direction!==p.productionSignal))) {'''
+         current.executionEligible!==true||current.direction!==p.productionSignal||
+         mappedOrderSignal(current).orderSignal!==p.signal))) {'''
 old_log='''      currentStatus: current?.status ?? null,
       source,'''
 new_log='''      currentStatus: current?.status ?? null,
@@ -94,13 +95,11 @@ new_log='''      currentStatus: current?.status ?? null,
 for key in ('current.upstreamModel!==GUARDIAN_ID','submit_blocked_signal_changed','currentStatus: current?.status'):
  ix=live.find(key)
  print('GUARDIAN_RECHECK_LIVE_CONTEXT',key,repr(live[max(0,ix-290):ix+490])[:1200] if ix>=0 else 'NOT_PRESENT')
-for text,expected in [(old_call,1),(old_guard,1),(old_log,1),
-                      (new_guard,0),(new_log,0)]:
+for text,expected in [(old_call,1),(old_log,1),(new_guard,1),(new_log,0)]:
  assert live.count(text)==expected,('LIVE_ANCHOR_MISMATCH',text[:45],live.count(text))
 assert new.count(new_guard)==1 and new.count(new_log)==1
 patched=live.replace(marker,chunk+marker,1)
 patched=patched.replace(old_call,call_new,1)
-patched=patched.replace(old_guard,new_guard,1)
 patched=patched.replace(old_log,new_log,1)
 assert 'guardianRetryMissingSignal' in patched and 'signalIdMatches' in patched,'PATCH_INCOMPLETE'
 Path(sys.argv[3]).write_text(patched)

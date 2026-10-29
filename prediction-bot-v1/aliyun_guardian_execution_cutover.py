@@ -149,7 +149,11 @@ s=json.load(open(sys.argv[1]))
 assert s.get('ok') and s.get('enabled') is False
 assert s.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1'
 assert not s.get('pendingAction')
-assert s.get('guardianRiskReady') is True,'FIXED_EXIT_READINESS_NOT_CONFIRMED'
+if s.get('guardianRiskReady') is not True:
+ print('GUARDIAN_FIXED_EXIT_STATUS_MISSING_OR_FALSE',
+       {'fieldPresent':'guardianRiskReady' in s,'value':s.get('guardianRiskReady'),
+        'fixedTp':s.get('takeProfitEnabled'),'fixedSl':s.get('stopLossEnabled')})
+ raise AssertionError('FIXED_EXIT_READINESS_NOT_CONFIRMED')
 PY
     then healthy=1;break;fi
   fi

@@ -1,9 +1,10 @@
 // Shared persistence for the UI configuration (not the prediction/trade decision logic).
 // Redis is the authoritative store across Railway container replacements.
 import fs from 'node:fs';
+import path from 'node:path';
 import { createClient } from 'redis';
 
-export const RISK_CONFIG_FILE = process.env.RISK_CONTROL_FILE || '/tmp/risk-control.json';
+export const RISK_CONFIG_FILE = process.env.RISK_CONTROL_FILE || path.join(process.env.RISK_DATA_DIR||'/var/lib/zl-prediction/rounds','risk-control.json');
 export const RISK_REDIS_KEY = 'trade-control:risk-config:v1';
 let client = null;
 let connecting = null;
@@ -35,6 +36,7 @@ function writeLocal(config) {
   } catch (e) {
     if (e?.code !== 'ENOENT') throw e;
   }
+  fs.mkdirSync(path.dirname(RISK_CONFIG_FILE),{recursive:true,mode:0o750});
   const temporary = RISK_CONFIG_FILE + '.tmp-' + process.pid;
   fs.writeFileSync(temporary, serialized, 'utf8');
   fs.renameSync(temporary, RISK_CONFIG_FILE);

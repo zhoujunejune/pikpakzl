@@ -1,0 +1,41 @@
+name: GUARDIAN 5M fixed-only repair regression (NO LIVE ORDERS)
+on:
+  push:
+    branches:
+      - 'fix/guardian5-fixed-only-readiness-*'
+    paths:
+      - 'railway-diagnostic/**'
+      - '.github/workflows/guardian5-fixed-repair-ci.yml'
+  pull_request:
+    paths:
+      - 'railway-diagnostic/**'
+      - '.github/workflows/guardian5-fixed-repair-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check production module JavaScript syntax
+        run: |
+          for f in railway-diagnostic/{index,wrapper,guardian-fixed-readiness,guardian-live-bridge,risk-runner,risk-worker,risk-config-storage,control-shell,guardian-main-dashboard}.mjs; do
+            node --check "$f"
+          done
+      - name: Run GUARDIAN fixed exit and transaction policy unit regressions (mock only)
+        run: |
+          node --test railway-diagnostic/guardian-fixed-readiness.test.mjs \
+            railway-diagnostic/order-submit-window.test.mjs \
+            railway-diagnostic/risk-persistence-status.test.mjs \
+            railway-diagnostic/risk-worker-speed.test.mjs \
+            railway-diagnostic/real-risk-monitor.test.mjs
+      - name: Assert no dynamic SELL and no live trading in CI
+        run: |
+          ! grep -q "guardianRiskQuote(" railway-diagnostic/risk-worker.mjs
+          grep -q "guardianRiskReady: guardianRuntimeReadiness.ready" railway-diagnostic/index.mjs
+          grep -q "GUARDIAN_DYNAMIC_EXIT_ENABLED:'false'" railway-diagnostic/risk-runner.mjs

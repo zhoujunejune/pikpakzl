@@ -47,30 +47,7 @@ function rejectExpiredOrderWindow(p, stage) {
 const EV_FILTER_ENABLED = false; // EV 仅保留计算/展示，不再作为实盘下单拦截条件
 const EV_FILTER_REQUIRE_CALIBRATED = !/^(0|false|no|off)$/i.test(String(process.env.PREDICTION_EV_REQUIRE_CALIBRATED || 'true'));
 const EV_MIN_EDGE = Math.max(0, Math.min(0.50, Number(process.env.PREDICTION_EV_MIN_EDGE || 0.04)));
-function guardianRiskState(paths) {
-  for(const name of paths){
-    if(!name)continue;
-    try{return JSON.parse(fs.readFileSync(name,'utf8'))}catch{}
-  }
-  return null;
-}
-function guardianExitMonitorReady(now=Date.now()) {
-  // Fixed-only GUARDIAN mode: never treat an unverified dynamic SELL monitor
-  // as a substitute for the user's two enabled, live fixed exit controls.
-  const root='/var/lib/zl-prediction/rounds/';
-  const config=guardianRiskState([process.env.RISK_CONTROL_FILE,root+'risk-control.json','/tmp/risk-control.json']);
-  const runtime=guardianRiskState([process.env.RISK_STATUS_FILE,root+'risk-runtime-status.json','/tmp/risk-runtime-status.json']);
-  const health=guardianRiskState([process.env.RISK_WORKER_HEALTH_FILE,root+'risk-worker-health.json','/tmp/risk-worker-health.json']);
-  if(!config||!runtime||!health)return false;
-  const statusAge=now-Date.parse(runtime.at);
-  const positionAge=now-Date.parse(health.lastSuccessfulPositionsAt);
-  return config.takeProfitEnabled===true&&config.stopLossEnabled===true&&
-    runtime.enabled===true&&runtime.workerRunning===true&&runtime.configApplied===true&&
-    runtime.guardianDynamicExitEnabled===false&&runtime.transitioning!==true&&
-    Number.isFinite(statusAge)&&statusAge>=0&&statusAge<=6000&&
-    Number.isFinite(positionAge)&&positionAge>=0&&positionAge<=10000&&
-    Number.isSafeInteger(health.positionsSeen)&&health.positionsSeen>=0;
-}
+function guardianExitMonitorReady(){return guardianFixedReadiness().ready;}
 
 let autoConfirmHalted = false;
 let lastAutoSubmitAt = 0;
@@ -145,6 +122,15 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     }));
   }
 
+  if(p.signalModelChoice===GUARDIAN_ID){
+    const risk=guardianFixedReadiness();
+    if(!risk.ready){
+      p.state='RISK_NOT_READY';p.blockReason='RISK_NOT_READY';
+      p.riskDetail=risk.reason;
+      p.error='固定止盈止损执行器尚未就绪：'+risk.reason;
+      return {status:503,body:{ok:false,reason:'RISK_NOT_READY',detail:risk.reason,error:p.error}};
+    }
+  }
   p.state = 'QUOTING';
   p.error = null;
   p.code = null;
@@ -165,7 +151,8 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
          current.executionEligible!==true))||
       (p.signalModelChoice===GUARDIAN_ID&&
         (current.upstreamModel!==GUARDIAN_ID||current.signalId!==p.signalId||
-         current.executionEligible!==true||current.direction!==p.signal))) {
+         current.executionEligible!==true||current.direction!==p.productionSignal||
+         mappedOrderSignal(current).orderSignal!==p.signal))) {
     pendingAction = null;
     console.log(JSON.stringify({
       event: 'submit_blocked_signal_changed',
@@ -237,7 +224,7 @@ async function submitPendingOrder(p, { source = 'manual' } = {}) {
     if(!guardianExitMonitorReady()||!validation.ok){
       p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
       p.blockReason=!guardianExitMonitorReady()
-        ?'GUARDIAN_DYNAMIC_SELL_MONITOR_UNVERIFIED':validation.reason;
+        ?'RISK_NOT_READY':validation.reason;
       p.error='GUARDIAN真实退出监控未就绪，或交易所报价无效、已过期，未下单';
       return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
     }
@@ -756,20 +743,16 @@ const newConfirmRoute = String.raw`  if (req.method === 'POST' && url.pathname =
   }`;
 source = source.slice(0, confirmStartIndex) + newConfirmRoute + source.slice(notFoundIndex);
 
-// A previously patched live index may already contain autoConfirmEnabled.
-// Insert readiness exactly once and fail before starting the server on an unknown status shape.
-const guardianReadyField = "      guardianRiskReady: guardianExitMonitorReady(),";
-if (!source.includes(guardianReadyField)) {
-  const bare = "      enabled,\n      amount: tradeAmountText,";
-  const alreadyAuto = "      autoConfirmHalted,\n      amount: tradeAmountText,";
-  const bareCount = source.split(bare).length - 1;
-  const autoCount = source.split(alreadyAuto).length - 1;
-  if (bareCount + autoCount !== 1) throw new Error('GUARDIAN_STATUS_INJECTION_ANCHOR_MISMATCH');
-  source = bareCount === 1
-    ? source.replace(bare, "      enabled,\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n" + guardianReadyField + "\n      amount: tradeAmountText,")
-    : source.replace(alreadyAuto, "      autoConfirmHalted,\n" + guardianReadyField + "\n      amount: tradeAmountText,");
-}
-if (!source.includes(guardianReadyField)) throw new Error('GUARDIAN_STATUS_READINESS_FIELD_MISSING');
+// GUARDIAN live execution is only allowed through this protected wrapper.
+const guardianExecutorFields = "      guardianExecutionReady: false,\n      guardianExecutionBlockReason: 'GUARDIAN_WRAPPER_REQUIRED',";
+if (source.split(guardianExecutorFields).length !== 2) throw new Error('GUARDIAN_EXECUTOR_STATUS_ANCHOR_MISMATCH');
+source = source.replace(guardianExecutorFields,
+  "      guardianExecutionReady: guardianRuntimeReadiness.ready,\n      guardianExecutionBlockReason: guardianRuntimeReadiness.reason,");
+
+// Readiness is exported directly by index.mjs; no fragile status-response injection.
+if (!source.includes('guardianRiskReady: guardianRuntimeReadiness.ready') ||
+    !source.includes('guardianRiskBlockReason: guardianRuntimeReadiness.reason'))
+  throw new Error('GUARDIAN_STATUS_READINESS_FIELD_MISSING');
 source = source.replace(
   "      hasWalletId: Boolean(ENV_WALLET_ID),",
   "      hasWalletId: Boolean(ENV_WALLET_ID),\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n      autoConfirmCooldownMs: AUTO_CONFIRM_COOLDOWN_MS,\n      autoConfirmStopOnError: AUTO_CONFIRM_STOP_ON_ERROR,"

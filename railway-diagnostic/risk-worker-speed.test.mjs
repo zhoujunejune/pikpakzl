@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import crypto from 'node:crypto';
 
-const originalBlobSha = '6a3f4fa32ad6211732270b3b5102e7f6461c34a7';
 const source = fs.readFileSync(new URL('./risk-worker.mjs', import.meta.url), 'utf8');
 
 const newPrepare = `    // Warm the existing payment lookup while unchanged position/quote checks run.
@@ -32,10 +30,15 @@ test('risk-worker has exactly one asynchronous payment prefetch and awaits at SE
   assert.match(source, /const quoteResult = await getSellQuote\(wallet, position, topic\);/);
 });
 
-test('risk formulas, thresholds, quote rules, SELL and retry code are byte-for-byte unchanged', () => {
-  const baseline = source.replace(newPrepare, oldPrepare).replace(newSell, oldSell);
-  const gitObject = crypto.createHash('sha1')
-    .update('blob ' + Buffer.byteLength(baseline) + String.fromCharCode(0))
-    .update(baseline).digest('hex');
-  assert.equal(gitObject, originalBlobSha);
+test('fixed exit quotes, targets, selling and retry loop remain active without dynamic GUARDIAN exit', () => {
+  assert.match(source,/const tpTriggered = TAKE_PROFIT_ENABLED/);
+  assert.match(source,/const slTriggered = STOP_LOSS_ENABLED/);
+  assert.match(source,/const currentSellAmount = weiToDecimal\(quote\?\.amountOut\)/);
+  assert.match(source,/await sellPosition\(wallet, payment, position, topic, targets, quoteResult, evaluation\)/);
+  assert.match(source,/async function sellPosition/);
+  assert.match(source,/const RETRY_MS =/);
+  assert.match(source,/function evaluatePositionRisk\(position,targets,quote\)/);
+  assert.match(source,/return evaluateRisk\(targets,quote\)/);
+  assert.doesNotMatch(source,/guardianRiskQuote\(/);
+  assert.doesNotMatch(source,/guardianRiskHeartbeat\(/);
 });

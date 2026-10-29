@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
+      - name: Install existing risk-control dependencies
+        run: npm install --prefix railway-diagnostic --no-audit --no-fund --ignore-scripts
       - name: Verify JS syntax
         run: |
           node --check railway-diagnostic/guardian-main-dashboard.mjs

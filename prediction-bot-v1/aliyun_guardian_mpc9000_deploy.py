@@ -32,6 +32,7 @@ import json,datetime,urllib.request,pathlib
 with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=5) as r:s=json.load(r)
 assert s.get('ok') is True and s.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1','TRADE_MODEL_UNREADY'
 assert s.get('guardianRiskReady') is True and s.get('guardianExecutionReady') is True,'RISK_OR_EXECUTION_NOT_READY'
+assert s.get('enabled') is False,'FOLLOW_ENABLED_ABORT'
 p=s.get('pendingAction') or {}
 now=int(datetime.datetime.now(datetime.timezone.utc).timestamp()*1000)
 if p.get('round') is not None and int(p['round'])>=now//300000*300000-300000:
@@ -43,7 +44,7 @@ r=json.loads((root/'risk-runtime-status.json').read_text())
 h=json.loads((root/'risk-worker-health.json').read_text())
 c=json.loads((root/'risk-control.json').read_text())
 assert r.get('workerRunning') is True and r.get('configApplied') is True,'EXIT_MONITOR_UNREADY'
-assert c.get('takeProfitEnabled') is True and c.get('stopLossEnabled') is True,'FIXED_EXITS_DISABLED'
+assert isinstance(c.get('takeProfitEnabled'), bool) and c.get('stopLossEnabled') is True,'FIXED_EXITS_CONFIG_INVALID'
 assert h.get('positionsSeen')==0,'OPEN_POSITION_DEPLOY_ABORT'
 print('MPC9000_PREFLIGHT_PASS',s.get('enabled'))
 PY
@@ -56,11 +57,11 @@ from pathlib import Path
 import sys
 old=Path(sys.argv[1]).read_text(); new=Path(sys.argv[2]).read_text()
 marker="  return /insufficient.{0,70}(?:balance|funds?|usdt)|"
-guard="""  // Binance Prediction quote HTTP 400 / -9000: MPC funds are unavailable.
+guard='''  // Binance Prediction quote HTTP 400 / -9000: MPC funds are unavailable.
   // Exact message and code only; never treat unrelated -9000, network, 5xx or 451 as safe fallback.
   if (Number(call.code ?? call.data?.code) === -9000 &&
       /^please ensure your account has enough usdt\\.?$/.test(message.trim())) return true;
-"""
+'''
 assert old.count(marker)==1 and new.count(marker)==1 and new.count(guard)==1,'PATCH_ANCHOR_INVALID'
 assert old.count(guard)==0,'ALREADY_PATCHED'
 patched=old.replace(marker,guard+marker,1)

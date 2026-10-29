@@ -63,11 +63,11 @@ try:
 except Exception as e:print('GUARDIAN_TRADE_STATUS_ERROR',type(e).__name__)
 # Print small, filtered code context around sell-quote readiness, without credentials.
 src=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')
-for name in ('guardian-risk-integration.mjs','risk-worker.mjs'):
+for name in ('guardian-risk-integration.mjs','risk-worker.mjs','risk-runner.mjs','risk-config-storage.mjs'):
  try:
   lines=(src/name).read_text().splitlines()
   for i,line in enumerate(lines):
-   if any(x in line for x in ('guardianRiskHeartbeat(', 'realSellQuote:', 'guardianRiskQuote(')):
+   if any(x in line for x in ('guardianRiskHeartbeat(', 'realSellQuote:', 'guardianRiskQuote(', 'GUARDIAN_DYNAMIC_EXIT_ENABLED', 'dynamicExitEnabled:', 'function defaultConfig', 'function readConfig', 'function startWorker')):
     print('GUARDIAN_RISK_SOURCE',name,'line',i+1)
     for j in range(max(0,i-4),min(len(lines),i+8)):
      ss=lines[j].strip()

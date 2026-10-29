@@ -62,6 +62,9 @@ export function guardianRiskHeartbeat(healthy,opts={}){
   if(!enabled)return;
   const file=opts.file||READY,at=opts.at??Date.now();
   // This is process health, NOT a guarantee that Binance will fill a SELL.
+  // A successful position poll proves a live monitor, NOT a filled SELL.
+  // Never mark a real executable SELL quote as verified without one.
   writeAtomic(file,{model:GUARDIAN_MODEL,at,enabled:Boolean(healthy),
-    realSellQuote:true,orderRegistry:true});
+    positionsPollVerified:Boolean(healthy),realSellQuote:opts.realSellQuote===true,
+    orderRegistry:true,actualSellFillVerified:false});
 }

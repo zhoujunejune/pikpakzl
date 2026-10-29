@@ -226,8 +226,7 @@ http.createServer(async (req, res) => {
     if (!persistenceReady||!persistenceHealthy)
       return sendJson(res,503,{ok:false,error:'Redis持久化不可用；未更改动态止盈止损设置'});
     if (body.enabled && !guardianRiskToggleStatus().canEnable)
-      return sendJson(res,409,{ok:false,error:'真实SELL平仓及异常恢复未完成生产验收，动态止盈止损暂不能开启',
-        ...guardianRiskToggleStatus()});
+      return sendJson(res,409,{...guardianRiskToggleStatus(),ok:false,error:'真实SELL平仓及异常恢复未完成生产验收，动态止盈止损暂不能开启'});
     try{
       await serializedRiskWrite(async()=>writeRiskConfig({...readRiskConfig(),guardianDynamicEnabled:body.enabled}));
       log('guardian_dynamic_risk_user_switch',{requestedEnabled:body.enabled});

@@ -103,7 +103,7 @@ ROOT=/opt/zl-prediction-live/ui-sidecar
 DEST=$ROOT/guardian-visibility-sidecar.mjs
 UNIT=/etc/systemd/system/zl-prediction-ui-visibility.service
 HOST=prediction.47-237-188-69.sslip.io
-SHA=c1b0c082269274163e892a1db1f4e2c3e556fdc7
+SHA=c5db4aa955ef063156ecc991fe4454bffa5b108e
 test -x "$NODE" && test -r "$CADDY"
 systemctl is-active --quiet zl-prediction-trade
 systemctl is-active --quiet caddy
@@ -154,7 +154,10 @@ systemctl enable zl-prediction-ui-visibility >/dev/null
 systemctl restart zl-prediction-ui-visibility
 for i in $(seq 1 18);do
   if curl -fsS --max-time 4 http://127.0.0.1:13051/ -o "$BACK/page.html" &&
-     grep -q '__zlGuardianLiveVisibilityV2' "$BACK/page.html" &&
+     grep -q '__zlGuardianLiveVisibilityV2' "$BACK/page.html"
+grep -q 'zgv2WinRate' "$BACK/page.html"
+grep -q 'zgv2WinCounts' "$BACK/page.html"
+grep -q 'zgv2RecentWinRate' "$BACK/page.html" &&
      curl -fsS --max-time 3 http://127.0.0.1:13051/healthz | grep -q '"ok":true'; then break;fi
   sleep 1
 done

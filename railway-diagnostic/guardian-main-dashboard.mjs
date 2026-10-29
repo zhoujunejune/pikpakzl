@@ -64,7 +64,7 @@ const SCRIPT=String.raw`<script>(function(){
    var riskReady=t.guardianRiskReady===true;
    var reason=t.guardianRiskBlockReason||'RISK_NOT_READY';
    put('zlGRiskReady',riskReady?'固定风控已就绪':reason);
-   put('zlGExecutionReady',!ready?'模型配置不可用':!riskReady?'不可开新仓 · '+reason:t.enabled===true?'跟随开启 · 等待有效报价':'执行器就绪 · 跟随关闭');
+   put('zlGExecutionReady',!ready?'模型配置不可用':t.guardianExecutionReady!==true?'执行入口未就绪 · '+(t.guardianExecutionBlockReason||reason):t.enabled===true?'跟随开启 · 等待有效报价':'执行器就绪 · 跟随关闭');
    put('zlGFixedTP',risk&&risk.ok?(risk.takeProfitEnabled?'开启 · '+Number(risk.takeProfitPercent)+'% 理论盈利空间':'关闭'):'读取失败');
    put('zlGFixedSL',risk&&risk.ok?(risk.stopLossEnabled?'开启 · 亏损 '+Number(risk.stopLossPercent)+'% 触发':'关闭'):'读取失败');
    put('zlGRiskPersistence',risk&&risk.ok?(risk.persistenceHealthy===true?'正常':'未就绪'):'状态未知');

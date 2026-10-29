@@ -163,6 +163,74 @@ for name in ('guardian-live-bridge.mjs','wrapper.mjs'):
  s=p.read_text()
  print('RECHECK_LIVE_CODE',name,'sha256',hashlib.sha256(s.encode()).hexdigest(),'retainedObservation',('retainedObservation' in s),'GUARDIAN_RECHECK_V2',('GUARDIAN_RECHECK_V2' in s),'sameRoundStatusGuard',("latest.status==null" in s))
 PY
+echo GUARDIAN_FULL_ORDER_READONLY_AUDIT_BEGIN
+python3 - <<'PY'
+import json,subprocess,datetime,urllib.request,pathlib,collections,re,time
+tz=datetime.timezone(datetime.timedelta(hours=8))
+def safe_read(port,ep):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:%s%s'%(port,ep),timeout=4) as r:return json.load(r)
+ except Exception as e:return {'readError':type(e).__name__}
+def filt(row,names):return {k:row.get(k) for k in names}
+for port in (13001,13005):
+ s=safe_read(port,'/api/status')
+ keys=['ok','enabled','mode','orderSignalModel','orderSignalModelReady','guardianRiskReady','guardianExecutionReady','directionModeReady','autoConfirmEnabled','autoConfirmHalted','tradeAmount','amount','lastAutoSubmitAt','pendingAction','lastOrder']
+ vals=filt(s,keys)
+ for k in ('pendingAction','lastOrder'):
+  ob=vals.get(k) or {}; vals[k]=filt(ob,['state','round','code','httpStatus','error','blockReason','paymentAccount','orderAttempts','maxOrderAttempts','amount','submittedAt','startedAt'])
+ print('FULL_AUDIT_TRADE_STATUS',port,json.dumps(vals,ensure_ascii=False,default=str)[:2000])
+s=safe_read(13049,'/api/status')
+rec=s.get('records') or []
+print('FULL_AUDIT_GUARDIAN',json.dumps({'ok':s.get('ok'),'configured':s.get('configured'),'model':s.get('model'),'error':str(s.get('error',''))[:120],
+'latest':filt(s.get('latest') or {},['round','direction','reason','status']),
+'round':s.get('round'),'observedAgeSec':round((time.time()*1000-int(s.get('observedAt') or 0))/1000,1) if s.get('observedAt') else None,
+'recordsLast5':[filt(x,['round','at','status','predictedDirection']) for x in rec[-5:]]},ensure_ascii=False,default=str)[:1800])
+riskroot=pathlib.Path('/var/lib/zl-prediction/rounds')
+def age(x):
+ if not x:return None
+ try:return round(time.time()-datetime.datetime.fromisoformat(str(x).replace('Z','+00:00')).timestamp(),1)
+ except:return None
+for name,keys in [
+ ('risk-control.json',['takeProfitEnabled','stopLossEnabled','takeProfitPercent','stopLossPercent','enabled']),
+ ('risk-runtime-status.json',['enabled','workerRunning','configApplied','transitioning','guardianDynamicExitEnabled','at','error']),
+ ('risk-worker-health.json',['positionsSeen','lastSuccessfulPositionsAt','lastErrorAt','lastError','lastTickFinishedAt','quoteErrors'])]:
+ try:
+  p=riskroot/name
+  d=json.loads(p.read_text())
+  out=filt(d,keys)
+  for k in ['at','lastSuccessfulPositionsAt','lastTickFinishedAt']:
+   if k in out:out[k+'AgeSec']=age(out.pop(k))
+  print('FULL_AUDIT_RISK',name,json.dumps(out,ensure_ascii=False,default=str)[:900])
+ except Exception as e:print('FULL_AUDIT_RISK_MISSING',name,type(e).__name__)
+for service in ('zl-prediction-trade','zl-prediction-guardian-analysis','zl-prediction-risk-exits','redis-server'):
+ p=subprocess.run(['systemctl','is-active',service],capture_output=True,text=True,timeout=3)
+ print('FULL_AUDIT_SERVICE',service,p.stdout.strip() or 'unknown')
+for file in ('index.mjs','wrapper.mjs','guardian-live-bridge.mjs'):
+ p=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')/file
+ if not p.exists(): print('FULL_AUDIT_FILE_MISSING',file);continue
+ t=p.read_text()
+ print('FULL_AUDIT_LIVE_CODE',file,{'guardedSignalRetries':'GUARDIAN_RECHECK_V2' in t,'observedRetention':'retainedObservation' in t,'takeProfitRequired':"config.takeProfitEnabled===true&&config.stopLossEnabled===true" in t,'guardianSourcePresent':'GUARDIAN_ID' in t})
+# Production journald: only event type & safe scalar attributes; never print credentials or raw order objects.
+proc=subprocess.run(['journalctl','-u','zl-prediction-trade','--since','12 hours ago','-o','json','--no-pager'],capture_output=True,text=True,timeout=25)
+wanted={'api_confirm_control','api_intent_ready','intent_prepare_failed','auto_submit_triggered','auto_confirm_halted','guardian_signal_recheck_completed','submit_blocked_signal_changed','fresh_quote_failed','fresh_quote_ready','prediction_wallet_quote_insufficient_spot_fallback','prediction_wallet_insufficient_spot_unavailable','api_order_submit_attempt','api_order_failed','api_order_submitted','order_submit_attempt_denied','order_submit_deadline_expired','order_retry_requote_failed','order_unknown_fence_failed','submission_unknown','risk_worker_unready','guard_order_blocked','guardian_feed_unavailable','production_signal_choice_hydrate_failed','direction_mode_hydrate_failed','order_status_conflict_auto_halted'}
+freq=collections.Counter();last=[]
+for line in proc.stdout.splitlines():
+ try:
+  row=json.loads(line); m=json.loads(row.get('MESSAGE',''))
+  if not isinstance(m,dict):continue
+  e=m.get('event')
+  if e not in wanted:continue
+  freq[e]+=1
+  ts=datetime.datetime.fromtimestamp(int(row['__REALTIME_TIMESTAMP'])/1e6,tz).strftime('%m-%d %H:%M:%S')
+  item={k:m.get(k) for k in ('round','state','code','httpStatus','source','spotQuoteOk','retries','signalRecovered','signalIdMatches','attempt','maxAttempts','status','currentStatus','currentDirection','currentSignalIdMatches','recheckRetries','paymentAccount','productionSignal','orderSignal','amount') if m.get(k) is not None and isinstance(m.get(k),(str,int,float,bool))}
+  if 'error' in m and isinstance(m['error'],str):item['error']=m['error'][:120]
+  last.append([ts,e,item])
+ except Exception:continue
+print('FULL_AUDIT_LOG_READ',proc.returncode,len(proc.stdout.splitlines()))
+print('FULL_AUDIT_EVENTS_COUNTS',json.dumps(freq,ensure_ascii=False))
+for i in last[-25:]:print('FULL_AUDIT_EVENT',json.dumps(i,ensure_ascii=False))
+print('GUARDIAN_FULL_ORDER_READONLY_AUDIT_END')
+PY
 echo PROBE_END
 '''
 def main():

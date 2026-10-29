@@ -52,6 +52,17 @@ test('heartbeat never claims readiness while disabled',()=>{
   guardianRiskHeartbeat(true,{enabled:true,file,at:1793182200000});
   const r=JSON.parse(fs.readFileSync(file,'utf8'));
   assert.equal(r.model,'ZL_GUARDIAN_5M_V1');
-  assert.equal(r.enabled,true);assert.equal(r.realSellQuote,true);
+  assert.equal(r.enabled,true);assert.equal(r.positionsPollVerified,true);
+  assert.equal(r.realSellQuote,false);assert.equal(r.actualSellFillVerified,false);
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
+});
+
+test('all Guardian cross-process state files share writable production rounds directory',async()=>{
+ const bridge=await import('./guardian-live-bridge.mjs');
+ const risk=await import('./guardian-risk-integration.mjs');
+ const base=process.env.GUARDIAN_STATE_DIR||'/var/lib/zl-prediction/rounds/guardian5';
+ assert.equal(bridge.GUARDIAN_REGISTRY,path.join(base,'guardian-live-orders.json'));
+ assert.equal(risk.READY,path.join(base,'guardian-risk-ready.json'));
+ assert.match(fs.readFileSync(new URL('./risk-runner.mjs',import.meta.url),'utf8'),/rounds\/guardian5/);
+ assert.match(fs.readFileSync(new URL('./wrapper.mjs',import.meta.url),'utf8'),/rounds\/guardian5/);
 });

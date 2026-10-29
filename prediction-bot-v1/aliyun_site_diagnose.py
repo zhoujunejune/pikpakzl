@@ -280,6 +280,38 @@ for raw in found[-24:]:
  print("SITE_NODE_LAST_ERROR",x[:215])
 '
 echo "SITE_NODE_LAST_ERRORS_END"
+echo "GUARDIAN_VISIBILITY_READONLY_BEGIN"
+python3 - <<'PY'
+from pathlib import Path
+from urllib.request import urlopen
+import json, time
+file=Path('/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs')
+print('GUARDIAN_VIS_DISK_PRESENT',file.exists())
+print('GUARDIAN_VIS_DISK_HAS_PATCH',file.exists() and 'zlGuardianVisibilityRestoreV1' in file.read_text(errors='replace'))
+for tag,url in [
+ ('HOME','http://127.0.0.1:13001/'),
+ ('GUARDIAN','http://127.0.0.1:13049/api/status'),
+ ('TRADE','http://127.0.0.1:13001/api/status'),
+ ('FEED','http://127.0.0.1:13003/api/shadow-market-data'),
+]:
+ try:
+  with urlopen(url,timeout=8) as r:
+   content=r.read(1100000)
+   print('GUARDIAN_VIS_HTTP',tag,r.status)
+   if tag=='HOME':
+    print('GUARDIAN_VIS_LIVE_HTML_HAS_PATCH',b'zlGuardianVisibilityRestoreV1' in content)
+    print('GUARDIAN_VIS_LIVE_HTML_HAS_GUARDIAN',b'zlGuardianMain' in content)
+   else:
+    j=json.loads(content)
+    if tag=='GUARDIAN':
+     print('GUARDIAN_VIS_BACKEND',{'ok':j.get('ok'),'model':j.get('model'),'records':len(j.get('records') or []),'recorded':(j.get('stats') or {}).get('shadowPredictions'),'latestSignal':(j.get('latest') or {}).get('direction'),'lastTickAgeSeconds':round((time.time()*1000-float(j.get('lastTickAt') or 0))/1000) if j.get('lastTickAt') else None})
+    elif tag=='TRADE':
+     print('GUARDIAN_VIS_FOLLOW',{'ok':j.get('ok'),'enabled':j.get('enabled'),'pendingAction':bool(j.get('pendingAction'))})
+    else:
+     print('GUARDIAN_VIS_FEED',{'ok':j.get('ok'),'topLevelFields':sorted(j.keys())[:22]})
+ except Exception as e:print('GUARDIAN_VIS_ERROR',tag,type(e).__name__)
+PY
+echo "GUARDIAN_VISIBILITY_READONLY_END"
 echo "SITE_AUDIT_END"
 '''
 def main():

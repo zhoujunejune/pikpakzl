@@ -1,0 +1,29 @@
+name: Guardian 5M isolated safety regression
+on:
+  pull_request:
+    paths:
+      - 'railway-diagnostic/guardian-*.mjs'
+      - 'railway-diagnostic/risk-*.mjs'
+      - 'railway-diagnostic/control-shell.mjs'
+      - 'railway-diagnostic/wrapper.mjs'
+      - 'prediction-bot-v1/guardian5-*.mjs'
+      - '.github/workflows/guardian5-live-regression.yml'
+  workflow_dispatch:
+jobs:
+  guardian5-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          node --check prediction-bot-v1/guardian5-live-bridge.mjs
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --check railway-diagnostic/control-shell.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --check railway-diagnostic/risk-runner.mjs
+          node --check railway-diagnostic/risk-worker.mjs
+      - run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/risk-worker-speed.test.mjs

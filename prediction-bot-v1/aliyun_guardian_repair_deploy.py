@@ -87,14 +87,14 @@ change(
  "      p.error='固定止盈止损执行器尚未就绪：'+risk.reason;\n      if(isAuto)retryGuardianBeforePost(p,'FIXED_EXIT_TEMPORARILY_UNREADY');\n      return {status:503,body:{ok:false,reason:'RISK_NOT_READY',detail:risk.reason,error:p.error}};",
  'fixed_risk_readiness_retry')
 change(
- """    if(!guardianExitMonitorReady()||!validation.ok){
+ '''    if(!guardianExitMonitorReady()||!validation.ok){
       p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
       p.blockReason=!guardianExitMonitorReady()
         ?'RISK_NOT_READY':validation.reason;
       p.error='GUARDIAN真实退出监控未就绪，或交易所报价无效、已过期，未下单';
       return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
-    }""",
- """    const exitReady=guardianExitMonitorReady();
+    }''',
+ '''    const exitReady=guardianExitMonitorReady();
     if(!exitReady||!validation.ok){
       p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
       p.blockReason=!exitReady?'RISK_NOT_READY':validation.reason;
@@ -102,16 +102,16 @@ change(
       if(isAuto && exitReady && validation.reason==='GUARDIAN_REAL_QUOTE_INVALID_OR_EXPIRED')
         retryGuardianBeforePost(p,'QUOTE_INVALID_OR_EXPIRED_BEFORE_POST');
       return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
-    }""",
+    }''',
  'guardian_real_quote_retry')
 change(
- """  if(p.signalModelChoice===GUARDIAN_ID&&
+ '''  if(p.signalModelChoice===GUARDIAN_ID&&
      (!guardianExitMonitorReady()||!guardianQuoteGate(current,quote,{now:Date.now()}).ok)){
     p.state='GUARDIAN_RISK_OR_QUOTE_BLOCKED';
     p.error='GUARDIAN提交前风险执行器或报价核验失败，未下单';
     return {status:409,body:{ok:false,error:p.error}};
-  }""",
- """  if(p.signalModelChoice===GUARDIAN_ID){
+  }''',
+ '''  if(p.signalModelChoice===GUARDIAN_ID){
     const exitReady=guardianExitMonitorReady();
     const check=guardianQuoteGate(current,quote,{now:Date.now()});
     if(!exitReady||!check.ok){
@@ -122,7 +122,7 @@ change(
         retryGuardianBeforePost(p,'QUOTE_EXPIRED_BEFORE_ORDER_POST');
       return {status:409,body:{ok:false,error:p.error,reason:p.blockReason}};
     }
-  }""",
+  }''',
  'guardian_final_quote_retry')
 assert 'guardian_prepost_retry_scheduled' in source,'RETRY_HELPER_LOST'
 assert 'guardianFixedReadiness().ready' in source,'FIXED_RISK_GATE_LOST'

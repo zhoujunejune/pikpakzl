@@ -67,7 +67,7 @@ for name in ('guardian-risk-integration.mjs','risk-worker.mjs','risk-runner.mjs'
  try:
   lines=(src/name).read_text().splitlines()
   for i,line in enumerate(lines):
-   if any(x in line for x in ('guardianRiskHeartbeat(', 'realSellQuote:', 'guardianRiskQuote(', 'GUARDIAN_DYNAMIC_EXIT_ENABLED', 'dynamicExitEnabled:', 'function defaultConfig', 'function readConfig', 'function startWorker')):
+   if any(x in line for x in ('guardianRiskHeartbeat(', 'realSellQuote:', 'guardianRiskQuote(', 'GUARDIAN_DYNAMIC_EXIT_ENABLED', 'dynamicExitEnabled:', 'function defaultConfig', 'function readConfig', 'function startWorker', 'function effectiveGuardian', 'function guardianOpenExposure', 'GUARDIAN_UI_APPROVED', 'previousGuardianActive')):
     print('GUARDIAN_RISK_SOURCE',name,'line',i+1)
     for j in range(max(0,i-4),min(len(lines),i+8)):
      ss=lines[j].strip()

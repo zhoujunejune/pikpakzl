@@ -221,7 +221,7 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/guardian-dynamic-risk') {
     const body=await readJsonBody(req);
-    if (!pinOK(body.pin)) return sendJson(res, 401, {ok:false,error:'控制 PIN 错误'});
+    if (!pinOK(body.pin, req)) return sendJson(res, 401, {ok:false,error:'站点登录未通过或控制 PIN 错误'});
     if (typeof body.enabled!=='boolean')return sendJson(res,400,{ok:false,error:'动态止盈止损开关必须是布尔值'});
     if (!persistenceReady||!persistenceHealthy)
       return sendJson(res,503,{ok:false,error:'Redis持久化不可用；未更改动态止盈止损设置'});

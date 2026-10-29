@@ -43,6 +43,28 @@ test('malformed or untrusted source and stale live feed fail closed',()=>{
  assert.equal(guardianOrderSignal({...payload,observedAt:now-12000},now).ok,false);
  assert.equal(guardianOrderSignal({...payload,latest:{...payload.latest,direction:'WAIT'}},now).ok,false);
 });
+
+test('persisted GUARDIAN UP/DOWN remains locked when service reports OBSERVED next tick',()=>{
+ const now=1793182500000+72000,original=fixture(now,'DOWN');
+ const before=guardianOrderSignal(original,now);
+ const observed={...original,latest:{direction:'OBSERVED',round:before.round,reason:'本轮已记录一次AI信号'}};
+ const after=guardianOrderSignal(observed,now+5000);
+ assert.equal(before.ok,true);
+ assert.equal(after.ok,true);
+ assert.equal(after.direction,'DOWN');
+ assert.equal(after.signalId,before.signalId);
+ assert.equal(after.executionEligible,true);
+});
+test('OBSERVED does not restore missing, settled, cross-round or stale signals',()=>{
+ const now=1793182500000+72000,original=fixture(now,'UP');
+ const observed={...original,latest:{direction:'OBSERVED',round:original.latest.round}};
+ assert.equal(guardianOrderSignal({...observed,records:[]},now).ok,false);
+ assert.equal(guardianOrderSignal({...observed,records:[{...original.records[0],status:'SETTLED'}]},now).ok,false);
+ assert.equal(guardianOrderSignal({...observed,latest:{direction:'OBSERVED',round:original.latest.round-300000}},now).ok,false);
+ assert.equal(guardianOrderSignal({...observed,observedAt:now-15000},now).ok,false);
+ assert.equal(guardianOrderSignal({...observed,latest:{direction:'WAIT',round:original.latest.round}},now).ok,false);
+});
+
 test('registry only enables dynamic exits for order IDs accepted by Binance',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'guardian-registry-')),file=path.join(dir,'r.json');
  const round=1793182200000,tokenId='token-12345';

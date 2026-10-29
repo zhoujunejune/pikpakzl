@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Read-only Alibaba runtime and risk-worker checks; no secrets or order calls."""
+import base64,os,time,sys
+from alibabacloud_swas_open20200601.client import Client
+from alibabacloud_swas_open20200601 import models as sw
+from alibabacloud_tea_openapi import models as api
+SCRIPT=r"""#!/bin/bash
+set -eu
+BASE=/opt/zl-prediction-live/src/railway-diagnostic
+echo GUARDIAN_RUNTIME_DIAG_START=true
+for name in wrapper.mjs guardian-live-bridge.mjs risk-worker.mjs risk-runner.mjs risk-config-storage.mjs control-shell.mjs guardian-main-dashboard.mjs; do
+  file="$BASE/$name"
+  if test -r "$file"; then sha256sum "$file" | cut -c1-88
+  else echo "GUARDIAN_RUNTIME_FILE_MISSING $name"; fi
+done
+for name in risk-runtime-status.json risk-worker-health.json risk-control.json guardian-risk-ready.json;do
+  if test -f "/tmp/$name";then ls -l "/tmp/$name";else echo "GUARDIAN_RUNTIME_MISSING $name";fi
+done
+for name in wrapper.mjs risk-worker.mjs risk-runner.mjs control-shell.mjs;do
+  file="$BASE/$name"
+  test -f "$file" || continue
+  for mark in guardianExitMonitorReady GUARDIAN_DYNAMIC_EXIT_ENABLED guardianRiskQuote lastSuccessfulPositionsAt dynamicExitEnabled guardianRiskReady writeStatus;do
+    if grep -Fq "$mark" "$file";then echo "GUARDIAN_RUNTIME_MARKER $name $mark yes";fi
+  done
+done
+systemctl show zl-prediction-risk-exits -p MainPID -p ActiveState -p PrivateTmp
+systemctl show zl-prediction-trade -p MainPID -p ActiveState -p PrivateTmp
+echo GUARDIAN_RUNTIME_DIAG_COMPLETE=true
+"""
+c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+ access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+ endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
+req=sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+ type='RunShellScript',name='guardian-runtime-readonly-diff',command_content=SCRIPT,working_user='root',timeout=75)
+invoke=c.run_command(req).body.invoke_id
+for _ in range(46):
+ time.sleep(2)
+ d=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+ if d and str(d.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+  try:out=base64.b64decode(d.output or '',validate=True).decode('utf8','replace')
+  except Exception:out='OUTPUT_UNAVAILABLE'
+  print('GUARDIAN_RUNTIME_AUDIT',d.invocation_status,d.exit_code)
+  print(out[-11000:])
+  sys.exit(0 if str(d.invocation_status)=='Success' and int(d.exit_code)==0 else 4)
+sys.exit(5)

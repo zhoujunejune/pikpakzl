@@ -96,6 +96,10 @@ for t in target:
  for x in a[-2:]:
   print('G2210_SIGNAL',json.dumps(pick(x,['round','at','marketAt','status','predictedDirection','reason','subjectiveConfidence','tradeEligible','tradeGate']),ensure_ascii=False)[:950])
 print('G2210_TRADE_STATUS',json.dumps(pick(s,['ok','enabled','mode','amount','orderSignalModel','orderSignalModelReady','directionModeReady','guardianRiskReady','guardianExecutionReady','guardianRiskBlockReason','guardianExecutionBlockReason','orderMappingMode','orderSignal','productionSignal','orderProductionSource','startAfterRound']),ensure_ascii=False)[:1100])
+balance=get(13001,'/api/balance')
+print('G2210_LIVE_BALANCE',json.dumps({'ok':balance.get('ok'),'error':balance.get('error'),'accounts':[
+  {k:v.get(k) for k in ('accountType','availableBalanceDisplay','enabled')}
+  for v in (balance.get('items') or []) if isinstance(v,dict)]},ensure_ascii=False)[:1100])
 print('G2210_TRADE_PENDING',json.dumps(pick(s.get('pendingAction'),['round','state','status','error','code','blockReason','productionSignal','orderSignal','mappingMode']),ensure_ascii=False))
 print('G2210_LAST_ORDER',json.dumps(pick(s.get('lastOrder'),['round','state','status','error','code','submittedAt']),ensure_ascii=False))
 print('G2210_DIRECTION',json.dumps(pick(mode,['ok','ready','revision','modes','effectiveAfterRound']),ensure_ascii=False)[:1100])
@@ -129,7 +133,7 @@ for unit in ('zl-prediction-trade','zl-prediction-guardian-analysis'):
   event=str(v.get('event') or '')
   cnt[event]+=1
   if event and any(k in event.lower() for k in ('guardian','signal','intent','order','quote','submit','block','control','follow','confirm','ready','risk','fail')):
-   events.append(pick(v,['event','round','at','status','state','code','reason','blockReason','direction','productionSignal','orderSignal','source','error','enabled']))
+   events.append(pick(v,['event','round','at','status','state','code','httpStatus','reason','blockReason','direction','productionSignal','orderSignal','source','error','enabled','fundingSource','paymentAccount']))
  print('G2210_JOURNAL_SUMMARY',unit,'lines',len(out.splitlines()),'events',json.dumps(cnt.most_common(18),ensure_ascii=False))
  for row in events[-45:]:print('G2210_JOURNAL_EVENT',unit,json.dumps(row,ensure_ascii=False)[:450])
 print('GUARDIAN_2210_2215_INCIDENT_DONE=true')

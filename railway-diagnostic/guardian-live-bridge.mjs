@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-export const GUARDIAN_REGISTRY='/var/lib/zl-prediction/guardian5/guardian-live-orders.json';
+export const GUARDIAN_STATE_DIR=process.env.GUARDIAN_STATE_DIR||'/var/lib/zl-prediction/rounds/guardian5';
+export const GUARDIAN_REGISTRY=path.join(GUARDIAN_STATE_DIR,'guardian-live-orders.json');
 // A record is created BEFORE the owner-armed Binance order POST. It has no
 // write authority: it only permits risk monitoring for this exact token/round.
 export function guardianRegisterIntent(intent,{file=GUARDIAN_REGISTRY}={}){

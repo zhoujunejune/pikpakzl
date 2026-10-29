@@ -45,6 +45,16 @@ for name in ['risk-runtime-status.json','risk-worker-health.json','risk-control.
 PY
 systemctl show zl-prediction-risk-exits -p MainPID -p ActiveState -p PrivateTmp
 systemctl show zl-prediction-trade -p MainPID -p ActiveState -p PrivateTmp
+BASE_SHA=16350d9faa9046224702f82a5c8f34f6cc1d9f68
+STAGE=$(mktemp -d /tmp/guardian-compare-XXXXXX)
+for name in wrapper.mjs guardian-live-bridge.mjs risk-runner.mjs risk-config-storage.mjs control-shell.mjs guardian-risk-integration.mjs guardian-main-dashboard.mjs;do
+  file="$BASE/$name"
+  if curl -fsSL --max-time 15 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE_SHA/railway-diagnostic/$name" -o "$STAGE/$name";then
+    if test -f "$file" && cmp -s "$STAGE/$name" "$file";then echo "GUARDIAN_DEPLOY_BASELINE $name MATCH"
+    else echo "GUARDIAN_DEPLOY_BASELINE $name LIVE_DRIFT";fi
+  else echo "GUARDIAN_DEPLOY_BASELINE $name REFERENCE_UNAVAILABLE";fi
+done
+rm -rf "$STAGE"
 echo GUARDIAN_RUNTIME_DIAG_COMPLETE=true
 """
 c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],

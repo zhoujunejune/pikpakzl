@@ -71,6 +71,7 @@ new=Path(sys.argv[2]).read_text()
 helper='  // GUARDIAN_RECHECK_V2: retry only a missing fresh read;'
 marker='  // Overlap independent signal revalidation and fresh quote retrieval.'
 assert new.count(helper)==1 and new.count(marker)==1,'REFERENCE_HELPER_NOT_FOUND'
+print('GUARDIAN_RECHECK_LIVE_MARKER_COUNTS',live.count(marker),live.count(helper),flush=True)
 assert live.count(marker)==1 and live.count(helper)==0,'LIVE_WRAPPER_UNEXPECTED'
 chunk=new[new.index(helper):new.index(marker)]
 old_call='''  let [current, freshQuote] = await Promise.all([

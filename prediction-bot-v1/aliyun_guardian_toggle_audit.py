@@ -40,6 +40,18 @@ for port,route in [(13001,'/api/status'),(13001,'/api/risk-control'),(13049,'/ap
    print('TOGGLE_AUDIT_RISK',{'ok':d.get('ok'),'persistenceHealthy':d.get('persistenceHealthy'),'stopLossEnabled':d.get('stopLossEnabled'),'takeProfitEnabled':d.get('takeProfitEnabled')})
   else:print('TOGGLE_AUDIT_GUARDIAN',{'model':d.get('model'),'exitExecutionEnabled':d.get('exitExecutionEnabled'),'eligible':(d.get('automaticTradeEligibility') or {}).get('eligible')})
  except Exception as e:print('TOGGLE_AUDIT_HTTP_ERROR',port,route,type(e).__name__)
+for name,needles in {
+ 'control-shell.mjs':['function defaultRiskConfig()','function readRiskConfig()','async function writeRiskConfig(next)','  if (req.method === \'POST\' && url.pathname === \'/api/risk-control\')','function validPercent(n)'],
+ 'risk-config-storage.mjs':['export function validatedRiskConfig(value)'],
+ 'risk-runner.mjs':['const CONTROL_FILE','function defaultConfig()','function readConfig()','function configKey(cfg)','function writeStatus()','function startWorker(cfg)','function reconcile()']
+}.items():
+ p=base/name
+ if not p.is_file():continue
+ t=p.read_text()
+ for needle in needles:
+  i=t.find(needle)
+  if i<0:continue
+  print('TOGGLE_AUDIT_SNIPPET',name,needle.replace(' ','_')[:50],repr(t[i:i+1050]))
 print('TOGGLE_AUDIT_COMPLETE=true')
 PY
 """

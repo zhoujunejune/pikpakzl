@@ -44,6 +44,27 @@ def overlay(base: str, updated: str, live: str, filename: str) -> str:
                 live = live.replace(anchor, anchor + new, 1)
                 changed += 1
                 continue
+        # The more recent production runner independently removed the older
+        # unconditional GUARDIAN environment switch. Rebase precisely without
+        # reintroducing that unsafe default.
+        if filename == 'risk-runner.mjs' and 'GUARDIAN_DYNAMIC_EXIT_ENABLED' in old:
+            if old.strip().startswith('guardianDynamicExitEnabled:') and live.count(old) == 0:
+                if 'guardianDynamicExitDesired' in new:
+                    anchor='    workerRunning: running,\n'
+                else:
+                    anchor="  log('risk_runtime_worker_started', {\n"
+                if live.count(anchor)!=1:
+                    raise ValueError('GUARDIAN_RUNTIME_STATUS_INSERTION_MISMATCH')
+                live=live.replace(anchor,anchor+new,1)
+                changed+=1
+                continue
+            if live.count(old)==0 and ' || GUARDIAN_DYNAMIC_EXIT_ENABLED' in old:
+                actual=old.replace(' || GUARDIAN_DYNAMIC_EXIT_ENABLED','')
+                if live.count(actual)!=1:
+                    raise ValueError('LIVE_GUARDIAN_REMOVED_FLAG_MISMATCH')
+                live=live.replace(actual,new,1)
+                changed+=1
+                continue
         if old:
             if live.count(old) != 1:
                 raise ValueError(f'LIVE_PATCH_ANCHOR_MISMATCH:{filename}:{tag}:{a0}:{len(old)}')

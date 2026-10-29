@@ -55,6 +55,22 @@ for name in wrapper.mjs guardian-live-bridge.mjs risk-runner.mjs risk-config-sto
   else echo "GUARDIAN_DEPLOY_BASELINE $name REFERENCE_UNAVAILABLE";fi
 done
 rm -rf "$STAGE"
+python3 - <<'PY'
+from pathlib import Path
+b=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+patterns={
+ 'guardian-live-bridge.mjs':['stats.validated===true','settled>=300','round+FIVE_MIN-now<25000','modelProbability<0.70','edge>=0.05','guardianRegisterIntent'],
+ 'wrapper.mjs':['GUARDIAN_ORDER_DEADLINE_MS = 275000','GUARDIAN_ORDER_DEADLINE_MS = 300000','guardianExitMonitorReady','lastSuccessfulPositionsAt','currentRetry.direction!==p.signal','currentRetry.direction!==p.productionSignal'],
+ 'control-shell.mjs':['dynamicExitEnabled','outerAuthOnly','process.env.RISK_CONTROL_FILE','pinOK(body.pin'],
+ 'risk-runner.mjs':['dynamicExitEnabled','GUARDIAN_DYNAMIC_EXIT_ENABLED','process.env.RISK_STATUS_FILE'],
+ 'risk-config-storage.mjs':['dynamicExitEnabled','process.env.RISK_CONTROL_FILE'],
+ 'guardian-risk-integration.mjs':['GUARDIAN_RISK_READY_FILE','process.env.GUARDIAN_REGISTRY_FILE']
+}
+for name,needles in patterns.items():
+ try:s=(b/name).read_text()
+ except Exception:continue
+ print('GUARDIAN_RUNTIME_PATCH_ANCHORS',name,{n:s.count(n) for n in needles})
+PY
 echo GUARDIAN_RUNTIME_DIAG_COMPLETE=true
 """
 c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],

@@ -52,6 +52,9 @@ for name,needles in {
   i=t.find(needle)
   if i<0:continue
   print('TOGGLE_AUDIT_SNIPPET',name,needle.replace(' ','_')[:50],repr(t[i:i+1050]))
+for name,n in [('control-shell.mjs',4400),('risk-runner.mjs',500),('risk-config-storage.mjs',1700)]:
+ p=base/name
+ if p.is_file():print('TOGGLE_AUDIT_TOP',name,repr(p.read_text()[:n]))
 print('TOGGLE_AUDIT_COMPLETE=true')
 PY
 """

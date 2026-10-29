@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const originalBlobSha = '6a3f4fa32ad6211732270b3b5102e7f6461c34a7';
 const source = fs.readFileSync(new URL('./risk-worker.mjs', import.meta.url), 'utf8');
 
 const newPrepare = `    // Warm the existing payment lookup while unchanged position/quote checks run.

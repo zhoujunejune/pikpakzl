@@ -125,9 +125,9 @@ rollback(){
   echo ZGV_ROLLBACK_DONE=true
 }
 trap rollback ERR
-curl -fsSL --retry 2 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$SHA/prediction-bot-v1/guardian-visibility-sidecar.mjs" -o "$BACK/sidecar.stage"
-"$NODE" --check "$BACK/sidecar.stage"
-install -o zl-pred -g zl-pred -m 0644 "$BACK/sidecar.stage" "$DEST"
+curl -fsSL --retry 2 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$SHA/prediction-bot-v1/guardian-visibility-sidecar.mjs" -o "$BACK/sidecar.stage.mjs"
+"$NODE" --check "$BACK/sidecar.stage.mjs"
+install -o zl-pred -g zl-pred -m 0644 "$BACK/sidecar.stage.mjs" "$DEST"
 cat > "$UNIT" <<'EOF'
 [Unit]
 Description=GUARDIAN BTC 5M read-only visibility sidecar

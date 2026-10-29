@@ -25,7 +25,7 @@ const CARD=String.raw`<section class="c" id="zlGuardianMain" style="margin:14px 
  <div class="v" id="zlGRiskToggleState" style="margin:8px 0;font-size:20px">正在查询实际开关...</div>
  <div class="muted" id="zlGRiskToggleReason" style="line-height:1.6">必须核验真实卖出报价、平仓和失败恢复后才能开启。</div>
  <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:12px">
-  <input type="password" id="zlGRiskTogglePin" aria-label="动态风控控制 PIN" autocomplete="off" placeholder="输入控制 PIN" style="min-width:135px;flex:1;max-width:230px;padding:11px;border-radius:8px;background:#101b2b;color:#eff5ff;border:1px solid #36516a">
+  <input type="password" id="zlGRiskTogglePin" aria-label="动态风控控制 PIN" autocomplete="off" placeholder="已登录站点可免填 PIN" style="min-width:135px;flex:1;max-width:230px;padding:11px;border-radius:8px;background:#101b2b;color:#eff5ff;border:1px solid #36516a">
   <button type="button" id="zlGRiskToggleButton" aria-label="切换 GUARDIAN 动态止盈止损" onclick="zlGuardianToggleRisk()" style="border-radius:9px;background:#203c54;color:#e8f3ff;border:1px solid #5481a4;min-height:43px;padding:10px 15px;cursor:pointer">读取中</button>
  </div>
  <div id="zlGRiskToggleNotice" role="status" aria-live="polite" style="min-height:20px;font-size:13px;margin-top:8px;color:#e1b77c"></div>
@@ -86,7 +86,6 @@ const SCRIPT=String.raw`<script>(function(){
   if(riskBusy||!guardianToggle.loaded)return;
   var pin=el('zlGRiskTogglePin');
   var password=pin&&String(pin.value||'').trim();
-  if(!password){toggleNote('请先输入控制 PIN');return}
   var enabled=!guardianToggle.requestedEnabled;
   // A UI toggle must never claim that an unverified SELL worker is active.
   if(enabled&&!guardianToggle.canEnable){

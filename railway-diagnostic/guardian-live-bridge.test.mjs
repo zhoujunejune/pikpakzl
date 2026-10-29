@@ -17,6 +17,7 @@ test('TC-01/02: valid Guardian signal may pass with zero samples and low confide
  const signal=guardianOrderSignal(fixture(now),now);
  assert.equal(signal.ok,true);
  assert.equal(signal.executionEligible,true);
+ assert.equal(signal.source,'FAST5_SPOT_MOMENTUM_V1');
  assert.equal(signal.modelProbability,null);
  assert.equal(signal.calibrationReady,false);
  assert.equal(guardianQuoteGate(signal,{quoteId:'binance-quote',chance:.98,expireAt:now+8000},{now}).ok,true);

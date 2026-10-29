@@ -6,7 +6,7 @@ on:
       - prediction-bot-v1/aliyun_guardian_restore_visibility.py
       - .github/workflows/zl-guardian-visibility-restore.yml
   workflow_dispatch:
-permissions: {contents: read}
+permissions: {contents: read, statuses: write}
 concurrency:
   group: guardian5-visibility-repair-only
   cancel-in-progress: false
@@ -25,6 +25,7 @@ jobs:
       - name: Validate Python, embedded JS and remote shell before touching Alibaba
         run: |
           python -m py_compile prediction-bot-v1/aliyun_guardian_restore_visibility.py
+          node --check prediction-bot-v1/guardian-visibility-sidecar.mjs
           python - <<'PY'
           import ast, pathlib, subprocess
           p=pathlib.Path('prediction-bot-v1/aliyun_guardian_restore_visibility.py')
@@ -43,7 +44,7 @@ jobs:
           print('GUARDIAN_READONLY_VISIBILITY_PATCH_VALID=true')
           PY
       - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
-      - name: Stage UI-only patch on Alibaba and restart only if following is idle
+      - name: Deploy read-only overlay through Caddy, no trading-process restart
         env:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
@@ -51,4 +52,28 @@ jobs:
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
           python prediction-bot-v1/aliyun_guardian_restore_visibility.py
-# Manual rollout requested after following was stopped; preserve order state and all history.
+      - name: Publish auditable deployment result
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZGV_JOB_STATUS: ${{ job.status }}
+        run: |
+          python - <<'PY'
+          import os,json,urllib.request
+          state='success' if os.getenv('ZGV_JOB_STATUS')=='success' else 'failure'
+          body=json.dumps({
+            'state':state,
+            'context':'guardian-readonly-visibility-deploy',
+            'description':'Read-only visibility deploy '+state+'; trading engine not restarted'
+          }).encode()
+          url='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/statuses/'+os.environ['GITHUB_SHA']
+          request=urllib.request.Request(url,data=body,method='POST',headers={
+            'Authorization':'Bearer '+os.environ['GH_TOKEN'],
+            'Accept':'application/vnd.github+json',
+            'Content-Type':'application/json'
+          })
+          with urllib.request.urlopen(request,timeout=20) as response:
+            print('ZGV_COMMIT_STATUS_POSTED',response.status,state)
+          PY
+

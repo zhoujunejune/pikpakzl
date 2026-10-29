@@ -19,6 +19,20 @@ print('GUARDIAN',{k:a.get(k) for k in ['ok','model','latest','stats','automaticT
 print('DYNAMIC',{k:r.get(k) for k in ['ok','requestedEnabled','effectiveEnabled','reason']})
 for row in (a.get('records') or [])[:5]:
  print('SIGNAL',{k:row.get(k) for k in ['round','at','predictedDirection','status','reason']})
+import subprocess
+log=subprocess.run(['journalctl','-u','zl-prediction-trade','--since','3 hours ago','-o','cat','-n','2000','--no-pager'],capture_output=True,text=True,timeout=15)
+keep={'event','round','state','error','reason','blockReason','code','httpStatus','source','model','upstreamModel','attempt','enabled','signal','executionEligible','calibrationReady','qualityGate','stage'}
+events=[]
+for line in log.stdout.splitlines():
+ try:
+  obj=json.loads(line.strip())
+  event=str(obj.get('event',''))
+  if not any(word in event for word in ['guardian','auto_submit','intent_prepare','signal','order_submit','fresh_quote','trade_follow','order_control']):continue
+  events.append({k:v for k,v in obj.items() if k in keep})
+ except (ValueError,TypeError):continue
+print('RELEVANT_TRADE_EVENTS_COUNT',len(events))
+for row in events[-50:]:
+ print('RELEVANT_TRADE_EVENT',json.dumps(row,ensure_ascii=False)[:650])
 print('SIGNAL_AUDIT_COMPLETE')
 PY
 """

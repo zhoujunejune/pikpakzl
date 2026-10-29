@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Guarded, no-trade Alibaba deployment of GUARDIAN 5M repair."""
+import os,sys,re,time,base64
+from alibabacloud_swas_open20200601.client import Client
+from alibabacloud_swas_open20200601 import models as sw
+from alibabacloud_tea_openapi import models as api
+
+REMOTE=r"""#!/bin/bash
+set -Eeuo pipefail
+REV=__REV__
+BASE=4c3bc920538669bcce4105897ed398d7ead3fe66
+ROOT=/opt/zl-prediction-live/src/railway-diagnostic
+REG=/var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json
+NODE=/opt/zl-prediction-node/bin/node
+TMP=$(mktemp -d /tmp/g5repair-XXXXXXXX)
+BACK=/var/backups/guardian-5m-repair-$(date -u +%Y%m%dT%H%M%SZ)-$$
+mkdir -p -m 0700 "$BACK"
+CHANGED=0; DONE=0
+cleanup(){
+ if test "$CHANGED" = 1 && test "$DONE" = 0;then
+  for f in wrapper.mjs guardian-live-bridge.mjs guardian-risk-integration.mjs;do cp -p "$BACK/$f" "$ROOT/$f" || :;done
+  systemctl restart zl-prediction-risk-exits || :
+  systemctl restart zl-prediction-trade || :
+  echo GUARDIAN_REPAIR_ROLLED_BACK=true
+ fi
+ rm -rf "$TMP"
+}
+trap cleanup EXIT
+preflight(){
+python3 - <<'PY'
+import json,urllib.request,pathlib,subprocess
+with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=4) as r:s=json.load(r)
+assert s.get('ok') is True and s.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1','NOT_GUARDIAN'
+assert s.get('enabled') is False,'FOLLOW_ON_ABORT'
+assert s.get('guardianRiskReady') is True and s.get('guardianExecutionReady') is True,'RISK_UNREADY'
+for p in (s.get('pendingAction') or {},s.get('lastOrder') or {}):
+ assert p.get('state') not in ('READY','QUOTING','SUBMITTING','SUBMITTED_PENDING_CONFIRMATION','SUBMISSION_UNKNOWN'),'UNRECONCILED_ORDER'
+root=pathlib.Path('/var/lib/zl-prediction/rounds')
+cfg=json.loads((root/'risk-control.json').read_text())
+risk=json.loads((root/'risk-runtime-status.json').read_text())
+health=json.loads((root/'risk-worker-health.json').read_text())
+assert cfg.get('takeProfitEnabled') is True and cfg.get('stopLossEnabled') is True,'FIXED_EXITS_OFF'
+assert risk.get('workerRunning') is True and risk.get('configApplied') is True,'RISK_WORKER_UNREADY'
+assert health.get('positionsSeen')==0,'OPEN_POSITION_ABORT'
+for svc in ('zl-prediction-trade','zl-prediction-risk-exits'):
+ p=subprocess.check_output(['systemctl','show','-p','MainPID','--value',svc],text=True).strip()
+ if p.isdigit() and int(p)>0:
+  for item in (pathlib.Path('/proc')/p/'environ').read_bytes().split(b'\0'):
+   if item.startswith(b'GUARDIAN_REGISTRY_FILE='):
+    assert item.split(b'=',1)[1].decode()=='/var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json','REGISTRY_ENV_CONFLICT'
+print('GUARDIAN_REPAIR_PREFLIGHT_OK=true',flush=True)
+PY
+}
+for svc in zl-prediction-trade zl-prediction-risk-exits zl-prediction-guardian-analysis;do systemctl is-active --quiet "$svc";done
+preflight
+for f in wrapper.mjs guardian-live-bridge.mjs guardian-risk-integration.mjs;do
+ cp -p "$ROOT/$f" "$BACK/$f"
+done
+echo GUARDIAN_REPAIR_BACKUP="$BACK"
+curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE/railway-diagnostic/wrapper.mjs" -o "$TMP/old.mjs"
+curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$REV/railway-diagnostic/wrapper.mjs" -o "$TMP/new.mjs"
+python3 - "$TMP/old.mjs" "$TMP/new.mjs" "$ROOT/wrapper.mjs" "$TMP/wrapper.mjs" <<'PY'
+import difflib,pathlib,subprocess,sys
+old,new,live,out=map(pathlib.Path,sys.argv[1:])
+diff=''.join(difflib.unified_diff(old.read_text().splitlines(keepends=True),new.read_text().splitlines(keepends=True),fromfile='a/wrapper.mjs',tofile='b/wrapper.mjs',n=3))
+assert 'guardian_prepost_retry_scheduled' in diff,'GUARDIAN_RETRY_PATCH_MISSING'
+r=subprocess.run(['patch','--batch','--fuzz=0','--forward','--output',str(out),str(live)],input=diff,text=True,capture_output=True)
+print('GUARDIAN_WRAPPER_PATCH',r.returncode,r.stdout[:300],r.stderr[:300],flush=True)
+assert r.returncode==0,'LIVE_WRAPPER_DRIFT_REQUIRES_REVIEW'
+assert 'guardian_prepost_retry_scheduled' in out.read_text()
+PY
+for f in guardian-live-bridge.mjs guardian-risk-integration.mjs;do
+ python3 - "$ROOT/$f" "$TMP/$f" <<'PY'
+from pathlib import Path
+import sys
+s=Path(sys.argv[1]).read_text()
+old='/var/lib/zl-prediction/guardian5/guardian-live-orders.json'
+new='/var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json'
+assert s.count(old)+s.count(new)==1,'REGISTRY_PATH_UNEXPECTED'
+Path(sys.argv[2]).write_text(s.replace(old,new))
+PY
+done
+for f in wrapper.mjs guardian-live-bridge.mjs guardian-risk-integration.mjs;do "$NODE" --check "$TMP/$f";done
+install -d -o zl-pred -g zl-pred -m 0750 "$(dirname "$REG")"
+OLD=/var/lib/zl-prediction/guardian5/guardian-live-orders.json
+if test -f "$OLD";then
+ if test -f "$REG";then cmp -s "$OLD" "$REG" || { echo REGISTRY_CONFLICT;exit 4; }
+ else cp -p "$OLD" "$REG";chown zl-pred:zl-pred "$REG";fi
+fi
+systemd-run --quiet --wait --pipe --collect \
+ -p User=zl-pred -p Group=zl-pred -p ProtectSystem=strict \
+ -p ReadWritePaths=/var/lib/zl-prediction/rounds \
+ /usr/bin/python3 -c '
+import pathlib,os,sys
+p=pathlib.Path(sys.argv[1]).parent/(".atomic-check-"+str(os.getpid()))
+q=p.with_suffix(".renamed")
+try:
+ p.write_text("ok");p.rename(q);assert q.read_text()=="ok"
+finally:p.unlink(missing_ok=True);q.unlink(missing_ok=True)
+print("GUARDIAN_REGISTRY_SANDBOX_ATOMIC_WRITE_OK=true")
+' "$REG"
+preflight
+for f in wrapper.mjs guardian-live-bridge.mjs guardian-risk-integration.mjs;do
+ cp "$TMP/$f" "$ROOT/$f"
+ chown --reference="$BACK/$f" "$ROOT/$f"
+ chmod --reference="$BACK/$f" "$ROOT/$f"
+done
+CHANGED=1
+systemctl restart zl-prediction-risk-exits
+systemctl restart zl-prediction-trade
+PASS=0
+for i in $(seq 1 20);do
+ if preflight >/dev/null 2>&1;then PASS=1;break;fi
+ sleep 2
+done
+test "$PASS" = 1
+for f in wrapper.mjs guardian-live-bridge.mjs guardian-risk-integration.mjs;do
+ cmp -s "$TMP/$f" "$ROOT/$f"
+ echo "GUARDIAN_REPAIR_FILE_SHA" "$f" "$(sha256sum "$ROOT/$f" | cut -d ' ' -f1)"
+done
+for svc in zl-prediction-trade zl-prediction-risk-exits zl-prediction-guardian-analysis;do systemctl is-active --quiet "$svc";done
+preflight
+DONE=1
+echo GUARDIAN_REPAIR_PRODUCTION_DEPLOYED=true
+echo GUARDIAN_REPAIR_COMMIT="$REV"
+echo GUARDIAN_REPAIR_NO_LIVE_ORDER_POST=true
+echo GUARDIAN_REPAIR_OWNER_REARM_REQUIRED=true
+"""
+def main():
+ sha=os.getenv('GITHUB_SHA','')
+ if os.getenv('GITHUB_REF_NAME')!='feature/zl-futures-bot-v1' or not re.fullmatch(r'[a-f0-9]{40}',sha):
+  print('GUARDIAN_INVALID_REF');return 2
+ if not (os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID') and os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')):
+  print('GUARDIAN_MISSING_ALIBABA_CREDENTIALS');return 3
+ client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
+ try:
+  ident=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='guardian-5m-safe-repair',type='RunShellScript',command_content=REMOTE.replace('__REV__',sha),working_user='root',timeout=170)).body.invoke_id
+  for _ in range(100):
+   time.sleep(2)
+   d=client.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=ident)).body.invocation_result
+   if d and str(d.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+    try: out=base64.b64decode(d.output or '',validate=True).decode('utf8','replace')
+    except Exception:out='OUTPUT_UNAVAILABLE'
+    print('GUARDIAN_REPAIR_REMOTE',d.invocation_status,d.exit_code)
+    print(out[-11500:])
+    return 0 if str(d.invocation_status)=='Success' and int(d.exit_code)==0 and 'GUARDIAN_REPAIR_PRODUCTION_DEPLOYED=true' in out else 5
+  print('GUARDIAN_REPAIR_TIMEOUT');return 6
+ except Exception as e:
+  print('GUARDIAN_REPAIR_API_ERROR',type(e).__name__,getattr(e,'code',''));return 7
+if __name__=='__main__':sys.exit(main())

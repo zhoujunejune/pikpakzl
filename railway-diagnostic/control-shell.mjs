@@ -7,7 +7,7 @@ import { hydrateRiskConfig, persistRiskConfig } from './risk-config-storage.mjs'
 const PORT = Number(process.env.PORT || 3000);
 const INNER_PORT = Number(process.env.INNER_CONTROL_PORT || 3001);
 const CONTROL_PIN_SHA256 = process.env.CONTROL_PIN_SHA256 || '';
-const RISK_CONTROL_FILE = process.env.RISK_CONTROL_FILE || '/tmp/risk-control.json';
+const RISK_CONTROL_FILE = process.env.RISK_CONTROL_FILE || (process.env.RISK_DATA_DIR||'/var/lib/zl-prediction/rounds')+'/risk-control.json';
 let persistenceReady = false;
 let persistenceHealthy = false;
 let persistenceRestored = false;

@@ -20,8 +20,18 @@ const CARD=String.raw`<section class="c" id="zlGuardianMain" style="margin:14px 
  <div class="kv"><div class="k">风控设置持久化</div><div class="v" id="zlGRiskPersistence">核验中</div></div>
  <div class="kv"><div class="k">风控平仓执行验证</div><div class="v" id="zlGRiskExec">核验中</div></div>
 </div>
+<div class="kv" id="zlGuardianRiskSwitchCard" style="margin:14px 0;border:1px solid #34526e;border-radius:12px;padding:14px">
+ <div class="k" style="font-size:13px">GUARDIAN 专属动态风控</div>
+ <div class="v" id="zlGRiskToggleState" style="margin:8px 0;font-size:20px">正在查询实际开关...</div>
+ <div class="muted" id="zlGRiskToggleReason" style="line-height:1.6">必须核验真实卖出报价、平仓和失败恢复后才能开启。</div>
+ <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:12px">
+  <input type="password" id="zlGRiskTogglePin" aria-label="动态风控控制 PIN" autocomplete="off" placeholder="输入控制 PIN" style="min-width:135px;flex:1;max-width:230px;padding:11px;border-radius:8px;background:#101b2b;color:#eff5ff;border:1px solid #36516a">
+  <button type="button" id="zlGRiskToggleButton" aria-label="切换 GUARDIAN 动态止盈止损" onclick="zlGuardianToggleRisk()" style="border-radius:9px;background:#203c54;color:#e8f3ff;border:1px solid #5481a4;min-height:43px;padding:10px 15px;cursor:pointer">读取中</button>
+ </div>
+ <div id="zlGRiskToggleNotice" role="status" aria-live="polite" style="min-height:20px;font-size:13px;margin-top:8px;color:#e1b77c"></div>
+</div>
 <div class="muted" id="zlGDetail" style="margin:12px 0;min-height:2.5em">正在检查实际状态与交易接入情况</div>
-<div class="muted" style="margin:12px 0;padding:10px 12px;border:1px solid #30485e;border-radius:9px">GUARDIAN 已指定为唯一生产信号模型，但它的真实开仓和动态止盈止损执行仍未接通。现有固定比例止盈止损属于另一套风险服务，不能当作 GUARDIAN 动态平仓成功的证明。</div>
+<div class="muted" style="margin:12px 0;padding:10px 12px;border:1px solid #30485e;border-radius:9px">GUARDIAN 动态风控开关与旧固定止盈止损互相独立。只有后端确认风控 Worker 生效时才显示“运行中”；未通过真实 SELL 验收前，点击开启会被安全拦截。停止跟随不等于停止现有仓位的风险监控。</div>
 <a href="/guardian/" style="display:inline-block;margin:7px 0 3px;padding:10px 13px;color:#a7d8ff;text-decoration:none;border:1px solid #456681;border-radius:9px">查看 GUARDIAN 详细信号与记录</a>
 </section>`;
 const SCRIPT=String.raw`<script>(function(){
@@ -45,12 +55,65 @@ const SCRIPT=String.raw`<script>(function(){
   if(x==='THINKING')return 'DeepSeek 分析中';
   return 'WAIT · 暂不交易'
  }
- var loading=false;
+ var loading=false,riskBusy=false;
+ var guardianToggle={loaded:false,requestedEnabled:false,effectiveEnabled:false,canEnable:false};
+ function toggleNote(text){put('zlGRiskToggleNotice',text||'')}
+ function renderToggle(d){
+  if(!d||d.ok!==true){
+   guardianToggle.loaded=false;
+   put('zlGRiskToggleState','状态未知 · 不允许操作');
+   put('zlGRiskToggleReason','动态风控接口不可用，无法判断是否真正受保护');
+   var b=el('zlGRiskToggleButton');if(b)b.disabled=true;
+   return;
+  }
+  guardianToggle={loaded:true,requestedEnabled:d.requestedEnabled===true,
+    effectiveEnabled:d.effectiveEnabled===true,canEnable:d.canEnable===true};
+  var label=d.effectiveEnabled?'运行中 · 仍需核对真实成交':
+    d.requestedEnabled?'开启请求已保存 · 尚未确认生效':
+    '已关闭 · 未启用动态止盈止损';
+  put('zlGRiskToggleState',label);
+  put('zlGRiskToggleReason',d.reason||'未取得实际风控状态');
+  var btn=el('zlGRiskToggleButton');
+  if(btn){btn.disabled=riskBusy;btn.textContent=riskBusy?'正在保存...':
+     d.requestedEnabled?'关闭动态止盈止损':'开启动态止盈止损';}
+  put('zlGDynamicTP',d.effectiveEnabled?'已接入 · Worker运行':'未启用');
+  put('zlGDynamicSL',d.effectiveEnabled?'已接入 · Worker运行':'未启用');
+  put('zlGRiskExec',d.effectiveEnabled?
+    'Worker健康；真实SELL成交仍需订单核验':
+    '动态平仓尚未运行 / 未取得交易所成交验证');
+ }
+ window.zlGuardianToggleRisk=async function(){
+  if(riskBusy||!guardianToggle.loaded)return;
+  var pin=el('zlGRiskTogglePin');
+  var password=pin&&String(pin.value||'').trim();
+  if(!password){toggleNote('请先输入控制 PIN');return}
+  var enabled=!guardianToggle.requestedEnabled;
+  // A UI toggle must never claim that an unverified SELL worker is active.
+  if(enabled&&!guardianToggle.canEnable){
+   toggleNote('尚未完成真实SELL平仓及异常恢复验收，系统禁止开启；当前实盘风控没有生效。');
+   return;
+  }
+  riskBusy=true;renderToggle({...guardianToggle,ok:true});
+  try{
+   var response=await fetch('/api/guardian-dynamic-risk',{method:'POST',
+    credentials:'same-origin',cache:'no-store',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({enabled:enabled,pin:password}),
+    signal:AbortSignal.timeout(9000)});
+   var data=await response.json();
+   if(!response.ok||data.ok!==true)throw Error(data.error||'控制接口拒绝操作');
+   if(pin)pin.value='';
+   renderToggle(data);
+   toggleNote(data.effectiveEnabled?'已确认运行；仍应核对真实SELL成交':
+    enabled?'已保存请求，但风控未确认生效；不可据此假定订单受保护':'关闭请求已保存；存量持仓如有风险仍需监控');
+  }catch(e){toggleNote('操作失败：'+String(e.message||e).slice(0,150))}
+  finally{riskBusy=false;void load()}
+ };
  async function load(){
   if(loading||document.hidden)return;loading=true;
   try{
-   var result=await Promise.all([get('/guardian/api/status'),get('/api/status'),get('/api/risk-control').catch(function(){return null})]);
-   var g=result[0],t=result[1],risk=result[2];
+   var result=await Promise.all([get('/guardian/api/status'),get('/api/status'),get('/api/risk-control').catch(function(){return null}),get('/api/guardian-dynamic-risk').catch(function(){return null})]);
+   var g=result[0],t=result[1],risk=result[2],guardianRisk=result[3];
    if(g.ok!==true||g.model!=='ZL_GUARDIAN_5M_V1')throw Error('GUARDIAN分析服务未就绪');
    if(t.ok!==true)throw Error('生产控制服务未就绪');
    var ready=t.orderSignalModel==='ZL_GUARDIAN_5M_V1'&&t.orderSignalModelReady===true;
@@ -61,12 +124,11 @@ const SCRIPT=String.raw`<script>(function(){
    var age=g.observedAt==null?null:Math.max(0,Date.now()-Number(g.observedAt));
    put('zlGMarket',age==null?'等待行情':age<60000?Math.round(age/1000)+' 秒': '行情延迟 '+Math.round(age/1000)+' 秒');
    put('zlGFollow',t.enabled===true?'已开启（当前不可实盘下单）':'关闭');
-   put('zlGDynamicTP',g.exitExecutionEnabled===true?'已接通（须再确认成交）':'未接入');
-   put('zlGDynamicSL',g.exitExecutionEnabled===true?'已接通（须再确认成交）':'未接入');
+   if(!riskBusy)renderToggle(guardianRisk);
    put('zlGFixedTP',risk&&risk.ok?(risk.takeProfitEnabled?'开启 · '+Number(risk.takeProfitPercent)+'% 理论盈利空间':'关闭'):'读取失败');
    put('zlGFixedSL',risk&&risk.ok?(risk.stopLossEnabled?'开启 · 亏损 '+Number(risk.stopLossPercent)+'% 触发':'关闭'):'读取失败');
    put('zlGRiskPersistence',risk&&risk.ok?(risk.persistenceHealthy===true?'正常':'未就绪'):'状态未知');
-   put('zlGRiskExec','未取得实时 SELL 报价及成交核验证据');
+   // Real Worker state comes only from the dedicated control endpoint.
    var stats=g.stats||{};
    put('zlGCount',Number.isFinite(stats.shadowPredictions)?stats.shadowPredictions:0);
    put('zlGAccuracy',stats.settled>0&&Number.isFinite(stats.directionAccuracy)?(100*stats.directionAccuracy).toFixed(1)+'%（'+stats.settled+'轮）':'暂无有效结算');

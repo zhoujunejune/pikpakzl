@@ -40,8 +40,9 @@ assert guardian.get('automaticTradeEligibility',{}).get('eligible') is False,'LI
 print('GUARDIAN_TOGGLE_PREFLIGHT_SAFE=true')
 PY
 # Check EVERY ongoing Binance prediction position before risk-worker restart.
-RISK_PID=$(pgrep -f '/opt/zl-prediction-node/bin/node risk-worker.mjs' | head -n 1)
-test -n "$RISK_PID"
+RISK_PID=$(pgrep -f '/opt/zl-prediction-node/bin/node risk-worker.mjs' | head -n 1 || true)
+if test -z "$RISK_PID";then RISK_PID=$(systemctl show zl-prediction-trade -p MainPID --value);fi
+test -n "$RISK_PID" && test "$RISK_PID" -gt 0
 RISK_PID="$RISK_PID" python3 - <<'PY'
 import json,os,time,hmac,hashlib,urllib.parse,urllib.request
 pid=os.environ['RISK_PID']

@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Read-only risk readiness diagnosis: no credentials, orders or account data logged."""
+import base64,os,sys,time
+from alibabacloud_swas_open20200601.client import Client
+from alibabacloud_swas_open20200601 import models as sw
+from alibabacloud_tea_openapi import models as api
+SCRIPT=r"""#!/bin/bash
+set -eu
+python3 - <<'PY'
+import datetime,json,pathlib,urllib.request
+r=pathlib.Path('/var/lib/zl-prediction/rounds')
+files=['risk-runtime-status.json','risk-worker-health.json','risk-control.json','guardian5/guardian-risk-ready.json']
+data={}
+for f in files:
+ try:data[f]=json.loads((r/f).read_text())
+ except Exception as e:print('RISK_READONLY_FILE_ERROR',f,type(e).__name__)
+now=datetime.datetime.now(datetime.timezone.utc)
+def age(s):
+ try:
+  if isinstance(s,(int,float)):
+   return round(now.timestamp()-(s/1000 if s>10**11 else s),2)
+  return round((now-datetime.datetime.fromisoformat(str(s).replace('Z','+00:00'))).total_seconds(),2)
+ except Exception:return 'INVALID'
+x=data.get(files[0],{})
+y=data.get(files[1],{})
+z=data.get(files[3],{})
+c=data.get(files[2],{})
+print('GUARDIAN_RISK_READONLY_SUMMARY',json.dumps({
+ 'statusPresent':files[0] in data,
+ 'healthPresent':files[1] in data,
+ 'controlPresent':files[2] in data,
+ 'guardianReadyPresent':files[3] in data,
+ 'runtimeAgeSec':age(x.get('at')),
+ 'positionsAgeSec':age(y.get('lastSuccessfulPositionsAt')),
+ 'markerAgeSec':age(z.get('at')),
+ 'workerRunning':x.get('workerRunning') is True,
+ 'configApplied':x.get('configApplied') is True,
+ 'guardianDynamicExitEnabled':x.get('guardianDynamicExitEnabled') is True,
+ 'controlDynamicExitEnabled':c.get('dynamicExitEnabled'),
+ 'controlFixedTpEnabled':c.get('takeProfitEnabled'),
+ 'controlFixedSlEnabled':c.get('stopLossEnabled'),
+ 'guardianMarkerModelMatch':z.get('model')=='ZL_GUARDIAN_5M_V1',
+ 'markerEnabled':z.get('enabled') is True,
+ 'markerRealSellQuote':z.get('realSellQuote') is True,
+ 'markerOrderRegistry':z.get('orderRegistry') is True
+},sort_keys=True))
+try:
+ with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=5) as u:d=json.load(u)
+ print('GUARDIAN_TRADE_READONLY_SUMMARY',json.dumps({
+   'ok':d.get('ok'),
+   'followingEnabled':d.get('enabled'),
+   'selectedModel':d.get('orderSignalModel'),
+   'pendingAction':d.get('pendingAction') is not None,
+ },sort_keys=True))
+except Exception as e:print('GUARDIAN_TRADE_STATUS_ERROR',type(e).__name__)
+PY
+"""
+def main():
+ c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+ access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+ endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
+ invoke=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+  instance_id='b67374069bb3457ba6a3a2ede9305d3f',type='RunShellScript',
+  name='guardian5-readonly-risk-health',command_content=SCRIPT,
+  working_user='root',timeout=40)).body.invoke_id
+ for _ in range(35):
+  time.sleep(2)
+  d=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+   instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+  if d and str(d.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+   try:o=base64.b64decode(d.output or '',validate=True).decode('utf8','replace')
+   except Exception:o='OUTPUT_NOT_UTF8'
+   print('GUARDIAN_RISK_READONLY_RUN',d.invocation_status,d.exit_code)
+   print(o[-6500:])
+   return 0 if str(d.invocation_status)=='Success' and int(d.exit_code)==0 else 4
+ return 5
+if __name__=='__main__':sys.exit(main())

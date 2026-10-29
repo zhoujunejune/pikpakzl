@@ -147,6 +147,27 @@ print('REGISTRY_AS_SERVICE_ACCOUNT',{'parentExists':p.parent.exists(),
  'fileExists':p.exists(),'canWriteFile':os.access(p,os.W_OK) if p.exists() else None})
 PY
 echo GUARDIAN_REGISTRY_READONLY_AUDIT_END
+echo GUARDIAN_SERVICE_SANDBOX_BEGIN
+python3 - <<'PY'
+import os,subprocess,pathlib,json
+unit='zl-prediction-trade'
+props=['User','ProtectSystem','ProtectHome','ReadWritePaths','ReadOnlyPaths','InaccessiblePaths','RootDirectory','DynamicUser','StateDirectory','PrivateTmp','MainPID']
+d={}
+for item in props:
+ p=subprocess.run(['systemctl','show',unit,'--property='+item,'--value'],capture_output=True,text=True,timeout=3)
+ d[item]=p.stdout.strip()[:250]
+print('REGISTRY_UNIT_SANDBOX',json.dumps(d,ensure_ascii=False))
+pid=d.get('MainPID')
+if pid and pid.isdigit() and int(pid)>0:
+ try:
+  b=pathlib.Path('/proc')/pid/'environ'
+  vals=dict(x.split('=',1) for x in b.read_bytes().decode('utf8','replace').split(chr(0)) if '=' in x)
+  reg=vals.get('GUARDIAN_REGISTRY_FILE')
+  print('REGISTRY_ENV_FILE',reg if reg is None or (reg.startswith('/') and len(reg)<250) else 'UNEXPECTED_PATH')
+ except Exception as e:print('REGISTRY_ENV_FILE_ERROR',type(e).__name__)
+PY
+echo GUARDIAN_SERVICE_SANDBOX_END
+
 echo PROBE_END
 '''
 def main():

@@ -231,6 +231,68 @@ print('FULL_AUDIT_EVENTS_COUNTS',json.dumps(freq,ensure_ascii=False))
 for i in last[-25:]:print('FULL_AUDIT_EVENT',json.dumps(i,ensure_ascii=False))
 print('GUARDIAN_FULL_ORDER_READONLY_AUDIT_END')
 PY
+echo GUARDIAN_FULL_READONLY_AUDIT_BEGIN
+python3 - <<'PY'
+import json,urllib.request,datetime,subprocess,pathlib,collections
+now=datetime.datetime.now(datetime.timezone.utc)
+print('AUDIT_SERVER_UTC',now.isoformat(timespec='seconds'))
+def api(port,url):
+ try:
+  with urllib.request.urlopen('http://127.0.0.1:%d%s'%(port,url),timeout=4) as x: return json.load(x)
+ except Exception as e: return {'ok':False,'auditError':type(e).__name__}
+def compact(o,keys):
+ return {k:o.get(k) for k in keys if k in o}
+s=api(13001,'/api/status')
+a=api(13005,'/api/status')
+g=api(13049,'/api/status')
+m=api(13003,'/api/shadow-market-data')
+print('AUDIT_MAIN_STATUS',json.dumps(compact(s,['ok','enabled','amount','mode','autoConfirmEnabled','autoConfirmHalted','autoConfirmCooldownMs','autoConfirmStopOnError','orderSignalModel','orderSignalModelReady','guardianExecutionReady','guardianRiskReady','directionModeReady','orderDirectionPolicy','signal','orderSignal','startAfterRound','health','status']),default=str,ensure_ascii=False)[:1700])
+print('AUDIT_SECONDARY_STATUS',json.dumps(compact(a,['ok','enabled','amount','autoConfirmEnabled','autoConfirmHalted','orderSignalModel','orderSignalModelReady','guardianExecutionReady','guardianRiskReady']),default=str,ensure_ascii=False)[:1200])
+for tag,obj in [('PENDING',s.get('pendingAction') or {}),('LAST',s.get('lastOrder') or {})]:
+ print('AUDIT_'+tag,json.dumps(compact(obj,['round','state','error','code','httpStatus','blockReason','paymentAccount','orderAttempts','maxAttempts','quoteChance','quoteExpireAt','submittedAt','lastCheckedAt','status']),ensure_ascii=False,default=str)[:1000])
+bal=s.get('balance') or {}
+accounts=bal.get('items') or []
+print('AUDIT_CEX_PAYMENT_OPTIONS',json.dumps({'apiOk':bal.get('ok'),'error':bal.get('error'),'cached':bal.get('cached'),'cacheAgeMs':bal.get('cacheAgeMs'),'accounts':[{'accountType':x.get('accountType'),'enabled':x.get('enabled'),'ge1usdt':(float(x.get('availableBalanceDisplay') or 0)>=1 if str(x.get('availableBalanceDisplay') or '0').replace('.','',1).isdigit() else None)} for x in accounts]},ensure_ascii=False)[:1000])
+print('AUDIT_GUARDIAN_SIGNAL',json.dumps({'ok':g.get('ok'),'model':g.get('model'),'configured':g.get('configured'),'round':g.get('round'),'latest':compact(g.get('latest') or {},['round','direction','status','reason']),'recordCount':len(g.get('records') or []),'lastTickAt':g.get('lastTickAt'),'observedAt':g.get('observedAt'),'error':g.get('error'),'stats':compact(g.get('stats') or {},['settled','correct','validated'])},ensure_ascii=False,default=str)[:1300])
+print('AUDIT_FEED',json.dumps({'ok':m.get('ok'),'readOnly':m.get('readOnly'),'symbol':m.get('symbol'),'lastEventMs':(m.get('latest') or {}).get('eventMs'),'roundStartMs':(m.get('latest') or {}).get('roundStartMs')},ensure_ascii=False)[:500])
+root=pathlib.Path('/var/lib/zl-prediction/rounds')
+def age(x):
+ try:
+  if isinstance(x,(float,int)):return round((now.timestamp()*1000-float(x))/1000) if x>1e11 else round(now.timestamp()-float(x))
+  d=datetime.datetime.fromisoformat(str(x).replace('Z','+00:00'))
+  return round((now-d).total_seconds())
+ except Exception:return None
+for name in ['risk-control.json','risk-runtime-status.json','risk-worker-health.json']:
+ try:
+  d=json.loads((root/name).read_text())
+  keys={'risk-control.json':['takeProfitEnabled','stopLossEnabled','takeProfitPercent','stopLossPercent'],
+        'risk-runtime-status.json':['at','workerRunning','enabled','configApplied','guardianDynamicExitEnabled','transitioning','error','lastError'],
+        'risk-worker-health.json':['lastSuccessfulPositionsAt','positionsSeen','lastError','workerRunning','error']}[name]
+  view=compact(d,keys)
+  for k in ('at','lastSuccessfulPositionsAt'):
+   if k in view:view[k+'AgeSec']=age(view.pop(k))
+  print('AUDIT_RISK_FILE',name,json.dumps(view,ensure_ascii=False,default=str)[:900])
+ except Exception as e: print('AUDIT_RISK_FILE_ERROR',name,type(e).__name__)
+for unit in ('zl-prediction-trade','zl-prediction-v2','zl-prediction-v3','zl-prediction-risk-exits','zl-prediction-guardian-analysis'):
+ p=subprocess.run(['systemctl','is-active',unit],capture_output=True,text=True,timeout=2)
+ print('AUDIT_UNIT',unit,p.stdout.strip() or 'unknown')
+p=subprocess.run(['journalctl','-u','zl-prediction-trade','--since','4 hours ago','-o','json','--no-pager','-n','16000'],capture_output=True,text=True,timeout=22)
+by=collections.Counter()
+events=[]
+wanted={'api_confirm_control','api_intent_ready','auto_submit_triggered','guardian_signal_recheck_completed','submit_blocked_signal_changed','fresh_quote_failed','fresh_quote_ready','api_order_submit_attempt','api_order_failed','api_order_submitted_pending_confirmation','order_status_updated','order_retry_requote_failed','order_submit_attempt_denied','order_submit_deadline_expired','auto_confirm_halted','guardian_feed_unavailable','intent_prepare_failed','prediction_wallet_quote_insufficient_spot_fallback','prediction_wallet_insufficient_spot_unavailable','prediction_wallet_insufficient_spot_fallback','order_submit_rejected','direction_mode_refresh_failed','production_signal_choice_hydrate_failed','guardian_order_registration_failed_after_buy','order_status_conflict_auto_halted'}
+for line in p.stdout.splitlines():
+ try:
+  j=json.loads(line);m=json.loads(j.get('MESSAGE',''))
+  if not isinstance(m,dict) or m.get('event') not in wanted:continue
+  e=m['event'];by[e]+=1
+  ts=datetime.datetime.fromtimestamp(int(j['__REALTIME_TIMESTAMP'])/1000000,datetime.timezone(datetime.timedelta(hours=8))).strftime('%m-%d %H:%M:%S')
+  safe=compact(m,['round','source','code','httpStatus','retries','signalRecovered','signalIdMatches','currentSignalIdMatches','currentStatus','spotQuoteOk','state','reason','blockReason','paymentAccount','attempt','attempts'])
+  events.append({'time':ts,'event':e,**safe})
+ except (TypeError,ValueError,KeyError):continue
+print('AUDIT_EVENTS_READ_OK',p.returncode==0,'counts',json.dumps(by,ensure_ascii=False))
+for e in events[-30:]:print('AUDIT_EVENT',json.dumps(e,ensure_ascii=False,default=str)[:450])
+print('AUDIT_FULL_COMPLETE=true')
+PY
 echo PROBE_END
 '''
 def main():

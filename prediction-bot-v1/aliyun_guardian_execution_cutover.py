@@ -19,6 +19,8 @@ cleanup(){
   if test "$changed" = 1 && test "$committed" = 0;then
     cp -p "$BACK/guardian-live-bridge.mjs" "$ROOT/guardian-live-bridge.mjs"
     cp -p "$BACK/wrapper.mjs" "$ROOT/wrapper.mjs"
+    cp -p "$BACK/risk-runner.mjs" "$ROOT/risk-runner.mjs"
+    systemctl restart zl-prediction-risk-exits || true
     systemctl restart zl-prediction-trade || true
     echo GUARDIAN_CUTOVER_ROLLBACK_COMPLETED=true
   fi
@@ -41,31 +43,33 @@ print('GUARDIAN_CUTOVER_TRADE_IDLE=true')
 PY
 }
 check_risk(){
-python3 - <<'PY'
+python3 - "$1" <<'PY'
 import pathlib,json,datetime,sys
-root=pathlib.Path('/var/lib/zl-prediction/rounds')
+phase=sys.argv[1]; root=pathlib.Path('/var/lib/zl-prediction/rounds')
 try:
  r=json.loads((root/'risk-runtime-status.json').read_text())
  h=json.loads((root/'risk-worker-health.json').read_text())
- g=json.loads((root/'guardian5/guardian-risk-ready.json').read_text())
+ c=json.loads((root/'risk-control.json').read_text())
  now=datetime.datetime.now(datetime.timezone.utc)
  def recent(x,sec):
-  ts=datetime.datetime.fromisoformat(str(x).replace('Z','+00:00'))
-  return abs((now-ts).total_seconds())<sec
- ok=(r.get('workerRunning') is True and r.get('configApplied') is True and
-     r.get('guardianDynamicExitEnabled') is True and recent(r.get('at'),10) and
-     recent(h.get('lastSuccessfulPositionsAt'),15) and
-     g.get('model')=='ZL_GUARDIAN_5M_V1' and g.get('enabled') is True and
-     g.get('realSellQuote') is True and g.get('orderRegistry') is True and
-     abs(now.timestamp()*1000-int(g.get('at',0)))<10000)
- if not ok: raise ValueError('RISK_MONITOR_NOT_VERIFIED')
- print('GUARDIAN_CUTOVER_LIVE_RISK_VERIFIED=true')
-except Exception as e:print('GUARDIAN_CUTOVER_RISK_BLOCKED',type(e).__name__);sys.exit(12)
+  if isinstance(x,(float,int)): return 0 <= now.timestamp()-(x/1000 if x>1e11 else x)<sec
+  return 0 <= (now-datetime.datetime.fromisoformat(str(x).replace('Z','+00:00'))).total_seconds()<sec
+ assert c.get('takeProfitEnabled') is True and c.get('stopLossEnabled') is True,'FIXED_TP_SL_NOT_BOTH_ENABLED'
+ assert 1<=float(c.get('takeProfitPercent',0))<=100 and 1<=float(c.get('stopLossPercent',0))<=100,'FIXED_TP_SL_INVALID_PERCENT'
+ assert r.get('workerRunning') is True and r.get('configApplied') is True and r.get('enabled') is True,'RISK_WORKER_NOT_READY'
+ assert recent(r.get('at'),9) and recent(h.get('lastSuccessfulPositionsAt'),16),'RISK_HEARTBEAT_STALE'
+ assert h.get('positionsSeen')==0,'OPEN_POSITIONS_ABORT'
+ if phase=='after':
+  assert r.get('guardianDynamicExitEnabled') is False,'DYNAMIC_EXIT_NOT_RETIRED'
+  assert r.get('transitioning') is not True,'RISK_TRANSITIONING'
+ print('GUARDIAN_FIXED_RISK_VERIFIED',phase,'TP',c.get('takeProfitPercent'),'SL',c.get('stopLossPercent'),'dynamic',r.get('guardianDynamicExitEnabled'))
+except Exception as e:
+ print('GUARDIAN_FIXED_RISK_BLOCKED',phase,type(e).__name__,str(e)[:90]);sys.exit(12)
 PY
 }
 check_idle
-check_risk
-for f in wrapper.mjs guardian-live-bridge.mjs;do
+check_risk before
+for f in wrapper.mjs guardian-live-bridge.mjs risk-runner.mjs;do
   cp -p "$ROOT/$f" "$BACK/$f"
   curl -fsSL --retry 2 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$REV/railway-diagnostic/$f" -o "$WORK/new-$f"
   "$NODE" --check "$WORK/new-$f"
@@ -109,9 +113,23 @@ assert out.count('function guardianExitMonitorReady(')==1
 print('GUARDIAN_CUTOVER_TARGETED_PATCH_READY=true')
 PY
 for f in wrapper.mjs guardian-live-bridge.mjs;do "$NODE" --check "$WORK/patch-$f";done
+test "$(grep -Fc "GUARDIAN_DYNAMIC_EXIT_ENABLED:'false'" "$WORK/new-risk-runner.mjs")" = 1
+test "$(grep -Fc 'dynamicExitEnabled: false' "$WORK/new-risk-runner.mjs")" = 2
+"$NODE" --check "$WORK/new-risk-runner.mjs"
 check_idle
-check_risk
+check_risk before
 changed=1
+cp "$WORK/new-risk-runner.mjs" "$ROOT/risk-runner.mjs"
+chown --reference="$BACK/risk-runner.mjs" "$ROOT/risk-runner.mjs"
+chmod --reference="$BACK/risk-runner.mjs" "$ROOT/risk-runner.mjs"
+systemctl restart zl-prediction-risk-exits
+risk_healthy=0
+for n in $(seq 1 22);do
+ if systemctl is-active --quiet zl-prediction-risk-exits && check_risk after;then risk_healthy=1;break;fi
+ sleep 1
+done
+test "$risk_healthy" = 1
+check_idle
 for f in guardian-live-bridge.mjs wrapper.mjs;do
   cp "$WORK/patch-$f" "$ROOT/$f"
   chown --reference="$BACK/$f" "$ROOT/$f"
@@ -120,7 +138,7 @@ done
 "$NODE" --check "$ROOT/wrapper.mjs"
 "$NODE" --check "$ROOT/guardian-live-bridge.mjs"
 check_idle
-check_risk
+check_risk after
 systemctl restart zl-prediction-trade
 healthy=0
 for n in $(seq 1 18);do
@@ -131,15 +149,17 @@ s=json.load(open(sys.argv[1]))
 assert s.get('ok') and s.get('enabled') is False
 assert s.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1'
 assert not s.get('pendingAction')
+assert s.get('guardianRiskReady') is True,'FIXED_EXIT_READINESS_NOT_CONFIRMED'
 PY
     then healthy=1;break;fi
   fi
   sleep 2
 done
 test "$healthy" = 1
-check_risk
+check_risk after
 committed=1
 echo GUARDIAN_CUTOVER_PRODUCTION_DEPLOYED=true
+echo GUARDIAN_FIXED_ONLY_RISK_ACTIVE=true
 echo GUARDIAN_CUTOVER_FOLLOW_OWNER_OFF=true
 echo GUARDIAN_CUTOVER_BACKUP="$BACK"
 """

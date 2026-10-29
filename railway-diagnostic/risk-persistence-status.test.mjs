@@ -55,7 +55,7 @@ test('internal worker telemetry may continue but redundant status endpoint and U
 });
 
 test('PIN is masked, and existing order/strategy controls remain unchanged',()=>{
- assert.match(page,/<input id="pin" type="password" autocomplete="off"/);
+ assert.match(page,/<input id="pin" type="hidden" value=""/);
  assert.match(page,/id="tradeInputsCard"/);
  assert.match(page,/id="riskControlsAnchor"/);
  assert.match(wrapper,/AUTO_CONFIRM_ENABLED/);
@@ -69,5 +69,5 @@ test('only monitoring and persistence are wired: no new automatic financial fuse
  assert.doesNotMatch(runner,/DAILY_LOSS_HALT|MAX_DAILY_TRADES|AUTO_MAX_LOSS/);
  assert.doesNotMatch(control,/DAILY_LOSS_HALT|MAX_DAILY_TRADES|AUTO_MAX_LOSS/);
  assert.match(page,/Prediction 可用余额/);
- assert.match(page,/开始跟随新信号/);
+ assert.match(page,/开始跟随（自动提交，下一轮生效）/);
 });

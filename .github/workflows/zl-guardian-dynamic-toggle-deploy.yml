@@ -4,6 +4,8 @@ on:
     branches: [feature/guardian-dynamic-risk-ui-toggle]
     paths:
       - prediction-bot-v1/aliyun_guardian_toggle_deploy.py
+      - prediction-bot-v1/guardian_toggle_overlay.py
+      - prediction-bot-v1/test_guardian_toggle_overlay.py
       - .github/workflows/zl-guardian-dynamic-toggle-deploy.yml
   workflow_dispatch:
 permissions: {contents: read}

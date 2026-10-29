@@ -23,6 +23,7 @@ jobs:
         with:
           node-version: '22'
       - name: Validate Python, embedded JS and remote shell before touching Alibaba
+        id: validate
         run: |
           python -m py_compile prediction-bot-v1/aliyun_guardian_restore_visibility.py
           node --check prediction-bot-v1/guardian-visibility-sidecar.mjs
@@ -45,6 +46,7 @@ jobs:
           PY
       - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
       - name: Deploy read-only overlay through Caddy, no trading-process restart
+        id: deploy
         env:
           ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
@@ -58,13 +60,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ZGV_JOB_STATUS: ${{ job.status }}
+          ZGV_VALIDATE: ${{ steps.validate.outcome }}
+          ZGV_DEPLOY: ${{ steps.deploy.outcome }}
         run: |
           python - <<'PY'
           import os,json,urllib.request
           state='success' if os.getenv('ZGV_JOB_STATUS')=='success' else 'failure'
+          phase='verify' if state=='success' else ('validation' if os.getenv('ZGV_VALIDATE')!='success' else 'aliyun-deploy')
           body=json.dumps({
             'state':state,
-            'context':'guardian-readonly-visibility-deploy',
+            'context':'guardian-ui-'+phase,
             'description':'Read-only visibility deploy '+state+'; trading engine not restarted'
           }).encode()
           url='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/statuses/'+os.environ['GITHUB_SHA']

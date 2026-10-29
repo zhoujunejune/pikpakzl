@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import { createClient } from 'redis';
 
-export const RISK_CONFIG_FILE = '/tmp/risk-control.json';
+export const RISK_CONFIG_FILE = process.env.RISK_CONTROL_FILE || '/tmp/risk-control.json';
 export const RISK_REDIS_KEY = 'trade-control:risk-config:v1';
 let client = null;
 let connecting = null;

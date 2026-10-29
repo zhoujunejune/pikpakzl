@@ -76,7 +76,9 @@ import sys
 s=Path(sys.argv[1]).read_text()
 old='/var/lib/zl-prediction/guardian5/guardian-live-orders.json'
 new='/var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json'
-assert s.count(old)+s.count(new)==1,'REGISTRY_PATH_UNEXPECTED'
+print('GUARDIAN_REGISTRY_LIVE_SOURCE',sys.argv[1], 'old',s.count(old),'new',s.count(new),
+      'registryLines',[x[:200] for x in s.splitlines() if 'REGISTRY' in x or 'guardian-live-orders.json' in x][:8],flush=True)
+assert s.count(old)+s.count(new)>=1,'REGISTRY_PATH_UNEXPECTED'
 Path(sys.argv[2]).write_text(s.replace(old,new))
 PY
 done

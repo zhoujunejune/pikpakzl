@@ -110,6 +110,13 @@ ls=t.splitlines()
 for n,line in enumerate(ls):
  if any(k in line for k in ('guardianToggle','riskBusy','renderToggle','zlGuardianToggleRisk','/api/guardian-dynamic-risk','function loadRisk','var loading','async function load()','zlGDynamicTP','zlGDynamicSL')):
   print('GUARDIAN_UI_SCRIPT_LINE',n+1,line.strip()[:190])
+# Show the narrow remaining dashboard loader structure; no accounts or secrets.
+from pathlib import Path
+ls=Path('/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs').read_text().splitlines()
+for i in range(109,min(154,len(ls))):
+ line=ls[i]
+ if any(k in line.lower() for k in ('key','secret','authorization','password')):continue
+ print('GUARDIAN_UI_LOADER',i+1,line[:260])
 PY
 """
 def main():

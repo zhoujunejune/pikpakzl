@@ -43,13 +43,7 @@ function log(event, extra = {}) {
   console.log(JSON.stringify({ event, shell: 'trade-control', at: new Date().toISOString(), ...extra }));
 }
 
-function pinOK(pin,req) {
-  if(process.env.ZL_OUTER_AUTH_ONLY==='true'){
-    const origin=String(process.env.ZL_PUBLIC_ORIGIN||'');
-    return Boolean(req&&origin.startsWith('https://')&&
-      req.headers['x-zl-verified-login']==='1'&&
-      req.headers.origin===origin&&req.headers['sec-fetch-site']==='same-origin');
-  }
+function pinOK(pin) {
   return Boolean(CONTROL_PIN_SHA256)&&crypto.createHash('sha256').update(String(pin||'')).digest('hex')===CONTROL_PIN_SHA256;
 }
 
@@ -186,12 +180,12 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
   if (req.method === 'GET' && url.pathname === '/api/risk-control') {
-    return sendJson(res, 200, { ok: true, ...readRiskConfig(), persistenceReady, persistenceHealthy, persistenceRestored, outerAuthOnly:process.env.ZL_OUTER_AUTH_ONLY==='true' });
+    return sendJson(res, 200, { ok: true, ...readRiskConfig(), persistenceReady, persistenceHealthy, persistenceRestored });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/risk-control') {
     const body = await readJsonBody(req);
-    if (!pinOK(body.pin,req)) return sendJson(res, 401, { ok: false, error: 'PIN 错误' });
+    if (!pinOK(body.pin)) return sendJson(res, 401, { ok: false, error: 'PIN 错误' });
     if (!persistenceReady || !persistenceHealthy) return sendJson(res, 503, { ok: false, error: '持久化存储不可用，已阻止可能丢失的配置修改；请检查 Redis 状态' });
     try {
       const updated = await serializedRiskWrite(async () => {

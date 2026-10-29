@@ -1,0 +1,31 @@
+name: GUARDIAN dynamic exit UI and safety gate tests
+on:
+  push:
+    branches: [feature/guardian-dynamic-risk-ui-toggle]
+    paths:
+      - railway-diagnostic/guardian-main-dashboard.mjs
+      - railway-diagnostic/control-shell.mjs
+      - railway-diagnostic/risk-runner.mjs
+      - railway-diagnostic/risk-config-storage.mjs
+      - railway-diagnostic/guardian-dynamic-toggle-ui.test.mjs
+      - .github/workflows/zl-guardian-dynamic-toggle-ui-tests.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Verify JS syntax
+        run: |
+          node --check railway-diagnostic/guardian-main-dashboard.mjs
+          node --check railway-diagnostic/control-shell.mjs
+          node --check railway-diagnostic/risk-config-storage.mjs
+          node --check railway-diagnostic/risk-runner.mjs
+      - name: Verify GUARDIAN-only control, persistent settings and safety gates
+        run: node --test railway-diagnostic/guardian-dynamic-toggle-ui.test.mjs
+      - name: Regression tests for existing risk control UI
+        run: node --test railway-diagnostic/risk-controls-ui.test.mjs

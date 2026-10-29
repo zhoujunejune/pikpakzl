@@ -55,25 +55,23 @@ function guardianRiskState(paths) {
   return null;
 }
 function guardianExitMonitorReady(now=Date.now()) {
+  // Fixed-only GUARDIAN mode: never treat an unverified dynamic SELL monitor
+  // as a substitute for the user's two enabled, live fixed exit controls.
   const root='/var/lib/zl-prediction/rounds/';
   const config=guardianRiskState([process.env.RISK_CONTROL_FILE,root+'risk-control.json','/tmp/risk-control.json']);
   const runtime=guardianRiskState([process.env.RISK_STATUS_FILE,root+'risk-runtime-status.json','/tmp/risk-runtime-status.json']);
   const health=guardianRiskState([process.env.RISK_WORKER_HEALTH_FILE,root+'risk-worker-health.json','/tmp/risk-worker-health.json']);
   if(!config||!runtime||!health)return false;
-  if(runtime.workerRunning!==true||runtime.configApplied!==true||
-     !Number.isFinite(Date.parse(runtime.at))||now-Date.parse(runtime.at)>6000||
-     !Number.isFinite(Date.parse(health.lastSuccessfulPositionsAt))||
-     now-Date.parse(health.lastSuccessfulPositionsAt)>10000)return false;
-  const dynamicOn=config.dynamicExitEnabled===true ||
-    (config.dynamicExitEnabled===undefined&&runtime.guardianDynamicExitEnabled===true);
-  if(!dynamicOn)return config.stopLossEnabled===true||config.takeProfitEnabled===true;
-  if(runtime.guardianDynamicExitEnabled!==true)return false;
-  const marker=guardianRiskState([process.env.GUARDIAN_RISK_READY_FILE,
-    root+'guardian5/guardian-risk-ready.json','/tmp/guardian-risk-ready.json']);
-  return marker?.model===GUARDIAN_ID&&marker.enabled===true&&
-    marker.realSellQuote===true&&marker.orderRegistry===true&&
-    Number.isFinite(marker.at)&&now-marker.at>=0&&now-marker.at<=4000;
+  const statusAge=now-Date.parse(runtime.at);
+  const positionAge=now-Date.parse(health.lastSuccessfulPositionsAt);
+  return config.takeProfitEnabled===true&&config.stopLossEnabled===true&&
+    runtime.enabled===true&&runtime.workerRunning===true&&runtime.configApplied===true&&
+    runtime.guardianDynamicExitEnabled===false&&runtime.transitioning!==true&&
+    Number.isFinite(statusAge)&&statusAge>=0&&statusAge<=6000&&
+    Number.isFinite(positionAge)&&positionAge>=0&&positionAge<=10000&&
+    Number.isSafeInteger(health.positionsSeen)&&health.positionsSeen>=0;
 }
+
 let autoConfirmHalted = false;
 let lastAutoSubmitAt = 0;
 const autoAttemptedRounds = new Set();

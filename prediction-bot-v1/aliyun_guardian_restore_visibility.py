@@ -97,96 +97,111 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden){voi
 # Remote script is generated with only a base64-encoded, static UI fragment.
 REMOTE = r"""#!/bin/bash
 set -Eeuo pipefail
-PANEL=/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs
 NODE=/opt/zl-prediction-node/bin/node
-test -r "$PANEL" && test -x "$NODE"
+CADDY=/etc/caddy/Caddyfile
+ROOT=/opt/zl-prediction-live/ui-sidecar
+DEST=$ROOT/guardian-visibility-sidecar.mjs
+UNIT=/etc/systemd/system/zl-prediction-ui-visibility.service
+HOST=prediction.47-237-188-69.sslip.io
+SHA=c1b0c082269274163e892a1db1f4e2c3e556fdc7
+test -x "$NODE" && test -r "$CADDY"
 systemctl is-active --quiet zl-prediction-trade
-BACK=/var/backups/guardian5-visibility-$(date -u +%Y%m%dT%H%M%SZ)-$$
-mkdir -p -m 0700 "$BACK"
-cp -p "$PANEL" "$BACK/before.mjs"
-export ZGV_BACK="$BACK"
-python3 - <<'PY'
-from pathlib import Path
-import base64,json,os
-p=Path('/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs')
-src=p.read_text()
-if "zlGuardianVisibilityRestoreV1" in src:
- print("ZGV_PATCH_ALREADY_STAGED=true")
-else:
- fragment=base64.b64decode('FRAGMENT_BASE64_HERE').decode('utf-8')
- needle="return out.replace('</body>',SCRIPT+'</body>');"
- if src.count(needle)!=1:raise RuntimeError('GUARDIAN_INJECTION_ANCHOR_CHANGED')
- replacement="return out.replace('</body>',SCRIPT+"+json.dumps(fragment,ensure_ascii=False)+"+'</body>');"
- revised=src.replace(needle,replacement,1)
- st=p.with_name(p.name+'.zgv-stage')
- st.write_text(revised)
- os.chmod(st,p.stat().st_mode&0o777)
- os.chown(st,p.stat().st_uid,p.stat().st_gid)
- os.replace(st,p)
- print("ZGV_PATCH_STAGED=true")
-PY
-python3 - <<'PY'
-from pathlib import Path
-import json,os
-p=Path('/opt/zl-prediction-live/src/railway-diagnostic/guardian-main-dashboard.mjs')
-src=p.read_text()
-if 'ZGV_FALLBACK_SCRIPT' in src:
- print('ZGV_INDEPENDENT_FALLBACK_ALREADY_STAGED=true')
-else:
- needle=' if(start<0)return html;'
- assert src.count(needle)==1,'GUARDIAN_OLD_CARD_FALLBACK_ANCHOR_CHANGED'
- matches=[l for l in src.splitlines() if l.startswith(" return out.replace('</body>',SCRIPT+")]
- assert len(matches)==1,'GUARDIAN_RENDER_RETURN_UNEXPECTED'
- old=matches[0]
- quoted=old.split('SCRIPT+',1)[1].rsplit("+'</body>');",1)[0]
- fragment=json.loads(quoted)
- assert 'zlGuardianVisibilityRestoreV1' in fragment and fragment.startswith('<script>')
- declaration='export function injectGuardianMainDashboard(html){'
- assert src.count(declaration)==1
- src=src.replace(declaration,'const ZGV_FALLBACK_SCRIPT='+quoted+';\n'+declaration,1)
- src=src.replace(needle," if(start<0)return html.replace('</body>',ZGV_FALLBACK_SCRIPT+'</body>');",1)
- src=src.replace(old," return out.replace('</body>',SCRIPT+ZGV_FALLBACK_SCRIPT+'</body>');",1)
- stage=p.with_name(p.name+'.zgv-fallback')
- stage.write_text(src)
- os.chmod(stage,p.stat().st_mode&0o777)
- os.chown(stage,p.stat().st_uid,p.stat().st_gid)
- os.replace(stage,p)
- print('ZGV_INDEPENDENT_FALLBACK_STAGED=true')
-PY
-"$NODE" --check "$PANEL"
-STATE=$(python3 - <<'PY'
-import urllib.request,json
-with urllib.request.urlopen('http://127.0.0.1:13001/api/status',timeout=8) as f:s=json.load(f)
-if s.get('ok') is not True:raise RuntimeError('TRADE_STATUS_NOT_OK')
-print('ACTIVE' if s.get('enabled') is True or s.get('pendingAction') else 'IDLE')
-PY
-)
-if test "$STATE" != IDLE;then
- echo ZGV_PATCH_ON_DISK_BUT_NOT_LIVE=true
- echo ZGV_FOLLOWING_UNCHANGED=true
- echo ZGV_RESTART_SKIPPED_TO_PROTECT_ACTIVE_TRADES=true
- exit 0
-fi
-if ! systemctl restart zl-prediction-trade;then
- cp -p "$BACK/before.mjs" "$PANEL"
- systemctl restart zl-prediction-trade || true
- echo ZGV_DEPLOY_ROLLED_BACK=true
- exit 8
-fi
-READY=0
-for i in $(seq 1 62);do
- if curl -fsS --max-time 4 http://127.0.0.1:13001/ -o "$BACK/page.html" && grep -q 'zlGuardianVisibilityRestoreV1' "$BACK/page.html";then READY=1;break;fi
- sleep 2
+systemctl is-active --quiet caddy
+id zl-pred >/dev/null
+curl -fsS --max-time 8 http://127.0.0.1:13001/api/status | python3 -c "import json,sys; assert json.load(sys.stdin).get('ok') is True"
+BACK=/var/backups/guardian-ui-only-$(date -u +%Y%m%dT%H%M%SZ)-$$
+mkdir -p -m 0700 "$BACK" "$ROOT"
+cp -p "$CADDY" "$BACK/caddy.before"
+if test -f "$DEST";then cp -p "$DEST" "$BACK/sidecar.before";fi
+if test -f "$UNIT";then cp -p "$UNIT" "$BACK/unit.before";fi
+rollback(){
+  echo ZGV_ROLLBACK_STARTED=true
+  cp -p "$BACK/caddy.before" "$CADDY"
+  if test -f "$BACK/sidecar.before";then cp -p "$BACK/sidecar.before" "$DEST";else rm -f "$DEST";fi
+  if test -f "$BACK/unit.before";then cp -p "$BACK/unit.before" "$UNIT";else rm -f "$UNIT";fi
+  systemctl daemon-reload || true
+  if test -f "$BACK/unit.before";then systemctl restart zl-prediction-ui-visibility || true;else systemctl stop zl-prediction-ui-visibility || true;fi
+  systemctl reload caddy || true
+  echo ZGV_ROLLBACK_DONE=true
+}
+trap rollback ERR
+curl -fsSL --retry 2 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$SHA/prediction-bot-v1/guardian-visibility-sidecar.mjs" -o "$BACK/sidecar.stage"
+"$NODE" --check "$BACK/sidecar.stage"
+install -o zl-pred -g zl-pred -m 0644 "$BACK/sidecar.stage" "$DEST"
+cat > "$UNIT" <<'EOF'
+[Unit]
+Description=GUARDIAN BTC 5M read-only visibility sidecar
+After=network-online.target zl-prediction-trade.service
+Wants=network-online.target
+[Service]
+Type=simple
+User=zl-pred
+Group=zl-pred
+WorkingDirectory=/opt/zl-prediction-live/ui-sidecar
+ExecStart=/opt/zl-prediction-node/bin/node /opt/zl-prediction-live/ui-sidecar/guardian-visibility-sidecar.mjs
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable zl-prediction-ui-visibility >/dev/null
+systemctl restart zl-prediction-ui-visibility
+for i in $(seq 1 18);do
+  if curl -fsS --max-time 4 http://127.0.0.1:13051/ -o "$BACK/page.html" &&
+     grep -q '__zlGuardianLiveVisibilityV2' "$BACK/page.html" &&
+     curl -fsS --max-time 3 http://127.0.0.1:13051/healthz | grep -q '"ok":true'; then break;fi
+  sleep 1
 done
-if test "$READY" != 1;then
- cp -p "$BACK/before.mjs" "$PANEL"
- systemctl restart zl-prediction-trade || true
- echo ZGV_DEPLOY_ROLLED_BACK=true
- exit 9
-fi
+grep -q '__zlGuardianLiveVisibilityV2' "$BACK/page.html"
+python3 - <<'PY'
+from pathlib import Path
+import os
+p=Path('/etc/caddy/Caddyfile')
+s=p.read_text()
+host='\nprediction.47-237-188-69.sslip.io {'
+pos=s.find(host)
+if pos<0 and s.startswith(host.lstrip('\n')):pos=0
+assert pos>=0,'PREDICTION_CADDY_HOST_MISSING'
+if '# ZGV_READONLY_VISIBILITY_V2' in s:
+ assert s.count('reverse_proxy 127.0.0.1:13051')==2,'EXISTING_ROOT_PROXY_DRIFT'
+ print('ZGV_CADDY_ALREADY_WIRED=true')
+else:
+ anchor='\n  handle {'
+ start=s.index(anchor,pos)
+ assert 'reverse_proxy 127.0.0.1:13001' in s[start:start+160],'PREDICTION_FALLBACK_NOT_MATCHED'
+ patch=('\n  # ZGV_READONLY_VISIBILITY_V2: route only public HTML and read-only market feed'
+        '\n  handle / {'
+        '\n    reverse_proxy 127.0.0.1:13051'
+        '\n  }'
+        '\n  handle /zl-guardian-visibility/market {'
+        '\n    reverse_proxy 127.0.0.1:13051'
+        '\n  }')
+ s=s[:start]+patch+s[start:]
+ assert s.count('basic_auth')==p.read_text().count('basic_auth'),'AUTH_MUST_BE_PRESERVED'
+ staged=p.with_name('Caddyfile.zgv-stage')
+ staged.write_text(s)
+ os.chmod(staged,0o644)
+ os.replace(staged,p)
+ print('ZGV_CADDY_READONLY_ROUTES_INSTALLED=true')
+PY
+caddy validate --config "$CADDY" >/dev/null
+systemctl reload caddy
+curl -skS --resolve "$HOST:443:127.0.0.1" --max-time 6 -o /dev/null -w '%{http_code}' "https://$HOST/" > "$BACK/public_code"
+test "$(cat "$BACK/public_code")" = 401
+systemctl is-active --quiet zl-prediction-trade
+systemctl is-active --quiet zl-prediction-ui-visibility
+systemctl is-active --quiet caddy
+curl -fsS --max-time 5 http://127.0.0.1:13001/api/status | python3 -c "import json,sys; assert json.load(sys.stdin).get('ok') is True"
+echo ZGV_RESTART_SKIPPED_TO_PROTECT_ACTIVE_TRADES=true
 echo ZGV_LIVE_VISIBILITY_RESTORED=true
-echo ZGV_TRADE_STRATEGY_UNCHANGED=true
-"""
+echo ZGV_TRADE_ENGINE_NOT_RESTARTED=true
+echo ZGV_BACKUP_DIR="$BACK"
+trap - ERR"""
 REMOTE=REMOTE.replace('FRAGMENT_BASE64_HERE',base64.b64encode(VIS.encode()).decode())
 
 def main():

@@ -60,14 +60,39 @@ echo GUARDIAN_REPAIR_BACKUP="$BACK"
 curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE/railway-diagnostic/wrapper.mjs" -o "$TMP/old.mjs"
 curl -fsSL --retry 2 --max-time 25 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$REV/railway-diagnostic/wrapper.mjs" -o "$TMP/new.mjs"
 python3 - "$TMP/old.mjs" "$TMP/new.mjs" "$ROOT/wrapper.mjs" "$TMP/wrapper.mjs" <<'PY'
-import difflib,pathlib,subprocess,sys
+import difflib,pathlib,sys
 old,new,live,out=map(pathlib.Path,sys.argv[1:])
-diff=''.join(difflib.unified_diff(old.read_text().splitlines(keepends=True),new.read_text().splitlines(keepends=True),fromfile='a/wrapper.mjs',tofile='b/wrapper.mjs',n=3))
-assert 'GUARDIAN_FIXED_STOP_LOSS_UNREADY' in diff and 'p.signalModelChoice!==GUARDIAN_ID' in diff,'GUARDIAN_LATEST_FIX_MISSING'
-r=subprocess.run(['patch','--batch','--fuzz=0','--forward','--output',str(out),str(live)],input=diff,text=True,capture_output=True)
-print('GUARDIAN_WRAPPER_PATCH',r.returncode,r.stdout[:300],r.stderr[:300],flush=True)
-assert r.returncode==0,'LIVE_WRAPPER_DRIFT_REQUIRES_REVIEW'
-assert 'guardian_prepost_retry_scheduled' in out.read_text()
+a=old.read_text().splitlines(keepends=True)
+b=new.read_text().splitlines(keepends=True)
+live_text=live.read_text()
+opcodes=[x for x in difflib.SequenceMatcher(None,a,b,autojunk=False).get_opcodes() if x[0]!='equal']
+assert 3<=len(opcodes)<=10,'UNEXPECTED_GUARDIAN_CHANGE_COUNT'
+print('GUARDIAN_SELECTIVE_CHANGE_COUNT',len(opcodes),flush=True)
+for tag,i1,i2,j1,j2 in opcodes:
+ old_part=''.join(a[i1:i2])
+ new_part=''.join(b[j1:j2])
+ left=''.join(a[max(0,i1-1):i1])
+ right=''.join(a[i2:i2+1])
+ candidates=[(left+old_part+right,left+new_part+right),(old_part,new_part)]
+ applied=False
+ for needle,replacement in candidates:
+  if needle and live_text.count(needle)==1:
+   live_text=live_text.replace(needle,replacement,1)
+   applied=True
+   break
+ if not applied:
+  print('GUARDIAN_PATCH_CONTEXT_MISMATCH',tag,i1,i2,
+        'oldFirstLine',repr(old_part[:130]),'oldCount',live_text.count(old_part),
+        'newCount',live_text.count(new_part),flush=True)
+  if new_part and live_text.count(new_part)==1:
+   print('GUARDIAN_HUNK_ALREADY_INSTALLED',i1,flush=True)
+   continue
+  raise AssertionError('LIVE_WRAPPER_CHANGE_REQUIRES_REVIEW')
+assert 'guardian_prepost_retry_scheduled' in live_text,'RETRY_GUARD_LOST'
+assert 'GUARDIAN_FIXED_STOP_LOSS_UNREADY' in live_text,'FIXED_SL_REPAIR_MISSING'
+assert 'p.signalModelChoice!==GUARDIAN_ID' in live_text,'COOLDOWN_REPAIR_MISSING'
+out.write_text(live_text)
+print('GUARDIAN_SELECTIVE_PATCH_PASS=true',flush=True)
 PY
 for f in guardian-live-bridge.mjs guardian-risk-integration.mjs;do
  python3 - "$ROOT/$f" "$TMP/$f" <<'PY'

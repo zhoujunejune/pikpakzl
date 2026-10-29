@@ -756,10 +756,20 @@ const newConfirmRoute = String.raw`  if (req.method === 'POST' && url.pathname =
   }`;
 source = source.slice(0, confirmStartIndex) + newConfirmRoute + source.slice(notFoundIndex);
 
-source = source.replace(
-  "      enabled,\n      amount: tradeAmountText,",
-  "      enabled,\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n      guardianRiskReady: guardianExitMonitorReady(),\n      amount: tradeAmountText,"
-);
+// A previously patched live index may already contain autoConfirmEnabled.
+// Insert readiness exactly once and fail before starting the server on an unknown status shape.
+const guardianReadyField = "      guardianRiskReady: guardianExitMonitorReady(),";
+if (!source.includes(guardianReadyField)) {
+  const bare = "      enabled,\n      amount: tradeAmountText,";
+  const alreadyAuto = "      autoConfirmHalted,\n      amount: tradeAmountText,";
+  const bareCount = source.split(bare).length - 1;
+  const autoCount = source.split(alreadyAuto).length - 1;
+  if (bareCount + autoCount !== 1) throw new Error('GUARDIAN_STATUS_INJECTION_ANCHOR_MISMATCH');
+  source = bareCount === 1
+    ? source.replace(bare, "      enabled,\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n" + guardianReadyField + "\n      amount: tradeAmountText,")
+    : source.replace(alreadyAuto, "      autoConfirmHalted,\n" + guardianReadyField + "\n      amount: tradeAmountText,");
+}
+if (!source.includes(guardianReadyField)) throw new Error('GUARDIAN_STATUS_READINESS_FIELD_MISSING');
 source = source.replace(
   "      hasWalletId: Boolean(ENV_WALLET_ID),",
   "      hasWalletId: Boolean(ENV_WALLET_ID),\n      autoConfirmEnabled: AUTO_CONFIRM_ENABLED,\n      autoConfirmHalted,\n      autoConfirmCooldownMs: AUTO_CONFIRM_COOLDOWN_MS,\n      autoConfirmStopOnError: AUTO_CONFIRM_STOP_ON_ERROR,"

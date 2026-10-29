@@ -98,6 +98,24 @@ if base:
 if pfile.exists():
  print('REGISTRY_FILE_EXISTS',True,'size',pfile.stat().st_size)
 else:print('REGISTRY_FILE_EXISTS',False)
+balance=s.get('balance') or {}
+balances=[]
+for x in balance.get('items') or []:
+ if not isinstance(x,dict):continue
+ try:sufficient=float(x.get('availableBalanceDisplay') or 0)>=float(s.get('amount') or 1)
+ except:sufficient=None
+ balances.append({'accountType':x.get('accountType'),'enabled':x.get('enabled'),'sufficientForConfiguredAmount':sufficient})
+print('PAYMENT_OPTIONS',json.dumps({'ok':balance.get('ok'),'cached':balance.get('cached'),'cacheAgeMs':balance.get('cacheAgeMs'),'accounts':balances},separators=(',',':')))
+env={}
+if pid.isdigit() and int(pid)>0:
+ try:
+  for entry in (pathlib.Path('/proc')/pid/'environ').read_bytes().split(b'\0'):
+   if b'=' not in entry:continue
+   k,val=entry.split(b'=',1)
+   if k in (b'AUTO_CONFIRM_ENABLED',b'AUTO_CONFIRM_STOP_ON_ERROR',b'AUTO_CONFIRM_MAX_ORDERS_PER_ROUND',b'MAX_ORDER_SUBMIT_ATTEMPTS',b'AUTO_CONFIRM_COOLDOWN_MS'):
+    env[k.decode()]=val.decode('utf8','replace')[:50]
+ except Exception as e:print('CONFIG_ENV_ERROR',type(e).__name__)
+print('AUTO_CONFIG',json.dumps(env,separators=(',',':')))
 print('READ_ONLY_AUDIT_FINISHED=true')
 PY
 """

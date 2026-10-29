@@ -70,16 +70,9 @@ function guardianExitMonitorReady(now=Date.now()) {
   if(runtime.guardianDynamicExitEnabled!==true)return false;
   const marker=guardianRiskState([process.env.GUARDIAN_RISK_READY_FILE,
     root+'guardian5/guardian-risk-ready.json','/tmp/guardian-risk-ready.json']);
-  const markerHealthy=marker?.model===GUARDIAN_ID&&marker.enabled===true&&
-    marker.orderRegistry===true&&Number.isFinite(marker.at)&&
-    now-marker.at>=0&&now-marker.at<=4000;
-  if(!markerHealthy)return false;
-  // Before the first BUY there are no owned shares to request a real SELL quote.
-  // Bootstrap is allowed only for a fresh, successful zero-position poll and a
-  // live dedicated dynamic-exit worker. Never label this a verified SELL quote.
-  if(marker.realSellQuote===true)return true;
-  return health.positionsSeen===0&&marker.positionsPollVerified===true&&
-    runtime.guardianDynamicExitEnabled===true;
+  return marker?.model===GUARDIAN_ID&&marker.enabled===true&&
+    marker.realSellQuote===true&&marker.orderRegistry===true&&
+    Number.isFinite(marker.at)&&now-marker.at>=0&&now-marker.at<=4000;
 }
 let autoConfirmHalted = false;
 let lastAutoSubmitAt = 0;

@@ -34,6 +34,7 @@ try:
  print('LAST_ORDER_STATE',s.get('lastOrder',{}).get('state') if isinstance(s.get('lastOrder'),dict) else None)
 except Exception as e:print('TRADE_STATUS_ERROR',type(e).__name__)
 PY
+echo GUARDIAN_REPAIR_POSTDEPLOY_READONLY=true
 echo GUARDIAN_REPAIR_PREFLIGHT_END
 """
 c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],

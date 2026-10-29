@@ -47,6 +47,9 @@ assert s.get('ok') is True,'STATUS_NOT_OK'
 assert s.get('orderSignalModel')=='ZL_GUARDIAN_5M_V1','OTHER_MODEL_ACTIVE'
 assert s.get('orderSignalModelReady') is True,'MODEL_SELECTION_NOT_READY'
 assert s.get('guardianExecutionReady') is True and s.get('guardianRiskReady') is True,'EXECUTION_OR_RISK_NOT_READY'
+assert s.get('directionModeReady') is True,'DIRECTION_MODES_NOT_READY'
+m=(s.get('directionModes') or {}).get('FAST5_SPOT_MOMENTUM_V1') or {}
+assert m.get('UP') in ('FORWARD','INVERSE') and m.get('DOWN') in ('FORWARD','INVERSE'),'FAST5_SOURCE_MODE_NOT_ENABLED'
 p=s.get('pendingAction')
 if isinstance(p,dict):
  now=int(datetime.datetime.now(datetime.timezone.utc).timestamp()*1000)
@@ -97,7 +100,13 @@ assert 'now>=round+FIVE_MIN' in replacement,'ROUND_EXPIRY_CHECK_MISSING'
 assert 'GUARDIAN_SOURCE' in dest and 'FIVE_MIN' in dest,'ADAPTER_DEPENDENCY_MISSING'
 out=dest[:oldstart]+replacement+dest[oldend:]
 assert out[:oldstart]==dest[:oldstart] and out[out.index(end):]==dest[oldend:],'UNEXPECTED_CHANGE'
+old_source="export const GUARDIAN_SOURCE='SELECTIVE_V2_FAST8_PRIMARY';"
+new_source="export const GUARDIAN_SOURCE='FAST5_SPOT_MOMENTUM_V1';"
+assert out.count(old_source)==1 and new.count(new_source)==1,'GUARDIAN_PRODUCTION_SOURCE_UNKNOWN'
+out=out.replace(old_source,new_source,1)
+assert out.count(new_source)==1,'GUARDIAN_SOURCE_FIX_FAILED'
 Path(sys.argv[3]).write_text(out)
+print('GUARDIAN_PRODUCTION_SOURCE_ALIGNED=true')
 print('GUARDIAN_OBSERVED_MINIMAL_FUNCTION_PATCH_READY=true')
 PY
 "$NODE" --check "$WORK/guardian-live-bridge.mjs"
@@ -105,7 +114,8 @@ PY
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
 const src=process.argv[2];
-const {guardianOrderSignal,GUARDIAN_ID}=await import(pathToFileURL(src).href);
+const {guardianOrderSignal,GUARDIAN_ID,GUARDIAN_SOURCE}=await import(pathToFileURL(src).href);
+assert.equal(GUARDIAN_SOURCE,'FAST5_SPOT_MOMENTUM_V1','PRODUCTION_SOURCE_NOT_ALIGNED');
 const now=Date.now(),round=Math.floor(now/300000)*300000;
 const r={round,at:Math.max(round,now-1800),marketAt:now-600,status:'PREDICTED',predictedDirection:'DOWN'};
 const root={ok:true,model:GUARDIAN_ID,readOnly:true,orders:false,configured:true,observedAt:now-100,
@@ -114,6 +124,7 @@ const a=guardianOrderSignal({...root,latest:{round,status:'SHADOW_OBSERVATION',d
 const b=guardianOrderSignal({...root,latest:{round,direction:'OBSERVED'}},now);
 assert(a.ok===true&&b.ok===true,'OBSERVED_SIGNAL_NOT_ACCEPTED');
 assert(a.signalId===b.signalId&&b.direction==='DOWN','SIGNAL_ID_CHANGED');
+assert.equal(a.source,'FAST5_SPOT_MOMENTUM_V1','GUARDIAN_ORDER_DIRECTION_MAPPING_UNKNOWN');
 assert(guardianOrderSignal({...root,latest:{round,direction:'WAIT'}},now).ok===false);
 assert(guardianOrderSignal({...root,observedAt:now-15000,latest:{round,direction:'OBSERVED'}},now).ok===false);
 console.log('GUARDIAN_OBSERVED_REMOTE_REGRESSION_OK=true');

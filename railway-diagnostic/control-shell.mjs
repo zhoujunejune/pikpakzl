@@ -119,6 +119,9 @@ function guardianRiskToggleStatus(now=Date.now()){
     proof?.unknownSellReconciled===true && proof?.riskRestartTested===true &&
     Number.isFinite(proof?.verifiedAt) && now-proof.verifiedAt>=0 &&
     now-proof.verifiedAt<7*24*3600000;
+  // Owner may arm a monitored worker without falsely claiming a filled SELL test.
+  // A real Binance SELL fill remains separately verified by the proof record.
+  const armAllowed=process.env.GUARDIAN_MONITOR_ARM_ALLOWED==='true';
   const live=runtime?.guardianDynamicExitEnabled===true && runtime?.workerRunning===true &&
     runtime?.configApplied===true && runtime?.persistenceHealthy===true &&
     Date.parse(runtime?.at||'')>now-5000 &&
@@ -129,13 +132,15 @@ function guardianRiskToggleStatus(now=Date.now()){
   const protectedOpenPositions=runtime?.guardianOpenPositionsRetained===true;
   return {
     ok:true,model:'ZL_GUARDIAN_5M_V1',
-    requestedEnabled,effectiveEnabled,canEnable:Boolean(approved&&persistenceReady&&persistenceHealthy),
+    requestedEnabled,effectiveEnabled,canEnable:Boolean(armAllowed&&persistenceReady&&persistenceHealthy),
     protectedOpenPositions,approvalVerified:Boolean(approved),
-    state:effectiveEnabled?'RUNNING':requestedEnabled?'PENDING_NOT_VERIFIED':'OFF',
-    reason:effectiveEnabled?'风控Worker正在运行；实际成交还需核对交易所订单':
-      !approved?'GUARDIAN真实SELL报价、成交、异常恢复和重启验收尚未完成，禁止开启':
+    state:effectiveEnabled?(approved?'RUNNING_VERIFIED':'MONITOR_RUNNING_UNVERIFIED_SELL'):
+      requestedEnabled?'PENDING_WORKER_READY':'OFF',
+    reason:effectiveEnabled?(approved?'监控Worker运行，已核对历史SELL验证记录；实际成交仍需逐单确认':
+      '动态风控监控已启动，但尚无真实SELL成交验证；止损不保证成交'):
+      !armAllowed?'GUARDIAN动态监控尚未获得服务器启用许可':
       !persistenceHealthy?'配置持久化不可用':
-      requestedEnabled?'已保存开启请求，等待风控Worker确认':'动态止盈止损已关闭',
+      requestedEnabled?'开启已保存，正在等待风控Worker心跳':'动态止盈止损已关闭',
     persistenceHealthy,updatedAt:config.updatedAt,
     workerHeartbeatAt:heart?.at??null,workerRunning:runtime?.workerRunning===true,
   };

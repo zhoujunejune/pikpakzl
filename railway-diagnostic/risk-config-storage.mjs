@@ -23,7 +23,7 @@ export function validatedRiskConfig(value) {
     takeProfitPercent: tp,
     stopLossEnabled: value.stopLossEnabled,
     stopLossPercent: sl,
-    dynamicExitEnabled: value.dynamicExitEnabled === true,
+    dynamicExitEnabled: false, // Retired Guardian dynamic mode; normalize legacy Redis snapshots.
     updatedAt: value.updatedAt,
   };
 }

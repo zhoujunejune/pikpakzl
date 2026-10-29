@@ -1,0 +1,39 @@
+name: GUARDIAN adaptive V2 isolated Alibaba staging
+on:
+  push:
+    branches: [feature/guardian-adaptive-v2-shadow]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_adaptive_shadow_stage.py
+      - .github/workflows/zl-guardian-adaptive-v2-shadow-stage.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian-adaptive-v2-shadow-stage
+  cancel-in-progress: false
+jobs:
+  stage-inert-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Check script and remote shell syntax
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_adaptive_shadow_stage.py
+          python - <<'PY'
+          import ast,subprocess
+          tree=ast.parse(open('prediction-bot-v1/aliyun_guardian_adaptive_shadow_stage.py').read())
+          shell=next(x.value.value for x in tree.body if isinstance(x,ast.Assign) and any(isinstance(n,ast.Name) and n.id=='SCRIPT' for n in x.targets))
+          p=subprocess.run(['bash','-n'],input=shell,text=True,capture_output=True)
+          assert p.returncode==0,p.stderr
+          PY
+          node --test railway-diagnostic/guardian-adaptive-exit-v2.test.mjs
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Stage inert files only; no worker restart or orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_adaptive_shadow_stage.py

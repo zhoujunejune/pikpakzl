@@ -85,7 +85,7 @@ def get_status(port=13001):
  except Exception as exc:return {'error':type(exc).__name__}
 s=get_status()
 print('GUARDIAN_INCIDENT_LIVE_STATUS',json.dumps({
- k:s.get(k) for k in ['ok','enabled','autoConfirmEnabled','autoConfirmHalted','orderSignalModel','guardianRiskReady','orderSignal','amount','startAfterRound']},ensure_ascii=False))
+ k:s.get(k) for k in ['ok','enabled','autoConfirmEnabled','autoConfirmHalted','orderSignalModel','guardianRiskReady','guardianExecutionReady','guardianExecutionBlockReason','guardianRiskBlockReason','orderSignalModelReady','orderSignal','mode','amount','startAfterRound']},ensure_ascii=False))
 for k in ['signal','pendingAction','lastOrder']:
  x=s.get(k)
  if isinstance(x,dict):
@@ -104,6 +104,15 @@ for unit in ['zl-prediction-trade','zl-prediction-guardian-analysis']:
  raw=cmd(['journalctl','-u',unit,'--since','2026-10-29 11:59:30 UTC',
           '--until','2026-10-29 12:05:30 UTC','-o','cat','--no-pager'])
  print('GUARDIAN_INCIDENT_JOURNAL_TOTAL',unit,len(raw.splitlines()))
+ parsed=0;found=[]
+ for line in raw.splitlines():
+  try: v=json.loads(line[line.index('{'):])
+  except (ValueError,TypeError):continue
+  if not isinstance(v,dict):continue
+  parsed+=1
+  event=v.get('event')
+  if isinstance(event,str) and event not in found:found.append(event)
+ print('GUARDIAN_INCIDENT_JOURNAL_STRUCTURED',unit,parsed,'EVENT_NAMES',found[:35])
  rows=[]
  for line in raw.splitlines():
   pos=line.find('{')

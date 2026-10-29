@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {guardianFixedReadiness} from './guardian-fixed-readiness.mjs';
 import {GUARDIAN_ID,guardianOrderSignal,guardianQuoteGate,guardianRegisterIntent,guardianMarkSubmitted} from './guardian-live-bridge.mjs';
 import {predictionWalletPayment,eligibleSpotFallback,explicitMpcInsufficient} from './payment-source-priority.mjs';
 import crypto from 'node:crypto';
@@ -1245,6 +1246,7 @@ http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
+    const guardianRuntimeReadiness = guardianFixedReadiness();
     try{await refreshDirectionSettings()}catch{}
     const mapping=mappedOrderSignal(signal);
     // The existing mobile UI renders these server-provided labels as text.
@@ -1255,6 +1257,12 @@ http.createServer(async (req, res) => {
     return send(res, 200, {
       ok: true,
       enabled,
+      guardianRiskReady: guardianRuntimeReadiness.ready,
+      guardianRiskBlockReason: guardianRuntimeReadiness.reason,
+      guardianRiskRuntime: {workerRunning:guardianRuntimeReadiness.workerRunning,
+        configApplied:guardianRuntimeReadiness.configApplied,
+        dynamicExitEnabled:guardianRuntimeReadiness.dynamicExitEnabled,
+        positionsSeen:guardianRuntimeReadiness.positionsSeen},
       amount: tradeAmountText,
       mode: 'API_CONFIRM_LIVE',
       quoteMode: 'FRESH_ON_CONFIRM',

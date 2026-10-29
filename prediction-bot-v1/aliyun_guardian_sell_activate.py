@@ -108,6 +108,8 @@ for name in zl-prediction-trade zl-prediction-risk-exits;do
 done
 test ! -e /var/lib/zl-prediction/rounds/guardian5/guardian-live-orders.json
 test ! -e /var/lib/zl-prediction/guardian5/guardian-live-orders.json
+test -f /var/lib/zl-prediction/rounds/risk-control.json
+cp -p /var/lib/zl-prediction/rounds/risk-control.json "$BACK/config-before.json"
 install -d -o zl-pred -g zl-pred -m 0750 /var/lib/zl-prediction/rounds/guardian5
 CHANGED=no
 rollback(){

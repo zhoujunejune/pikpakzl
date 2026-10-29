@@ -1,0 +1,48 @@
+name: Deploy GUARDIAN saved-signal OBSERVED lock fix to Alibaba
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_observed_deploy.py
+      - .github/workflows/zl-guardian-observed-deploy.yml
+permissions:
+  contents: read
+concurrency:
+  group: zl-guardian-observed-production-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax and regression
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_observed_deploy.py
+          python - <<'PY'
+          import ast,subprocess
+          src=open('prediction-bot-v1/aliyun_guardian_observed_deploy.py').read()
+          tree=ast.parse(src)
+          shell=next(node.value.value for node in tree.body if isinstance(node,ast.Assign) and any(getattr(t,'id',None)=='REMOTE' for t in node.targets))
+          r=subprocess.run(['bash','-n'],input=shell,text=True,capture_output=True)
+          print(r.stderr)
+          assert r.returncode==0,'REMOTE_SHELL_SYNTAX_INVALID'
+          PY
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --test railway-diagnostic/guardian-live-bridge.test.mjs
+      - name: Install Alibaba SWAS SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy narrow fix to Alibaba with rollback
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_observed_deploy.py

@@ -52,7 +52,7 @@ test('production path still requires immutable Guardian identity, quote and roun
   const block=wrapper.slice(i,i+1000);
   for(const clause of ['current.signalId!==p.signalId','current.executionEligible!==true',
     'current.direction!==p.productionSignal','String(current.round) !== String(p.round)',
-    'pendingOrderMatchesProduction(p,current)'])
+    'pendingOrderMatchesProduction(p,current)','mappedOrderSignal(current).orderSignal!==p.signal'])
     assert.ok(block.includes(clause),clause);
   assert.ok(wrapper.includes("getSignal({forceHttp:true})"));
   assert.ok(wrapper.includes("orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice)"));

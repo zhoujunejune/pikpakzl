@@ -16,12 +16,14 @@ export function validatedRiskConfig(value) {
   const sl = Number(value.stopLossPercent);
   if (!Number.isFinite(tp) || tp < 1 || tp > 100 ||
       !Number.isFinite(sl) || sl < 1 || sl > 100) throw new Error('INVALID_RISK_CONFIG_PERCENT');
+  if(value.dynamicExitEnabled!==undefined&&typeof value.dynamicExitEnabled!=='boolean') throw new Error('INVALID_DYNAMIC_EXIT_BOOLEAN');
   if (typeof value.updatedAt !== 'string' || !Number.isFinite(Date.parse(value.updatedAt))) throw new Error('INVALID_RISK_CONFIG_DATE');
   return {
     takeProfitEnabled: value.takeProfitEnabled,
     takeProfitPercent: tp,
     stopLossEnabled: value.stopLossEnabled,
     stopLossPercent: sl,
+    dynamicExitEnabled: value.dynamicExitEnabled === true,
     updatedAt: value.updatedAt,
   };
 }

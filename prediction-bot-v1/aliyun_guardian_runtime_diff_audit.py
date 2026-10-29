@@ -30,6 +30,19 @@ for name in risk-runner.mjs risk-worker.mjs guardian-risk-integration.mjs; do
   fi
 done
 find /var/lib/zl-prediction -maxdepth 4 -type f \( -name '*risk*json' -o -name '*guardian*ready*' \) 2>/dev/null | head -25 || true
+python3 - <<'PY'
+import json,os
+root='/var/lib/zl-prediction/rounds'
+fields=('at','enabled','workerRunning','guardianDynamicExitEnabled','configApplied',
+ 'dynamicExitEnabled','takeProfitEnabled','stopLossEnabled','persistenceHealthy',
+ 'lastSuccessfulPositionsAt','lastTickFinishedAt','lastWorkerStartedAt','configUpdatedAt')
+for name in ['risk-runtime-status.json','risk-worker-health.json','risk-control.json',
+             'guardian5/guardian-risk-ready.json']:
+ try:
+  obj=json.load(open(os.path.join(root,name)))
+  print('GUARDIAN_SAFE_RISK_STATE',name,{k:obj.get(k) for k in fields if k in obj})
+ except Exception as e:print('GUARDIAN_SAFE_RISK_STATE_ERROR',name,type(e).__name__)
+PY
 systemctl show zl-prediction-risk-exits -p MainPID -p ActiveState -p PrivateTmp
 systemctl show zl-prediction-trade -p MainPID -p ActiveState -p PrivateTmp
 echo GUARDIAN_RUNTIME_DIAG_COMPLETE=true

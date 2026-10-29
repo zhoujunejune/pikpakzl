@@ -6,7 +6,23 @@ const CONTROL_FILE = '/tmp/risk-control.json';
 const STATUS_FILE = '/tmp/risk-runtime-status.json';
 const CHECK_MS = 300;
 const STATUS_MS = 2000;
-const GUARDIAN_DYNAMIC_EXIT_ENABLED=/^(1|true)$/i.test(String(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED||'false'));
+const GUARDIAN_ENV_ENABLED=/^(1|true)$/i.test(String(process.env.GUARDIAN_DYNAMIC_EXIT_ENABLED||'false'));
+const GUARDIAN_UI_APPROVED=process.env.GUARDIAN_RISK_UI_ENABLE_APPROVED==='true';
+const GUARDIAN_REGISTRY='/var/lib/zl-prediction/guardian5/guardian-live-orders.json';
+let previousGuardianActive=GUARDIAN_ENV_ENABLED;
+function guardianOpenExposure(now=Date.now()){
+  try{
+    const raw=JSON.parse(fs.readFileSync(GUARDIAN_REGISTRY,'utf8'));
+    if(raw?.model!=='ZL_GUARDIAN_5M_V1'||!Array.isArray(raw.entries))
+      return previousGuardianActive; // fail closed: keep existing protection on bad registry
+    return raw.entries.some(row=>row?.status==='SUBMITTED'&&
+      Number.isSafeInteger(row.round)&&now>=row.round&&now<row.round+360000);
+  }catch(error){return previousGuardianActive && error?.code!=='ENOENT'}
+}
+function effectiveGuardian(cfg){
+  const requested=GUARDIAN_ENV_ENABLED||(GUARDIAN_UI_APPROVED&&cfg?.guardianDynamicEnabled===true);
+  return requested||(previousGuardianActive&&guardianOpenExposure());
+}
 
 function envBool(name, fallback = 'false') {
   return !['0', 'false', 'off', 'no'].includes(String(process.env[name] || fallback).toLowerCase());
@@ -23,6 +39,7 @@ function defaultConfig() {
     takeProfitPercent: envPercent('AUTO_TAKE_PROFIT_PERCENT', 50),
     stopLossEnabled: envBool('AUTO_STOP_LOSS_ENABLED', 'false'),
     stopLossPercent: envPercent('AUTO_STOP_LOSS_PERCENT', 50),
+    guardianDynamicEnabled:false,
     source: 'env',
     updatedAt: null,
   };
@@ -39,6 +56,7 @@ function readConfig() {
       takeProfitPercent: Number.isFinite(tp) && tp >= 1 && tp <= 100 ? tp : fallback.takeProfitPercent,
       stopLossEnabled: Boolean(parsed?.stopLossEnabled),
       stopLossPercent: Number.isFinite(sl) && sl >= 1 && sl <= 100 ? sl : fallback.stopLossPercent,
+      guardianDynamicEnabled:parsed?.guardianDynamicEnabled===true,
       source: 'runtime',
       updatedAt: parsed?.updatedAt || null,
     };
@@ -49,7 +67,7 @@ function readConfig() {
 }
 
 function configKey(cfg) {
-  return `${cfg.takeProfitEnabled ? 'tp1' : 'tp0'}:${cfg.takeProfitPercent}:${cfg.stopLossEnabled ? 'sl1' : 'sl0'}:${cfg.stopLossPercent}`;
+  return `${cfg.takeProfitEnabled ? 'tp1' : 'tp0'}:${cfg.takeProfitPercent}:${cfg.stopLossEnabled ? 'sl1' : 'sl0'}:${cfg.stopLossPercent}:guardian${effectiveGuardian(cfg)?'1':'0'}`;
 }
 
 let child = null;
@@ -64,13 +82,17 @@ let configPersisted = false;
 let lastWorkerStartedAt = null;
 function writeStatus() {
   const config = readConfig();
-  const enabled = config.takeProfitEnabled || config.stopLossEnabled || GUARDIAN_DYNAMIC_EXIT_ENABLED;
+  const guardianEnabled=effectiveGuardian(config);
+  const enabled = config.takeProfitEnabled || config.stopLossEnabled || guardianEnabled;
   const running = Boolean(child && !child.killed && child.exitCode === null);
   const payload = {
     at: new Date().toISOString(),
     enabled,
     workerRunning: running,
-    guardianDynamicExitEnabled: GUARDIAN_DYNAMIC_EXIT_ENABLED,
+    guardianDynamicExitEnabled: guardianEnabled,
+    guardianDynamicExitDesired: config.guardianDynamicEnabled,
+    guardianOpenPositionsRetained: guardianEnabled&&!config.guardianDynamicEnabled&&guardianOpenExposure(),
+    guardianUiControlApproved: GUARDIAN_UI_APPROVED,
     configApplied: enabled ? running && childKey === configKey(config) : !running,
     controllerPid: process.pid,
     workerPid: running ? child.pid : null,
@@ -98,6 +120,7 @@ function log(event, extra = {}) {
 function startWorker(cfg) {
   childKey = configKey(cfg);
   lastWorkerStartedAt = new Date().toISOString();
+  previousGuardianActive=effectiveGuardian(cfg);
   child = spawn(process.execPath, ['risk-worker.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -106,11 +129,12 @@ function startWorker(cfg) {
       AUTO_TAKE_PROFIT_PERCENT: String(cfg.takeProfitPercent),
       AUTO_STOP_LOSS_ENABLED: cfg.stopLossEnabled ? 'true' : 'false',
       AUTO_STOP_LOSS_PERCENT: String(cfg.stopLossPercent),
+      GUARDIAN_DYNAMIC_EXIT_ENABLED: effectiveGuardian(cfg)?'true':'false',
     },
     stdio: 'inherit',
   });
   log('risk_runtime_worker_started', {
-    guardianDynamicExitEnabled:GUARDIAN_DYNAMIC_EXIT_ENABLED,
+    guardianDynamicExitEnabled:effectiveGuardian(cfg),
     takeProfitEnabled: cfg.takeProfitEnabled,
     takeProfitPercent: cfg.takeProfitPercent,
     stopLossEnabled: cfg.stopLossEnabled,
@@ -128,7 +152,7 @@ function startWorker(cfg) {
 function reconcile() {
   if (!storageReady) return;
   desired = readConfig();
-  const enabled = desired.takeProfitEnabled || desired.stopLossEnabled || GUARDIAN_DYNAMIC_EXIT_ENABLED;
+  const enabled = desired.takeProfitEnabled || desired.stopLossEnabled || effectiveGuardian(desired);
   const wantedKey = configKey(desired);
   if (child) {
     if (!enabled || childKey !== wantedKey) {

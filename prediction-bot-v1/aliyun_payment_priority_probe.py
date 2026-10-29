@@ -119,6 +119,34 @@ print('FULL_AUDIT_EVENTS_COUNTS',json.dumps(freq,ensure_ascii=False))
 for i in last[-25:]:print('FULL_AUDIT_EVENT',json.dumps(i,ensure_ascii=False))
 print('GUARDIAN_FULL_ORDER_READONLY_AUDIT_END')
 PY
+echo GUARDIAN_REGISTRY_READONLY_AUDIT_BEGIN
+python3 - <<'PY'
+import os,json,pathlib,subprocess,pwd,stat
+unit=subprocess.run(['systemctl','show','zl-prediction-trade','--property=User','--value'],capture_output=True,text=True).stdout.strip()
+user=unit or 'root'
+reg=pathlib.Path('/var/lib/zl-prediction/guardian5/guardian-live-orders.json')
+print('REGISTRY_UNIT_USER',user)
+print('REGISTRY_PARENT',str(reg.parent))
+for p in (reg.parent.parent,reg.parent,reg):
+ try:
+  s=p.stat()
+  print('REGISTRY_PATH',str(p),'exists',True,'type','dir' if p.is_dir() else 'file','mode',oct(stat.S_IMODE(s.st_mode)),'owner',pwd.getpwuid(s.st_uid).pw_name,'gid',s.st_gid)
+ except Exception as e:print('REGISTRY_PATH',str(p),'exists',False,'error',type(e).__name__)
+if reg.exists():
+ try:
+  d=json.loads(reg.read_text())
+  print('REGISTRY_JSON_VALID',True,'model',str(d.get('model'))[:60],'entryCount',len(d.get('entries',[])) if isinstance(d.get('entries'),list) else 'invalid')
+ except Exception as e:print('REGISTRY_JSON_VALID',False,'error',type(e).__name__)
+print('REGISTRY_SERVICE_UID',subprocess.run(['systemctl','show','zl-prediction-trade','--property=MainPID','--value'],capture_output=True,text=True).stdout.strip())
+PY
+runuser -u zl-pred -- python3 - <<'PY'
+import pathlib,os
+p=pathlib.Path('/var/lib/zl-prediction/guardian5/guardian-live-orders.json')
+print('REGISTRY_AS_SERVICE_ACCOUNT',{'parentExists':p.parent.exists(),
+ 'canCreateInParent':os.access(p.parent,os.W_OK|os.X_OK),
+ 'fileExists':p.exists(),'canWriteFile':os.access(p,os.W_OK) if p.exists() else None})
+PY
+echo GUARDIAN_REGISTRY_READONLY_AUDIT_END
 echo PROBE_END
 '''
 def main():

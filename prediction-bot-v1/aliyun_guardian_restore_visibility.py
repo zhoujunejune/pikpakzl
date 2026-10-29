@@ -110,7 +110,8 @@ systemctl is-active --quiet caddy
 id zl-pred >/dev/null
 curl -fsS --max-time 8 http://127.0.0.1:13001/api/status | python3 -c "import json,sys; assert json.load(sys.stdin).get('ok') is True"
 BACK=/var/backups/guardian-ui-only-$(date -u +%Y%m%dT%H%M%SZ)-$$
-mkdir -p -m 0700 "$BACK" "$ROOT"
+mkdir -p -m 0700 "$BACK"
+install -d -o zl-pred -g zl-pred -m 0755 "$ROOT"
 cp -p "$CADDY" "$BACK/caddy.before"
 if test -f "$DEST";then cp -p "$DEST" "$BACK/sidecar.before";fi
 if test -f "$UNIT";then cp -p "$UNIT" "$BACK/unit.before";fi

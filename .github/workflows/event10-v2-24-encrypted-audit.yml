@@ -77,8 +77,16 @@ jobs:
             algorithm=hashes.SHA256(),label=None))
           envelope={'key':base64.b64encode(wrapped).decode(),
             'nonce':base64.b64encode(nonce).decode(),'data':base64.b64encode(encrypted).decode()}
-          print('V2_PRIVATE_DETAIL_ENCRYPTED='+base64.b64encode(
-            json.dumps(envelope,separators=(',',':')).encode()).decode())
+          os.makedirs("dist",exist_ok=True)
+          with open("dist/v2-24-encrypted-envelope.json","w",encoding="utf-8") as output_file:
+            json.dump(envelope,output_file,separators=(",",":"))
+          print("V2_ENCRYPTED_ARTIFACT_READY=true")
           print('V2_DETAIL_ROW_COUNT='+str(detail['total']))
           print('V2_DETAIL_SUMMARY='+json.dumps(detail['summary'],ensure_ascii=False))
           PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EVENT10-V2-24-ENCRYPTED-DETAIL
+          path: dist/v2-24-encrypted-envelope.json
+          retention-days: 1
+          if-no-files-found: error

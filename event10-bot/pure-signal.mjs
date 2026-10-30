@@ -84,86 +84,127 @@ export function parseAggressiveStreak(raw,receivedAt){
     source:"BINANCE_USDM_BTCUSDT_AGGTRADES_10S",
     observedAt:last.T};
 }
-export function evaluatePureSignal({feed,reference,orderBook=null,aggressiveFlow=null,cycleMs=600000}){
-  const at=reference?.observedAt,price=reference?.price;
-  if(!Number.isSafeInteger(at)||!finitePositive(price)||feed?.symbol!=="BTCUSDT"||
-    feed?.ok!==true||feed?.readOnly!==true)throw Error("UNVERIFIED_REFERENCE");
-  const one=closedBars(feed,"1m",60000,at);
-  const five=closedBars(feed,"5m",300000,at);
-  const oneCloses=one.map(b=>b.c),fiveCloses=five.map(b=>b.c);
-  const ema1m9=ema(oneCloses,9),ema1m21=ema(oneCloses,21);
-  const ema5m9=ema(fiveCloses,9),ema5m21=ema(fiveCloses,21);
-  const previous9=ema(oneCloses.slice(0,-1),9),previous21=ema(oneCloses.slice(0,-1),21);
-  const crossUp=previous9<=previous21&&ema1m9>ema1m21;
-  const crossDown=previous9>=previous21&&ema1m9<ema1m21;
-  const volumeAvg20=one.slice(-21,-1).reduce((sum,x)=>sum+x.v,0)/20;
-  if(!finitePositive(volumeAvg20))throw Error("ZERO_VOLUME_BASELINE");
-  const ratio=one.at(-1).v/volumeAvg20;
-  const rsi=rsiWilder(oneCloses);
-  const positive5=five.slice(-2).every(x=>x.c>x.o);
-  const negative5=five.slice(-2).every(x=>x.c<x.o);
-  const last1=one.at(-1);
-  // The reference timestamp is the real decision instant, not the last spot
-  // trade tick. Both market sources are already available by this instant.
-  const bookFresh=orderBook&&valid(orderBook.observedAt)&&
+// Workbook: BTC_10分钟事件合约_信号策略.xlsx (Higher/Lower, 2026-10-30).
+// Observe the late 7.0–8.5-minute window of a UTC-aligned INDEX REFERENCE
+// cycle. IMPORTANT: this is NOT a Binance Event Contract opened at that cycle's
+// start. Event-contract expiry is relative to that contract's *actual* open,
+// and the official order strike cannot be read through the public market API.
+export const LATE_WINDOW_RULE_VERSION="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030";
+const pct=(x)=>Math.round(x*1e6)/1e4;
+const between=(x,a,b)=>x>=a&&x<b;
+
+export function parseBinanceIndexQuote(raw,receivedAt){
+  const price=Number(raw?.indexPrice),at=Number(raw?.time);
+  if(raw?.symbol!=="BTCUSDT"||!finitePositive(price)||
+     !Number.isSafeInteger(at)||at>receivedAt+1000||receivedAt-at>5000)
+    throw Error("INDEX_QUOTE_STALE_OR_INVALID");
+  return {price,observedAt:at,source:"BINANCE_USDM_BTCUSDT_INDEX_PRICE"};
+}
+export function parseBinanceIndexKlines(raw,receivedAt){
+  if(!Array.isArray(raw))throw Error("INDEX_KLINES_INVALID");
+  const rows=raw.filter(x=>Array.isArray(x)&&x.length>=5&&
+    Number.isSafeInteger(Number(x[0]))&&
+    [1,2,3,4].every(i=>finitePositive(Number(x[i]))))
+    .map(x=>({at:Number(x[0]),open:Number(x[1]),high:Number(x[2]),
+      low:Number(x[3]),close:Number(x[4])}))
+    .sort((a,b)=>a.at-b.at);
+  if(rows.length<10||rows.some(x=>x.high<Math.max(x.open,x.close)||
+    x.low>Math.min(x.open,x.close)||x.low>x.high))
+      throw Error("INDEX_KLINES_MISSING_OR_BAD");
+  for(let i=1;i<rows.length;i++)
+    if(rows[i].at-rows[i-1].at!==60000)throw Error("INDEX_KLINES_GAP");
+  return {rows,observedAt:receivedAt,source:"BINANCE_USDM_INDEX_1M"};
+}
+export function evaluatePureSignal({
+  reference,indexSnapshot=null,indexKlines=null,orderBook=null,cycleMs=600000
+}={}){
+  const at=reference?.observedAt;
+  if(!Number.isSafeInteger(at)||!indexSnapshot||
+    !finitePositive(indexSnapshot.price)||
+    !Number.isSafeInteger(indexSnapshot.observedAt)||
+    indexSnapshot.observedAt>at||at-indexSnapshot.observedAt>5000)
+      throw Error("REALTIME_BINANCE_INDEX_REQUIRED");
+  const cycleStart=at-Math.floor(at%cycleMs),elapsed=at-cycleStart;
+  const inWindow=between(elapsed,420000,510000);
+  const opening=indexKlines?.rows?.find(x=>x.at===cycleStart);
+  const currentBar=indexKlines?.rows?.find(x=>x.at===Math.floor(at/60000)*60000);
+  const rows=indexKlines?.rows||[];
+  const hasIndex=!!opening&&!!currentBar&&
+    rows.some(x=>x.at===currentBar.at-60000)&&
+    Number.isSafeInteger(indexKlines.observedAt)&&
+    indexKlines.observedAt<=at&&at-indexKlines.observedAt<=5000;
+  const price=indexSnapshot.price,base=hasIndex?opening.open:null;
+  const lead=hasIndex?(price-base):null;
+  const absLead=hasIndex?Math.abs(lead):null;
+  const recent=hasIndex?rows.filter(x=>x.at+60000>at-60000&&x.at<=at):[];
+  // 1m bars overlap the last 60s. Including their full OHLC makes
+  // adverse-excursion checks conservative rather than inventing tick history.
+  const high=recent.length?Math.max(price,...recent.map(x=>x.high)):null;
+  const low=recent.length?Math.min(price,...recent.map(x=>x.low)):null;
+  const pullback=hasIndex?Math.max(0,high-price):null;
+  const rebound=hasIndex?Math.max(0,price-low):null;
+  const bookFresh=!!orderBook&&Number.isSafeInteger(orderBook.observedAt)&&
     orderBook.observedAt<=at&&at-orderBook.observedAt<=5000;
-  const bid=bookFresh?n(orderBook.bidTop5QtyBtc):null;
-  const ask=bookFresh?n(orderBook.askTop5QtyBtc):null;
+  const bid=bookFresh?Number(orderBook.bidTop5QtyBtc):null;
+  const ask=bookFresh?Number(orderBook.askTop5QtyBtc):null;
   const hasBook=finitePositive(bid)&&finitePositive(ask);
-  const buyStreak=aggressiveFlow&&valid(aggressiveFlow.lastTradeAt)&&
-    aggressiveFlow.lastTradeAt<=at&&at-aggressiveFlow.lastTradeAt<=4000&&
-    Number.isSafeInteger(aggressiveFlow.consecutiveTakerBuys)&&
-    aggressiveFlow.consecutiveTakerBuys>=3;
   const up={
-    trend5m:ema5m9>ema5m21&&positive5,
-    momentum1m:(ema1m9>ema1m21||crossUp)&&last1.c>last1.o&&price>ema1m9,
-    volume:ratio>=1.3,
-    orderflow:(hasBook&&bid>ask)||!!buyStreak,
-    rsi:rsi>=45&&rsi<=70
+    timeWindow:inWindow,
+    lead:hasIndex&&lead/base>=0.001,
+    retrace:hasIndex&&lead>0&&pullback<=lead/2,
+    minuteCandle:hasIndex&&currentBar.close>=currentBar.open,
+    orderBook:hasBook&&bid>ask
   };
   const down={
-    trend5m:ema5m9<ema5m21&&negative5,
-    momentum1m:(ema1m9<ema1m21||crossDown)&&last1.c<last1.o&&price<ema1m9,
-    volume:ratio>=1.3,
-    orderflow:hasBook&&ask>bid,
-    rsi:rsi>=30&&rsi<=55
+    timeWindow:inWindow,
+    lead:hasIndex&&-lead/base>=0.001,
+    retrace:hasIndex&&lead<0&&rebound<=-lead/2,
+    minuteCandle:hasIndex&&currentBar.close<=currentBar.open,
+    orderBook:hasBook&&ask>bid
   };
   const all=x=>Object.values(x).every(v=>v===true);
   const direction=all(up)?"UP":all(down)?"DOWN":null;
-  const conditions=direction==="UP"?up:direction==="DOWN"?down:null;
-  const missing=x=>Object.entries(x).filter(([,ok])=>!ok).map(([name])=>name);
-  const elapsed=((at%cycleMs)+cycleMs)%cycleMs;
-  const label=direction==="UP"?"看涨 Higher":direction==="DOWN"?"看跌 Lower":"无信号";
-  const reason=direction?label+"：5分钟趋势、1分钟动量、放量、盘口/主动成交、RSI 全部通过。":
-    "无信号：有条件未满足；看涨未通过 "+missing(up).join("、")+
-    "；看跌未通过 "+missing(down).join("、")+"。";
+  const missing=x=>Object.entries(x).filter(([,ok])=>!ok).map(([key])=>key);
+  const reason=direction?
+    (direction==="UP"?"看涨 Higher":"看跌 Lower")+
+    "：第7–8.5分钟、指数领先≥0.10%、60秒不利回撤≤领先一半、1分钟K线及盘口全部通过。"+
+    "本信号仅为UTC指数参考周期模拟，非币安实际事件合约到期判断。":
+    !inWindow?"无信号：不在本周期第7–8.5分钟的观察窗口。":
+    !hasIndex?"无信号：缺少同源指数参考开盘价或完整近一分钟K线。":
+    "无信号：看涨未通过 "+missing(up).join("、")+
+       "；看跌未通过 "+missing(down).join("、")+"。";
   return {
-    strategyVersion:RULE_VERSION,direction,signal:direction??"NO_SIGNAL",
-    status:direction?"PREDICTED":"NO_SIGNAL",reason,confidence:null,
-    cycleStartAt:at-elapsed,firstThreeMinutes:elapsed<180000,
-    snapshotAt:at,conditions,upChecks:up,downChecks:down,
+    strategyVersion:LATE_WINDOW_RULE_VERSION,direction,
+    signal:direction??"NO_SIGNAL",
+    status:direction?"PREDICTED":"NO_SIGNAL",
+    reason,confidence:null,cycleStartAt:cycleStart,
+    firstThreeMinutes:false,lateWindow:inWindow,
+    snapshotAt:at,conditions:direction==="UP"?up:direction==="DOWN"?down:null,
+    upChecks:up,downChecks:down,
+    referenceBasis:"UTC_10M_INDEX_OPEN_PROXY_NOT_EVENT_CONTRACT_STRIKE",
     evidence:{
-      ema5m9,ema5m21,ema1m9,ema1m21,previous1mEma9:previous9,
-      previous1mEma21:previous21,crossUp,crossDown,
-      lastTwo5m:five.slice(-2).map(b=>({open:b.o,close:b.c,at:b.t})),
-      lastClosed1m:{open:last1.o,close:last1.c,volume:last1.v,at:last1.t},
-      priceAtSignal:price,volumeAvg20,volumeRatio:ratio,
-      rsi14:rsi,bidTop5QtyBtc:hasBook?bid:null,askTop5QtyBtc:hasBook?ask:null,
-      consecutiveTakerBuys:buyStreak?aggressiveFlow.consecutiveTakerBuys:0,
-      bookEvidenceAvailable:!!hasBook,aggressiveBuyConfirmed:!!buyStreak,
-      referenceSource:"BINANCE_BTC_PUBLIC_SPOT_PROXY",
-      bookSource:"BINANCE_USDM_BTCUSDT_ORDERBOOK_TOP5"
+      cycleOpenIndexPrice:base,liveIndexPrice:price,
+      signedLeadPct:hasIndex?pct(lead/base):null,
+      leadingAmount:absLead,pullbackPrice:pullback,reboundPrice:rebound,
+      retraceBound:hasIndex?absLead/2:null,
+      recentIndexBars:recent.length, indexMinuteOpen:currentBar?.open??null,
+      indexMinuteClose:currentBar?.close??null,
+      bidTop5QtyBtc:hasBook?bid:null,askTop5QtyBtc:hasBook?ask:null,
+      referenceSource:"BINANCE_USDM_INDEX_UTC_CYCLE_PROXY",
+      bookSource:"BINANCE_USDM_BTCUSDT_ORDERBOOK_TOP5",
+      referenceIsActualEventContractStrike:false
     }
   };
 }
 
-
-// Collect only the two market-data families required by the rule.
-// A missing source is an explicit failed gate, never a fabricated signal.
+// Only public read-only Binance USD-M Index Price/Klines and top-5 depth.
+// Do not substitute spot/mark prices when index or reference bar is missing.
+// HTTP 451, staleness, or missing bar => no direction; never fake an official strike.
 export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=3000}={}){
  const endpoints=[
-  ["orderBook","https://fapi.binance.com/fapi/v1/depth?symbol=BTCUSDT&limit=5",parseTop5Depth],
-  ["aggressiveFlow","https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT&limit=1000",parseAggressiveStreak]
+  ["indexQuote","https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",parseBinanceIndexQuote],
+  ["indexKlines","https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=BTCUSDT&interval=1m&limit=12",parseBinanceIndexKlines],
+  ["orderBook","https://fapi.binance.com/fapi/v1/depth?symbol=BTCUSDT&limit=5",parseTop5Depth]
  ];
  const results=await Promise.all(endpoints.map(async([name,url,parser])=>{
    try{
@@ -172,7 +213,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
      const data=await response.json(),receivedAt=now();
      return {name,ok:true,value:parser(data,receivedAt),receivedAt};
    }catch(e){
-     const raw=String(e?.message||e).slice(0,80);
+     const raw=String(e?.message||e).slice(0,100);
      const error=/HTTP_451/.test(raw)?"REGION_RESTRICTED_451":
        /HTTP_418/.test(raw)?"IP_BLOCK_418":
        /HTTP_\d+/.test(raw)?raw:
@@ -186,11 +227,12 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
      {available:false,error:row.error};
    if(row.ok)features[row.name]={...row.value,receivedAt:row.receivedAt};
  }
- return {source:"BINANCE_USDM_PUBLIC_DEPTH_AND_AGGTRADES_NOT_EVENT_INDEX",
+ return {source:"BINANCE_USDM_PUBLIC_INDEX_AND_DEPTH_UTC_REFERENCE_NOT_EVENT_ORDER",
    available:results.filter(x=>x.ok).length,total:results.length,
    features,availability,caveats:[
-     "订单簿取 BTCUSDT USD-M 永续合约前5档数量，K线与参考价格来自现有BTC公开现货源，市场口径不同。",
-     "仅使用做出决策前实际收到且新鲜的数据，不可用时不臆造。",
-     "仅输出信号，不提供币安事件合约下单或官方结算。"
+     "固定UTC十分钟周期并非币安事件合约实际开仓后十分钟；本策略不读取真实合约Strike或到期时间。",
+     "指数报价及1分钟指数K线来自币安USD-M公开接口；前5档盘口来自币安USD-M永续合约。",
+     "最近60秒回撤采用覆盖该区间的1分钟K线最高/最低点作保守上界；不是逐秒逐笔指数轨迹。",
+     "仅生成参考信号，不提交真实订单或声称官方事件合约命中率。"
    ]};
 }

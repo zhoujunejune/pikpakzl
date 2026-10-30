@@ -1,0 +1,63 @@
+name: Build ZL Control Android APK
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/zl-android-apk.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-control-android-apk
+  cancel-in-progress: false
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android platform and build-tools
+        run: |
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses >/dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Verify native app security invariants
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          m=Path('android-app/app/src/main/AndroidManifest.xml').read_text()
+          j=Path('android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java').read_text()
+          for k in ('android:usesCleartextTraffic="false"','android:allowBackup="false"'):
+            assert k in m
+          for k in ('setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW)',
+                    'onReceivedSslError','handler.cancel()','onReceivedHttpAuthRequest',
+                    'https://','/app/','isTrusted(uri)'):
+            assert k in j,k
+          assert 'DEEPSEEK_API_KEY' not in j and 'BINANCE_API_KEY' not in j
+          print('ZL_NATIVE_SECURITY_INVARIANTS_PASS')
+          PY
+      - name: Build installable debug-signed APK
+        working-directory: android-app
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+      - name: Prepare APK and check build metadata
+        run: |
+          mkdir -p dist
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.0.0-Android.apk
+          test -s dist/ZL-Control-v1.0.0-Android.apk
+          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.0.0-Android.apk | head -n 7
+          sha256sum dist/ZL-Control-v1.0.0-Android.apk
+          echo 'ZL_APK_BUILT_AND_SIGNED=true'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZL-Control-Android-APK
+          path: dist/ZL-Control-v1.0.0-Android.apk
+          if-no-files-found: error
+          retention-days: 90

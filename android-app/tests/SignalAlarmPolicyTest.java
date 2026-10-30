@@ -15,7 +15,7 @@ public final class SignalAlarmPolicyTest {
         eq("BEFORE_ENABLED",SignalAlarmPolicy.decide("DOWN","old",null,enabled-1,expiry,enabled,now));
         eq("SIGNAL_EXPIRED",SignalAlarmPolicy.decide("DOWN","late",null,opened,expiry,enabled,expiry+1));
         eq("SIGNAL_TOO_OLD",SignalAlarmPolicy.decide("UP","late",null,opened,0,enabled,opened+361_000));
-        eq("ALERT",SignalAlarmPolicy.decide("UP","late-but-live",null,opened,expiry,enabled,opened+170_000-31_000));
+        eq("ALERT",SignalAlarmPolicy.decide("UP","late-but-live",null,opened,opened+240_000,enabled,opened+170_000));
         eq("MISSING_ENABLE_TIME",SignalAlarmPolicy.decide("UP","x",null,opened,expiry,0,now));
         eq("INVALID_TIME",SignalAlarmPolicy.decide("DOWN","x",null,0,expiry,enabled,now));
         eq("INVALID_ID",SignalAlarmPolicy.decide("DOWN","",null,opened,expiry,enabled,now));

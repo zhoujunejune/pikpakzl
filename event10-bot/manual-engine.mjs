@@ -131,6 +131,10 @@ function slimSignal(h) {
     fiveOfFive:h.ruleChecks?.conditions?Object.values(h.ruleChecks.conditions).every(Boolean):true,
     volumeRatio:Number.isFinite(evidence.volumeRatio)?evidence.volumeRatio:null,
     rsi14:Number.isFinite(evidence.rsi14)?evidence.rsi14:null,
+    leadPct:Number.isFinite(evidence.signedLeadPct)?Math.abs(evidence.signedLeadPct):null,
+    retracementRatioPct:Number.isFinite(evidence.leadingAmount)&&evidence.leadingAmount>0?
+      round(100*(h.direction==="UP"?evidence.pullbackPrice:evidence.reboundPrice)/
+        evidence.leadingAmount,2):null,
     checks:h.ruleChecks?.conditions||null,
     closePrice:h.closePrice??null,closeObservedAt:h.closeObservedAt??null,
     proxyHit:typeof h.proxyHit==="boolean"?h.proxyHit:null,

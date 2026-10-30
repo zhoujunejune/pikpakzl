@@ -124,8 +124,8 @@ function store(file,records){
 function slimSignal(h) {
   const evidence=h.ruleChecks?.evidence||{};
   return {
-    id:h.id,strategyVersion:h.decisionReviewVersion,model:"PURE_RULES_V1",
-    trigger:String(h.id).startsWith("auto-rule-")?"AUTO":"MANUAL",
+    id:h.id,strategyVersion:h.decisionReviewVersion,model:h.model||"PURE_RULES_V1",
+    trigger:String(h.id).startsWith("auto-")?"AUTO":"MANUAL",
     openedAt:h.openedAt,expiresAt:h.expiresAt,
     direction:h.direction,openPrice:h.openPrice,
     fiveOfFive:h.ruleChecks?.conditions?Object.values(h.ruleChecks.conditions).every(Boolean):true,
@@ -195,7 +195,8 @@ function openSignalLedger(file,sessionHistory) {
   function list(limit=25,offset=0){
     const take=Math.max(1,Math.min(100,Number(limit)||25));
     const skip=Math.max(0,Math.min(1000000,Number(offset)||0));
-    const ordered=Array.from(all.values()).sort((a,b)=>b.openedAt-a.openedAt||b.id.localeCompare(a.id));
+    const ordered=Array.from(all.values()).filter(x=>x.strategyVersion===RULE_VERSION)
+      .sort((a,b)=>b.openedAt-a.openedAt||b.id.localeCompare(a.id));
     const settled=ordered.filter(x=>typeof x.proxyHit==="boolean");
     const hits=settled.filter(x=>x.proxyHit===true).length;
     const percentage=n=>n.length?round(n.filter(x=>x.proxyHit===true).length*100/n.length,2):null;
@@ -230,10 +231,11 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   let lastDataProbe=null;
   const persist=()=>store(file,history);
   const latest=()=>history.at(-1)||null;
-  const stats=()=>{const decided=history.filter(x=>["UP","DOWN"].includes(x.direction));
-    const settled=history.filter(x=>typeof x.proxyHit==="boolean");
+  const stats=()=>{const current=history.filter(x=>x.decisionReviewVersion===RULE_VERSION);
+    const decided=current.filter(x=>["UP","DOWN"].includes(x.direction));
+    const settled=current.filter(x=>typeof x.proxyHit==="boolean");
     const hits=settled.filter(x=>x.proxyHit).length;
-    return {total:history.length,validDirections:decided.length,
+    return {total:current.length,validDirections:decided.length,
       proxySettled:settled.length,proxyHits:hits,proxyMisses:settled.length-hits,
       proxyAccuracyPct:settled.length?round(100*hits/settled.length,2):null,
       officialSettled:0,officialAccuracyPct:null};
@@ -241,12 +243,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_AUTO_FIRST3M_PLUS_MANUAL",
-      providerModel:"PURE_RULES_V1",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_LATE_7_TO_8_5M_PLUS_MANUAL",
+      providerModel:"PURE_LATE_INDEX_REFERENCE_V2",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
-      officialEventContractResultsAvailable:false,priceSource:SOURCE,
+      officialEventContractResultsAvailable:false,
+      priceSource:"BINANCE_USDM_INDEX_UTC_CYCLE_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_EMA_VOLUME_DEPTH_RSI_V1",
+      enrichmentVersion:"EVENT10_LATE_INDEX_REFERENCE_V2",
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"disabled",reasoningEffort:null,
       lastReasoningObserved:null,lastReasoningTokenCount:null,
@@ -291,49 +294,49 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // future data. The decision clock, not the last spot TRADE time,
       // defines the information cutoff.
       const market=await collectRuleFeatures({fetcher,now:clock,timeoutMs:1200});
-      const feed=await readFeed();
-      const spot=buildSnapshot(feed,clock()); // verifies spot tick freshness
       const decisionAt=clock();
       if(decisionAt-clickReceivedAt>5000)throw Error("SIGNAL_SNAPSHOT_TOO_SLOW");
-      const reference={...spot,observedAt:decisionAt,
-        priceObservedAt:spot.observedAt,observedAgeMs:decisionAt-spot.observedAt};
-      const availability={...market.availability};
-      const filtered={};
+      const availability={...market.availability},filtered={};
       for(const [k,v] of Object.entries(market.features)){
-        const observed=v.observedAt??v.lastTradeAt;
-        // Both market-source samples must have been received by decision time;
-        // require strict exchange-time freshness without using lookahead.
-        const maxAge=k==="aggressiveFlow"?4000:5000;
+        const observed=v.observedAt;
+        const maxAge=k==="indexQuote"?5000:5000;
         if(!Number.isSafeInteger(observed)||observed>decisionAt||
             decisionAt-observed>maxAge||
             !Number.isSafeInteger(v.receivedAt)||v.receivedAt>decisionAt)
           availability[k]={available:false,error:"SOURCE_OUTSIDE_DECISION_WINDOW"};
         else filtered[k]=v;
       }
-      const rule=evaluatePureSignal({feed,reference,
-        orderBook:filtered.orderBook,aggressiveFlow:filtered.aggressiveFlow});
+      const reference={observedAt:decisionAt};
+      const rule=evaluatePureSignal({reference,
+        indexSnapshot:filtered.indexQuote,indexKlines:filtered.indexKlines,
+        orderBook:filtered.orderBook});
+      const cycleExpiry=rule.cycleStartAt+HORIZON_MS;
+      const openingIndex=rule.evidence.cycleOpenIndexPrice;
+      const liveIndex=rule.evidence.liveIndexPrice;
       lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,
-        openedAt:decisionAt,referencePriceObservedAt:spot.observedAt,
-        openAgeMs:reference.observedAgeMs,
-        openPrice:reference.price,expiresAt:decisionAt+HORIZON_MS,
+        openedAt:decisionAt,referencePriceObservedAt:filtered.indexQuote?.observedAt??null,
+        openAgeMs:filtered.indexQuote?decisionAt-filtered.indexQuote.observedAt:null,
+        openPrice:openingIndex,liveIndexPrice:liveIndex,expiresAt:cycleExpiry,
         ...rule,featureAvailability:availability};
       lastDataProbe={checkedAt:clock(),available:Object.keys(filtered).length,
         total:market.total,availability};
-      if(!rule.direction)return lastCheck; // Missing ANY mandatory gate = no signal, no prediction record.
-      const session={id,clickReceivedAt,openedAt:reference.observedAt,
-        clickToCaptureMs:clock()-clickReceivedAt,expiresAt:reference.observedAt+HORIZON_MS,
-        openPrice:reference.price,openAgeMs:reference.observedAgeMs,
-        referencePriceObservedAt:spot.observedAt,
-        priceStructure:null,features:reference.indicators,
-        rollingTenMinutes:tenMinuteWindow(feed,reference.observedAt),
+      if(!rule.direction)return lastCheck;
+      const session={id,clickReceivedAt,openedAt:decisionAt,
+        clickToCaptureMs:clock()-clickReceivedAt,expiresAt:cycleExpiry,
+        openPrice:openingIndex,liveIndexPrice:liveIndex,
+        openAgeMs:filtered.indexQuote?decisionAt-filtered.indexQuote.observedAt:null,
+        referencePriceObservedAt:filtered.indexQuote?.observedAt??null,
+        priceStructure:null,features:rule.evidence,
+        rollingTenMinutes:null,
         enrichment:{source:market.source,features:filtered,
           available:Object.keys(filtered).length,total:market.total},
         featureAvailability:availability,sourceWarnings:market.caveats,
         featureBundleVersion:RULE_VERSION,decisionReviewVersion:RULE_VERSION,
         decisionReview:null,compactEvidence:null,analysisArguments:null,
-        source:SOURCE,status:"PREDICTED",direction:rule.direction,
+        source:"BINANCE_USDM_INDEX_UTC_CYCLE_PROXY_NOT_ORDER_STRIKE",
+        status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_RULES_V1",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_LATE_INDEX_REFERENCE_V2",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -341,7 +344,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         proxyOutcome:null,proxyHit:null,returnPct:null,
         officialEventOutcome:null,officialEventHit:null,
         realOrderPlaced:false,error:null};
-      // Append to independent audit trail before acknowledging this valid direction.
+            // Append to independent audit trail before acknowledging this valid direction.
       signalLedger.add(session);
       history.push(session);
       if(history.length>500)history.splice(0,history.length-500);
@@ -362,18 +365,19 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // The first 3 minutes are priority (12s cadence); continue looking
-    // through the remaining 7 minutes at a slower 30s cadence. "Priority"
-    // must not silently mean "never consider later valid signals".
-    // No forced direction, no order execution; one accepted signal per block.
+    // New strategy scans ONLY minutes 7.0–8.5 of each UTC-aligned
+    // reference cycle. This is a reference-cycle backtest, not the actual
+    // contract's order-relative expiry. Never auto-place any order.
     const nowMs=clock(),cycle=nowMs-Math.floor(nowMs%HORIZON_MS);
     if(lastRuleScanCycle!==cycle){lastRuleScanCycle=cycle;lastRuleScan=0;}
-    const scanInterval=nowMs-cycle<180000?12000:30000;
-    if(nowMs-lastRuleScan>=scanInterval&&!busyStart&&
-        !history.some(x=>x.signalCycleStartMs===cycle&&x.direction)&&
-        !history.some(x=>x.status==="PREDICTED"&&x.expiresAt>nowMs)){
+    const elapsed=nowMs-cycle;
+    if(elapsed>=420000&&elapsed<510000&&nowMs-lastRuleScan>=12000&&
+        !busyStart&&!history.some(x=>x.signalCycleStartMs===cycle&&
+          x.decisionReviewVersion===RULE_VERSION&&x.direction)&&
+        !history.some(x=>x.decisionReviewVersion===RULE_VERSION&&
+          x.status==="PREDICTED"&&x.expiresAt>nowMs)){
       lastRuleScan=nowMs;
-      void start("auto-rule-"+cycle).catch(e=>{
+      void start("auto-late-"+cycle).catch(e=>{
         lastError="AUTO_SCAN_"+String(e?.message||e).slice(0,100);
       });
     }
@@ -391,17 +395,41 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       }
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
-      const market=await readFeed();
-      const observed=checkedTick(market,clock(),6000);
-      for(const h of pending){
-        if(observed.observedAt < h.expiresAt || observed.observedAt>h.expiresAt+15000)
-          continue;
-        const score=scoreProxy(h.openPrice,observed.price,h.direction);
-        Object.assign(h,{closePrice:observed.price,
-          closeObservedAt:observed.observedAt,
-          expirySampleLagMs:observed.observedAt-h.expiresAt,
-          settlementStatus:"PUBLIC_MARKET_PROXY_ONLY",
-          ...score});persist();signalLedger.settle(h);
+      const newSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION);
+      const oldSessions=pending.filter(h=>h.decisionReviewVersion!==RULE_VERSION);
+      if(newSessions.length){
+        try{
+          const r=await fetcher("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+            {signal:AbortSignal.timeout(2200),headers:{Accept:"application/json"}});
+          if(!r.ok)throw Error("INDEX_SETTLEMENT_HTTP_"+r.status);
+          const item=await r.json(),sampleAt=Number(item?.time),price=Number(item?.indexPrice);
+          if(item?.symbol!=="BTCUSDT"||!Number.isSafeInteger(sampleAt)||
+             !Number.isFinite(price)||price<=0||
+             sampleAt>clock()+1000||clock()-sampleAt>5000)
+            throw Error("INDEX_SETTLEMENT_UNVERIFIED");
+          for(const h of newSessions){
+            if(sampleAt<h.expiresAt||sampleAt>h.expiresAt+15000)continue;
+            const score=scoreProxy(h.openPrice,price,h.direction);
+            Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
+              expirySampleLagMs:sampleAt-h.expiresAt,
+              settlementStatus:"INDEX_CYCLE_PROXY_ONLY",
+              ...score});persist();signalLedger.settle(h);
+          }
+        }catch(e){lastError="SETTLE_INDEX_"+String(e?.message||e).slice(0,120);}
+      }
+      if(oldSessions.length){
+        const market=await readFeed();
+        const observed=checkedTick(market,clock(),6000);
+        for(const h of oldSessions){
+          if(observed.observedAt<h.expiresAt||observed.observedAt>h.expiresAt+15000)
+            continue;
+          const score=scoreProxy(h.openPrice,observed.price,h.direction);
+          Object.assign(h,{closePrice:observed.price,
+            closeObservedAt:observed.observedAt,
+            expirySampleLagMs:observed.observedAt-h.expiresAt,
+            settlementStatus:"PUBLIC_MARKET_PROXY_ONLY",
+            ...score});persist();signalLedger.settle(h);
+        }
       }
     }catch(e){lastError="SETTLE_"+String(e?.message||e).slice(0,120);}
     finally{busySettle=false;}

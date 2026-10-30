@@ -57,6 +57,13 @@ jobs:
           for k in ('POST_NOTIFICATIONS','FOREGROUND_SERVICE_SPECIAL_USE',
                     'SignalAlertService'):
             assert k in m,k
+          assert 'outer.setOnApplyWindowInsetsListener' in j
+          assert 'WindowInsets.Type.statusBars()' in j
+          assert 'PREF_ENABLED_SINCE' in j
+          assert '仅新 Higher / Lower 信号提醒' in j
+          for k in ('"UP".equals(direction)&&!"DOWN".equals(direction)', 'openedAt<enabledSince',
+                    '__NO_PRIOR_SIGNALS__'):
+            assert k in service,k
           print('ZL_NATIVE_SECURITY_INVARIANTS_PASS')
           PY
       - name: Build installable debug-signed APK
@@ -65,14 +72,14 @@ jobs:
       - name: Prepare APK and check build metadata
         run: |
           mkdir -p dist
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.0-Alarm-Android.apk
-          test -s dist/ZL-Control-v1.1.0-Alarm-Android.apk
-          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.0-Alarm-Android.apk | head -n 7
-          sha256sum dist/ZL-Control-v1.1.0-Alarm-Android.apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.1-Alarm-Fix.apk
+          test -s dist/ZL-Control-v1.1.1-Alarm-Fix.apk
+          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.1-Alarm-Fix.apk | head -n 7
+          sha256sum dist/ZL-Control-v1.1.1-Alarm-Fix.apk
           echo 'ZL_APK_BUILT_AND_SIGNED=true'
       - uses: actions/upload-artifact@v4
         with:
-          name: ZL-Control-Android-Alarm-APK
-          path: dist/ZL-Control-v1.1.0-Alarm-Android.apk
+          name: ZL-Control-v1.1.1-APK
+          path: dist/ZL-Control-v1.1.1-Alarm-Fix.apk
           if-no-files-found: error
           retention-days: 90

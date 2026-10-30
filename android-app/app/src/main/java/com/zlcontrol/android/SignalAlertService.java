@@ -13,6 +13,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Base64;
 import org.json.JSONArray;
@@ -134,7 +135,15 @@ public final class SignalAlertService extends Service {
     private void pollSafe(){
         if(stopped)return;
         SecureStore.prefs(this).edit().putLong(PREF_LAST_POLL,System.currentTimeMillis()).apply();
-        try{poll();}
+        PowerManager.WakeLock lock=null;
+        try{
+            PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+            if(pm!=null){
+                lock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"ZLControl:event10-network-check");
+                lock.acquire(20000L); // Only during the request, never held permanently.
+            }
+            poll();
+        }
         catch(Exception e){
             String code=e.getMessage();
             if(code==null)code=e.getClass().getSimpleName();
@@ -145,6 +154,8 @@ public final class SignalAlertService extends Service {
                 .putString(PREF_LAST_REASON,message).apply();
             audit(prefs,"POLL_ERROR",null,message,0L,0L);
             status(message);
+        }finally{
+            if(lock!=null&&lock.isHeld())lock.release();
         }
     }
     private JSONObject fetch() throws Exception {

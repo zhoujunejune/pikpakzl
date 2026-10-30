@@ -5,7 +5,9 @@ on:
     branches: [feature/zl-futures-bot-v1]
     paths: [.github/workflows/event10-late-index-release.yml]
   workflow_dispatch:
-permissions: {contents: read}
+permissions:
+  contents: read
+  statuses: write
 concurrency:
   group: zl-event10-late-index-isolated-release
   cancel-in-progress: false
@@ -90,3 +92,28 @@ jobs:
               break
           if not complete:raise RuntimeError("EVENT10_LATE_DEPLOY_NOT_CONFIRMED")
           PY
+
+  report:
+    if: always()
+    needs: [test, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish EVENT10-only deploy status back to source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_RESULT: ${{ needs.test.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+        run: |
+          if [ "$TEST_RESULT" = "success" ] && [ "$DEPLOY_RESULT" = "success" ]; then
+            status=success
+            description="EVENT10 V2 isolated Aliyun release confirmed"
+          else
+            status=failure
+            description="EVENT10 release not confirmed: test=$TEST_RESULT deploy=$DEPLOY_RESULT"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$status" \
+            -f context="event10-late-index-deploy" \
+            -f description="$description" >/dev/null
+          echo "EVENT10_LATE_CI_RESULT=$status"

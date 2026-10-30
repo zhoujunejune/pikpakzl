@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · EMA9/21 + 成交量 + 盘口前5档 + RSI · 严格满足五项才出方向</p>
+<p class="sub">BTCUSDT · 第7–8.5分钟 + 指数领先0.10% + 回撤 + 1分钟K线 + 盘口</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-后台持续扫描：每个 UTC 10分钟周期的前3分钟优先每12秒检查一次，其余7分钟约每30秒检查一次；也可手动立即检测。任何一项不满足都显示无信号，不使用 DeepSeek，也不会使用账户余额或提交订单。事件合约的实际开仓价与到期价格由币安官方指数决定，此页面的参考行情未证实等于该指数。下方仅统计公开行情代理命中率，绝不冒充官方结算胜率。
+后台仅在UTC十分钟参考周期第7–8.5分钟约每12秒检查一次；也可手动检查（窗口外无信号）。指数相对周期起点领先至少0.10%，不利回撤不超过领先幅度一半，且1分钟指数K线及前5档盘口同向才出信号。重要：UTC周期不是币安事件合约实际订单的开仓和到期时间，本页面不掌握订单真实Strike。只做参考信号，不下单。
 </div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
@@ -53,19 +53,19 @@ th{color:#a9c6e7}
   <strong id="quickConfidence" class="signal-price">通过条件：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
- <div id="quickReason" class="signal-reason">只有五项全部成立才显示看涨或看跌，否则为无信号。</div>
- <p class="sub">规则没有主观置信度。当前 1 分钟与 5 分钟 K 线均采用最近已收盘 K 线，避免未收盘数据误判。</p>
+ <div id="quickReason" class="signal-reason">五项同时成立才出方向；窗口外或指数/盘口数据不完整时均无信号。</div>
+ <p class="sub">规则没有主观置信度。只使用币安USD-M指数价、指数1分钟K线和永续合约盘口。当前1分钟K线可能尚未收盘。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
-<p class="sub">自动扫描覆盖整个 UTC 10 分钟周期，优先在前3分钟捕捉方向；也可随时手动检查。有合格方向才锁定参考价并于10分钟后核对同一公开行情源。</p>
+<p class="sub">仅在UTC参考周期第7–8.5分钟自动扫描；周期结束核对指数。本结果不是实际新开事件合约10分钟后盈亏预测。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
-<div class="metric"><small>锁定参考价（非官方开仓价）</small><strong id="openPrice">—</strong></div>
+<div class="metric"><small>UTC周期指数开盘价（非订单Strike）</small><strong id="openPrice">—</strong></div>
 <div class="metric"><small>规则判断方向</small><strong id="direction">—</strong></div>
 <div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
-<div class="metric"><small>10分钟后参考价</small><strong id="closePrice">—</strong></div>
+<div class="metric"><small>UTC周期结束指数价</small><strong id="closePrice">—</strong></div>
 </div>
 <div class="grid" style="margin-top:10px">
 <div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
@@ -77,9 +77,9 @@ th{color:#a9c6e7}
 <p class="sub" id="reason">等待行情检查。</p>
 <div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
-<p id="featureSummary" class="sub">仅在点击或手动检查时读取额外行情；断线和 HTTP 451 将明确标记，不补假数据。</p>
+<p id="featureSummary" class="sub">只读取币安公开指数报价、指数1分钟K线和前5档盘口；HTTP 451或过期则不出信号。</p>
 <div id="featureHealth" class="grid" aria-live="polite"></div>
-<p class="sub">检查按钮只读取订单簿前5档和近期主动成交，不产生新方向记录。K线与参考价来自 BTC 现货行情代理；盘口来自 BTC 永续合约，数据口径不同。</p>
+<p class="sub">检查按钮只读取币安USD-M公开指数及盘口；UTC参考开盘价不等于真实事件订单Strike。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
 </section>
 <section class="card">
@@ -108,7 +108,7 @@ th{color:#a9c6e7}
 <div class="row"><h2>所有有效信号记录</h2><button type="button" class="secondary" id="refresh">立即刷新</button></div>
 <p class="sub" id="historySummary" aria-live="polite">载入已保存的信号…</p>
 <div class="tablewrap"><table><thead><tr>
-<th>出信号时间</th><th>来源</th><th>方向</th><th>参考价</th><th>五项条件</th><th>放量倍数</th><th>RSI14</th><th>10分钟参考价</th><th>代理结果</th>
+<th>出信号时间</th><th>来源</th><th>方向</th><th>UTC周期基准</th><th>五项条件</th><th>领先幅度</th><th>不利回撤/领先</th><th>到期指数价</th><th>代理结果</th>
 </tr></thead><tbody id="records"><tr><td colspan="9">读取中…</td></tr></tbody></table></div>
 <div class="row" style="margin-top:12px">
 <button type="button" class="secondary" id="newerSignals">上一页</button>
@@ -120,7 +120,7 @@ th{color:#a9c6e7}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029";
+const SIGNAL_VERSION="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -199,7 +199,8 @@ const displayConfidence=s=>{
 };
 const phaseText={ANALYZING:"处理中",PREDICTED:"五项成立，方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
- if(v==="PUBLIC_MARKET_PROXY_ONLY")return "代理行情已核对";
+ if(v==="PUBLIC_MARKET_PROXY_ONLY")return "旧版现货代理核对";
+ if(v==="INDEX_CYCLE_PROXY_ONLY")return "UTC指数周期已核对";
  if(v==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")return "到期时数据不足";
  if(v==="FAILED")return "分析失败";
  return "尚未核对";
@@ -210,7 +211,7 @@ function updateClock(){
  let n=Math.max(0,Math.floor((active.expiresAt-Date.now())/1000));
  $("remaining").textContent=String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0");
 }
-const sectionNames={fifteenMinute:"15分钟K线",orderBook:"买卖盘口",aggressiveFlow:"主动成交订单流",futuresIndex:"指数价格/资金费率",openInterest:"实时持仓量",openInterestChange:"5分钟持仓变化",continuousAggTrade:"连续WebSocket成交历史"};
+const sectionNames={indexQuote:"币安指数报价",indexKlines:"指数1分钟K线",fifteenMinute:"15分钟K线",orderBook:"买卖盘口",aggressiveFlow:"主动成交订单流",futuresIndex:"指数价格/资金费率",openInterest:"实时持仓量",openInterestChange:"5分钟持仓变化",continuousAggTrade:"连续WebSocket成交历史"};
 const sourceErrorNames={
  NEWER_THAN_REFERENCE_TICK:"采样时间晚于锁定参考价，已安全排除",
  INCOMPLETE_OR_UNFRESH_STREAM_WINDOW:"所需历史窗口不完整或未通过时效检查",
@@ -259,7 +260,7 @@ function display(d){
   $("quickOpen").textContent="参考价："+price(s.openPrice)+" USDT";
   $("quickReason").textContent=s.reason||(noSignal?"没有同时满足五项条件。":"等待行情校验。");
   $("quickTimestamp").textContent="采样："+when(s.openedAt)+" ｜ "+
-    (s.firstThreeMinutes||s.ruleChecks?.firstThreeMinutes?"本轮前3分钟优先窗口":"非优先窗口")+
+    (s.lateWindow||s.ruleChecks?.lateWindow?"UTC参考周期第7–8.5分钟":"不在观察窗口")+
     " ｜ 仅供方向参考，非事件合约官方交易记录。";
   $("openPrice").textContent=price(s.openPrice);
   $("openedAt").textContent=when(s.openedAt);
@@ -277,8 +278,8 @@ function display(d){
   const detail=$("analysisDetail");detail.replaceChildren();
   const rule=s.ruleChecks||s,up=rule.upChecks,down=rule.downChecks;
   if(up&&down){
-   const labels={trend5m:"5分钟 EMA+连续两根",momentum1m:"1分钟 EMA+K线+价格",
-       volume:"1分钟成交量至少1.3倍",orderflow:"前5档盘口/连续主动买入",rsi:"1分钟 RSI 区间"};
+   const labels={timeWindow:"第7–8.5分钟",lead:"指数领先至少0.10%",
+       retrace:"不利回撤≤领先一半",minuteCandle:"1分钟指数K线同向",orderBook:"前5档盘口同向"};
    for(const [direction,checks] of [["看涨",up],["看跌",down]]){
     const p=document.createElement("p");
     p.textContent=direction+"："+Object.entries(checks).map(([key,val])=>
@@ -289,15 +290,15 @@ function display(d){
    if(e){
     const p=document.createElement("p");
     const num=v=>Number.isFinite(v)?Number(v).toFixed(2):"不可用";
-    p.textContent="EMA5m "+num(e.ema5m9)+"/"+num(e.ema5m21)+
-      " | EMA1m "+num(e.ema1m9)+"/"+num(e.ema1m21)+
-      " | 放量倍数 "+num(e.volumeRatio)+" | RSI14 "+num(e.rsi14)+
+    p.textContent="UTC基准指数 "+num(e.cycleOpenIndexPrice)+
+      " | 当前指数 "+num(e.liveIndexPrice)+
+      " | 领先 "+num(e.signedLeadPct)+"% | 回撤上限 "+num(e.retraceBound)+
       " | 买/卖前5档数量 "+num(e.bidTop5QtyBtc)+"/"+num(e.askTop5QtyBtc);
     detail.append(p);
    }
   }
-  $("dataQuality").textContent="K线/参考价：公开BTC现货行情代理；盘口/主动成交：币安BTC永续合约。"+
-    "收盘K线才参与趋势/成交量判断。现货参考价格与合约盘口均必须在实际决策时间前收到并保持新鲜；此处不是官方事件合约结算。";
+  $("dataQuality").textContent="指数价与1分钟K线来自币安USD-M公开指数接口，盘口是BTC永续合约前5档。"+
+    "回撤采用覆盖近60秒的1分钟K线极值保守核验，UTC基准不是事件订单Strike，统计仅供研究。";
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
@@ -344,10 +345,10 @@ async function refresh(){
   if(epoch!==refreshEpoch||inflight)return;
   display(d);
   $("message").textContent=d.busyStart?"后台正在获取行情，完成后自动更新结果。":
-    d.active?"已出有效方向，等待10分钟后参考行情核对。":
+    d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查已完成：五项未同时满足，无信号。":
-    "后台持续检测整个10分钟周期；前3分钟优先，也可手动立即检测。";
+    "后台只在UTC周期第7–8.5分钟检查；窗口外不生成方向。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";
@@ -389,8 +390,8 @@ async function refreshHistory(){
       s.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY"?"行情不足，未核验":
       s.proxyOutcome==="FLAT"?"持平（不计）":"待10分钟到期";
    const x=s.direction==="UP"?"看涨 Higher":"看跌 Lower";
-   const volume=typeof s.volumeRatio==="number"?s.volumeRatio.toFixed(2)+"×":"—";
-   const rsi=typeof s.rsi14==="number"?s.rsi14.toFixed(1):"—";
+   const volume=typeof s.leadPct==="number"?s.leadPct.toFixed(3)+"%":"—";
+   const rsi=typeof s.retracementRatioPct==="number"?s.retracementRatioPct.toFixed(1)+"%":"—";
    const cells=[
      when(s.openedAt),s.trigger==="AUTO"?"自动":"手动",x,price(s.openPrice),
      s.fiveOfFive?"5/5":"历史记录",volume,rsi,price(s.closePrice),outcome
@@ -415,12 +416,12 @@ function showImmediateResult(session){
    lastDataProbe:null,lastFeatureCoverage:session?.featureAvailability||null});
  $("message").textContent=session?.status==="DATA_ERROR"?
    "本次数据异常，未产生方向。":signal?
-   "五项条件全部成立，已给出方向；10分钟后核对参考行情。":
+   "五项成立，已给出UTC周期方向，周期结束时核对指数。":
    "检查完成：五项未同时满足，无信号。";
 }
 async function startClick(){
  if(inflight)return;
- inflight=true;refreshEpoch++;$("start").disabled=true;$("message").textContent="正在检查最新已收盘K线、成交量和盘口…";
+ inflight=true;refreshEpoch++;$("start").disabled=true;$("message").textContent="正在检查币安指数报价、指数K线与盘口…";
  $("quickPhase").textContent="正在启动";
  $("quickDirection").textContent="正在检查五项条件…";
  $("quickDirection").className="signal-direction yellow";

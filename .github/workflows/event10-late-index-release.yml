@@ -115,5 +115,6 @@ jobs:
           gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
             -f state="$status" \
             -f context="event10-late-index-deploy" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             -f description="$description" >/dev/null
-          echo "EVENT10_LATE_CI_RESULT=$status"
+          echo "EVENT10_LATE_CI_RESULT=$status test=$TEST_RESULT deploy=$DEPLOY_RESULT"

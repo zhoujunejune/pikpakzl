@@ -87,3 +87,20 @@ jobs:
               break
           if not finished:raise RuntimeError("EVENT10_READONLY_NOT_COMPLETED")
           PY
+
+  report:
+    if: always()
+    needs: inspect
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish diagnostic run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.inspect.result }}
+        run: |
+          if [ "$RESULT" = "success" ]; then status=success; else status=failure; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$status" \
+            -f context="event10-live-readonly-diagnostic" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="EVENT10 live readonly probe: $RESULT" >/dev/null

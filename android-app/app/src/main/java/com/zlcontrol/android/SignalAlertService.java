@@ -25,6 +25,10 @@ import java.io.ByteArrayOutputStream;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Explicitly user-enabled on-device signal watcher. No orders or production engine changes.
@@ -46,6 +50,10 @@ public final class SignalAlertService extends Service {
     public static final String PREF_LAST_ALARM="event10_alert_last_alarm";
     public static final String PREF_LAST_ALARM_TIME="event10_alert_last_alarm_time";
     public static final String PREF_LAST_ERROR="event10_alert_last_error";
+    public static final String PREF_HANDLED_IDS="event10_alert_handled_ids_v2";
+    public static final String PREF_AUDIT_TRAIL="event10_alert_audit_trail_v2";
+    public static final String PREF_LAST_AUDIT_KEY="event10_alert_last_audit_key_v2";
+    public static final String PREF_LAST_MISSED_TIME="event10_alert_last_missed_time_v2";
     private static final String FOREGROUND_CHANNEL="zl_event10_foreground_v1";
     private static final String ALARM_CHANNEL="zl_event10_alarm_v1";
     private static final int FOREGROUND_ID=101;
@@ -116,7 +124,7 @@ public final class SignalAlertService extends Service {
                 t.setDaemon(true);
                 return t;
             });
-            executor.scheduleWithFixedDelay(this::pollSafe,1,10,TimeUnit.SECONDS);
+            executor.scheduleWithFixedDelay(this::pollSafe,0,5,TimeUnit.SECONDS);
         }
         return START_STICKY;
     }
@@ -132,8 +140,10 @@ public final class SignalAlertService extends Service {
             if(code==null)code=e.getClass().getSimpleName();
             String message=code.contains("401")?"HTTP 401：后台登录凭证失效，请重新登录":
                 "后台读取失败："+code.substring(0,Math.min(90,code.length()));
-            SecureStore.prefs(this).edit().putString(PREF_LAST_ERROR,message)
+            SharedPreferences prefs=SecureStore.prefs(this);
+            prefs.edit().putString(PREF_LAST_ERROR,message)
                 .putString(PREF_LAST_REASON,message).apply();
+            audit(prefs,"POLL_ERROR",null,message,0L,0L);
             status(message);
         }
     }
@@ -165,6 +175,30 @@ public final class SignalAlertService extends Service {
             }
         }finally{conn.disconnect();}
     }
+    private void audit(SharedPreferences p,String action,String id,String detail,
+                       long openedAt,long expiresAt) {
+        String fingerprint=String.valueOf(id)+"|"+action+"|"+String.valueOf(detail);
+        if(fingerprint.equals(p.getString(PREF_LAST_AUDIT_KEY,"")))return;
+        try {
+            JSONArray history=new JSONArray(p.getString(PREF_AUDIT_TRAIL,"[]"));
+            JSONObject e=new JSONObject();
+            e.put("time",System.currentTimeMillis());
+            e.put("signal_id",id==null?"":id);
+            e.put("action",action);
+            e.put("detail",detail==null?"":detail);
+            e.put("openedAt",openedAt);
+            e.put("expiresAt",expiresAt);
+            JSONArray limited=new JSONArray();
+            for(int i=Math.max(0,history.length()-38);i<history.length();i++){
+                Object item=history.opt(i);
+                if(item!=null)limited.put(item);
+            }
+            limited.put(e);
+            p.edit().putString(PREF_AUDIT_TRAIL,limited.toString())
+              .putString(PREF_LAST_AUDIT_KEY,fingerprint).apply();
+        }catch(Exception ignored){}
+    }
+
     private void poll() throws Exception {
         SharedPreferences p=SecureStore.prefs(this);
         if(!p.getBoolean(PREF_ENABLED,false))return;
@@ -174,57 +208,101 @@ public final class SignalAlertService extends Service {
         if(records==null)throw new IllegalStateException("信号记录缺失");
         long now=System.currentTimeMillis();
         p.edit().putLong(PREF_LAST_SUCCESS,now).remove(PREF_LAST_ERROR).apply();
-        String time=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.CHINA).format(new java.util.Date(now));
+        String clockTime=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.CHINA)
+            .format(new java.util.Date(now));
         if(records.length()==0){
-            status("监听正常 "+time+" · 尚无有效信号");
-            p.edit().putString(PREF_LAST_REASON,"暂无有效 Higher/Lower 信号").apply();
+            status("监听正常 "+clockTime+" · 等待新信号");
             return;
         }
         JSONObject latest=records.optJSONObject(0);
-        if(latest==null)return;
-        String id=latest.optString("id","");
-        String direction=latest.optString("direction","");
-        long openedAt=latest.optLong("openedAt",0L);
-        long expiresAt=latest.optLong("expiresAt",0L);
-        p.edit().putString(PREF_LAST_SEEN,id).putLong(PREF_LAST_SEEN_TIME,openedAt).apply();
+        if(latest!=null){
+            p.edit().putString(PREF_LAST_SEEN,latest.optString("id",""))
+                .putLong(PREF_LAST_SEEN_TIME,latest.optLong("openedAt",0L)).apply();
+        }
 
-        String previous=p.getString(PREF_LAST_ID,null);
-        String decision=SignalAlarmPolicy.decide(direction,id,previous,openedAt,expiresAt,
-            p.getLong(PREF_ENABLED_SINCE,0L),now);
-        if(!SignalAlarmPolicy.ALERT.equals(decision)){
-            if(!"ALREADY_HANDLED".equals(decision)){
-                p.edit().putString(PREF_LAST_REASON,decision).apply();
-                if("BEFORE_ENABLED".equals(decision)||"SIGNAL_EXPIRED".equals(decision)
-                    ||"SIGNAL_TOO_OLD".equals(decision)){
-                    p.edit().putString(PREF_LAST_ID,id).apply();
-                }
+        // Process the whole returned ledger, not just records[0].
+        // When the phone was paused, an earlier signal must not be hidden by a newer one.
+        List<JSONObject> ordered=new ArrayList<>();
+        for(int i=0;i<records.length();i++){
+            JSONObject signal=records.optJSONObject(i);
+            if(signal!=null)ordered.add(signal);
+        }
+        ordered.sort((a,b)->Long.compare(a.optLong("openedAt",0L),b.optLong("openedAt",0L)));
+        Set<String> processed=new HashSet<>(p.getStringSet(PREF_HANDLED_IDS,new HashSet<>()));
+        long enabledAt=p.getLong(PREF_ENABLED_SINCE,0L);
+        int missed=0;
+        for(JSONObject signal:ordered){
+            if(stopped||!p.getBoolean(PREF_ENABLED,false))return;
+            String id=signal.optString("id","");
+            String dir=signal.optString("direction","");
+            long opened=signal.optLong("openedAt",0L);
+            long expires=signal.optLong("expiresAt",0L);
+            if(processed.contains(id))continue;
+            String previous=id.equals(p.getString(PREF_LAST_ID,""))?id:null;
+            String decision=SignalAlarmPolicy.decide(dir,id,previous,opened,expires,enabledAt,now);
+            if("NO_SIGNAL".equals(decision)||"INVALID_ID".equals(decision))continue;
+            if("ALREADY_HANDLED".equals(decision)){processed.add(id);continue;}
+            if("BEFORE_ENABLED".equals(decision)){
+                // This is a historical record, NOT a failure for a new signal.
+                processed.add(id);
+                continue;
             }
-            status("监听正常 "+time+" · "+("ALREADY_HANDLED".equals(decision)?"等待新信号":decision));
-            return;
+            if("SIGNAL_EXPIRED".equals(decision)||"SIGNAL_TOO_OLD".equals(decision)){
+                // Keep an explicit missed event so diagnosis can distinguish it from no signal.
+                processed.add(id);
+                missed++;
+                p.edit().putLong(PREF_LAST_MISSED_TIME,now)
+                    .putString(PREF_LAST_REASON,decision).apply();
+                audit(p,"MISSED_EXPIRED",id,dir,opened,expires);
+                continue;
+            }
+            if(!SignalAlarmPolicy.ALERT.equals(decision)){
+                audit(p,"BLOCKED",id,decision,opened,expires);
+                p.edit().putString(PREF_LAST_REASON,decision).apply();
+                continue;
+            }
+            if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
+                audit(p,"BLOCKED",id,"NO_NOTIFICATION_PERMISSION",opened,expires);
+                p.edit().putString(PREF_LAST_REASON,"NO_NOTIFICATION_PERMISSION").apply();
+                continue; // Permission may later be granted before contract expires.
+            }
+            NotificationManager nm=getSystemService(NotificationManager.class);
+            if(!nm.areNotificationsEnabled()){
+                audit(p,"BLOCKED",id,"NOTIFICATIONS_DISABLED",opened,expires);
+                p.edit().putString(PREF_LAST_REASON,"NOTIFICATIONS_DISABLED").apply();
+                continue;
+            }
+            NotificationChannel channel=nm.getNotificationChannel(ALARM_CHANNEL);
+            if(channel!=null&&channel.getImportance()==NotificationManager.IMPORTANCE_NONE){
+                audit(p,"BLOCKED",id,"ALARM_CHANNEL_DISABLED",opened,expires);
+                p.edit().putString(PREF_LAST_REASON,"ALARM_CHANNEL_DISABLED").apply();
+                continue;
+            }
+            // Notification/audio dispatch. Mark handled only after the attempt; retry transient
+            // failures on the next poll while the signal remains live.
+            boolean soundStarted=alert(dir,signal);
+            processed.add(id);
+            p.edit().putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
+                .putLong(PREF_LAST_ALARM_TIME,System.currentTimeMillis())
+                .putString(PREF_LAST_REASON,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY").apply();
+            audit(p,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY",
+                id,dir,opened,expires);
         }
-        // Do not consider an unnotified signal completed. Retry failures while it is valid.
-        if(!p.getBoolean(PREF_ENABLED,false)||stopped)return;
-        if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
-            p.edit().putString(PREF_LAST_REASON,"NO_NOTIFICATION_PERMISSION").apply();
-            status("未授予通知权限，无法提醒");
-            return;
+        // Preserve at most the 100 newest handled IDs to avoid unbounded settings growth.
+        if(processed.size()>100){
+            Set<String> keep=new HashSet<>();
+            for(int i=0;i<ordered.size()&&keep.size()<100;i++){
+                String id=ordered.get(ordered.size()-1-i).optString("id","");
+                if(processed.contains(id))keep.add(id);
+            }
+            processed=keep;
         }
-        NotificationManager nm=getSystemService(NotificationManager.class);
-        if(!nm.areNotificationsEnabled()){
-            p.edit().putString(PREF_LAST_REASON,"NOTIFICATIONS_DISABLED").apply();
-            status("系统已关闭本 App 通知，无法提醒");
-            return;
+        p.edit().putStringSet(PREF_HANDLED_IDS,processed).apply();
+        if(missed>0){
+            status("监听已恢复 · 发现"+missed+"条已过期未提醒信号");
+        }else{
+            status("监听正常 "+clockTime+" · 等待新信号");
         }
-        NotificationChannel channel=nm.getNotificationChannel(ALARM_CHANNEL);
-        if(channel!=null&&channel.getImportance()==NotificationManager.IMPORTANCE_NONE){
-            p.edit().putString(PREF_LAST_REASON,"ALARM_CHANNEL_DISABLED").apply();
-            status("系统已关闭信号闹铃通知渠道");
-            return;
-        }
-        boolean soundStarted=alert(direction,latest);
-        p.edit().putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
-            .putLong(PREF_LAST_ALARM_TIME,System.currentTimeMillis())
-            .putString(PREF_LAST_REASON,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY").apply();
     }
     private boolean alert(String direction,JSONObject signal) {
         String name=direction.equals("UP")?"Higher · 看涨":"Lower · 看跌";

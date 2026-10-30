@@ -261,59 +261,49 @@ async function submitPendingOrder(p, { source = 'manual', prePostRetry = false }
         round:p.round,spotQuoteOk:freshQuote.ok}));
     }
   }
-  // GUARDIAN_QUOTE_CAPACITY_V1_BEGIN
-  // Exact Binance 4xx -9000 market-capacity rejections only: no amount increase,
-  // no second place-order POST, and no unlimited identical quote retries.
+  // GUARDIAN_QUOTE_CAPACITY_V2_BEGIN
+  // One authoritative get-quote for the configured amount. Binance owns
+  // changing minimum, market depth, and order-capacity rules. Never guess
+  // 90%/75% size or silently change the user's per-round amount.
   function guardianQuoteSizeError(q) {
-    if(!q||q.ok===true||q.network===true||![400,409,422].includes(Number(q.httpStatus??q.status)) ||
+    if(!q||q.ok===true||q.network===true ||
+       ![400,409,422].includes(Number(q.httpStatus??q.status)) ||
        Number(q.code??q.data?.code)!==-9000)return null;
     const msg=String(q.error??q.data?.msg??q.data?.message??'').trim().toLowerCase();
-    if(/your order amount is too large|market lacks enough liquidity for this trade/.test(msg))return 'TOO_LARGE';
-    if(/your order amount is too small/.test(msg))return 'TOO_SMALL';
-    return null;
+    if(/(?:balance|funds|enough usdt)/.test(msg))return null;
+    if(/(?:too small|below.{0,45}minimum)/.test(msg))return 'BINANCE_MARKET_MIN_AMOUNT';
+    if(/(?:market lacks enough liquidity|insufficient.{0,20}liquidity)/.test(msg))
+      return 'BINANCE_MARKET_LIQUIDITY_INSUFFICIENT';
+    if(/(?:too large|market threshold|exceeds.{0,45}maximum)/.test(msg))
+      return 'BINANCE_MARKET_MAX_AMOUNT';
+    return 'BINANCE_MARKET_QUOTE_RULE_REJECTED';
   }
-  if(!freshQuote.ok && p.signalModelChoice===GUARDIAN_ID &&
-     guardianQuoteSizeError(freshQuote)==='TOO_LARGE') {
-    const configuredWei=BigInt(amountToWei(p.amount));
-    const initialWei=BigInt(p._internal.amountIn);
-    if(initialWei===configuredWei && configuredWei>0n){
-      for(const pct of [90n,75n]){
-        if(!enabled||p!==pendingAction||
-           !orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice))break;
-        const candidate=(configuredWei*pct/100n).toString();
-        if(BigInt(candidate)<=0n)break;
-        p._internal.amountIn=candidate;
-        const response=await getFreshQuote(p._internal);
-        console.log(JSON.stringify({event:'guardian_quote_capacity_recovery',
-          round:p.round,configuredAmount:p.amount,candidateWei:candidate,
-          quoteOk:response.ok,code:response.code??null,httpStatus:response.httpStatus??null,
-          failureKind:guardianQuoteSizeError(response)}));
-        freshQuote=response;
-        if(response.ok){
-          // Binance must confirm the same input amount to avoid hidden oversizing.
-          if(response.quote?.amountIn!=null && String(response.quote.amountIn)!==candidate){
-            freshQuote={ok:false,error:'QUOTE_INPUT_AMOUNT_MISMATCH',code:null,httpStatus:null};
-            break;
-          }
-          const decimal=candidate.padStart(19,'0');
-          const integer=decimal.slice(0,-18);
-          const fractional=decimal.slice(-18).replace(/0+$/,'');
-          p.configuredAmount=p.amount;
-          p.amount=fractional?integer+'.'+fractional:integer;
-          p.quoteAmountReduced=true;
-          break;
-        }
-        if(guardianQuoteSizeError(freshQuote)!=='TOO_LARGE')break;
-      }
-    }
+  const guardianCapacityReason = p.signalModelChoice===GUARDIAN_ID
+    ? guardianQuoteSizeError(freshQuote) : null;
+  if (guardianCapacityReason) {
+    p.exchangeError=String(freshQuote.error??freshQuote.data?.msg??'Binance -9000').slice(0,220);
+    p.marketQuoteStatus='UNEXECUTABLE';
+    console.log(JSON.stringify({
+      event:'guardian_quote_unexecutable',round:p.round,reason:guardianCapacityReason,
+      configuredAmount:p.amount,amountIn:p._internal.amountIn,
+      quoteAttempts:1,marketTopicId:p.marketTopicId??null,
+      httpStatus:freshQuote.httpStatus??null,code:freshQuote.code??null,
+      exchangeError:p.exchangeError
+    }));
   }
-  // GUARDIAN_QUOTE_CAPACITY_V1_END
+  // GUARDIAN_QUOTE_CAPACITY_V2_END
   if (!freshQuote.ok) {
     p.state = isAuto ? 'AUTO_FAILED' : 'READY';
-    p.error = freshQuote.error;
+    const capacityMessages={
+      BINANCE_MARKET_MAX_AMOUNT:'币安拒绝报价：订单金额超出当前市场限制，已停止无效重试（未下单）',
+      BINANCE_MARKET_MIN_AMOUNT:'币安拒绝报价：当前投入低于该市场要求的最低金额，未擅自加大投入（未下单）',
+      BINANCE_MARKET_LIQUIDITY_INSUFFICIENT:'币安拒绝报价：市场当前流动性不足，已停止无效重试（未下单）',
+      BINANCE_MARKET_QUOTE_RULE_REJECTED:'币安报价未通过当前市场规则，已停止无效重试（未下单）'
+    };
+    p.error=guardianCapacityReason?capacityMessages[guardianCapacityReason]:freshQuote.error;
     p.code = freshQuote.code ?? null;
-    p.blockReason='FRESH_QUOTE_FAILED';
-    if(isAuto && !guardianQuoteSizeError(freshQuote))retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');
+    p.blockReason=guardianCapacityReason||'FRESH_QUOTE_FAILED';
+    if(isAuto && !guardianCapacityReason)retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');
     console.log(JSON.stringify({
       event: 'fresh_quote_failed',
       round: p.round,
@@ -322,12 +312,13 @@ async function submitPendingOrder(p, { source = 'manual', prePostRetry = false }
       direction: p.signal,
       action: p.action,
       amount: p.amount,
-      error: freshQuote.error,
+      error:p.error,exchangeError:p.exchangeError??null,
+      blockReason:p.blockReason,amountIn:p._internal.amountIn,
       code: freshQuote.code ?? null,
       httpStatus: freshQuote.httpStatus ?? null,
       source,
     }));
-    return { status: 502, body: freshQuote };
+    return { status: 502, body: guardianCapacityReason ? {...freshQuote,error:p.error,exchangeError:p.exchangeError,reason:p.blockReason,requestedAmount:p.amount} : freshQuote };
   }
 
   let quote = freshQuote.quote;

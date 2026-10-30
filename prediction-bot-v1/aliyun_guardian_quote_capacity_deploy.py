@@ -55,24 +55,42 @@ from pathlib import Path
 import sys
 src,repo,out=map(Path,sys.argv[1:])
 old=src.read_text();target=repo.read_text()
-start='  // GUARDIAN_QUOTE_CAPACITY_V1_BEGIN'
-end='  // GUARDIAN_QUOTE_CAPACITY_V1_END'
-anchor="  if (!freshQuote.ok) {\n    p.state = isAuto ? 'AUTO_FAILED' : 'READY';"
-retry_old="    if(isAuto)retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');"
-retry_new="    if(isAuto && !guardianQuoteSizeError(freshQuote))retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');"
-assert target.count(start)==1 and target.count(end)==1,'REPO_QUOTE_PATCH_MISSING'
-snippet=start+target.split(start,1)[1].split(end,1)[0]+end+'\n'
-assert old.count('guardianFixedReadiness().ready')>=1,'LIVE_FIXED_RISK_DRIFT'
-if old.count(start)==1 and old.count(end)==1 and old.count(retry_new)==1:
- assert old.split(start,1)[1].split(end,1)[0]==target.split(start,1)[1].split(end,1)[0],'PATCH_DIFFERS'
+v1start='  // GUARDIAN_QUOTE_CAPACITY_V1_BEGIN'
+v1end='  // GUARDIAN_QUOTE_CAPACITY_V1_END'
+v2start='  // GUARDIAN_QUOTE_CAPACITY_V2_BEGIN'
+v2end='  // GUARDIAN_QUOTE_CAPACITY_V2_END'
+retry_v1="    if(isAuto && !guardianQuoteSizeError(freshQuote))retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');"
+retry_v2="    if(isAuto && !guardianCapacityReason)retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');"
+assert target.count(v2start)==1 and target.count(v2end)==1 and target.count(retry_v2)==1,'REPO_V2_NOT_READY'
+assert old.count('guardianFixedReadiness().ready')>=1,'PRODUCTION_RISK_GATE_DRIFT'
+snip=v2start+target.split(v2start,1)[1].split(v2end,1)[0]+v2end
+if old.count(v2start)==1 and old.count(v2end)==1:
+ assert old.count(retry_v2)==1,'V2_LIVE_RETRY_DRIFT'
+ assert snip in old,'V2_LIVE_SNIPPET_DRIFT'
+ assert old.count("p.blockReason=guardianCapacityReason||'FRESH_QUOTE_FAILED';")==1,'V2_LIVE_UI_DRIFT'
  out.write_text(old)
- print('GUARDIAN_QUOTE_CAP_ALREADY_APPLIED=true',flush=True)
+ print('GUARDIAN_QUOTE_V2_ALREADY_APPLIED=true',flush=True)
 else:
- assert old.count(start)==0 and old.count(end)==0,'PARTIAL_PATCH_DETECTED'
- assert old.count(anchor)==1 and old.count(retry_old)==1,'LIVE_QUOTE_ANCHOR_DRIFT'
- patched=old.replace(anchor,snippet+anchor,1).replace(retry_old,retry_new,1)
- assert patched.replace(snippet,'').replace(retry_new,retry_old)==old,'OTHER_CODE_CHANGED'
- out.write_text(patched)
+ assert old.count(v1start)==1 and old.count(v1end)==1 and old.count(retry_v1)==1,'LIVE_V1_DRIFT'
+ old_snip=v1start+old.split(v1start,1)[1].split(v1end,1)[0]+v1end
+ source=old.replace(old_snip,snip,1).replace(retry_v1,retry_v2,1)
+ oldfailure="    p.error = freshQuote.error;\n    p.code = freshQuote.code ?? null;\n    p.blockReason='FRESH_QUOTE_FAILED';"
+ newfailure=target.split("    const capacityMessages={",1)[1].split("    if(isAuto && !guardianCapacityReason)",1)[0]
+ newfailure="    const capacityMessages={"+newfailure.rstrip()
+ assert source.count(oldfailure)==1,'LIVE_FAILURE_PATCH_DRIFT'
+ source=source.replace(oldfailure,newfailure,1)
+ oldlog="      error: freshQuote.error,\n      code: freshQuote.code ?? null,"
+ newlog="      error:p.error,exchangeError:p.exchangeError??null,\n      blockReason:p.blockReason,amountIn:p._internal.amountIn,\n      code: freshQuote.code ?? null,"
+ assert source.count(oldlog)==1,'LIVE_LOG_PATCH_DRIFT'
+ source=source.replace(oldlog,newlog,1)
+ oldreturn="    return { status: 502, body: freshQuote };"
+ newreturn="    return { status: 502, body: guardianCapacityReason ? {...freshQuote,error:p.error,exchangeError:p.exchangeError,reason:p.blockReason,requestedAmount:p.amount} : freshQuote };"
+ assert source.count(oldreturn)==1,'LIVE_RETURN_PATCH_DRIFT'
+ source=source.replace(oldreturn,newreturn,1)
+ assert 'for(const pct of [90n,75n])' not in source,'BLIND_RETRY_STILL_PRESENT'
+ assert source.count("guardianQuoteSizeError(freshQuote)")>=1,'CAPACITY_CLASSIFIER_MISSING'
+ out.write_text(source)
+ print('GUARDIAN_QUOTE_V2_SURGICAL_PATCHED=true',flush=True)
 print('GUARDIAN_QUOTE_CAP_PATCH_STAGE_OK=true',flush=True)
 PY
 "$NODE" --check "$TMP/patch.mjs"
@@ -83,16 +101,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 const raw=fs.readFileSync(process.argv[2],'utf8');
 const start=raw.indexOf('  function guardianQuoteSizeError(q) {');
-const end=raw.indexOf('\n  if(!freshQuote.ok && p.signalModelChoice',start);
+const end=raw.indexOf('\n  const guardianCapacityReason',start);
 assert(start>0&&end>start);
 const fn=Function(raw.slice(start,end)+';return guardianQuoteSizeError;')();
-const call={ok:false,httpStatus:400,code:-9000,error:'Your order amount is too large. Please decrease it to meet the market threshold.'};
-assert.equal(fn(call),'TOO_LARGE');
-assert.equal(fn({...call,error:'The market lacks enough liquidity for this trade. Please try a smaller amount.'}),'TOO_LARGE');
-assert.equal(fn({...call,error:'Your order amount is too small'}),'TOO_SMALL');
-for(const x of [{...call,code:-9001},{...call,httpStatus:500},{...call,network:true},{...call,ok:true},{...call,error:'Please ensure your account has enough USDT.'}]) assert.equal(fn(x),null);
-assert(raw.includes("for(const pct of [90n,75n])"));
-assert(raw.includes("p.configuredAmount=p.amount;"));
+const base={ok:false,httpStatus:400,code:-9000,error:'Your order amount is too large. Please decrease it to meet the market threshold.'};
+assert.equal(fn(base),'BINANCE_MARKET_MAX_AMOUNT');
+assert.equal(fn({...base,error:'The market lacks enough liquidity for this trade. Please try a smaller amount.'}),'BINANCE_MARKET_LIQUIDITY_INSUFFICIENT');
+assert.equal(fn({...base,error:'Your order amount is too small'}),'BINANCE_MARKET_MIN_AMOUNT');
+for(const x of [{...base,code:-9001},{...base,httpStatus:500},{...base,network:true},{...base,ok:true},{...base,error:'Please ensure your account has enough USDT.'}]) assert.equal(fn(x),null);
+assert(!raw.includes('for(const pct of [90n,75n])'));
+assert(raw.includes("p.blockReason=guardianCapacityReason||'FRESH_QUOTE_FAILED'"));
+assert(raw.includes("quoteAttempts:1"));
 console.log('GUARDIAN_QUOTE_CAP_TEST_PASS=true');
 JS
 preflight

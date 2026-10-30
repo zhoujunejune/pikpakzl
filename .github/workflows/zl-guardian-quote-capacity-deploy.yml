@@ -5,6 +5,7 @@ on:
     paths:
       - prediction-bot-v1/aliyun_guardian_quote_capacity_deploy.py
       - railway-diagnostic/wrapper.mjs
+      - railway-diagnostic/guardian-quote-capacity.test.mjs
       - .github/workflows/zl-guardian-quote-capacity-deploy.yml
   workflow_dispatch:
 permissions: {contents: read}
@@ -36,7 +37,7 @@ jobs:
           print('GUARDIAN_SAFE_DEPLOY_SYNTAX_PASS=true')
           PY
           node --check railway-diagnostic/wrapper.mjs
-          node --test railway-diagnostic/guardian-submit-recheck.test.mjs railway-diagnostic/guardian-live-bridge.test.mjs
+          node --test railway-diagnostic/guardian-submit-recheck.test.mjs railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-quote-capacity.test.mjs
   deploy:
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/feature/zl-futures-bot-v1'

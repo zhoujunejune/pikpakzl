@@ -38,11 +38,18 @@ public final class SignalAlertService extends Service {
     public static final String PREF_ENABLED_SINCE="event10_alert_enabled_since";
     public static final String PREF_LAST_ID="event10_alert_last_id";
     public static final String PREF_LAST_STATE="event10_alert_state";
+    public static final String PREF_LAST_POLL="event10_alert_last_poll";
+    public static final String PREF_LAST_SUCCESS="event10_alert_last_success";
+    public static final String PREF_LAST_SEEN="event10_alert_last_seen";
+    public static final String PREF_LAST_SEEN_TIME="event10_alert_last_seen_time";
+    public static final String PREF_LAST_REASON="event10_alert_last_reason";
+    public static final String PREF_LAST_ALARM="event10_alert_last_alarm";
+    public static final String PREF_LAST_ALARM_TIME="event10_alert_last_alarm_time";
+    public static final String PREF_LAST_ERROR="event10_alert_last_error";
     private static final String FOREGROUND_CHANNEL="zl_event10_foreground_v1";
     private static final String ALARM_CHANNEL="zl_event10_alarm_v1";
     private static final int FOREGROUND_ID=101;
     private static final int SIGNAL_ID=102;
-    private static final long FRESH_MS=150000L;
     private ScheduledExecutorService executor;
     private final AlarmPlayer sound=new AlarmPlayer();
     private volatile boolean stopped=false;
@@ -60,6 +67,7 @@ public final class SignalAlertService extends Service {
 
     @Override public void onCreate(){
         super.onCreate();
+        SecureStore.prefs(this).edit().putString(PREF_LAST_STATE,"后台监听服务已启动").apply();
         NotificationManager nm=getSystemService(NotificationManager.class);
         NotificationChannel foreground=new NotificationChannel(FOREGROUND_CHANNEL,"10分钟信号后台监听",NotificationManager.IMPORTANCE_LOW);
         foreground.setDescription("开关开启期间在后台监听新的 Higher/Lower 信号");
@@ -117,12 +125,16 @@ public final class SignalAlertService extends Service {
     }
     private void pollSafe(){
         if(stopped)return;
+        SecureStore.prefs(this).edit().putLong(PREF_LAST_POLL,System.currentTimeMillis()).apply();
         try{poll();}
         catch(Exception e){
             String code=e.getMessage();
             if(code==null)code=e.getClass().getSimpleName();
-            status(code.contains("401")?"登录凭证失效，请回 App 重新登录":
-                "暂时无法读取10分钟信号："+code.substring(0,Math.min(60,code.length())));
+            String message=code.contains("401")?"HTTP 401：后台登录凭证失效，请重新登录":
+                "后台读取失败："+code.substring(0,Math.min(90,code.length()));
+            SecureStore.prefs(this).edit().putString(PREF_LAST_ERROR,message)
+                .putString(PREF_LAST_REASON,message).apply();
+            status(message);
         }
     }
     private JSONObject fetch() throws Exception {
@@ -160,37 +172,59 @@ public final class SignalAlertService extends Service {
         if(!response.optBoolean("ok",false))throw new IllegalStateException("服务响应异常");
         JSONArray records=response.optJSONArray("records");
         if(records==null)throw new IllegalStateException("信号记录缺失");
-        status("监听正常 · "+new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.CHINA).format(new java.util.Date()));
+        long now=System.currentTimeMillis();
+        p.edit().putLong(PREF_LAST_SUCCESS,now).remove(PREF_LAST_ERROR).apply();
+        String time=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.CHINA).format(new java.util.Date(now));
         if(records.length()==0){
-            // Essential edge case: zero historical signals must NOT suppress the first future one.
-            if(p.getString(PREF_LAST_ID,null)==null)
-                p.edit().putString(PREF_LAST_ID,"__NO_PRIOR_SIGNALS__").apply();
+            status("监听正常 "+time+" · 尚无有效信号");
+            p.edit().putString(PREF_LAST_REASON,"暂无有效 Higher/Lower 信号").apply();
             return;
         }
         JSONObject latest=records.optJSONObject(0);
         if(latest==null)return;
         String id=latest.optString("id","");
         String direction=latest.optString("direction","");
-        // Never alarm on NO_SIGNAL, WAIT, DATA_ERROR, or a missing direction.
-        if(id.isEmpty()||(!"UP".equals(direction)&&!"DOWN".equals(direction)))return;
         long openedAt=latest.optLong("openedAt",0L);
-        long enabledSince=p.getLong(PREF_ENABLED_SINCE,0L);
+        long expiresAt=latest.optLong("expiresAt",0L);
+        p.edit().putString(PREF_LAST_SEEN,id).putLong(PREF_LAST_SEEN_TIME,openedAt).apply();
+
         String previous=p.getString(PREF_LAST_ID,null);
-        if(id.equals(previous))return;
-        // Mark the signal BEFORE alerting, so periodic polling and settlement don't repeat it.
-        p.edit().putString(PREF_LAST_ID,id).apply();
-        // First baseline: older records never ring, but a brand-new signal produced after
-        // enabling MUST ring even when the account had no previous signals.
-        if(enabledSince>0&&openedAt<enabledSince)return;
-        if(previous==null && enabledSince<=0)return;
-        long age=System.currentTimeMillis()-openedAt;
-        if(age<0||age>FRESH_MS)return;
+        String decision=SignalAlarmPolicy.decide(direction,id,previous,openedAt,expiresAt,
+            p.getLong(PREF_ENABLED_SINCE,0L),now);
+        if(!SignalAlarmPolicy.ALERT.equals(decision)){
+            if(!"ALREADY_HANDLED".equals(decision)){
+                p.edit().putString(PREF_LAST_REASON,decision).apply();
+                if("BEFORE_ENABLED".equals(decision)||"SIGNAL_EXPIRED".equals(decision)
+                    ||"SIGNAL_TOO_OLD".equals(decision)){
+                    p.edit().putString(PREF_LAST_ID,id).apply();
+                }
+            }
+            status("监听正常 "+time+" · "+("ALREADY_HANDLED".equals(decision)?"等待新信号":decision));
+            return;
+        }
+        // Do not consider an unnotified signal completed. Retry failures while it is valid.
         if(!p.getBoolean(PREF_ENABLED,false)||stopped)return;
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
-            status("需要打开安卓通知权限");
+            p.edit().putString(PREF_LAST_REASON,"NO_NOTIFICATION_PERMISSION").apply();
+            status("未授予通知权限，无法提醒");
+            return;
+        }
+        NotificationManager nm=getSystemService(NotificationManager.class);
+        if(!nm.areNotificationsEnabled()){
+            p.edit().putString(PREF_LAST_REASON,"NOTIFICATIONS_DISABLED").apply();
+            status("系统已关闭本 App 通知，无法提醒");
+            return;
+        }
+        NotificationChannel channel=nm.getNotificationChannel(ALARM_CHANNEL);
+        if(channel!=null&&channel.getImportance()==NotificationManager.IMPORTANCE_NONE){
+            p.edit().putString(PREF_LAST_REASON,"ALARM_CHANNEL_DISABLED").apply();
+            status("系统已关闭信号闹铃通知渠道");
             return;
         }
         alert(direction,latest);
+        p.edit().putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
+            .putLong(PREF_LAST_ALARM_TIME,System.currentTimeMillis())
+            .putString(PREF_LAST_REASON,"ALERT_DELIVERED").apply();
     }
     private void alert(String direction,JSONObject signal) {
         String name=direction.equals("UP")?"Higher · 看涨":"Lower · 看跌";

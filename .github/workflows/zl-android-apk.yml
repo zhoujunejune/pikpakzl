@@ -43,6 +43,20 @@ jobs:
                     'https://','/app/','isTrusted(uri)'):
             assert k in j,k
           assert 'DEEPSEEK_API_KEY' not in j and 'BINANCE_API_KEY' not in j
+          service=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java').read_text()
+          keystore=Path('android-app/app/src/main/java/com/zlcontrol/android/SecureStore.java').read_text()
+          alarm=Path('android-app/app/src/main/java/com/zlcontrol/android/AlarmPlayer.java').read_text()
+          for k in ('/event10/api/signals?limit=50&offset=0',
+                    'PREF_LAST_ID','FRESH_MS','FOREGROUND_SERVICE_TYPE_SPECIAL_USE',
+                    'Notification.CATEGORY_ALARM','System.currentTimeMillis()'):
+            assert k in service,k
+          for k in ('AndroidKeyStore','AES/GCM/NoPadding'):
+            assert k in keystore,k
+          for k in ('RingtoneManager.TYPE_ALARM','AudioAttributes.USAGE_ALARM'):
+            assert k in alarm,k
+          for k in ('POST_NOTIFICATIONS','FOREGROUND_SERVICE_SPECIAL_USE',
+                    'SignalAlertService'):
+            assert k in m,k
           print('ZL_NATIVE_SECURITY_INVARIANTS_PASS')
           PY
       - name: Build installable debug-signed APK
@@ -51,14 +65,14 @@ jobs:
       - name: Prepare APK and check build metadata
         run: |
           mkdir -p dist
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.0.0-Android.apk
-          test -s dist/ZL-Control-v1.0.0-Android.apk
-          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.0.0-Android.apk | head -n 7
-          sha256sum dist/ZL-Control-v1.0.0-Android.apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.0-Alarm-Android.apk
+          test -s dist/ZL-Control-v1.1.0-Alarm-Android.apk
+          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.0-Alarm-Android.apk | head -n 7
+          sha256sum dist/ZL-Control-v1.1.0-Alarm-Android.apk
           echo 'ZL_APK_BUILT_AND_SIGNED=true'
       - uses: actions/upload-artifact@v4
         with:
-          name: ZL-Control-Android-APK
-          path: dist/ZL-Control-v1.0.0-Android.apk
+          name: ZL-Control-Android-Alarm-APK
+          path: dist/ZL-Control-v1.1.0-Alarm-Android.apk
           if-no-files-found: error
           retention-days: 90

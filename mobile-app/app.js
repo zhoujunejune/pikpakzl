@@ -1,0 +1,200 @@
+/* ZL unified phone app — browser-only client, never receives exchange credentials. */
+"use strict";
+const $=id=>document.getElementById(id);
+const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],timer:null};
+function put(id,value){
+ const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
+}
+function stamp(ms){
+ const n=Number(ms);
+ if(!Number.isFinite(n)||n<=0)return "—";
+ return new Date(n).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"});
+}
+function dir(x){
+ return x==="UP"?"看涨 ↑":x==="DOWN"?"看跌 ↓":x==="WAIT"?"观望":x==="THINKING"?"分析中":x==="OBSERVED"?"已记录":"无信号";
+}
+function pct(n,d){
+ return Number.isInteger(n)&&Number.isInteger(d)&&d>0&&n>=0&&n<=d?(100*n/d).toFixed(1)+"%":"—";
+}
+function pill(id,tone,text){
+ const el=$(id);if(!el)return;
+ el.className="pill"+(tone==="good"?" good":tone==="bad"?" bad":"");
+ el.textContent=text;
+}
+function setHeading(id,direction){
+ const el=$(id);if(!el)return;
+ el.textContent=dir(direction);
+ el.className="v "+(direction==="UP"?"uptext":direction==="DOWN"?"downtext":"");
+}
+function node(tag,cls,t){
+ const el=document.createElement(tag);
+ if(cls)el.className=cls;
+ if(t!==undefined)el.textContent=String(t);
+ return el;
+}
+function renderRecords(id,items,kind){
+ const root=$(id);root.replaceChildren();
+ if(!items.length){
+  root.append(node("div","mini","暂无可核实的已保存信号记录。"));
+  return;
+ }
+ for(const r of items.slice(0,12)){
+  const d=kind==="guardian"?r.predictedDirection:r.direction;
+  const wrap=node("div","record"),head=node("div","record-head");
+  const title=node("div","record-title",dir(d));
+  if(d==="UP")title.classList.add("uptext");
+  if(d==="DOWN")title.classList.add("downtext");
+  const when=kind==="guardian"?(r.at||r.round):(r.openedAt||r.checkedAt);
+  head.append(title,node("span","mini",stamp(when)));
+  wrap.append(head);
+  let outcome="待核对";
+  if(kind==="guardian"&&r.status==="SETTLED")outcome=r.hit===true?"官方方向命中":r.hit===false?"官方方向未命中":"状态待核实";
+  if(kind==="event10"&&typeof r.proxyHit==="boolean")outcome=r.proxyHit?"公开行情代理命中":"公开行情代理未命中";
+  const desc=kind==="guardian"?
+    ("轮次 "+stamp(r.round)+" · "+outcome+" · "+(r.subjectiveConfidence==null?"置信度未提供":"模型主观置信度 "+Math.round(100*Number(r.subjectiveConfidence))+"%")):
+    (outcome+" · "+(r.status||"已保存")+" · 非实际事件订单");
+  wrap.append(node("div","record-note",desc));
+  root.append(wrap);
+ }
+}
+async function api(url,timeout=6500){
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),timeout);
+ try{
+  const res=await fetch(url,{cache:"no-store",credentials:"same-origin",signal:controller.signal,
+   headers:{"Accept":"application/json"}});
+  if(!res.ok)throw Error("HTTP "+res.status);
+  const value=await res.json();
+  if(!value||value.ok!==true)throw Error("服务响应无效");
+  return value;
+ }finally{clearTimeout(timer);}
+}
+function guardian(g,t){
+ if(!g||g.model!=="ZL_GUARDIAN_5M_V1")throw Error("GUARDIAN模型不匹配");
+ const records=Array.isArray(g.records)?g.records:[],m=g.stats||{};
+ const current=records.find(x=>Number(x.round)===Number(g.round));
+ const direction=current?.predictedDirection||g.latest?.direction;
+ setHeading("gDirection",direction);
+ put("gSignal",dir(direction));
+ put("gRound",stamp(g.round));
+ put("gCounts",(m.shadowPredictions??"—")+" / "+(m.settled??"—"));
+ put("gAccuracy",pct(m.correct,m.settled));
+ put("gReason",(g.latest?.reason||"暂无分析说明")+(g.error?"；错误："+String(g.error).slice(0,120):""));
+ state.lastGuardian=records;
+ renderRecords("gRecords",records.slice().sort((a,b)=>Number(b.round)-Number(a.round)),"guardian");
+ pill("gBadge","good","分析可用");
+ pill("gStatus","good","已连接");
+ if(!t||t.ok!==true){
+  put("gFollow","状态未知");put("gFollowLong","状态接口不可用");
+  put("gOrder","未获取");put("gOrderFull","—");put("gError","生产状态读取失败");
+  return;
+ }
+ const follow=t.enabled===true?"已开启":t.enabled===false?"已关闭":"未知";
+ put("gFollow",follow);put("gFollowLong",follow);
+ const order=t.pendingAction||t.lastOrder||null;
+ const orderState=order?.state||"暂无可核实记录";
+ put("gOrder",orderState);
+ put("gOrderFull",order?(String(orderState)+(order.round?" · "+stamp(order.round):"")):"暂无可核实记录");
+ put("gError",order?.blockReason||order?.error||t.lastError||"接口没有报告当前阻断原因");
+}
+function guardianError(error){
+ pill("gBadge","bad","连接异常");pill("gStatus","bad","暂不可用");
+ put("gReason","GUARDIAN数据读取失败："+String(error).slice(0,130)+"。请进入原交易控制台核实。");
+ for(const id of ["gDirection","gSignal","gAccuracy","gFollow","gFollowLong","gOrder","gOrderFull","gError","gRound","gCounts"])put(id,"不可用");
+ $("gRecords").replaceChildren(node("div","mini","当前未能读取信号数据，不能据此判断没有信号。"));
+}
+function currentEventRecord(e){
+ const a=e.active||null;
+ const b=e.lastCheck||null;
+ const c=e.lastSession||null;
+ return a||((Number(b?.checkedAt||b?.openedAt||0)>=Number(c?.openedAt||0))?b:c)||null;
+}
+function event(e,ledger){
+ const s=currentEventRecord(e);
+ const stats=ledger?.stats||e.strategyStats||{};
+ const direction=s?.direction||null;
+ setHeading("eDirection",direction);put("eSignal",dir(direction));
+ put("ePhase",s?.status||"尚无已保存状态");
+ put("eActive",e.active?"正在检测":"待机");
+ put("eCount",stats.validDirections??"—");
+ put("eCounts",(stats.validDirections??"—")+" / "+(stats.proxySettled??"—"));
+ const accuracy=pct(stats.proxyHits,stats.proxySettled);
+ const servicePct=Number(stats.proxyAccuracyPct);
+ const proxyDisplay=accuracy!=="—"?accuracy:(Number.isFinite(servicePct)?servicePct.toFixed(1)+"%":"—");
+ put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
+ put("eReason",s?.reason||"没有当前信号；10分钟信号需满足全部规则条件。");
+ pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中":"数据不可用");
+ pill("eStatus",e.configured===true?"good":"bad",e.active?"检测中":e.configured===true?"就绪":"未就绪");
+ const records=Array.isArray(ledger?.records)?ledger.records:[];
+ put("eTotal",ledger&&Number.isInteger(ledger.total)?"共 "+ledger.total+" 条有效信号":"当前记录不可用");
+ state.lastEvent=records;
+ renderRecords("eRecords",records,"event10");
+ $("manualCheck").disabled=e.configured!==true||Boolean(e.active)||state.manualBusy;
+}
+function eventError(error){
+ pill("eBadge","bad","连接异常");pill("eStatus","bad","暂不可用");
+ for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy","eTotal"])put(id,"不可用");
+ put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
+ $("eRecords").replaceChildren(node("div","mini","记录接口当前不可用，不代表历史记录为空。"));
+ $("manualCheck").disabled=true;
+}
+async function refresh(){
+ if(state.busy||document.hidden)return;
+ state.busy=true;
+ try{
+  const [gr,tr,er,lr]=await Promise.allSettled([
+   api("/guardian/api/status",7500),
+   api("/api/status",7500),
+   api("/event10/api/status",7500),
+   api("/event10/api/signals?limit=25&offset=0",9500)
+  ]);
+  const g=gr.status==="fulfilled"?gr.value:null;
+  const t=tr.status==="fulfilled"?tr.value:null;
+  const e=er.status==="fulfilled"?er.value:null;
+  const ledger=lr.status==="fulfilled"?lr.value:null;
+  try{if(g)guardian(g,t);else throw gr.reason||Error("无数据");}catch(err){guardianError(err);}
+  try{if(e)event(e,ledger);else throw er.reason||Error("无数据");}catch(err){eventError(err);}
+  // Do not claim that a bot is online when one of its API calls failed.
+  const count=Number(Boolean(g&&t))+Number(Boolean(e&&ledger));
+  $("healthDot").className="dot "+(count===2?"up":count===0?"down":"");
+  put("healthText",count===2?"双服务已连接":count===0?"连接异常":"部分接口异常");
+  put("updatedAt","刷新于 "+new Date().toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}));
+ }finally{state.busy=false;}
+}
+function navigate(page){
+ for(const el of document.querySelectorAll(".section-panel"))el.classList.toggle("active",el.id==="panel-"+page);
+ for(const el of document.querySelectorAll(".tab"))el.classList.toggle("selected",el.dataset.go===page);
+ history.replaceState(null,"","#"+page);
+ window.scrollTo({top:0,behavior:"instant"});
+}
+for(const btn of document.querySelectorAll("[data-go]"))btn.addEventListener("click",()=>navigate(btn.dataset.go));
+$("refresh").addEventListener("click",()=>void refresh());
+$("manualCheck").addEventListener("click",async()=>{
+ if(state.manualBusy)return;
+ state.manualBusy=true;$("manualCheck").disabled=true;
+ const result=$("manualResult");
+ result.hidden=false;result.textContent="已发出检测请求，正在等待服务端确认…";
+ try{
+  const requestId=crypto.randomUUID();
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),15000);
+  let res;
+  try{
+   res=await fetch("/event10/api/start",{method:"POST",credentials:"same-origin",
+    cache:"no-store",headers:{"X-Event10-Action":"manual-open","X-Event10-Request-Id":requestId,
+    "Accept":"application/json"},signal:controller.signal});
+  }finally{clearTimeout(timer);}
+  const data=await res.json();
+  if(!res.ok||data.ok!==true)throw Error(data.error||"HTTP "+res.status);
+  result.textContent="服务端已接受手动检测请求；请查看下方状态。此操作不会提交交易订单。";
+  await refresh();
+ }catch(err){
+  result.textContent="检测未确认："+String(err).slice(0,180)+"。请先核实当前状态，避免重复点击。";
+ }finally{state.manualBusy=false;$("manualCheck").disabled=false;}
+});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)void refresh();});
+const initial=location.hash.replace("#","");
+navigate(["overview","guardian","event10","more"].includes(initial)?initial:"overview");
+void refresh();
+setInterval(()=>void refresh(),10000);
+if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("/app/sw.js",{scope:"/app/"}).catch(()=>{}));

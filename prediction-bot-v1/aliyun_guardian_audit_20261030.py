@@ -64,7 +64,8 @@ for line in q.stdout:
   envelope=json.loads(line);x=json.loads(envelope.get('MESSAGE','{}'));event=x.get('event')
   if event not in events:continue
   counts[event]+=1
-  rec={'atChina':datetime.datetime.fromtimestamp(int(envelope.get('__REALTIME_TIMESTAMP','0'))/1000000,datetime.timezone(datetime.timedelta(hours=8))).isoformat()}\n  rec.update({k:x[k] for k in ('event','round','code','httpStatus','source','retries','signalRecovered','signalIdMatches','state','blockReason','paymentAccount','quoteOk','candidateWei','configuredAmount','failureKind','marketTopicId','signal','productionSignal','amount','amountIn','quoteAttempts','reason','exchangeError') if k in x})
+  rec={'atChina':datetime.datetime.fromtimestamp(int(envelope.get('__REALTIME_TIMESTAMP','0'))/1000000,datetime.timezone(datetime.timedelta(hours=8))).isoformat()}
+  rec.update({k:x[k] for k in ('event','round','code','httpStatus','source','retries','signalRecovered','signalIdMatches','state','blockReason','paymentAccount','quoteOk','candidateWei','configuredAmount','failureKind','marketTopicId','signal','productionSignal','amount','amountIn','quoteAttempts','reason','exchangeError') if k in x})
   if 'error' in x:rec['error']=str(x['error'])[:90]
   recent.append(rec)
   if len(recent)>80:recent.pop(0)

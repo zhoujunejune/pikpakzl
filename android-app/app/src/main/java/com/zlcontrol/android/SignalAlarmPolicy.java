@@ -11,8 +11,8 @@ public final class SignalAlarmPolicy {
         if(id.equals(lastId))return "ALREADY_HANDLED";
         if(enabledAt<=0)return "MISSING_ENABLE_TIME";
         if(openedAt<=0)return "INVALID_TIME";
-        // Allow small clock differences, never ring for a signal produced before switch-on.
-        if(openedAt+3000L<enabledAt)return "BEFORE_ENABLED";
+        // Respect the user's opt-in timestamp exactly; never ring for an older signal.
+        if(openedAt<enabledAt)return "BEFORE_ENABLED";
         if(openedAt>nowMs+10000L)return "PHONE_CLOCK_BEHIND";
         // Market has an explicit expiry: do not wake user for dead event contracts.
         if(expiresAt>0){

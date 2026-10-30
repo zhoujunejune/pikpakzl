@@ -16,6 +16,10 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.app.NotificationManager;
 import android.app.NotificationChannel;
+import android.content.ClipboardManager;
+import android.content.ClipData;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
@@ -266,6 +270,26 @@ public final class MainActivity extends Activity {
             .format(new java.util.Date(timestamp));
     }
 
+    private String alarmReason(String reason){
+        switch(reason){
+            case "RING_STARTED":return "已启动系统铃声";
+            case "SOUND_FAILED_NOTICE_ONLY":return "通知已发出，但系统铃声播放失败";
+            case "BEFORE_ENABLED":return "信号发生在本次开启提醒之前（历史信号）";
+            case "MISSED_EXPIRED":return "后台恢复时信号已经过期，未补响";
+            case "SIGNAL_EXPIRED":return "发现信号时已超过到期时间";
+            case "NO_NOTIFICATION_PERMISSION":return "没有系统通知权限";
+            case "ALARM_CHANNEL_DISABLED":return "信号提醒通知渠道已被关闭";
+            case "NOTIFICATIONS_DISABLED":return "App 系统通知已关闭";
+            case "POLL_ERROR":return "后台服务器请求失败";
+            case "SIGNAL_TOO_OLD":return "信号过旧，不再提醒";
+            case "BLOCKED":return "信号被提醒条件拦截";
+            default:return reason==null||reason.isEmpty()?"暂无":reason;
+        }
+    }
+    private String directionName(String direction){
+        return "UP".equals(direction)?"看涨↑":
+            "DOWN".equals(direction)?"看跌↓":direction;
+    }
     private void showAlarmDiagnostics(){
         android.content.SharedPreferences p=SecureStore.prefs(this);
         boolean enabled=p.getBoolean(SignalAlertService.PREF_ENABLED,false);
@@ -283,25 +307,67 @@ public final class MainActivity extends Activity {
         PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
         if(pm!=null&&Build.VERSION.SDK_INT>=23)
             batteryUnrestricted=pm.isIgnoringBatteryOptimizations(getPackageName());
+        StringBuilder log=new StringBuilder();
+        try{
+            JSONArray audit=new JSONArray(p.getString(SignalAlertService.PREF_AUDIT_TRAIL,"[]"));
+            for(int i=audit.length()-1;i>=Math.max(0,audit.length()-7);i--){
+                JSONObject e=audit.optJSONObject(i);
+                if(e==null)continue;
+                String action=e.optString("action","");
+                log.append("\n")
+                    .append(timeOf(e.optLong("time",0L))).append(" ")
+                    .append(alarmReason(action)).append(" ")
+                    .append(directionName(e.optString("detail","")));
+            }
+        }catch(Exception e){log.append("\n日志读取失败");}
+        if(log.length()==0)log.append("\n暂无提醒事件");
         String report="监控开关："+(enabled?"开启":"关闭")+
+            "\n本次开启时间："+timeOf(p.getLong(SignalAlertService.PREF_ENABLED_SINCE,0L))+
             "\n后台最后尝试："+timeOf(lastPoll)+
             "\n后台最后成功："+timeOf(lastSuccess)+
             "\n最近信号："+timeOf(lastSignal)+
             "\n最近信号ID："+p.getString(SignalAlertService.PREF_LAST_SEEN,"无")+
             "\n上次闹铃："+timeOf(lastAlarm)+
             "\n上次闹铃ID："+p.getString(SignalAlertService.PREF_LAST_ALARM,"无")+
-            "\n最近判断："+p.getString(SignalAlertService.PREF_LAST_REASON,"暂无")+
+            "\n最近判断："+alarmReason(p.getString(SignalAlertService.PREF_LAST_REASON,"暂无"))+
             "\n读取错误："+p.getString(SignalAlertService.PREF_LAST_ERROR,"无")+
             "\n系统通知："+(notifyAllowed?"已授权":"已关闭/未授权")+
-            "\n忽略电池优化："+(batteryUnrestricted?"是":"否，锁屏后可能暂停");
+            "\n忽略电池优化："+(batteryUnrestricted?"是":"否，锁屏后可能暂停")+
+            "\n\n最近提醒审计记录："+log;
         new AlertDialog.Builder(this).setTitle("10分钟信号提醒诊断")
             .setMessage(report).setPositiveButton("知道了",null)
-            .setNeutralButton("后台权限设置",(dialog,which)->{
-                try{startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));}
-                catch(Exception e){toast("请到手机设置 → 应用 → ZL Control → 电池 设置允许后台运行");}
-            }).show();
+            .setNegativeButton("复制诊断",(dialog,which)->{
+                ClipboardManager clipboard=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                if(clipboard!=null){
+                    clipboard.setPrimaryClip(ClipData.newPlainText("ZL信号提醒诊断",report));
+                    toast("已复制诊断记录（不包含账号密码）");
+                }
+            })
+            .setNeutralButton("后台权限设置",(dialog,which)->openBackgroundSettings())
+            .show();
     }
 
+    private void openBackgroundSettings(){
+        try{
+            startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+        }catch(Exception e){
+            try{startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:"+getPackageName())));}
+            catch(Exception ignored){toast("请到手机设置 → 应用 → ZL Control → 电池 设置允许后台运行");}
+        }
+    }
+    private void showBackgroundPermissionAdvice(){
+        PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+        if(pm==null||pm.isIgnoringBatteryOptimizations(getPackageName()))return;
+        new AlertDialog.Builder(this)
+            .setTitle("请允许后台运行，避免漏掉新信号")
+            .setMessage("你的手机此前显示未忽略电池优化。系统可能在锁屏时暂停每5秒检查一次的监听。"
+                +"\n\n建议在系统电池设置里为 ZL Control 开启“无限制 / 允许后台运行”，"
+                +"并允许开机自启动（手机提供时）。否则无法保证及时提醒。")
+            .setPositiveButton("去设置",(dialog,which)->openBackgroundSettings())
+            .setNegativeButton("稍后",null)
+            .show();
+    }
     private void tryEnable(){
         if(SecureStore.loadLogin(this)==null){
             toast("请先在下方登录原阿里云控制台，再开启闹铃");
@@ -334,6 +400,7 @@ public final class MainActivity extends Activity {
         try{
             SignalAlertService.start(this);
             toast("10分钟信号闹铃已开启。系统会显示持续监听通知。");
+            showBackgroundPermissionAdvice();
         }catch(Exception e){
             SecureStore.prefs(this).edit().putBoolean(SignalAlertService.PREF_ENABLED,false).apply();
             setToggle(false);

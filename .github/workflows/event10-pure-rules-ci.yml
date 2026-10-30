@@ -21,12 +21,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: "22"}
-      - name: Syntax, five mandatory gates and NO_SIGNAL
+      - name: Syntax, five mandatory entry gates and full signal+600s outcome regression
         run: |
           node --check event10-bot/pure-signal.mjs
           node --check event10-bot/manual-engine.mjs
           node --check event10-bot/server.mjs
-          node --test event10-bot/pure-signal.test.mjs event10-bot/panel-state.test.mjs event10-bot/signal-ledger.test.mjs
+          node --test event10-bot/late-index.test.mjs
       - name: Ensure no event-contract trading calls or AI in signal path
         run: |
           python3 - <<'PY'
@@ -37,7 +37,9 @@ jobs:
                             '/api/v3/order','/papi/v1/order']:
             assert forbidden not in s+rule,forbidden
           assert 'if(!rule.direction)return lastCheck' in s
-          assert 'nowMs-cycle<180000' in s
+          assert 'const signalExpiry=decisionAt+HORIZON_MS' in s
+          assert 'openPrice:liveIndex' in s
+          assert 'INDEX_SIGNAL_TPLUS10_PROXY_ONLY' in s
           assert 'autoTradingEnabled:false' in s
           assert 'const all=x=>Object.values(x).every(v=>v===true)' in rule
           print('EVENT10_PURE_SIGNAL_NO_AI_OR_TRADE_GATE=true')

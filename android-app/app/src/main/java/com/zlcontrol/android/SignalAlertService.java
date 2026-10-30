@@ -106,10 +106,25 @@ public final class SignalAlertService extends Service {
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
         return PendingIntent.getActivity(this,1,intent,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
     }
+    private PendingIntent signalActivityIntent(String signalId,String action,int discriminator){
+        Intent intent=new Intent(this,MainActivity.class).setAction(action);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        intent.putExtra("signal_id",signalId);
+        int request=(signalId.hashCode()&0x3fffffff)^(discriminator<<27);
+        return PendingIntent.getActivity(this,request,intent,
+            PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+    private PendingIntent openBinanceIntent(String signalId){
+        return signalActivityIntent(signalId,MainActivity.ACTION_OPEN_BINANCE,1);
+    }
+    private PendingIntent openEvent10Intent(String signalId){
+        return signalActivityIntent(signalId,MainActivity.ACTION_VIEW_EVENT10,2);
+    }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&ACTION_SILENCE.equals(intent.getAction())){
             sound.stop();
-            getSystemService(NotificationManager.class).cancel(SIGNAL_ID);
+            getSystemService(NotificationManager.class)
+                .cancel(intent.getIntExtra("signal_notification_id",SIGNAL_ID));
             return START_STICKY;
         }
         if(intent!=null&&ACTION_STOP.equals(intent.getAction())){
@@ -318,23 +333,38 @@ public final class SignalAlertService extends Service {
     private boolean alert(String direction,JSONObject signal) {
         String name=direction.equals("UP")?"Higher · 看涨":"Lower · 看跌";
         String trigger="AUTO".equals(signal.optString("trigger"))?"后台自动信号":"手动检测信号";
-        String content="BTC 10分钟事件合约 · "+name+" · "+trigger;
-        Intent silencer=new Intent(this,SignalAlertService.class).setAction(ACTION_SILENCE);
-        PendingIntent silence=PendingIntent.getService(this,2,silencer,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+        String signalId=signal.optString("id","");
+        int notificationId=(signalId.hashCode()&0x3fffffff)+2000;
+        long opened=signal.optLong("openedAt",System.currentTimeMillis());
+        String signalTime=new java.text.SimpleDateFormat("MM-dd HH:mm:ss",java.util.Locale.CHINA)
+            .format(new java.util.Date(opened));
+        String content="BTC 10分钟 · "+name+" · "+signalTime+" · "+trigger;
+        // Reference-cycle expiry is NOT the expiry of a new Binance order.
+        String detail=content+"。金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
+            +"确认方向、开仓指数价格和最终到期时间，再由你手动下单。没有自动成交。";
+        Intent silencer=new Intent(this,SignalAlertService.class)
+            .setAction(ACTION_SILENCE)
+            .setData(android.net.Uri.parse("zlcontrol://silence/"+android.net.Uri.encode(signalId)))
+            .putExtra("signal_notification_id",notificationId);
+        PendingIntent silence=PendingIntent.getService(this,notificationId,silencer,
+            PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent binance=openBinanceIntent(signalId);
         Notification notice=new Notification.Builder(this,ALARM_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("🔔 新信号："+name)
+            .setContentTitle("新信号："+name+" · 前往币安手动下单")
             .setContentText(content)
-            .setStyle(new Notification.BigTextStyle().bigText(content+"。信号仅供参考，不是实际成交订单。"))
+            .setStyle(new Notification.BigTextStyle().bigText(detail))
             .setAutoCancel(true)
-            .setWhen(System.currentTimeMillis())
+            .setWhen(opened>0?opened:System.currentTimeMillis())
             .setShowWhen(true)
             .setPriority(Notification.PRIORITY_HIGH)
             .setCategory(Notification.CATEGORY_ALARM)
-            .setContentIntent(openAppIntent())
+            .setContentIntent(binance)
+            .addAction(new Notification.Action.Builder(null,"打开币安",binance).build())
+            .addAction(new Notification.Action.Builder(null,"查看信号",openEvent10Intent(signalId)).build())
             .addAction(new Notification.Action.Builder(null,"停止响铃",silence).build())
             .build();
-        getSystemService(NotificationManager.class).notify(SIGNAL_ID,notice);
+        getSystemService(NotificationManager.class).notify(notificationId,notice);
         boolean started=sound.play(this,25);
         status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name);
         return started;

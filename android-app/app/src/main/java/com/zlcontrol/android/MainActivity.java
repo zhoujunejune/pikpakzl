@@ -52,6 +52,9 @@ public final class MainActivity extends Activity {
     private static final String HOST="prediction.47-237-188-69.sslip.io";
     private static final String START_URL="https://"+HOST+"/app/";
     private static final int NOTIFICATION_REQUEST=734;
+    public static final String ACTION_OPEN_BINANCE="com.zlcontrol.android.OPEN_BINANCE_MANUAL";
+    public static final String ACTION_VIEW_EVENT10="com.zlcontrol.android.VIEW_EVENT10";
+    private static final String BINANCE_PACKAGE="com.binance.dev";
     private WebView webView;
     private Switch alarmToggle;
     private TextView alarmStatus;
@@ -116,6 +119,13 @@ public final class MainActivity extends Activity {
         title.setTextColor(Color.WHITE);
         title.setTypeface(null,android.graphics.Typeface.BOLD);
         line.addView(title,new LinearLayout.LayoutParams(0,dp(34),1));
+        Button binance=new Button(this);
+        binance.setText("打开币安");
+        binance.setTextSize(12);
+        binance.setAllCaps(false);
+        binance.setContentDescription("打开币安App，手动确认10分钟事件合约下单");
+        binance.setOnClickListener(v->launchBinance());
+        line.addView(binance,new LinearLayout.LayoutParams(dp(112),dp(42)));
         top.addView(line);
 
         // Full-width dedicated row: the control must not hide behind the status bar.
@@ -240,7 +250,35 @@ public final class MainActivity extends Activity {
                 if(req.isForMainFrame())toast("无法连接阿里云控制台，请检查网络");
             }
         });
-        webView.loadUrl(START_URL);
+        Intent launchIntent=getIntent();
+        boolean fromSignal=launchIntent!=null&&
+            (ACTION_OPEN_BINANCE.equals(launchIntent.getAction())||
+             ACTION_VIEW_EVENT10.equals(launchIntent.getAction()));
+        webView.loadUrl(START_URL+(fromSignal?"#event10":""));
+        if(launchIntent!=null&&ACTION_OPEN_BINANCE.equals(launchIntent.getAction()))
+            statusHandler.post(this::launchBinance);
+    }
+    @Override protected void onNewIntent(Intent intent){
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if(intent==null)return;
+        if(ACTION_OPEN_BINANCE.equals(intent.getAction()))launchBinance();
+        else if(ACTION_VIEW_EVENT10.equals(intent.getAction())&&webView!=null)
+            webView.loadUrl(START_URL+"#event10");
+    }
+    private void launchBinance(){
+        // Only launch Binance's installed official app; never inject orders,
+        // auto-fill a direction/amount, or use unofficial event-contract APIs.
+        try{
+            Intent launch=getPackageManager().getLaunchIntentForPackage(BINANCE_PACKAGE);
+            if(launch==null){
+                toast("未检测到官方币安 App，请先安装或更新，然后前往 合约→事件→BTC→10分钟");
+                return;
+            }
+            startActivity(launch);
+        }catch(Exception e){
+            toast("无法打开币安，请手动启动币安 App，进入 合约→事件→BTC→10分钟");
+        }
     }
     private void updateStatus(){
         boolean enabled=SecureStore.prefs(this)

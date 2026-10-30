@@ -49,6 +49,21 @@ for file in index.html app.js manifest.webmanifest sw.js icon.svg;do
   curl -fsSL --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/mobile-app/$file" -o "$STAGE/$file"
 done
 test -s "$STAGE/index.html" && test -s "$STAGE/app.js"
+# Version marker uses exactly the same immutable GitHub revision as static assets.
+# Existing WebViews can detect a new revision without installing a new APK.
+python3 - "$STAGE" "COMMIT_SHA" <<'HOT_UPDATE'
+import json, pathlib, re, sys
+directory=pathlib.Path(sys.argv[1])
+revision=sys.argv[2]
+assert re.fullmatch(r"[a-f0-9]{40}",revision)
+js=directory.joinpath("app.js")
+content=js.read_text()
+assert content.count("__ZL_APP_RELEASE_SHA__")==1
+js.write_text(content.replace("__ZL_APP_RELEASE_SHA__",revision))
+directory.joinpath("version.json").write_text(
+    json.dumps({"commit":revision,"updateType":"web","apkReinstallRequired":False},separators=(",",":"))+"\\n")
+print("MOBILE_WEB_HOT_UPDATE_MARKER_READY=true")
+HOT_UPDATE
 NODE=/opt/zl-prediction-node/bin/node
 "$NODE" --check "$STAGE/app.js"
 "$NODE" --check "$STAGE/sw.js"
@@ -64,6 +79,9 @@ for expected in ('/app/app.js','/app/manifest.webmanifest','panel-guardian','pan
 for expected in ('/guardian/api/status','/api/status','/event10/api/status','/event10/api/signals','/event10/api/start'):
     assert expected in js, expected
 assert 'localStorage' not in js and 'sessionStorage' not in js
+assert re.fullmatch(r'[a-f0-9]{40}',json.loads((p/'version.json').read_text())['commit'])
+assert '__ZL_APP_RELEASE_SHA__' not in js
+assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html
 def segment(x,y,ax,ay,bx,by):
     dx,dy=bx-ax,by-ay
     t=max(0.,min(1.,((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy)))
@@ -147,7 +165,7 @@ Path(sys.argv[2]).write_text(result)
 print('MOBILE_CADDY_STATIC_ROUTE_STAGED=true')
 CADDY_PATCH
 install -d -o root -g root -m 0755 "$APP"
-for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png;do
+for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png version.json;do
   install -o root -g root -m 0644 "$STAGE/$file" "$APP/$file"
 done
 cp "$STAGE/Caddyfile.staged" "$CADDY"
@@ -155,7 +173,7 @@ changed=1
 caddy validate --config "$CADDY"
 systemctl reload caddy
 # A compromised public route must never reveal the app or trading APIs without login.
-for route in /app/ /app/app.js /app/manifest.webmanifest /api/status /guardian/api/status /event10/api/status;do
+for route in /app/ /app/app.js /app/version.json /app/manifest.webmanifest /api/status /guardian/api/status /event10/api/status;do
   status=$(curl -skS --max-time 9 --resolve "$HOST:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$HOST$route")
   test "$status" = 401 || { echo "MOBILE_AUTH_CHECK_FAILED_PATH=$route STATUS=$status"; exit 41; }
 done

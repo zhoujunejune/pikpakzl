@@ -1,5 +1,6 @@
 /* ZL unified phone app — browser-only client, never receives exchange credentials. */
 "use strict";
+const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],timer:null};
 function put(id,value){
@@ -161,6 +162,37 @@ async function refresh(){
   put("updatedAt","刷新于 "+new Date().toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}));
  }finally{state.busy=false;}
 }
+
+/**
+ * The APK is a stable shell. Public UI/JS is delivered via authenticated,
+ * no-store HTTPS from Alibaba. Poll a release marker, never exchange APIs.
+ * Only auto-activate on return to foreground; don't interrupt manual checks.
+ */
+async function checkHotUpdate(onReturn=false){
+ try{
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);
+  let response;
+  try{response=await fetch("/app/version.json",{cache:"no-store",credentials:"same-origin",
+    headers:{"Accept":"application/json","Cache-Control":"no-cache"},signal:controller.signal});}
+  finally{clearTimeout(timeout);}
+  if(!response.ok)throw Error("HTTP "+response.status);
+  const meta=await response.json();
+  if(!meta||typeof meta.commit!=="string"||!/^[a-f0-9]{40}$/.test(meta.commit))throw Error("INVALID_VERSION");
+  put("appBuildVersion",APP_DEPLOY_SHA.slice(0,8));
+  if(meta.commit===APP_DEPLOY_SHA){
+   $("hotUpdateBanner").hidden=true;
+   put("appUpdateState","已经是最新网页版本 · 无须更新APK");
+   return;
+  }
+  if(onReturn&&!state.manualBusy&&!state.busy){window.location.reload();return;}
+  $("hotUpdateBanner").hidden=false;
+  put("hotUpdateText","发现新版网页功能 · 点击刷新即可使用，不需要卸载或重装");
+  put("appUpdateState","检测到新版本："+meta.commit.slice(0,8)+" · 等待应用");
+ }catch(error){
+  // An offline/version-service error must never hide trading signal data.
+  put("appUpdateState","热更新检查暂不可用，现有页面继续运行");
+ }
+}
 function navigate(page){
  for(const el of document.querySelectorAll(".section-panel"))el.classList.toggle("active",el.id==="panel-"+page);
  for(const el of document.querySelectorAll(".tab"))el.classList.toggle("selected",el.dataset.go===page);
@@ -169,6 +201,7 @@ function navigate(page){
 }
 for(const btn of document.querySelectorAll("[data-go]"))btn.addEventListener("click",()=>navigate(btn.dataset.go));
 $("refresh").addEventListener("click",()=>void refresh());
+$("hotUpdateButton").addEventListener("click",()=>window.location.reload());
 $("manualCheck").addEventListener("click",async()=>{
  if(state.manualBusy)return;
  state.manualBusy=true;$("manualCheck").disabled=true;
@@ -192,9 +225,16 @@ $("manualCheck").addEventListener("click",async()=>{
   result.textContent="检测未确认："+String(err).slice(0,180)+"。请先核实当前状态，避免重复点击。";
  }finally{state.manualBusy=false;$("manualCheck").disabled=false;}
 });
-document.addEventListener("visibilitychange",()=>{if(!document.hidden)void refresh();});
+document.addEventListener("visibilitychange",()=>{
+ if(!document.hidden){
+  void checkHotUpdate(true);
+  void refresh();
+ }
+});
 const initial=location.hash.replace("#","");
 navigate(["overview","guardian","event10","more"].includes(initial)?initial:"overview");
 void refresh();
+void checkHotUpdate();
 setInterval(()=>void refresh(),10000);
+setInterval(()=>{if(!document.hidden)void checkHotUpdate();},60000);
 if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("/app/sw.js",{scope:"/app/"}).catch(()=>{}));

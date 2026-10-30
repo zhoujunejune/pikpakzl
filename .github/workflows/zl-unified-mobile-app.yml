@@ -43,6 +43,9 @@ jobs:
           for url in ('/guardian/api/status','/event10/api/status','/event10/api/signals','/event10/api/start'):
             assert url in js
           assert 'localStorage' not in js and 'sessionStorage' not in js
+          assert 'hotUpdateBanner' in html and 'appUpdateState' in html
+          assert '__ZL_APP_RELEASE_SHA__' in js and 'checkHotUpdate' in js
+          assert 'version.json' in (root/'aliyun_deploy.py').read_text()
           tree=ast.parse((root/'aliyun_deploy.py').read_text())
           remote=next(n.value.value for n in tree.body if isinstance(n,ast.Assign) and
                       any(getattr(t,'id',None)=='REMOTE' for t in n.targets))
@@ -84,6 +87,7 @@ jobs:
           base='https://prediction.47-237-188-69.sslip.io'
           for path,needle in (('/app/','ZL CONTROL'),('/app/app.js','/guardian/api/status'),
                               ('/app/manifest.webmanifest','"standalone"'),
+                              ('/app/version.json','"updateType": "web"'),
                               ('/app/sw.js','fetch(event.request)')):
               req=urllib.request.Request(base+path,headers={'Authorization':'Basic '+basic,'Cache-Control':'no-cache'})
               with urllib.request.urlopen(req,timeout=14) as response:

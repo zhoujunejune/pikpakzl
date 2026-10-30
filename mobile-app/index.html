@@ -82,6 +82,10 @@ a{color:inherit;text-decoration:none}
 <div class="brand"><div class="logo">ZL</div><div><b>ZL CONTROL</b><small>双机器人 · 统一管理</small></div></div>
 <div class="light"><span class="dot" id="healthDot"></span><span id="healthText">连接中</span></div>
 </header>
+<div id="hotUpdateBanner" class="message" hidden role="status" aria-live="polite">
+  <div id="hotUpdateText">发现新的网页版本</div>
+  <button class="btn primary full" type="button" id="hotUpdateButton" style="margin-top:10px">刷新应用最新版（不需要重新安装）</button>
+</div>
 <section id="panel-overview" class="section-panel active" aria-label="机器人总览">
 <h1 class="hi">交易控制台</h1><p class="desc">BTC · 阿里云生产环境 · 所有时间均为北京时间</p>
 <div class="sect-head"><h2>机器人状态</h2><small id="updatedAt">尚未同步</small></div>
@@ -140,6 +144,8 @@ a{color:inherit;text-decoration:none}
 <h1 class="hi">应用与安全</h1><p class="desc">一个登录入口，两个独立服务</p>
 <div class="card">
 <div class="kvline"><span class="label">数据服务</span><span class="value">阿里云 HTTPS，同源接口</span></div>
+<div class="kvline"><span class="label">网页热更新</span><span class="value" id="appUpdateState">检查中</span></div>
+<div class="kvline"><span class="label">网页版本</span><span class="value" id="appBuildVersion">—</span></div>
 <div class="kvline"><span class="label">登录保护</span><span class="value">沿用 Caddy Basic Auth</span></div>
 <div class="kvline"><span class="label">自动刷新</span><span class="value">页面可见时每10秒</span></div>
 <div class="kvline"><span class="label">交易 API 密钥</span><span class="value">不存储在本 App</span></div>

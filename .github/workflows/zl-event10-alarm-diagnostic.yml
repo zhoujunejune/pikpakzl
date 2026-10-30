@@ -41,6 +41,8 @@ jobs:
             print('EVENT10_SIGNAL',json.dumps({
               'id':x.get('id'),'time_shanghai':dt,'age_seconds':age,
               'direction':x.get('direction'),'status':x.get('status'),
+              'expiresAt':x.get('expiresAt'),
+              'expires_shanghai':(datetime.datetime.fromtimestamp(x.get('expiresAt')/1000,sh).isoformat() if isinstance(x.get('expiresAt'),(int,float)) and x.get('expiresAt')>0 else 'MISSING'),
               'trigger':x.get('trigger'),'strategyVersion':x.get('strategyVersion')
             },ensure_ascii=False,default=str))
           PY

@@ -1,15 +1,19 @@
-name: EVENT10 pure-rule isolated tests (never deploy)
+name: EVENT10 six-gate rule isolated tests (never deploy)
 on:
   push:
+    branches: [feature/zl-futures-bot-v1]
+  pull_request:
     branches: [feature/zl-futures-bot-v1]
     paths:
       - "event10-bot/pure-signal.mjs"
       - "event10-bot/pure-signal.test.mjs"
+      - "event10-bot/high-selectivity.test.mjs"
       - "event10-bot/panel-state.test.mjs"
       - "event10-bot/signal-ledger.test.mjs"
       - "event10-bot/server.mjs"
       - "event10-bot/manual-engine.mjs"
       - "event10-bot/panel.html"
+      - "event10-bot/aliyun_high_selectivity_only.py"
       - ".github/workflows/event10-pure-rules-ci.yml"
 permissions:
   contents: read
@@ -21,12 +25,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: "22"}
-      - name: Syntax, five mandatory entry gates and full signal+600s outcome regression
+      - name: Syntax, six mandatory entry gates and full signal+600s outcome regression
         run: |
           node --check event10-bot/pure-signal.mjs
           node --check event10-bot/manual-engine.mjs
           node --check event10-bot/server.mjs
-          node --test event10-bot/late-index.test.mjs
+          node --test event10-bot/high-selectivity.test.mjs
       - name: Ensure no event-contract trading calls or AI in signal path
         run: |
           python3 - <<'PY'
@@ -42,5 +46,7 @@ jobs:
           assert 'INDEX_SIGNAL_TPLUS10_PROXY_ONLY' in s
           assert 'autoTradingEnabled:false' in s
           assert 'const all=x=>Object.values(x).every(v=>v===true)' in rule
+          assert 'trend5m:' in rule and 'momentum1m:' in rule and 'pricePosition:' in rule
+          assert 'volume:volumeGate' in rule and 'orderflow:' in rule and 'rsi:' in rule
           print('EVENT10_PURE_SIGNAL_NO_AI_OR_TRADE_GATE=true')
           PY

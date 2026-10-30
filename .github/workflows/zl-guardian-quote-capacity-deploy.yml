@@ -1,0 +1,56 @@
+name: GUARDIAN -9000 quote-capacity guarded Alibaba repair
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_quote_capacity_deploy.py
+      - railway-diagnostic/wrapper.mjs
+      - .github/workflows/zl-guardian-quote-capacity-deploy.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian-quote-capacity-repair
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Static parse and guarded patch assertions
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_quote_capacity_deploy.py
+          python - <<'PY'
+          import ast,subprocess
+          s=open('prediction-bot-v1/aliyun_guardian_quote_capacity_deploy.py').read()
+          t=ast.parse(s)
+          x=next(y.value.value for y in t.body if isinstance(y,ast.Assign) and any(getattr(v,'id',None)=='REMOTE' for v in y.targets))
+          p=subprocess.run(['bash','-n'],input=x,text=True,capture_output=True)
+          assert p.returncode==0,p.stderr
+          assert 'FOLLOW_ENABLED_ABORT' in x and 'OPEN_POSITION_ABORT' in x
+          assert 'place-order-bundle' not in x
+          print('GUARDIAN_SAFE_DEPLOY_SYNTAX_PASS=true')
+          PY
+          node --check railway-diagnostic/wrapper.mjs
+          node --test railway-diagnostic/guardian-submit-recheck.test.mjs railway-diagnostic/guardian-live-bridge.test.mjs
+  deploy:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/zl-futures-bot-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy only when follow is OFF and no open positions
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID" && test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_quote_capacity_deploy.py

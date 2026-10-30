@@ -38,11 +38,19 @@ def pid(unit):
     return cmd("systemctl","show","-p","MainPID","--value",unit)
 
 def validate_state(s,version):
+    active=s.get("active")
+    if active:
+        expiry=active.get("expiresAt")
+        # The new engine explicitly settles old V3 index-proxy sessions.
+        # Keep the active session; never cut over near its 600s deadline.
+        if (active.get("decisionReviewVersion") not in LEGACY_VERSIONS or
+            not isinstance(expiry,(int,float)) or
+            expiry-time.time()*1000 < 180000):
+            return False
     return (s.get("configured") is True and
         s.get("decisionReviewVersion")==version and
         s.get("autoTradingEnabled") is False and
         s.get("executionAvailable") is False and
-        not s.get("active") and
         s.get("busyStart") is False and s.get("busySettle") is False)
 
 def atomic_install(target,data):
@@ -127,6 +135,14 @@ def main():
                 except Exception:
                     pass
             if not ready:raise RuntimeError("EVENT10_NEW_VERSION_NOT_SERVING")
+            # Guarded hot cutover preserves existing active legacy signal IDs
+            # and leaves their own T+600 proxy settlement with the new engine.
+            if before.get("active"):
+                prior=before["active"]
+                resumed=status().get("active")
+                if not resumed or resumed.get("id")!=prior.get("id") or \
+                   resumed.get("expiresAt")!=prior.get("expiresAt"):
+                    raise RuntimeError("PREEXISTING_ACTIVE_SIGNAL_NOT_PRESERVED")
             after=json.loads(fetch_local("/api/history"))
             if not after.get("ok") or len(after.get("records",[]))<old_count:
                 raise RuntimeError("EVENT10_HISTORY_COUNT_DECREASED")

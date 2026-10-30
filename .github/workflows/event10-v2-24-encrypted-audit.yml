@@ -70,15 +70,7 @@ jobs:
             break
           if detail is None:raise RuntimeError('AUDIT_TIMEOUT')
           # Only encrypted historical timestamps and prices go into public build logs.
-          pub=serialization.load_pem_public_key("""-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAppV6UyGP+8SmA9N7ueTs
-Z6YR+rZHbI1u+Bc2Q8nYtgZpwVucgnQ78bfYKTiJrzw3IVpgpaCVhM/rgbtI1QxV
-nbZBNEvUtMG8eBOOZp0cXd9PXpBkIDCUjfglrPjsur9pM6krdoiFSdv3OecpO4Su
-KmHhsV4qr+9PTlMQfy69WoOiuUsbv8jM7zWvJVUk+PU0Pgy9j+zkMjq/QxOn/Yec
-eOxRAwuwHWHYHt/Na/+jMGpbZ9MS2yW4buViiw/HH5/F8XqHijYJeoWjNTADi3g9
-Kol8Mp53a8pCWA/LULdXUfwiGFJMB4cLodf0eE4K0xswL1Aqn9ENuG9zwCpFPvIe
-PwIDAQAB
------END PUBLIC KEY-----""".encode())
+          pub=serialization.load_pem_public_key(base64.b64decode("LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFwcFY2VXlHUCs4U21BOU43dWVUcwpaNllSK3JaSGJJMXUrQmMyUThuWXRnWnB3VnVjZ25RNzhiZllLVGlKcnp3M0lWcGdwYUNWaE0vcmdidEkxUXhWCm5iWkJORXZVdE1HOGVCT09acDBjWGQ5UFhwQmtJRENVamZnbHJQanN1cjlwTTZrcmRvaUZTZHYzT2VjcE80U3UKS21IaHNWNHFyKzlQVGxNUWZ5NjlXb09pdVVzYnY4ak03eld2SlZVaytQVTBQZ3k5ait6a01qcS9ReE9uL1llYwplT3hSQXd1d0hXSFlIdC9OYS8rak1HcGJaOU1TMnlXNGJ1Vmlpdy9ISDUvRjhYcUhpallKZW9Xak5UQURpM2c5CktvbDhNcDUzYThwQ1dBL0xVTGRYVWZ3aUdGSk1CNGNMb2RmMGVFNEsweHN3TDFBcW45RU51Rzl6d0NwRlB2SWUKUHdJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t"))
           key=AESGCM.generate_key(bit_length=256);nonce=os.urandom(12)
           encrypted=AESGCM(key).encrypt(nonce,json.dumps(detail,ensure_ascii=False,separators=(',',':')).encode(),b'ZL-EVENT10-V2-24')
           wrapped=pub.encrypt(key,padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),

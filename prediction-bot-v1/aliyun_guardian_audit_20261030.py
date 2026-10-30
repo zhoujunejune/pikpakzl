@@ -56,7 +56,7 @@ for name in ('wrapper.mjs','index.mjs'):
     excerpt='\\n'.join(lines[max(0,i-4):min(len(lines),i+9)])
     print('GUARDIAN_RUNTIME_GATE_SOURCE',name,keyword,i+1,excerpt[:1150])
  except Exception as e:print('GUARDIAN_RUNTIME_GATE_READ_FAILED',name,type(e).__name__)
-events=set('api_confirm_control api_intent_ready auto_submit_triggered guardian_signal_recheck_completed submit_blocked_signal_changed fresh_quote_failed fresh_quote_ready guardian_quote_capacity_recovery intent_prepare_failed api_order_submit_attempt order_submit_attempt_denied order_status_updated order_status_conflict_auto_halted order_retry_requote_failed prediction_wallet_quote_insufficient_spot_fallback prediction_wallet_insufficient_spot_unavailable order_submit_deadline_expired auto_confirm_failed api_order_submitted api_order_failed guardian_feed_unavailable'.split())
+events=set('api_confirm_control api_intent_ready auto_submit_triggered guardian_quote_unexecutable guardian_signal_recheck_completed submit_blocked_signal_changed fresh_quote_failed fresh_quote_ready guardian_quote_capacity_recovery intent_prepare_failed api_order_submit_attempt order_submit_attempt_denied order_status_updated order_status_conflict_auto_halted order_retry_requote_failed prediction_wallet_quote_insufficient_spot_fallback prediction_wallet_insufficient_spot_unavailable order_submit_deadline_expired auto_confirm_failed api_order_submitted api_order_failed guardian_feed_unavailable'.split())
 q=subprocess.Popen(['journalctl','-u','zl-prediction-trade','--since','8 hours ago','--no-pager','-o','cat'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,errors='replace')
 counts=collections.Counter();recent=[]
 for line in q.stdout:
@@ -64,10 +64,10 @@ for line in q.stdout:
   x=json.loads(line);event=x.get('event')
   if event not in events:continue
   counts[event]+=1
-  rec={k:x[k] for k in ('event','round','code','httpStatus','source','retries','signalRecovered','signalIdMatches','state','blockReason','paymentAccount','quoteOk','candidateWei','configuredAmount','failureKind') if k in x}
+  rec={k:x[k] for k in ('event','round','code','httpStatus','source','retries','signalRecovered','signalIdMatches','state','blockReason','paymentAccount','quoteOk','candidateWei','configuredAmount','failureKind','marketTopicId','signal','productionSignal','amount','amountIn','quoteAttempts','reason','exchangeError') if k in x}
   if 'error' in x:rec['error']=str(x['error'])[:90]
   recent.append(rec)
-  if len(recent)>35:recent.pop(0)
+  if len(recent)>80:recent.pop(0)
  except (ValueError,TypeError,AttributeError):continue
 q.wait(timeout=12)
 print('EVENT_COUNTS',json.dumps(counts,ensure_ascii=False,separators=(',',':')))

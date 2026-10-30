@@ -3,6 +3,7 @@
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],timer:null};
+const EVENT10_HIGH_SELECTIVITY_VERSION="EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031";
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
 }
@@ -42,15 +43,21 @@ function renderRecords(id,items,kind){
  for(const r of items.slice(0,12)){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
-  const title=node("div","record-title",dir(d));
+  const version=kind==="event10"?(r.strategyVersion||r.decisionReviewVersion||r.ruleChecks?.strategyVersion):null;
+  const edition=version===EVENT10_HIGH_SELECTIVITY_VERSION?"六项新策略":"旧版信号";
+  const title=node("div","record-title",kind==="event10"?dir(d)+" · "+edition:dir(d));
   if(d==="UP")title.classList.add("uptext");
   if(d==="DOWN")title.classList.add("downtext");
   const when=kind==="guardian"?(r.at||r.round):(r.openedAt||r.checkedAt);
   head.append(title,node("span","mini",stamp(when)));
   wrap.append(head);
-  let outcome="待核对";
+  let outcome="待10分钟核对";
   if(kind==="guardian"&&r.status==="SETTLED")outcome=r.hit===true?"官方方向命中":r.hit===false?"官方方向未命中":"状态待核实";
-  if(kind==="event10"&&typeof r.proxyHit==="boolean")outcome=r.proxyHit?"公开行情代理命中":"公开行情代理未命中";
+  if(kind==="event10"){
+   if(typeof r.proxyHit==="boolean")outcome=r.proxyHit?"指数代理命中":"指数代理未命中";
+   else if(r.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")outcome="到期数据不足，未核验";
+   else if(r.proxyOutcome==="FLAT")outcome="指数持平（不计命中率）";
+  }
   const desc=kind==="guardian"?
     ("轮次 "+stamp(r.round)+" · "+outcome+" · "+(r.subjectiveConfidence==null?"置信度未提供":"模型主观置信度 "+Math.round(100*Number(r.subjectiveConfidence))+"%")):
     (outcome+" · "+(r.status||"已保存")+" · 非实际事件订单");
@@ -110,24 +117,49 @@ function currentEventRecord(e){
  const c=e.lastSession||null;
  return a||((Number(b?.checkedAt||b?.openedAt||0)>=Number(c?.openedAt||0))?b:c)||null;
 }
-function event(e,ledger){
+function eventVersion(r){
+ return r?.strategyVersion||r?.decisionReviewVersion||r?.ruleChecks?.strategyVersion||null;
+}
+function mergeEventRecords(ledger,historyData){
+ const rows=new Map();
+ for(const r of (Array.isArray(historyData?.records)?historyData.records:[])){
+  if(!r||!["UP","DOWN"].includes(r.direction)||!Number.isFinite(r.openedAt)||!r.id)continue;
+  rows.set(r.id,r);
+ }
+ // Ledger authoritative for duplicate IDs.
+ for(const r of (Array.isArray(ledger?.records)?ledger.records:[])){
+  if(!r||!["UP","DOWN"].includes(r.direction)||!Number.isFinite(r.openedAt)||!r.id)continue;
+  rows.set(r.id,r);
+ }
+ return Array.from(rows.values()).sort((a,b)=>b.openedAt-a.openedAt);
+}
+function event(e,ledger,historyData){
  const s=currentEventRecord(e);
  const stats=ledger?.stats||e.strategyStats||{};
+ const records=mergeEventRecords(ledger,historyData);
+ const legacy=records.filter(r=>eventVersion(r)!==EVENT10_HIGH_SELECTIVITY_VERSION);
+ const oldSignal=!!s&&["UP","DOWN"].includes(s.direction)&&eventVersion(s)!==EVENT10_HIGH_SELECTIVITY_VERSION;
  const direction=s?.direction||null;
  setHeading("eDirection",direction);put("eSignal",dir(direction));
- put("ePhase",s?.status||"尚无已保存状态");
- put("eActive",e.active?"正在检测":"待机");
+ put("ePhase",(oldSignal?"旧策略 · ":"")+(s?.status||"尚无已保存状态"));
+ put("eActive",e.active?(oldSignal?"旧信号等待核对":"新信号等待核对"):"待机");
  put("eCount",stats.validDirections??"—");
  put("eCounts",(stats.validDirections??"—")+" / "+(stats.proxySettled??"—"));
  const accuracy=pct(stats.proxyHits,stats.proxySettled);
- const servicePct=Number(stats.proxyAccuracyPct);
- const proxyDisplay=accuracy!=="—"?accuracy:(Number.isFinite(servicePct)?servicePct.toFixed(1)+"%":"—");
+ const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
+ const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（暂无已核对样本）");
  put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
- put("eReason",s?.reason||"没有当前信号；10分钟信号需满足全部规则条件。");
- pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中":"数据不可用");
- pill("eStatus",e.configured===true?"good":"bad",e.active?"检测中":e.configured===true?"就绪":"未就绪");
- const records=Array.isArray(ledger?.records)?ledger.records:[];
- put("eTotal",ledger&&Number.isInteger(ledger.total)?"共 "+ledger.total+" 条有效信号":"当前记录不可用");
+ put("eReason",(oldSignal?"这是旧版策略的历史信号，不属于当前Excel六项新策略。\n":"")+(s?.reason||"暂无新策略有效信号；六项条件未全部通过时返回WAIT。"));
+ pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 六项新策略":"数据不可用");
+ pill("eStatus",e.configured===true?"good":"bad",e.active?(oldSignal?"旧信号待核对":"新信号待核对"):e.configured===true?"就绪":"未就绪");
+ const newTotal=Number.isInteger(ledger?.total)?ledger.total:(stats.total??0);
+ if(historyData&&Array.isArray(historyData.records)){
+  put("eTotal","新版 "+newTotal+" 条 · 最近旧版 "+legacy.length+" 条");
+ }else if(ledger){
+  put("eTotal","新版 "+newTotal+" 条 · 旧版历史暂不可用");
+ }else{
+  put("eTotal","信号记录暂不可用");
+ }
  state.lastEvent=records;
  renderRecords("eRecords",records,"event10");
  $("manualCheck").disabled=e.configured!==true||Boolean(e.active)||state.manualBusy;
@@ -143,18 +175,20 @@ async function refresh(){
  if(state.busy||document.hidden)return;
  state.busy=true;
  try{
-  const [gr,tr,er,lr]=await Promise.allSettled([
+  const [gr,tr,er,lr,hr]=await Promise.allSettled([
    api("/guardian/api/status",7500),
    api("/api/status",7500),
    api("/event10/api/status",7500),
-   api("/event10/api/signals?limit=25&offset=0",9500)
+   api("/event10/api/signals?limit=25&offset=0",9500),
+   api("/event10/api/history",9500)
   ]);
   const g=gr.status==="fulfilled"?gr.value:null;
   const t=tr.status==="fulfilled"?tr.value:null;
   const e=er.status==="fulfilled"?er.value:null;
   const ledger=lr.status==="fulfilled"?lr.value:null;
+  const legacyHistory=hr.status==="fulfilled"?hr.value:null;
   try{if(g)guardian(g,t);else throw gr.reason||Error("无数据");}catch(err){guardianError(err);}
-  try{if(e)event(e,ledger);else throw er.reason||Error("无数据");}catch(err){eventError(err);}
+  try{if(e)event(e,ledger,legacyHistory);else throw er.reason||Error("无数据");}catch(err){eventError(err);}
   // Do not claim that a bot is online when one of its API calls failed.
   const count=Number(Boolean(g&&t))+Number(Boolean(e&&ledger));
   $("healthDot").className="dot "+(count===2?"up":count===0?"down":"");

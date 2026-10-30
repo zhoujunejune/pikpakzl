@@ -241,12 +241,19 @@ function showSources(coverage){
   flag.className=v.available?"good":"yellow";div.append(name,flag);el.append(div);
  }
 }
+// A persisted legacy V1 session must never be shown as the current V2 signal.
+const isCurrentStrategyRecord=s=>!!s&&(
+ s.strategyVersion===SIGNAL_VERSION||
+ s.decisionReviewVersion===SIGNAL_VERSION||
+ s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
 function display(d){
- const recent=d.lastCheck||null,old=d.lastSession||null;
- const showNoSignal=(recent?.status==="NO_SIGNAL"||recent?.status==="DATA_ERROR")&&!d.active&&
-    recent.checkedAt>=(old?.modelFinishedAt||old?.openedAt||0);
- const s=showNoSignal?recent:(d.active||old||null);
- active=d.active||null;
+ const recent=isCurrentStrategyRecord(d.lastCheck)?d.lastCheck:null;
+ const old=isCurrentStrategyRecord(d.lastSession)?d.lastSession:null;
+ const currentActive=isCurrentStrategyRecord(d.active)?d.active:null;
+ const recentIsLatest=!!recent&&
+   (recent.checkedAt??recent.openedAt??0)>=(old?.modelFinishedAt??old?.openedAt??0);
+ const s=currentActive||(recentIsLatest?recent:(old||recent||null));
+ active=currentActive;
  $("engine").textContent=d.configured?"固定五项信号规则已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured||!!d.active; // Manual joins background scan
@@ -305,8 +312,13 @@ function display(d){
   $("quickConfidence").textContent="通过条件：—";$("confidence").textContent="—";
   $("quickOpen").textContent="参考价：—";
   $("quickReason").textContent="五项条件同时成立才出信号；其余为无信号。";
-  $("quickTimestamp").textContent="整个10分钟周期自动检查；前3分钟更频繁，也可手动立即检查。";
-  $("analysisDetail").replaceChildren();$("phase").textContent="等待检测";
+  $("quickTimestamp").textContent="后台在UTC参考周期第7–8.5分钟自动扫描，窗口外不会产生V2方向信号。";
+  for(const id of ["openPrice","direction","openedAt","expiresAt","closePrice","latency","result","remaining"]){
+    $(id).textContent="—";
+  }
+  $("reason").textContent="暂时没有V2方向信号；旧版Higher/Lower保留在历史记录中，不作为当前信号。";
+  $("dataQuality").textContent="新策略仅采用币安指数价、指数1分钟K线及永续合约前5档盘口。";
+  $("analysisDetail").replaceChildren();$("phase").textContent="等待V2检测";
  }
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
  updateClock();

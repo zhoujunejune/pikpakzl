@@ -61,9 +61,9 @@ jobs:
           assert 'WindowInsets.Type.statusBars()' in j
           assert 'PREF_ENABLED_SINCE' in j
           assert '仅新 Higher / Lower 信号提醒' in j
-          for k in ('"UP".equals(direction)&&!"DOWN".equals(direction)', 'openedAt<enabledSince',
-                    '__NO_PRIOR_SIGNALS__'):
-            assert k in service,k
+          assert 'PREF_ENABLED_SINCE' in service
+          assert 'SignalAlarmPolicy.decide' in service
+          assert 'PREF_LAST_REASON' in service
           assert '查看提醒诊断' in j
           assert 'PREF_LAST_SUCCESS' in service
           assert 'PREF_LAST_ALARM_TIME' in service

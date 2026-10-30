@@ -35,6 +35,7 @@ public final class SignalAlertService extends Service {
     public static final String ACTION_SILENCE="com.zlcontrol.android.SILENCE_ALARM";
     public static final String ACTION_START="com.zlcontrol.android.START_ALERTS";
     public static final String PREF_ENABLED="event10_alert_enabled";
+    public static final String PREF_ENABLED_SINCE="event10_alert_enabled_since";
     public static final String PREF_LAST_ID="event10_alert_last_id";
     public static final String PREF_LAST_STATE="event10_alert_state";
     private static final String FOREGROUND_CHANNEL="zl_event10_foreground_v1";
@@ -160,23 +161,29 @@ public final class SignalAlertService extends Service {
         JSONArray records=response.optJSONArray("records");
         if(records==null)throw new IllegalStateException("信号记录缺失");
         status("监听正常 · "+new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.CHINA).format(new java.util.Date()));
-        if(records.length()==0)return;
+        if(records.length()==0){
+            // Essential edge case: zero historical signals must NOT suppress the first future one.
+            if(p.getString(PREF_LAST_ID,null)==null)
+                p.edit().putString(PREF_LAST_ID,"__NO_PRIOR_SIGNALS__").apply();
+            return;
+        }
         JSONObject latest=records.optJSONObject(0);
         if(latest==null)return;
         String id=latest.optString("id","");
         String direction=latest.optString("direction","");
+        // Never alarm on NO_SIGNAL, WAIT, DATA_ERROR, or a missing direction.
         if(id.isEmpty()||(!"UP".equals(direction)&&!"DOWN".equals(direction)))return;
+        long openedAt=latest.optLong("openedAt",0L);
+        long enabledSince=p.getLong(PREF_ENABLED_SINCE,0L);
         String previous=p.getString(PREF_LAST_ID,null);
-        if(previous==null){
-            // Establish baseline. Opening the switch never rings for historical signals.
-            p.edit().putString(PREF_LAST_ID,id).apply();
-            return;
-        }
         if(id.equals(previous))return;
-        // Save prior to notifying: settlement updates and subsequent polling must never double-ring.
+        // Mark the signal BEFORE alerting, so periodic polling and settlement don't repeat it.
         p.edit().putString(PREF_LAST_ID,id).apply();
-        long at=latest.optLong("openedAt",0);
-        long age=System.currentTimeMillis()-at;
+        // First baseline: older records never ring, but a brand-new signal produced after
+        // enabling MUST ring even when the account had no previous signals.
+        if(enabledSince>0&&openedAt<enabledSince)return;
+        if(previous==null && enabledSince<=0)return;
+        long age=System.currentTimeMillis()-openedAt;
         if(age<0||age>FRESH_MS)return;
         if(!p.getBoolean(PREF_ENABLED,false)||stopped)return;
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){

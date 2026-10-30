@@ -1,0 +1,92 @@
+name: EVENT10 V2 read-only live signal diagnosis
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/event10-v2-live-readonly-audit.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+concurrency:
+  group: event10-v2-live-audit
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read live EVENT10 status, last attempted scan, and ledger without modifying files
+        id: audit
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,base64,time,json
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID');sk=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          if not ak or not sk:raise RuntimeError('CLOUD_CREDS_MISSING')
+          cmd=r'''#!/bin/bash
+          set -Eeuo pipefail
+          python3 - <<'REMOTE'
+          import json,urllib.request,time,datetime,subprocess
+          def get(path):
+              with urllib.request.urlopen('http://127.0.0.1:13020'+path,timeout=6) as r:
+                  return json.load(r)
+          state=get('/api/status');ledger=get('/api/signals?limit=3&offset=0')
+          fmt=lambda ms: datetime.datetime.fromtimestamp(ms/1000,datetime.timezone.utc).isoformat() if isinstance(ms,(int,float)) and ms>0 else None
+          recent=state.get('lastCheck') or {};last=state.get('lastSession') or {}
+          avail=recent.get('featureAvailability') or state.get('lastDataProbe',{}).get('availability') or {}
+          scan={
+            'nowUtc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'serviceActive':subprocess.run(['systemctl','is-active','zl-event10-deepseek'],capture_output=True,text=True).stdout.strip(),
+            'model':state.get('providerModel'),'strategyVersion':state.get('decisionReviewVersion'),
+            'autoSignalEnabled':state.get('autoSignalEnabled'),'autoTradingEnabled':state.get('autoTradingEnabled'),
+            'scanCheckedUtc':fmt(recent.get('checkedAt')),'scanStatus':recent.get('status'),
+            'scanDirection':recent.get('direction'),'scanReason':recent.get('reason'),
+            'scanVersion':recent.get('strategyVersion'),'scanError':recent.get('error'),
+            'scanUpChecks':recent.get('upChecks'),'scanDownChecks':recent.get('downChecks'),
+            'dataSources':avail,'lastError':state.get('lastError'),
+            'lastSessionVersion':last.get('decisionReviewVersion'),'lastSessionUtc':fmt(last.get('openedAt')),
+            'v2LedgerVersion':ledger.get('version'),'v2SignalCount':ledger.get('total'),
+            'v2Settled':(ledger.get('stats') or {}).get('proxySettled'),
+            'v2Records':[{ 'version':x.get('strategyVersion'),'openedUtc':fmt(x.get('openedAt')),'direction':x.get('direction'),'status':x.get('status')} for x in (ledger.get('records') or [])[:3]]
+          }
+          print('EVENT10_V2_AUDIT_JSON='+json.dumps(scan,ensure_ascii=False,separators=(',',':')))
+          REMOTE
+          '''
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          instance='b67374069bb3457ba6a3a2ede9305d3f'
+          invocation=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=instance,name='event10-v2-readonly-audit',type='RunShellScript',working_user='root',command_content=cmd,timeout=75)).body.invoke_id
+          if not invocation:raise RuntimeError('CLOUD_COMMAND_NOT_ACCEPTED')
+          done=False
+          for i in range(50):
+              time.sleep(2)
+              r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id=instance,invoke_id=invocation)).body.invocation_result
+              if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):continue
+              out=base64.b64decode(r.output or '').decode('utf8','replace')
+              for line in out.splitlines():
+                  if line.startswith('EVENT10_V2_AUDIT_JSON='): print(line,flush=True)
+              if str(r.invocation_status)!='Success' or int(r.exit_code)!=0:raise RuntimeError('CLOUD_AUDIT_FAILED_'+str(r.invocation_status)+'_'+out[-500:])
+              if 'EVENT10_V2_AUDIT_JSON=' not in out:raise RuntimeError('CLOUD_AUDIT_MISSING_OUTPUT')
+              done=True;break
+          if not done:raise RuntimeError('CLOUD_AUDIT_TIMEOUT')
+          PY
+      - name: Report read-only audit outcome
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+        run: |
+          if [ "$AUDIT_OUTCOME" = "success" ]; then state=success; else state=failure; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" \
+            -f context="event10-v2-live-readonly-audit" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="EVENT10 read-only live signal snapshot: $AUDIT_OUTCOME" >/dev/null

@@ -13,6 +13,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.app.NotificationManager;
+import android.app.NotificationChannel;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
@@ -157,6 +160,15 @@ public final class MainActivity extends Activity {
         });
         bottom.addView(settings,new LinearLayout.LayoutParams(dp(96),dp(42)));
         top.addView(bottom);
+
+        // User-visible observability: distinguish switch-on from actual successful polling.
+        Button diagnose=new Button(this);
+        diagnose.setAllCaps(false);
+        diagnose.setText("查看提醒诊断（最近读取 / 最新信号 / 漏提醒原因）");
+        diagnose.setTextSize(11);
+        diagnose.setOnClickListener(v->showAlarmDiagnostics());
+        top.addView(diagnose,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,dp(40)));
         outer.addView(top);
 
         alarmToggle.setChecked(SecureStore.prefs(this)
@@ -236,12 +248,60 @@ public final class MainActivity extends Activity {
             alarmToggle.setText(enabled?"开启":"关闭");
         }
         if(alarmStatus!=null){
-            alarmStatus.setText(enabled?
-                SecureStore.prefs(this).getString(SignalAlertService.PREF_LAST_STATE,
-                   "正在连接后台信号服务…"):
-                "关闭时不响铃 · 开启后系统通知+闹铃（最多25秒）");
+            String status=enabled?SecureStore.prefs(this).getString(
+                SignalAlertService.PREF_LAST_STATE,"正在连接后台信号服务…"):
+                "关闭时不响铃 · 开启后系统通知+闹铃（最多25秒）";
+            if(enabled){
+                long last=SecureStore.prefs(this).getLong(SignalAlertService.PREF_LAST_POLL,0L);
+                long since=SecureStore.prefs(this).getLong(SignalAlertService.PREF_ENABLED_SINCE,0L);
+                long age=System.currentTimeMillis()-(last>0?last:since);
+                if(age>40000L)status="⚠ 后台监听已中断超过40秒，点下方查看诊断";
+            }
+            alarmStatus.setText(status);
         }
     }
+    private String timeOf(long timestamp){
+        if(timestamp<=0)return "无记录";
+        return new java.text.SimpleDateFormat("MM-dd HH:mm:ss",java.util.Locale.CHINA)
+            .format(new java.util.Date(timestamp));
+    }
+
+    private void showAlarmDiagnostics(){
+        android.content.SharedPreferences p=SecureStore.prefs(this);
+        boolean enabled=p.getBoolean(SignalAlertService.PREF_ENABLED,false);
+        long lastPoll=p.getLong(SignalAlertService.PREF_LAST_POLL,0L);
+        long lastSuccess=p.getLong(SignalAlertService.PREF_LAST_SUCCESS,0L);
+        long lastSignal=p.getLong(SignalAlertService.PREF_LAST_SEEN_TIME,0L);
+        long lastAlarm=p.getLong(SignalAlertService.PREF_LAST_ALARM_TIME,0L);
+        boolean notifyAllowed=true;
+        if(Build.VERSION.SDK_INT>=33&&
+           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
+           notifyAllowed=false;
+        NotificationManager manager=getSystemService(NotificationManager.class);
+        if(manager!=null&&!manager.areNotificationsEnabled())notifyAllowed=false;
+        boolean batteryUnrestricted=false;
+        PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+        if(pm!=null&&Build.VERSION.SDK_INT>=23)
+            batteryUnrestricted=pm.isIgnoringBatteryOptimizations(getPackageName());
+        String report="监控开关："+(enabled?"开启":"关闭")+
+            "\n后台最后尝试："+timeOf(lastPoll)+
+            "\n后台最后成功："+timeOf(lastSuccess)+
+            "\n最近信号："+timeOf(lastSignal)+
+            "\n最近信号ID："+p.getString(SignalAlertService.PREF_LAST_SEEN,"无")+
+            "\n上次闹铃："+timeOf(lastAlarm)+
+            "\n上次闹铃ID："+p.getString(SignalAlertService.PREF_LAST_ALARM,"无")+
+            "\n最近判断："+p.getString(SignalAlertService.PREF_LAST_REASON,"暂无")+
+            "\n读取错误："+p.getString(SignalAlertService.PREF_LAST_ERROR,"无")+
+            "\n系统通知："+(notifyAllowed?"已授权":"已关闭/未授权")+
+            "\n忽略电池优化："+(batteryUnrestricted?"是":"否，锁屏后可能暂停");
+        new AlertDialog.Builder(this).setTitle("10分钟信号提醒诊断")
+            .setMessage(report).setPositiveButton("知道了",null)
+            .setNeutralButton("后台权限设置",(dialog,which)->{
+                try{startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));}
+                catch(Exception e){toast("请到手机设置 → 应用 → ZL Control → 电池 设置允许后台运行");}
+            }).show();
+    }
+
     private void tryEnable(){
         if(SecureStore.loadLogin(this)==null){
             toast("请先在下方登录原阿里云控制台，再开启闹铃");
@@ -264,6 +324,10 @@ public final class MainActivity extends Activity {
     private void enableNow(){
         SecureStore.prefs(this).edit()
             .remove(SignalAlertService.PREF_LAST_ID)
+            .remove(SignalAlertService.PREF_LAST_POLL)
+            .remove(SignalAlertService.PREF_LAST_SUCCESS)
+            .remove(SignalAlertService.PREF_LAST_ERROR)
+            .remove(SignalAlertService.PREF_LAST_REASON)
             .putLong(SignalAlertService.PREF_ENABLED_SINCE,System.currentTimeMillis())
             .putBoolean(SignalAlertService.PREF_ENABLED,true)
             .putString(SignalAlertService.PREF_LAST_STATE,"正在启动监控…").apply();

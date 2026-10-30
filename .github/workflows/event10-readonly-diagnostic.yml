@@ -61,6 +61,16 @@ jobs:
               data=get('/api/data-health')
               info['dataHealth']={'ok':data.get('ok'),'availability':data.get('availability')}
           except Exception as e:info['dataHealthError']=str(type(e).__name__)+':'+str(e)[:140]
+          # Only emit short, whitelisted startup error signatures, never complete logs,
+          # requests, configuration or environment variables.
+          import re
+          journal=subprocess.run(['journalctl','-u','zl-event10-deepseek',
+            '--no-pager','-n','180','-o','cat'],capture_output=True,text=True,timeout=8)
+          safe=[]
+          for line in journal.stdout.splitlines():
+              if re.search(r'(SyntaxError|ReferenceError|TypeError|ERR_MODULE_NOT_FOUND|Cannot find module|Error:|EADDRINUSE|Failed to start|error code|exit-code)',line,re.I) and not re.search(r'(secret|token|password|authorization|bearer|api.?key|private)',line,re.I):
+                  safe.append(line[:180])
+          info['recentStartupErrors']=safe[-12:]
           print('EVENT10_LIVE_READONLY='+json.dumps(info,ensure_ascii=False,separators=(',',':')))
           REMOTE
           """

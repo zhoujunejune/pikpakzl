@@ -47,7 +47,7 @@ jobs:
           keystore=Path('android-app/app/src/main/java/com/zlcontrol/android/SecureStore.java').read_text()
           alarm=Path('android-app/app/src/main/java/com/zlcontrol/android/AlarmPlayer.java').read_text()
           for k in ('/event10/api/signals?limit=50&offset=0',
-                    'PREF_LAST_ID','FRESH_MS','FOREGROUND_SERVICE_TYPE_SPECIAL_USE',
+                    'PREF_LAST_ID','SignalAlarmPolicy.decide','FOREGROUND_SERVICE_TYPE_SPECIAL_USE',
                     'Notification.CATEGORY_ALARM','System.currentTimeMillis()'):
             assert k in service,k
           for k in ('AndroidKeyStore','AES/GCM/NoPadding'):
@@ -64,22 +64,34 @@ jobs:
           for k in ('"UP".equals(direction)&&!"DOWN".equals(direction)', 'openedAt<enabledSince',
                     '__NO_PRIOR_SIGNALS__'):
             assert k in service,k
+          assert '查看提醒诊断' in j
+          assert 'PREF_LAST_SUCCESS' in service
+          assert 'PREF_LAST_ALARM_TIME' in service
+          policy=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java').read_text()
+          assert 'SIGNAL_EXPIRED' in policy and 'NO_SIGNAL' in policy
           print('ZL_NATIVE_SECURITY_INVARIANTS_PASS')
           PY
+      - name: Run deterministic Event10 alarm policy regression tests
+        run: |
+          mkdir -p /tmp/zl-alarm-tests
+          javac -encoding UTF-8 -d /tmp/zl-alarm-tests \
+            android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java \
+            android-app/tests/SignalAlarmPolicyTest.java
+          java -cp /tmp/zl-alarm-tests com.zlcontrol.android.SignalAlarmPolicyTest
       - name: Build installable debug-signed APK
         working-directory: android-app
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - name: Prepare APK and check build metadata
         run: |
           mkdir -p dist
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.1-Alarm-Fix.apk
-          test -s dist/ZL-Control-v1.1.1-Alarm-Fix.apk
-          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.1-Alarm-Fix.apk | head -n 7
-          sha256sum dist/ZL-Control-v1.1.1-Alarm-Fix.apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
+          test -s dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
+          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk | head -n 7
+          sha256sum dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
           echo 'ZL_APK_BUILT_AND_SIGNED=true'
       - uses: actions/upload-artifact@v4
         with:
-          name: ZL-Control-v1.1.1-APK
-          path: dist/ZL-Control-v1.1.1-Alarm-Fix.apk
+          name: ZL-Control-v1.1.2-APK
+          path: dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
           if-no-files-found: error
           retention-days: 90

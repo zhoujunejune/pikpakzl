@@ -261,12 +261,59 @@ async function submitPendingOrder(p, { source = 'manual', prePostRetry = false }
         round:p.round,spotQuoteOk:freshQuote.ok}));
     }
   }
+  // GUARDIAN_QUOTE_CAPACITY_V1_BEGIN
+  // Exact Binance 4xx -9000 market-capacity rejections only: no amount increase,
+  // no second place-order POST, and no unlimited identical quote retries.
+  function guardianQuoteSizeError(q) {
+    if(!q||q.ok===true||q.network===true||![400,409,422].includes(Number(q.httpStatus??q.status)) ||
+       Number(q.code??q.data?.code)!==-9000)return null;
+    const msg=String(q.error??q.data?.msg??q.data?.message??'').trim().toLowerCase();
+    if(/your order amount is too large|market lacks enough liquidity for this trade/.test(msg))return 'TOO_LARGE';
+    if(/your order amount is too small/.test(msg))return 'TOO_SMALL';
+    return null;
+  }
+  if(!freshQuote.ok && p.signalModelChoice===GUARDIAN_ID &&
+     guardianQuoteSizeError(freshQuote)==='TOO_LARGE') {
+    const configuredWei=BigInt(amountToWei(p.amount));
+    const initialWei=BigInt(p._internal.amountIn);
+    if(initialWei===configuredWei && configuredWei>0n){
+      for(const pct of [90n,75n]){
+        if(!enabled||p!==pendingAction||
+           !orderSubmitWindowOpen(p.round,Date.now(),p.signalModelChoice))break;
+        const candidate=(configuredWei*pct/100n).toString();
+        if(BigInt(candidate)<=0n)break;
+        p._internal.amountIn=candidate;
+        const response=await getFreshQuote(p._internal);
+        console.log(JSON.stringify({event:'guardian_quote_capacity_recovery',
+          round:p.round,configuredAmount:p.amount,candidateWei:candidate,
+          quoteOk:response.ok,code:response.code??null,httpStatus:response.httpStatus??null,
+          failureKind:guardianQuoteSizeError(response)}));
+        freshQuote=response;
+        if(response.ok){
+          // Binance must confirm the same input amount to avoid hidden oversizing.
+          if(response.quote?.amountIn!=null && String(response.quote.amountIn)!==candidate){
+            freshQuote={ok:false,error:'QUOTE_INPUT_AMOUNT_MISMATCH',code:null,httpStatus:null};
+            break;
+          }
+          const decimal=candidate.padStart(19,'0');
+          const integer=decimal.slice(0,-18);
+          const fractional=decimal.slice(-18).replace(/0+$/,'');
+          p.configuredAmount=p.amount;
+          p.amount=fractional?integer+'.'+fractional:integer;
+          p.quoteAmountReduced=true;
+          break;
+        }
+        if(guardianQuoteSizeError(freshQuote)!=='TOO_LARGE')break;
+      }
+    }
+  }
+  // GUARDIAN_QUOTE_CAPACITY_V1_END
   if (!freshQuote.ok) {
     p.state = isAuto ? 'AUTO_FAILED' : 'READY';
     p.error = freshQuote.error;
     p.code = freshQuote.code ?? null;
     p.blockReason='FRESH_QUOTE_FAILED';
-    if(isAuto)retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');
+    if(isAuto && !guardianQuoteSizeError(freshQuote))retryGuardianBeforePost(p,'FRESH_QUOTE_FAILED_BEFORE_POST');
     console.log(JSON.stringify({
       event: 'fresh_quote_failed',
       round: p.round,

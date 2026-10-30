@@ -87,7 +87,7 @@ jobs:
           base='https://prediction.47-237-188-69.sslip.io'
           for path,needle in (('/app/','ZL CONTROL'),('/app/app.js','/guardian/api/status'),
                               ('/app/manifest.webmanifest','"standalone"'),
-                              ('/app/version.json','"updateType": "web"'),
+                              ('/app/version.json','"updateType":"web"'),
                               ('/app/sw.js','fetch(event.request)')):
               req=urllib.request.Request(base+path,headers={'Authorization':'Basic '+basic,'Cache-Control':'no-cache'})
               with urllib.request.urlopen(req,timeout=14) as response:

@@ -49,8 +49,9 @@ for file in index.html app.js manifest.webmanifest sw.js icon.svg;do
   curl -fsSL --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/mobile-app/$file" -o "$STAGE/$file"
 done
 test -s "$STAGE/index.html" && test -s "$STAGE/app.js"
-node --check "$STAGE/app.js"
-node --check "$STAGE/sw.js"
+NODE=/opt/zl-prediction-node/bin/node
+"$NODE" --check "$STAGE/app.js"
+"$NODE" --check "$STAGE/sw.js"
 python3 - "$STAGE" <<'PNG'
 import json,pathlib,struct,sys,zlib,math
 p=pathlib.Path(sys.argv[1])

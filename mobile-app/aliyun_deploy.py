@@ -61,14 +61,14 @@ content=js.read_text()
 assert content.count("__ZL_APP_RELEASE_SHA__")==1
 js.write_text(content.replace("__ZL_APP_RELEASE_SHA__",revision))
 directory.joinpath("version.json").write_text(
-    json.dumps({"commit":revision,"updateType":"web","apkReinstallRequired":False},separators=(",",":"))+"\\n")
+    json.dumps({"commit":revision,"updateType":"web","apkReinstallRequired":False},separators=(",",":")))
 print("MOBILE_WEB_HOT_UPDATE_MARKER_READY=true")
 HOT_UPDATE
 NODE=/opt/zl-prediction-node/bin/node
 "$NODE" --check "$STAGE/app.js"
 "$NODE" --check "$STAGE/sw.js"
 python3 - "$STAGE" <<'PNG'
-import json,pathlib,struct,sys,zlib,math
+import json,pathlib,re,struct,sys,zlib,math
 p=pathlib.Path(sys.argv[1])
 m=json.loads((p/'manifest.webmanifest').read_text())
 assert m['scope']=='/app/' and m['start_url']=='/app/' and m['display']=='standalone'

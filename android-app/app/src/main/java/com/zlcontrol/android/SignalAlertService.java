@@ -221,12 +221,12 @@ public final class SignalAlertService extends Service {
             status("系统已关闭信号闹铃通知渠道");
             return;
         }
-        alert(direction,latest);
+        boolean soundStarted=alert(direction,latest);
         p.edit().putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
             .putLong(PREF_LAST_ALARM_TIME,System.currentTimeMillis())
-            .putString(PREF_LAST_REASON,"ALERT_DELIVERED").apply();
+            .putString(PREF_LAST_REASON,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY").apply();
     }
-    private void alert(String direction,JSONObject signal) {
+    private boolean alert(String direction,JSONObject signal) {
         String name=direction.equals("UP")?"Higher · 看涨":"Lower · 看跌";
         String trigger="AUTO".equals(signal.optString("trigger"))?"后台自动信号":"手动检测信号";
         String content="BTC 10分钟事件合约 · "+name+" · "+trigger;
@@ -247,7 +247,8 @@ public final class SignalAlertService extends Service {
             .build();
         getSystemService(NotificationManager.class).notify(SIGNAL_ID,notice);
         boolean started=sound.play(this,25);
-        status((started?"响铃提醒：":"通知提醒：")+name);
+        status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name);
+        return started;
     }
     @Override public void onDestroy(){
         stopped=true;

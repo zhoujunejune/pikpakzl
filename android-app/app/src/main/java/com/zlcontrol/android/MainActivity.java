@@ -17,6 +17,7 @@ import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.webkit.HttpAuthHandler;
 import android.webkit.SslErrorHandler;
 import android.net.http.SslError;
@@ -78,10 +79,26 @@ public final class MainActivity extends Activity {
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setBackgroundColor(Color.rgb(10,18,32));
         setContentView(outer);
+        // Android 15+ draws app content behind the status bar by default.
+        // Keep the native alarm toggle entirely below system UI on all API levels.
+        outer.setOnApplyWindowInsetsListener((view,insets)->{
+            final int topInset;
+            final int bottomInset;
+            if(Build.VERSION.SDK_INT>=30){
+                topInset=insets.getInsets(WindowInsets.Type.statusBars()).top;
+                bottomInset=insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+            }else{
+                topInset=insets.getSystemWindowInsetTop();
+                bottomInset=insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(0,topInset,0,bottomInset);
+            return insets;
+        });
+        outer.requestApplyInsets();
 
         LinearLayout top=new LinearLayout(this);
         top.setOrientation(LinearLayout.VERTICAL);
-        top.setPadding(dp(14),dp(9),dp(14),dp(8));
+        top.setPadding(dp(16),dp(8),dp(16),dp(6));
         top.setBackgroundColor(Color.rgb(17,30,47));
         LinearLayout line=new LinearLayout(this);
         line.setOrientation(LinearLayout.HORIZONTAL);
@@ -91,12 +108,29 @@ public final class MainActivity extends Activity {
         title.setTextSize(15);
         title.setTextColor(Color.WHITE);
         title.setTypeface(null,android.graphics.Typeface.BOLD);
-        line.addView(title,new LinearLayout.LayoutParams(0,dp(42),1));
-        alarmToggle=new Switch(this);
-        alarmToggle.setText("");
-        alarmToggle.setContentDescription("十分钟事件合约新信号系统闹铃开关");
-        line.addView(alarmToggle);
+        line.addView(title,new LinearLayout.LayoutParams(0,dp(34),1));
         top.addView(line);
+
+        // Full-width dedicated row: the control must not hide behind the status bar.
+        LinearLayout toggleLine=new LinearLayout(this);
+        toggleLine.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        toggleLine.setOrientation(LinearLayout.HORIZONTAL);
+        TextView toggleHint=new TextView(this);
+        toggleHint.setText("仅新 Higher / Lower 信号提醒");
+        toggleHint.setTextSize(12);
+        toggleHint.setTextColor(Color.rgb(171,200,229));
+        toggleLine.addView(toggleHint,new LinearLayout.LayoutParams(0,dp(44),1));
+        alarmToggle=new Switch(this);
+        alarmToggle.setText("关闭");
+        alarmToggle.setTextSize(14);
+        alarmToggle.setTextColor(Color.WHITE);
+        alarmToggle.setMinWidth(dp(118));
+        alarmToggle.setPadding(dp(8),0,dp(8),0);
+        alarmToggle.setContentDescription("十分钟事件合约有信号才响铃，开关");
+        toggleLine.addView(alarmToggle,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
+        top.addView(toggleLine);
+
         LinearLayout bottom=new LinearLayout(this);
         bottom.setOrientation(LinearLayout.HORIZONTAL);
         bottom.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -127,7 +161,9 @@ public final class MainActivity extends Activity {
 
         alarmToggle.setChecked(SecureStore.prefs(this)
             .getBoolean(SignalAlertService.PREF_ENABLED,false));
+        alarmToggle.setText(alarmToggle.isChecked()?"开启":"关闭");
         alarmToggle.setOnCheckedChangeListener((button,checked)->{
+            alarmToggle.setText(checked?"开启":"关闭");
             if(suppressToggle)return;
             if(checked)tryEnable();
             else{
@@ -193,8 +229,11 @@ public final class MainActivity extends Activity {
     private void updateStatus(){
         boolean enabled=SecureStore.prefs(this)
             .getBoolean(SignalAlertService.PREF_ENABLED,false);
-        if(alarmToggle!=null&&alarmToggle.isChecked()!=enabled){
-            suppressToggle=true;alarmToggle.setChecked(enabled);suppressToggle=false;
+        if(alarmToggle!=null){
+            if(alarmToggle.isChecked()!=enabled){
+                suppressToggle=true;alarmToggle.setChecked(enabled);suppressToggle=false;
+            }
+            alarmToggle.setText(enabled?"开启":"关闭");
         }
         if(alarmStatus!=null){
             alarmStatus.setText(enabled?
@@ -219,11 +258,13 @@ public final class MainActivity extends Activity {
     private void setToggle(boolean checked){
         suppressToggle=true;
         alarmToggle.setChecked(checked);
+        alarmToggle.setText(checked?"开启":"关闭");
         suppressToggle=false;
     }
     private void enableNow(){
         SecureStore.prefs(this).edit()
             .remove(SignalAlertService.PREF_LAST_ID)
+            .putLong(SignalAlertService.PREF_ENABLED_SINCE,System.currentTimeMillis())
             .putBoolean(SignalAlertService.PREF_ENABLED,true)
             .putString(SignalAlertService.PREF_LAST_STATE,"正在启动监控…").apply();
         try{

@@ -1,3 +1,4 @@
+# Deploy request: EVENT10 isolated late-index strategy production rollout (2026-10-30)
 name: EVENT10 late-window index strategy isolated release
 on:
   push:

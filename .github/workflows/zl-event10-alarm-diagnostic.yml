@@ -1,0 +1,46 @@
+name: Diagnose live Event10 latest signals for app alarm
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-event10-alarm-diagnostic.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read real Event10 signals and status without exposing authorization
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import base64,os,json,urllib.request,datetime,zoneinfo
+          pwd=os.getenv('ZL_PANEL_PASSWORD','')
+          assert len(pwd)>10,'MISSING_AUTH'
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+pwd).encode()).decode()
+          def get(endpoint):
+            req=urllib.request.Request(base+endpoint,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+            with urllib.request.urlopen(req,timeout=15) as f:return json.load(f)
+          sh=zoneinfo.ZoneInfo('Asia/Shanghai')
+          now=datetime.datetime.now(sh)
+          print('SERVER_CHECK_LOCAL_SHANGHAI',now.isoformat())
+          status=get('/event10/api/status')
+          print('EVENT10_STATUS',json.dumps({
+            k:status.get(k) for k in ('ok','model','lastError') 
+          },ensure_ascii=False,default=str)[:2000])
+          last=status.get('lastSession') or {}
+          print('EVENT10_LAST_SESSION',json.dumps({k:last.get(k) for k in ('id','openedAt','direction','status','reason','model')},ensure_ascii=False)[:2000])
+          signals=get('/event10/api/signals?limit=12&offset=0')
+          print('SIGNALS_API_OK',signals.get('ok'),'RECORDS',len(signals.get('records') or []))
+          for x in (signals.get('records') or []):
+            ts=x.get('openedAt')
+            dt=datetime.datetime.fromtimestamp(ts/1000,sh).isoformat() if isinstance(ts,(int,float)) and ts>0 else 'MISSING'
+            age=round((now.timestamp()*1000-ts)/1000) if isinstance(ts,(int,float)) and ts>0 else None
+            print('EVENT10_SIGNAL',json.dumps({
+              'id':x.get('id'),'time_shanghai':dt,'age_seconds':age,
+              'direction':x.get('direction'),'status':x.get('status'),
+              'trigger':x.get('trigger'),'strategyVersion':x.get('strategyVersion')
+            },ensure_ascii=False,default=str))
+          PY

@@ -71,6 +71,23 @@ jobs:
               if re.search(r'(SyntaxError|ReferenceError|TypeError|ERR_MODULE_NOT_FOUND|Cannot find module|Error:|EADDRINUSE|Failed to start|error code|exit-code)',line,re.I) and not re.search(r'(secret|token|password|authorization|bearer|api.?key|private)',line,re.I):
                   safe.append(line[:180])
           info['recentStartupErrors']=safe[-12:]
+          pid=subprocess.run(['systemctl','show','-p','MainPID','--value','zl-event10-deepseek'],
+            capture_output=True,text=True,timeout=5).stdout.strip()
+          info['runtime']={'mainPid':pid}
+          if pid.isdecimal() and int(pid)>0:
+              proc=pathlib.Path('/proc')/pid
+              try:info['runtime']['cwd']=str((proc/'cwd').resolve())
+              except Exception:pass
+              try:
+                  parts=(proc/'cmdline').read_bytes().split(b'\\x00')
+                  info['runtime']['nodeFilePaths']=[p.decode('utf8','replace')[:120] for p in parts
+                    if p.startswith(b'/opt/') and (p.endswith(b'.mjs') or p.endswith(b'node'))][:5]
+              except Exception:pass
+          target=pathlib.Path('/opt/zl-event10/pure-signal.mjs')
+          if target.exists():
+              match=re.search(r'RULE_VERSION="([A-Za-z0-9_]+)"',target.read_text(errors='replace'))
+              info['runtime']['diskRuleVersion']=match.group(1) if match else 'UNKNOWN'
+
           print('EVENT10_LIVE_READONLY='+json.dumps(info,ensure_ascii=False,separators=(',',':')))
           REMOTE
           """

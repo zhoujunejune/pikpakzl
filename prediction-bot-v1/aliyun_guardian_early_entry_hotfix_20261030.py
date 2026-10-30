@@ -71,29 +71,29 @@ if mark not in src:
  src=replace(src,'local.aiCalls+=1;local.nextAnalysisAt=Date.now()+25000;',
   'local.aiCalls+=1;local.nextAnalysisAt=Date.now()+12000;','cadence')
  src=replace(src,'  const c=safeCandidate(f,Date.now());',
-  """  if(Date.now()-r>=GUARDIAN_ENTRY_CUTOFF_MS){
+  '''  if(Date.now()-r>=GUARDIAN_ENTRY_CUTOFF_MS){
    local.latest={direction:'WAIT',round:r,reason:'超过本轮2分50秒入场窗口，不追尾盘'};
    return;
   }
-  const c=safeCandidate(f,Date.now());""",'pre_analysis_cutoff')
+  const c=safeCandidate(f,Date.now());''','pre_analysis_cutoff')
  src=replace(src,'  const result=await judge(c,f);',
-  """  console.log(JSON.stringify({event:'guardian_ai_start',round:r,elapsedMs:Date.now()-r,attempt:local.aiCalls}));
+  '''  console.log(JSON.stringify({event:'guardian_ai_start',round:r,elapsedMs:Date.now()-r,attempt:local.aiCalls}));
   const result=await judge(c,f);
-  console.log(JSON.stringify({event:'guardian_ai_finish',round:r,elapsedMs:Date.now()-r,modelLatencyMs:local.modelLatencyMs,decision:result.direction}));""",'ai_timing')
+  console.log(JSON.stringify({event:'guardian_ai_finish',round:r,elapsedMs:Date.now()-r,modelLatencyMs:local.modelLatencyMs,decision:result.direction}));''','ai_timing')
  src=replace(src,"  // Revalidate the market at execution time: never use a slow model's stale snapshot.",
-  """  if(Date.now()-r>=GUARDIAN_ENTRY_CUTOFF_MS){
+  '''  if(Date.now()-r>=GUARDIAN_ENTRY_CUTOFF_MS){
    local.latest={direction:'WAIT',round:r,reason:'DeepSeek回复超过前2分50秒入场窗口'};
    console.log(JSON.stringify({event:'guardian_late_signal_skipped',round:r,elapsedMs:Date.now()-r}));
    return;
   }
-  // Revalidate the market at execution time: never use a slow model's stale snapshot.""",'after_ai_cutoff')
+  // Revalidate the market at execution time: never use a slow model's stale snapshot.''','after_ai_cutoff')
  src=replace(src,'  const row=recordDecision(c,result,Date.now());',
-  """  if(Date.now()-r>=GUARDIAN_ENTRY_CUTOFF_MS){
+  '''  if(Date.now()-r>=GUARDIAN_ENTRY_CUTOFF_MS){
    local.latest={direction:'WAIT',round:r,reason:'市场复核超过入场窗口'};
    return;
   }
   const row=recordDecision(c,result,Date.now());
-  console.log(JSON.stringify({event:'guardian_early_signal_ready',round:r,elapsedMs:Date.now()-r}));""",'before_signal_cutoff')
+  console.log(JSON.stringify({event:'guardian_early_signal_ready',round:r,elapsedMs:Date.now()-r}));''','before_signal_cutoff')
 else:
  assert src.count(mark)==1 and src.count('GUARDIAN_ENTRY_CUTOFF_MS')>=4,'PARTIAL_EARLY_PATCH'
 old='const GUARDIAN_ORDER_DEADLINE_MS = 300000;'

@@ -127,7 +127,7 @@ def main():
                 try:
                     snap=status()
                     if snap.get("decisionReviewVersion")==TARGET and \
-                       snap.get("providerModel")=="PURE_HIGH_SELECTIVITY_REFERENCE_V2" and \
+                       snap.get("providerModel")=="PURE_SIGNAL_SIX_GATES_V1" and \
                        snap.get("autoTradingEnabled") is False and \
                        snap.get("executionAvailable") is False:
                         ready=True

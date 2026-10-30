@@ -40,7 +40,7 @@ th{color:#a9c6e7}
 <p class="sub">BTCUSDT · 第7–8.5分钟 + 指数领先0.10% + 回撤 + 1分钟K线 + 盘口</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-后台仅在UTC十分钟参考周期第7–8.5分钟约每12秒检查一次；也可手动检查（窗口外无信号）。指数相对周期起点领先至少0.10%，不利回撤不超过领先幅度一半，且1分钟指数K线及前5档盘口同向才出信号。重要：UTC周期不是币安事件合约实际订单的开仓和到期时间，本页面不掌握订单真实Strike。只做参考信号，不下单。
+沿用UTC第7–8.5分钟及五项指标作为出信号条件。出信号时锁定实时BTC指数价，完整600秒后再比较涨跌。UTC周期基准只用于过滤；实际合约Strike与结算须看币安订单。不自动交易。
 </div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
@@ -57,19 +57,19 @@ th{color:#a9c6e7}
  <p class="sub">规则没有主观置信度。只使用币安USD-M指数价、指数1分钟K线和永续合约盘口。当前1分钟K线可能尚未收盘。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
-<p class="sub">仅在UTC参考周期第7–8.5分钟自动扫描；周期结束核对指数。本结果不是实际新开事件合约10分钟后盈亏预测。</p>
+<p class="sub">UTC第7–8.5分钟只是出信号条件；真正的代理结果在每条信号发出后完整600秒核对。不是实际事件合约订单盈亏。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
-<div class="metric"><small>UTC周期指数开盘价（非订单Strike）</small><strong id="openPrice">—</strong></div>
+<div class="metric"><small>信号锁定指数价（非订单Strike）</small><strong id="openPrice">—</strong></div>
 <div class="metric"><small>规则判断方向</small><strong id="direction">—</strong></div>
 <div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
-<div class="metric"><small>UTC周期结束指数价</small><strong id="closePrice">—</strong></div>
+<div class="metric"><small>信号后10分钟指数价</small><strong id="closePrice">—</strong></div>
 </div>
 <div class="grid" style="margin-top:10px">
 <div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
-<div class="metric"><small>计划参考结束时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
+<div class="metric"><small>信号后600秒核对时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>规则检查耗时</small><strong id="latency">—</strong></div>
 <div class="metric"><small>五项条件</small><strong id="confidence">—</strong></div>
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
@@ -79,7 +79,7 @@ th{color:#a9c6e7}
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
 <p id="featureSummary" class="sub">只读取币安公开指数报价、指数1分钟K线和前5档盘口；HTTP 451或过期则不出信号。</p>
 <div id="featureHealth" class="grid" aria-live="polite"></div>
-<p class="sub">检查按钮只读取币安USD-M公开指数及盘口；UTC参考开盘价不等于真实事件订单Strike。</p>
+<p class="sub">仅使用公开指数价和盘口，锁定参考价不等于实际订单Strike。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
 </section>
 <section class="card">
@@ -93,7 +93,7 @@ th{color:#a9c6e7}
 <p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
 </section>
 <section class="card">
-<h2>新规则信号统计（公开行情代理）</h2>
+<h2>新规则信号后10分钟命中率（指数代理）</h2>
 <div class="grid">
 <div class="metric"><small>新规则出信号</small><strong id="total">0</strong></div>
 <div class="metric"><small>新规则有效方向</small><strong id="decided">0</strong></div>
@@ -108,7 +108,7 @@ th{color:#a9c6e7}
 <div class="row"><h2>所有有效信号记录</h2><button type="button" class="secondary" id="refresh">立即刷新</button></div>
 <p class="sub" id="historySummary" aria-live="polite">载入已保存的信号…</p>
 <div class="tablewrap"><table><thead><tr>
-<th>出信号时间</th><th>来源</th><th>方向</th><th>UTC周期基准</th><th>五项条件</th><th>领先幅度</th><th>不利回撤/领先</th><th>到期指数价</th><th>代理结果</th>
+<th>出信号时间</th><th>来源</th><th>方向</th><th>信号锁定价</th><th>五项条件</th><th>领先幅度</th><th>不利回撤/领先</th><th>到期指数价</th><th>代理结果</th>
 </tr></thead><tbody id="records"><tr><td colspan="9">读取中…</td></tr></tbody></table></div>
 <div class="row" style="margin-top:12px">
 <button type="button" class="secondary" id="newerSignals">上一页</button>
@@ -120,7 +120,7 @@ th{color:#a9c6e7}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030";
+const SIGNAL_VERSION="EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -200,7 +200,8 @@ const displayConfidence=s=>{
 const phaseText={ANALYZING:"处理中",PREDICTED:"五项成立，方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
  if(v==="PUBLIC_MARKET_PROXY_ONLY")return "旧版现货代理核对";
- if(v==="INDEX_CYCLE_PROXY_ONLY")return "UTC指数周期已核对";
+ if(v==="INDEX_CYCLE_PROXY_ONLY")return "旧版UTC指数周期已核对";
+  if(v==="INDEX_SIGNAL_TPLUS10_PROXY_ONLY")return "信号后10分钟已核对";
  if(v==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")return "到期时数据不足";
  if(v==="FAILED")return "分析失败";
  return "尚未核对";
@@ -268,7 +269,7 @@ function display(d){
   $("quickReason").textContent=s.reason||(noSignal?"没有同时满足五项条件。":"等待行情校验。");
   $("quickTimestamp").textContent="采样："+when(s.openedAt)+" ｜ "+
     (s.lateWindow||s.ruleChecks?.lateWindow?"UTC参考周期第7–8.5分钟":"不在观察窗口")+
-    " ｜ 仅供方向参考，非事件合约官方交易记录。";
+    " ｜ 信号后完整600秒才核对，非事件合约官方交易记录。";
   $("openPrice").textContent=price(s.openPrice);
   $("openedAt").textContent=when(s.openedAt);
   $("expiresAt").textContent=noSignal?"—":when(s.expiresAt);
@@ -297,7 +298,7 @@ function display(d){
    if(e){
     const p=document.createElement("p");
     const num=v=>Number.isFinite(v)?Number(v).toFixed(2):"不可用";
-    p.textContent="UTC基准指数 "+num(e.cycleOpenIndexPrice)+
+    p.textContent="趋势基准指数 "+num(e.cycleOpenIndexPrice)+
       " | 当前指数 "+num(e.liveIndexPrice)+
       " | 领先 "+num(e.signedLeadPct)+"% | 回撤上限 "+num(e.retraceBound)+
       " | 买/卖前5档数量 "+num(e.bidTop5QtyBtc)+"/"+num(e.askTop5QtyBtc);
@@ -305,7 +306,7 @@ function display(d){
    }
   }
   $("dataQuality").textContent="指数价与1分钟K线来自币安USD-M公开指数接口，盘口是BTC永续合约前5档。"+
-    "回撤采用覆盖近60秒的1分钟K线极值保守核验，UTC基准不是事件订单Strike，统计仅供研究。";
+    "UTC基准是趋势特征；新版从信号时锁定指数价开始，600秒后核对涨跌；并非真实币安事件订单结算。";
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
@@ -428,7 +429,7 @@ function showImmediateResult(session){
    lastDataProbe:null,lastFeatureCoverage:session?.featureAvailability||null});
  $("message").textContent=session?.status==="DATA_ERROR"?
    "本次数据异常，未产生方向。":signal?
-   "五项成立，已给出UTC周期方向，周期结束时核对指数。":
+   "五项成立，已锁定信号时指数价；完整600秒后核对。":
    "检查完成：五项未同时满足，无信号。";
 }
 async function startClick(){

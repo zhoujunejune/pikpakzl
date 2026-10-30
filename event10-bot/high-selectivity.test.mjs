@@ -63,6 +63,7 @@ test("any missing mandatory gate yields WAIT/NO_SIGNAL and is never forced",()=>
   assert.equal(missingBook.direction,null);
   const badFive=structuredClone(healthy);
   badFive.candles["5m"].at(-1).close=badFive.candles["5m"].at(-1).open-0.2;
+  badFive.candles["5m"].at(-1).low=badFive.candles["5m"].at(-1).close-0.1;
   assert.equal(evaluatePureSignal({...args,feed:badFive,orderBook:book()}).direction,null);
 });
 test("three continuous active buys/sells may replace weak orderbook, never stale flow",()=>{

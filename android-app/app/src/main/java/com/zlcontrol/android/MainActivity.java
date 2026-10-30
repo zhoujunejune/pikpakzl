@@ -1,16 +1,21 @@
 package com.zlcontrol.android;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
 import android.text.InputType;
-import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.HttpAuthHandler;
 import android.webkit.SslErrorHandler;
@@ -21,193 +26,291 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.Switch;
+import android.widget.TextView;
 import android.widget.Toast;
-
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Thin first-party Android shell around the existing authenticated Alibaba site.
- * The app never contains exchange secrets and never calls a trading API directly.
- * All transaction control remains on the unchanged original HTTPS site.
+ * Existing ZL HTTPS control panel, plus opt-in local event10 system-alarm monitoring.
+ * All order controls remain on Alibaba; native code only reads event10 signal records.
  */
 public final class MainActivity extends Activity {
-    private static final String HOST = "prediction.47-237-188-69.sslip.io";
-    private static final String START_URL = "https://" + HOST + "/app/";
-
+    private static final String HOST="prediction.47-237-188-69.sslip.io";
+    private static final String START_URL="https://"+HOST+"/app/";
+    private static final int NOTIFICATION_REQUEST=734;
     private WebView webView;
-    private final List<HttpAuthHandler> pendingAuth = new ArrayList<>();
-    private boolean loginDialogOpen = false;
-    private String sessionUsername = null;
-    private String sessionPassword = null;
-    private int cachedCredentialRetry = 0;
+    private Switch alarmToggle;
+    private TextView alarmStatus;
+    private final AlarmPlayer preview=new AlarmPlayer();
+    private final Handler statusHandler=new Handler(Looper.getMainLooper());
+    private final List<HttpAuthHandler> pendingAuth=new ArrayList<>();
+    private boolean loginDialogOpen=false;
+    private boolean suppressToggle=false;
+    private boolean pendingEnable=false;
+    private String sessionUsername=null;
+    private String sessionPassword=null;
+    private int cachedCredentialRetry=0;
+    private final Runnable statusUpdate=new Runnable(){
+        @Override public void run(){
+            updateStatus();
+            statusHandler.postDelayed(this,3000);
+        }
+    };
 
-    private static boolean isTrusted(Uri uri) {
-        return uri != null && "https".equalsIgnoreCase(uri.getScheme())
-                && HOST.equalsIgnoreCase(uri.getHost())
-                && uri.getPort() == -1;
+    private static boolean isTrusted(Uri uri){
+        return uri!=null&&"https".equalsIgnoreCase(uri.getScheme())
+            &&HOST.equalsIgnoreCase(uri.getHost())&&uri.getPort()==-1;
     }
-
-    @Override
-    @SuppressLint("SetJavaScriptEnabled")
-    public void onCreate(Bundle savedInstanceState) {
+    private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
+    private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_LONG).show();}
+    @Override @SuppressLint("SetJavaScriptEnabled")
+    public void onCreate(Bundle savedInstanceState){
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.rgb(10, 18, 32));
-        getWindow().setNavigationBarColor(Color.rgb(11, 22, 37));
+        getWindow().setStatusBarColor(Color.rgb(10,18,32));
+        getWindow().setNavigationBarColor(Color.rgb(11,22,37));
+        LinearLayout outer=new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        outer.setBackgroundColor(Color.rgb(10,18,32));
+        setContentView(outer);
 
-        webView = new WebView(this);
-        webView.setBackgroundColor(Color.rgb(10, 18, 32));
-        webView.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        setContentView(webView);
+        LinearLayout top=new LinearLayout(this);
+        top.setOrientation(LinearLayout.VERTICAL);
+        top.setPadding(dp(14),dp(9),dp(14),dp(8));
+        top.setBackgroundColor(Color.rgb(17,30,47));
+        LinearLayout line=new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        TextView title=new TextView(this);
+        title.setText("🔔 10分钟信号闹铃");
+        title.setTextSize(15);
+        title.setTextColor(Color.WHITE);
+        title.setTypeface(null,android.graphics.Typeface.BOLD);
+        line.addView(title,new LinearLayout.LayoutParams(0,dp(42),1));
+        alarmToggle=new Switch(this);
+        alarmToggle.setText("");
+        alarmToggle.setContentDescription("十分钟事件合约新信号系统闹铃开关");
+        line.addView(alarmToggle);
+        top.addView(line);
+        LinearLayout bottom=new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.HORIZONTAL);
+        bottom.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        alarmStatus=new TextView(this);
+        alarmStatus.setTextSize(11);
+        alarmStatus.setTextColor(Color.rgb(156,182,211));
+        bottom.addView(alarmStatus,new LinearLayout.LayoutParams(0,dp(36),1));
+        Button test=new Button(this);
+        test.setAllCaps(false);
+        test.setText("试听");
+        test.setTextSize(11);
+        test.setOnClickListener(v->{
+            if(preview.play(this,5))toast("试听系统闹钟铃声（5秒）");
+            else toast("未读取到系统闹钟铃声，请在手机设置中选择铃声");
+        });
+        bottom.addView(test,new LinearLayout.LayoutParams(dp(66),dp(42)));
+        Button settings=new Button(this);
+        settings.setAllCaps(false);
+        settings.setText("闹铃设置");
+        settings.setTextSize(11);
+        settings.setOnClickListener(v->{
+            try{startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS));}
+            catch(ActivityNotFoundException e){toast("请从手机设置调整闹铃音量与铃声");}
+        });
+        bottom.addView(settings,new LinearLayout.LayoutParams(dp(96),dp(42)));
+        top.addView(bottom);
+        outer.addView(top);
 
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
-        settings.setJavaScriptCanOpenWindowsAutomatically(false);
-        settings.setSupportMultipleWindows(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setSaveFormData(false);
-        if (Build.VERSION.SDK_INT >= 26) settings.setSafeBrowsingEnabled(true);
+        alarmToggle.setChecked(SecureStore.prefs(this)
+            .getBoolean(SignalAlertService.PREF_ENABLED,false));
+        alarmToggle.setOnCheckedChangeListener((button,checked)->{
+            if(suppressToggle)return;
+            if(checked)tryEnable();
+            else{
+                SecureStore.prefs(this).edit()
+                    .putBoolean(SignalAlertService.PREF_ENABLED,false).apply();
+                SignalAlertService.stop(this);
+                updateStatus();
+            }
+        });
+
+        webView=new WebView(this);
+        webView.setBackgroundColor(Color.rgb(10,18,32));
+        outer.addView(webView,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,0,1));
+        WebSettings ws=webView.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        ws.setAllowFileAccess(false);
+        ws.setAllowContentAccess(false);
+        ws.setJavaScriptCanOpenWindowsAutomatically(false);
+        ws.setSupportMultipleWindows(false);
+        ws.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        ws.setSaveFormData(false);
+        if(Build.VERSION.SDK_INT>=26)ws.setSafeBrowsingEnabled(true);
         WebView.setWebContentsDebuggingEnabled(false);
-
         webView.setWebChromeClient(new WebChromeClient());
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                if (!request.isForMainFrame()) return false;
-                Uri uri = request.getUrl();
-                if (isTrusted(uri)) return false;
-                if ("about".equalsIgnoreCase(uri.getScheme())) return false;
-                try {
-                    startActivity(new Intent(Intent.ACTION_VIEW, uri));
-                } catch (ActivityNotFoundException e) {
-                    Toast.makeText(MainActivity.this, "无法打开外部链接", Toast.LENGTH_SHORT).show();
-                }
+        webView.setWebViewClient(new WebViewClient(){
+            @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){
+                if(!request.isForMainFrame())return false;
+                Uri uri=request.getUrl();
+                if(isTrusted(uri))return false;
+                if("about".equalsIgnoreCase(uri.getScheme()))return false;
+                try{startActivity(new Intent(Intent.ACTION_VIEW,uri));}
+                catch(ActivityNotFoundException e){toast("无法打开外部链接");}
                 return true;
             }
-
-            @Override
-            public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
-                                                  String host, String realm) {
-                if (!HOST.equalsIgnoreCase(host)) {
-                    handler.cancel();
-                    return;
-                }
-                // WebView may challenge more than one parallel resource during login.
-                // Reuse credentials only in memory. Prompt again after retries if invalid.
-                if (sessionUsername != null && sessionPassword != null
-                        && cachedCredentialRetry < 2 && !loginDialogOpen) {
+            @Override public void onReceivedHttpAuthRequest(WebView view,HttpAuthHandler handler,
+                                                             String host,String realm){
+                if(!HOST.equalsIgnoreCase(host)){handler.cancel();return;}
+                if(sessionUsername!=null&&sessionPassword!=null
+                    &&cachedCredentialRetry<2&&!loginDialogOpen){
                     cachedCredentialRetry++;
-                    handler.proceed(sessionUsername, sessionPassword);
+                    handler.proceed(sessionUsername,sessionPassword);
                     return;
                 }
                 requestLogin(handler);
             }
-
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
-                if (url != null && url.startsWith("https://" + HOST + "/")) {
-                    cachedCredentialRetry = 0;
-                }
+            @Override public void onPageFinished(WebView view,String url){
+                super.onPageFinished(view,url);
+                if(url!=null&&url.startsWith("https://"+HOST+"/"))cachedCredentialRetry=0;
             }
-
-            @Override
-            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-                handler.cancel(); // Never allow invalid TLS certificates.
-                Toast.makeText(MainActivity.this, "服务器证书验证失败，已阻止连接", Toast.LENGTH_LONG).show();
+            @Override public void onReceivedSslError(WebView view,SslErrorHandler handler,SslError error){
+                handler.cancel();
+                toast("服务器 HTTPS 证书无效，已拒绝连接");
             }
-
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request,
-                                        WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    Toast.makeText(MainActivity.this,
-                            "无法连接阿里云控制台，请检查网络后重试", Toast.LENGTH_LONG).show();
-                }
+            @Override public void onReceivedError(WebView view,WebResourceRequest req,WebResourceError err){
+                if(req.isForMainFrame())toast("无法连接阿里云控制台，请检查网络");
             }
         });
         webView.loadUrl(START_URL);
     }
-
-    private void requestLogin(HttpAuthHandler handler) {
+    private void updateStatus(){
+        boolean enabled=SecureStore.prefs(this)
+            .getBoolean(SignalAlertService.PREF_ENABLED,false);
+        if(alarmToggle!=null&&alarmToggle.isChecked()!=enabled){
+            suppressToggle=true;alarmToggle.setChecked(enabled);suppressToggle=false;
+        }
+        if(alarmStatus!=null){
+            alarmStatus.setText(enabled?
+                SecureStore.prefs(this).getString(SignalAlertService.PREF_LAST_STATE,
+                   "正在连接后台信号服务…"):
+                "关闭时不响铃 · 开启后系统通知+闹铃（最多25秒）");
+        }
+    }
+    private void tryEnable(){
+        if(SecureStore.loadLogin(this)==null){
+            toast("请先在下方登录原阿里云控制台，再开启闹铃");
+            setToggle(false);return;
+        }
+        if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+             !=PackageManager.PERMISSION_GRANTED){
+            pendingEnable=true;
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},NOTIFICATION_REQUEST);
+            return;
+        }
+        enableNow();
+    }
+    private void setToggle(boolean checked){
+        suppressToggle=true;
+        alarmToggle.setChecked(checked);
+        suppressToggle=false;
+    }
+    private void enableNow(){
+        SecureStore.prefs(this).edit()
+            .remove(SignalAlertService.PREF_LAST_ID)
+            .putBoolean(SignalAlertService.PREF_ENABLED,true)
+            .putString(SignalAlertService.PREF_LAST_STATE,"正在启动监控…").apply();
+        try{
+            SignalAlertService.start(this);
+            toast("10分钟信号闹铃已开启。系统会显示持续监听通知。");
+        }catch(Exception e){
+            SecureStore.prefs(this).edit().putBoolean(SignalAlertService.PREF_ENABLED,false).apply();
+            setToggle(false);
+            toast("后台监听无法启动，请检查通知和系统后台运行权限");
+        }
+        updateStatus();
+    }
+    @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] results){
+        super.onRequestPermissionsResult(requestCode,permissions,results);
+        if(requestCode!=NOTIFICATION_REQUEST)return;
+        boolean allowed=results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED;
+        if(pendingEnable&&allowed)enableNow();
+        else{
+            setToggle(false);
+            toast("未授权通知权限，信号闹铃保持关闭");
+        }
+        pendingEnable=false;
+    }
+    private void requestLogin(HttpAuthHandler handler){
         pendingAuth.add(handler);
-        if (loginDialogOpen) return;
-        loginDialogOpen = true;
-
-        LinearLayout layout = new LinearLayout(this);
+        if(loginDialogOpen)return;
+        loginDialogOpen=true;
+        LinearLayout layout=new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(24), dp(12), dp(24), dp(4));
-
-        EditText username = new EditText(this);
+        layout.setPadding(dp(24),dp(12),dp(24),dp(4));
+        EditText username=new EditText(this);
         username.setSingleLine(true);
-        username.setText(sessionUsername == null ? "zl" : sessionUsername);
-        username.setHint("管理账号");
+        username.setText(sessionUsername==null?"zl":sessionUsername);
+        username.setHint("原管理账号");
         username.setInputType(InputType.TYPE_CLASS_TEXT);
-        layout.addView(username, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        EditText password = new EditText(this);
+        layout.addView(username);
+        EditText password=new EditText(this);
         password.setSingleLine(true);
-        password.setHint("原有阿里云管理页面密码");
-        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        layout.addView(password, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        password.setHint("原管理密码");
+        password.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        layout.addView(password);
         password.requestFocus();
-
         new AlertDialog.Builder(this)
-                .setTitle("登录 ZL Control")
-                .setMessage("继续使用原服务器 HTTPS 认证。密码只在当前 App 运行期间临时使用，不写入本地文件。")
-                .setView(layout)
-                .setCancelable(false)
-                .setNegativeButton("取消", (dialog, which) -> {
-                    for (HttpAuthHandler h : pendingAuth) h.cancel();
-                    pendingAuth.clear();
-                    loginDialogOpen = false;
-                })
-                .setPositiveButton("登录", (dialog, which) -> {
-                    sessionUsername = username.getText().toString().trim();
-                    sessionPassword = password.getText().toString();
-                    cachedCredentialRetry = 0;
-                    for (HttpAuthHandler h : pendingAuth) {
-                        h.proceed(sessionUsername, sessionPassword);
-                    }
-                    pendingAuth.clear();
-                    loginDialogOpen = false;
-                })
-                .show();
+            .setTitle("登录 ZL Control")
+            .setMessage("为支持关屏后的信号提醒，App 使用安卓 Keystore 加密保管登录凭证；不保存交易 API 密钥。")
+            .setView(layout).setCancelable(false)
+            .setNegativeButton("取消",(dialog,which)->{
+                for(HttpAuthHandler h:pendingAuth)h.cancel();
+                pendingAuth.clear();loginDialogOpen=false;
+            })
+            .setPositiveButton("登录",(dialog,which)->{
+                sessionUsername=username.getText().toString().trim();
+                sessionPassword=password.getText().toString();
+                try{SecureStore.saveLogin(this,sessionUsername,sessionPassword);}
+                catch(Exception ex){toast("保存后台认证信息失败；信号提醒将不可用");}
+                cachedCredentialRetry=0;
+                for(HttpAuthHandler h:pendingAuth)h.proceed(sessionUsername,sessionPassword);
+                pendingAuth.clear();loginDialogOpen=false;
+                if(SecureStore.prefs(this).getBoolean(SignalAlertService.PREF_ENABLED,false)){
+                    try{SignalAlertService.start(this);}catch(Exception ignored){}
+                }
+            }).show();
     }
-
-    private int dp(int n) {
-        return Math.round(n * getResources().getDisplayMetrics().density);
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
+    @Override protected void onResume(){
+        super.onResume();
+        statusHandler.removeCallbacks(statusUpdate);
+        statusHandler.post(statusUpdate);
+        if(SecureStore.prefs(this).getBoolean(SignalAlertService.PREF_ENABLED,false)
+            &&SecureStore.loadLogin(this)!=null){
+            try{SignalAlertService.start(this);}catch(Exception ignored){}
         }
     }
-
-    @Override
-    protected void onDestroy() {
-        sessionUsername = null;
-        sessionPassword = null;
-        for (HttpAuthHandler h : pendingAuth) h.cancel();
+    @Override protected void onPause(){
+        statusHandler.removeCallbacks(statusUpdate);
+        super.onPause();
+    }
+    @Override public void onBackPressed(){
+        if(webView!=null&&webView.canGoBack())webView.goBack();
+        else super.onBackPressed();
+    }
+    @Override protected void onDestroy(){
+        preview.stop();
+        statusHandler.removeCallbacks(statusUpdate);
+        sessionUsername=null;sessionPassword=null;
+        for(HttpAuthHandler h:pendingAuth)h.cancel();
         pendingAuth.clear();
-        if (webView != null) {
-            webView.stopLoading();
-            webView.destroy();
-            webView = null;
-        }
+        if(webView!=null){webView.stopLoading();webView.destroy();webView=null;}
         super.onDestroy();
     }
 }

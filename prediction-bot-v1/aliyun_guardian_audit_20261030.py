@@ -71,6 +71,7 @@ for line in q.stdout:
   if len(recent)>80:recent.pop(0)
  except (ValueError,TypeError,AttributeError):continue
 q.wait(timeout=12)
+print('AUDIT_LIVE_PRECHECK',json.dumps({'enabled':s.get('enabled'),'guardianReady':s.get('guardianExecutionReady'),'riskReady':s.get('guardianRiskReady'),'amount':s.get('amount'),'orderModel':s.get('orderSignalModel'),'positionsSeen':hl.get('positionsSeen'),'pendingState':(s.get('pendingAction') or {}).get('state')},ensure_ascii=False))
 print('EVENT_COUNTS',json.dumps(counts,ensure_ascii=False,separators=(',',':')))
 for row in recent:print('EVENT',json.dumps(row,ensure_ascii=False,separators=(',',':')))
 import os,stat

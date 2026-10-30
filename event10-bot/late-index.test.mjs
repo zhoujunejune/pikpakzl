@@ -26,7 +26,7 @@ const evaluate=({side=1,now=instant,overridePrice=null,book=true,bars=indexBars(
 
 test("7–8.5m and all five gates: UP and DOWN, never a trade",()=>{
   const up=evaluate(),down=evaluate({side:-1});
-  assert.equal(RULE_VERSION,"EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030");
+  assert.equal(RULE_VERSION,"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031");
   assert.equal(up.direction,"UP");assert.equal(down.direction,"DOWN");
   assert.deepEqual(Object.values(up.conditions),Array(5).fill(true));
   assert.deepEqual(Object.values(down.conditions),Array(5).fill(true));
@@ -45,7 +45,7 @@ test("strict index freshness and complete 1m-index KL validation",()=>{
   const rows=indexBars().map(x=>[x.at,String(x.open),String(x.high),String(x.low),String(x.close)]);
   assert.equal(parseBinanceIndexKlines(rows,instant).rows.length,12);
 });
-test("independent history, UTC cycle close, no official event result or order",async()=>{
+test("independent signal-to-600s index comparison, no official event order",async()=>{
   let now=instant,price=100150;
   const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"event10-late-"));
   const stateFile=path.join(tmp,"history.json");
@@ -64,20 +64,26 @@ test("independent history, UTC cycle close, no official event result or order",a
   const e=createEngine({env:{EVENT10_STATE_FILE:stateFile},clock:()=>now,fetcher});
   const signal=await e.start("manual-late-signal-001");
   assert.equal(signal.direction,"UP");
-  assert.equal(signal.openPrice,100000);
+  assert.equal(signal.openPrice,100150);
+  assert.equal(signal.cycleOpenIndexPrice,100000);
   assert.equal(signal.liveIndexPrice,100150);
-  assert.equal(signal.expiresAt,cycle+600000);
-  assert.equal(signal.model,"PURE_LATE_INDEX_REFERENCE_V2");
+  assert.equal(signal.expiresAt,signal.openedAt+600000);
+  assert.equal(signal.model,"PURE_SIGNAL_INDEX_TPLUS10_V3");
   assert.equal(signal.realOrderPlaced,false);
   assert.equal(e.status().autoTradingEnabled,false);
   assert.equal(e.signals().stats.total,1);
   now=cycle+600500;price=100130;
   await e.tick();
-  const last=e.status().lastSession;
-  assert.equal(last.settlementStatus,"INDEX_CYCLE_PROXY_ONLY");
-  assert.equal(last.proxyHit,true);
+  assert.equal(e.signals().records[0].proxyHit,null); // old UTC cycle already ended
+  assert.equal(e.signals().stats.proxySettled,0); // but signal has not reached T+600
+  now=signal.expiresAt+800;price=100130;
+  await e.tick();
+  const last=e.history(20).find(x=>x.id===signal.id);
+  assert.equal(last.settlementStatus,"INDEX_SIGNAL_TPLUS10_PROXY_ONLY");
+  assert.equal(last.proxyHit,false); // Higher loses against locked 100150
   assert.equal(last.officialEventHit,null);
   assert.equal(e.signals().stats.proxySettled,1);
+  assert.equal(e.signals().stats.proxyHits,0);
   assert.equal(e.signals().records[0].leadPct,0.15);
-  assert.equal(JSON.parse(fs.readFileSync(stateFile,"utf8")).length,1);
+  assert.ok(JSON.parse(fs.readFileSync(stateFile,"utf8")).some(x=>x.id===signal.id));
 });

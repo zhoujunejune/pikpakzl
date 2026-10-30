@@ -67,6 +67,13 @@ jobs:
           assert '查看提醒诊断' in j
           assert 'PREF_LAST_SUCCESS' in service
           assert 'PREF_LAST_ALARM_TIME' in service
+          assert 'ordered.sort(' in service and 'PREF_HANDLED_IDS' in service
+          assert 'scheduleWithFixedDelay(this::pollSafe,0,5,TimeUnit.SECONDS)' in service
+          assert 'PREF_AUDIT_TRAIL' in service
+          assert 'PARTIAL_WAKE_LOCK' in service
+          assert '忽略电池优化' in j and '本次开启时间' in j
+          assert '后台权限设置' in j
+          assert 'WAKE_LOCK' in m
           policy=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java').read_text()
           assert 'SIGNAL_EXPIRED' in policy and 'NO_SIGNAL' in policy
           print('ZL_NATIVE_SECURITY_INVARIANTS_PASS')
@@ -84,14 +91,14 @@ jobs:
       - name: Prepare APK and check build metadata
         run: |
           mkdir -p dist
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
-          test -s dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
-          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk | head -n 7
-          sha256sum dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.3-Signal-Alert-Repair.apk
+          test -s dist/ZL-Control-v1.1.3-Signal-Alert-Repair.apk
+          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.3-Signal-Alert-Repair.apk | head -n 7
+          sha256sum dist/ZL-Control-v1.1.3-Signal-Alert-Repair.apk
           echo 'ZL_APK_BUILT_AND_SIGNED=true'
       - uses: actions/upload-artifact@v4
         with:
-          name: ZL-Control-v1.1.2-APK
-          path: dist/ZL-Control-v1.1.2-Alarm-Diagnostics.apk
+          name: ZL-Control-v1.1.3-APK
+          path: dist/ZL-Control-v1.1.3-Signal-Alert-Repair.apk
           if-no-files-found: error
           retention-days: 90

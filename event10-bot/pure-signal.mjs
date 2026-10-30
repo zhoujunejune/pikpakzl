@@ -1,7 +1,7 @@
 // Deterministic BTC 10-minute directional rule. No LLM, no order execution.
 // Candle indicators use CONFIRMED CLOSED spot BTCUSDT candles at/before the
 // reference tick; depth/trades are explicitly USD-M public-market context.
-export const RULE_VERSION="EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029";
+export const RULE_VERSION="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030";
 const n=v=>Number(v),valid=v=>typeof v==="number"&&Number.isFinite(v);
 const fmt=v=>valid(v)?v.toFixed(3):"缺失";
 const finitePositive=v=>valid(v)&&v>0;
@@ -89,7 +89,7 @@ export function parseAggressiveStreak(raw,receivedAt){
 // cycle. IMPORTANT: this is NOT a Binance Event Contract opened at that cycle's
 // start. Event-contract expiry is relative to that contract's *actual* open,
 // and the official order strike cannot be read through the public market API.
-export const LATE_WINDOW_RULE_VERSION="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030";
+export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 const pct=(x)=>Math.round(x*1e6)/1e4;
 const between=(x,a,b)=>x>=a&&x<b;
 

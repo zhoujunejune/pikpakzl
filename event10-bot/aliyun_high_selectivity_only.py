@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
-LEGACY_VERSIONS={"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_HS_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029"}
-TARGET="EVENT10_HS_INDEX_LEAD_RETRACE_V2_20261030"
+LEGACY_VERSIONS={"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029"}
+TARGET="EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
 FILES=("pure-signal.mjs","manual-engine.mjs","panel.html","high-selectivity.test.mjs")
 OTHER_UNITS=("zl-prediction-trade","zl-futures-bot-paper","zl-event10-trade-stream","caddy")

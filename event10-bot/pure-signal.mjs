@@ -1,7 +1,7 @@
 // Deterministic BTC 10-minute directional rule. No LLM, no order execution.
 // Candle indicators use CONFIRMED CLOSED spot BTCUSDT candles at/before the
 // reference tick; depth/trades are explicitly USD-M public-market context.
-export const RULE_VERSION="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030";
+export const RULE_VERSION="EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031";
 const n=v=>Number(v),valid=v=>typeof v==="number"&&Number.isFinite(v);
 const fmt=v=>valid(v)?v.toFixed(3):"缺失";
 const finitePositive=v=>valid(v)&&v>0;
@@ -85,10 +85,9 @@ export function parseAggressiveStreak(raw,receivedAt){
     observedAt:last.T};
 }
 // Workbook: BTC_10分钟事件合约_信号策略.xlsx (Higher/Lower, 2026-10-30).
-// Observe the late 7.0–8.5-minute window of a UTC-aligned INDEX REFERENCE
-// cycle. IMPORTANT: this is NOT a Binance Event Contract opened at that cycle's
-// start. Event-contract expiry is relative to that contract's *actual* open,
-// and the official order strike cannot be read through the public market API.
+// UTC 7–8.5m is an entry signal filter ONLY. Prediction is now signal+600s.
+// The UTC open is historical trend context, not prediction entry price.
+// Actual Event Contract strike and expiry must be confirmed in Binance.
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 const pct=(x)=>Math.round(x*1e6)/1e4;
 const between=(x,a,b)=>x>=a&&x<b;
@@ -168,7 +167,7 @@ export function evaluatePureSignal({
   const reason=direction?
     (direction==="UP"?"看涨 Higher":"看跌 Lower")+
     "：第7–8.5分钟、指数领先≥0.10%、60秒不利回撤≤领先一半、1分钟K线及盘口全部通过。"+
-    "本信号仅为UTC指数参考周期模拟，非币安实际事件合约到期判断。":
+    "本信号在生成时锁定当时的指数报价，完整600秒后比较涨跌。UTC周期基准仅供趋势过滤，真实事件合约以币安订单为准。":
     !inWindow?"无信号：不在本周期第7–8.5分钟的观察窗口。":
     !hasIndex?"无信号：缺少同源指数参考开盘价或完整近一分钟K线。":
     "无信号：看涨未通过 "+missing(up).join("、")+
@@ -181,7 +180,7 @@ export function evaluatePureSignal({
     firstThreeMinutes:false,lateWindow:inWindow,
     snapshotAt:at,conditions:direction==="UP"?up:direction==="DOWN"?down:null,
     upChecks:up,downChecks:down,
-    referenceBasis:"UTC_10M_INDEX_OPEN_PROXY_NOT_EVENT_CONTRACT_STRIKE",
+    referenceBasis:"SIGNAL_CAPTURED_INDEX_PRICE_TPLUS600_NOT_EVENT_CONTRACT_STRIKE",
     evidence:{
       cycleOpenIndexPrice:base,liveIndexPrice:price,
       signedLeadPct:hasIndex?pct(lead/base):null,
@@ -190,7 +189,7 @@ export function evaluatePureSignal({
       recentIndexBars:recent.length, indexMinuteOpen:currentBar?.open??null,
       indexMinuteClose:currentBar?.close??null,
       bidTop5QtyBtc:hasBook?bid:null,askTop5QtyBtc:hasBook?ask:null,
-      referenceSource:"BINANCE_USDM_INDEX_UTC_CYCLE_PROXY",
+      referenceSource:"BINANCE_USDM_INDEX_REALTIME_QUOTE_TPLUS600_PROXY",
       bookSource:"BINANCE_USDM_BTCUSDT_ORDERBOOK_TOP5",
       referenceIsActualEventContractStrike:false
     }

@@ -78,6 +78,7 @@ jobs:
           assert 'launchBinance()' in j and 'openBinanceIntent' in service
           assert 'openEvent10Intent' in service
           assert 'signal_notification_id' in service
+          assert 'ZL_SIGNING_STORE_FILE' in Path('android-app/app/build.gradle').read_text()
           policy=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java').read_text()
           assert 'SIGNAL_EXPIRED' in policy and 'NO_SIGNAL' in policy
           print('ZL_NATIVE_SECURITY_INVARIANTS_PASS')
@@ -89,20 +90,73 @@ jobs:
             android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java \
             android-app/tests/SignalAlarmPolicyTest.java
           java -cp /tmp/zl-alarm-tests com.zlcontrol.android.SignalAlarmPolicyTest
-      - name: Build installable debug-signed APK
-        working-directory: android-app
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
-      - name: Prepare APK and check build metadata
+      - name: Load persistent Android signing key (secrets only)
+        shell: bash
+        env:
+          ZL_ANDROID_KEYSTORE_B64: ${{ secrets.ZL_ANDROID_KEYSTORE_B64 }}
+          ZL_ANDROID_STORE_PASSWORD: ${{ secrets.ZL_ANDROID_STORE_PASSWORD }}
+          ZL_ANDROID_KEY_ALIAS: ${{ secrets.ZL_ANDROID_KEY_ALIAS }}
+          ZL_ANDROID_KEY_PASSWORD: ${{ secrets.ZL_ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+          if [[ -z "$ZL_ANDROID_KEYSTORE_B64" || -z "$ZL_ANDROID_STORE_PASSWORD" || -z "$ZL_ANDROID_KEY_ALIAS" || -z "$ZL_ANDROID_KEY_PASSWORD" ]]; then
+            echo 'ZL_STABLE_SIGNING=false' >> "$GITHUB_ENV"
+            echo 'STABLE_RELEASE_NOT_BUILT: configure four signing secrets; debug APK is NOT suitable for upgrades'
+            exit 0
+          fi
+          printf '%s' "$ZL_ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/zl-control-release.jks"
+          chmod 600 "$RUNNER_TEMP/zl-control-release.jks"
+          keytool -list -keystore "$RUNNER_TEMP/zl-control-release.jks" -storepass "$ZL_ANDROID_STORE_PASSWORD" -alias "$ZL_ANDROID_KEY_ALIAS" >/dev/null
+          echo 'ZL_STABLE_SIGNING=true' >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_STORE_FILE=$RUNNER_TEMP/zl-control-release.jks" >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_STORE_PASSWORD=$ZL_ANDROID_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_KEY_ALIAS=$ZL_ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_KEY_PASSWORD=$ZL_ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+      - name: Build release-signed APK if key exists, otherwise test-only debug APK
+        working-directory: android-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$ZL_STABLE_SIGNING" == true ]]; then
+            gradle --no-daemon --stacktrace :app:assembleRelease
+          else
+            gradle --no-daemon --stacktrace :app:assembleDebug
+          fi
+      - name: Verify APK signing and prepare output
+        shell: bash
+        env:
+          ZL_EXPECTED_CERT_SHA256: ${{ vars.ZL_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
           mkdir -p dist
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk dist/ZL-Control-v1.1.4-Signal-Alert-Repair.apk
-          test -s dist/ZL-Control-v1.1.4-Signal-Alert-Repair.apk
-          find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1 | xargs -I{} {} dump badging dist/ZL-Control-v1.1.4-Signal-Alert-Repair.apk | head -n 7
-          sha256sum dist/ZL-Control-v1.1.4-Signal-Alert-Repair.apk
-          echo 'ZL_APK_BUILT_AND_SIGNED=true'
+          if [[ "$ZL_STABLE_SIGNING" == true ]]; then
+            src=android-app/app/build/outputs/apk/release/app-release.apk
+            dest=dist/ZL-Control-v1.2.0-stable-release.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.0-STABLE-RELEASE' >> "$GITHUB_ENV"
+            echo 'ZL_RELEASE_UPGRADE_CAPABLE=true' >> "$GITHUB_ENV"
+          else
+            src=android-app/app/build/outputs/apk/debug/app-debug.apk
+            dest=dist/ZL-Control-v1.2.0-DEBUG-ONLY-NOT-UPGRADEABLE.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.0-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
+            echo 'ZL_RELEASE_UPGRADE_CAPABLE=false' >> "$GITHUB_ENV"
+          fi
+          cp "$src" "$dest"
+          test -s "$dest"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort | tail -1)"
+          "$AAPT" dump badging "$dest" | head -n 7
+          "$APKSIGNER" verify --verbose --print-certs "$dest" | tee "$RUNNER_TEMP/apk-verification.txt"
+          if [[ "$ZL_STABLE_SIGNING" == true && -n "$ZL_EXPECTED_CERT_SHA256" ]]; then
+            actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-verification.txt" | head -n1)"
+            [[ "${actual,,}" == "${ZL_EXPECTED_CERT_SHA256,,}" ]] || {
+              echo 'RELEASE_CERTIFICATE_CHANGED: refusing upgrade artifact'; exit 1;
+            }
+          fi
+          sha256sum "$dest"
+          echo "ZL_RELEASE_UPGRADE_CAPABLE=$ZL_STABLE_SIGNING"
       - uses: actions/upload-artifact@v4
         with:
-          name: ZL-Control-v1.1.4-APK
-          path: dist/ZL-Control-v1.1.4-Signal-Alert-Repair.apk
+          name: ${{ env.ZL_ARTIFACT_NAME }}
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 90

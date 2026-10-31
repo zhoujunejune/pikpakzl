@@ -1,3 +1,4 @@
+# Read-only connectivity check: EVENT10 and Android notification link, 2026-10-31 11:36 Asia/Shanghai.
 # Audit request after EVENT10 six-gate guard refused cutover on 2026-10-31
 name: EVENT10 live read-only diagnostic
 on:

@@ -44,3 +44,37 @@ test("the app never requests legacy event history or mixes old stats",()=>{
  assert.ok(html.includes("频率优化策略信号记录"));
  assert.ok(!html.includes("历史信号（新旧策略）"));
 });
+
+test("price comparison uses frozen index reference and exact settlement values",()=>{
+ const first=src.indexOf("function eventIndexPrice(v){");
+ const last=src.indexOf("function renderRecords(id,items,kind){",first);
+ assert.ok(first>=0&&last>first);
+ const c=vm.runInNewContext(src.slice(first,last)+"\n({eventIndexPrice,eventPriceComparison})",{Date});
+ assert.equal(c.eventIndexPrice(77579.24043478),"77,579.24043478");
+ assert.equal(c.eventIndexPrice(null),"—");
+ const base={openPrice:77500,expiresAt:Date.now()+600000,direction:"UP"};
+ const pending=c.eventPriceComparison({...base,closePrice:null,proxyHit:null});
+ assert.equal(pending.outcome,"等待10分钟到期核验");
+ assert.equal(pending.change,"—");
+ const win=c.eventPriceComparison({...base,closePrice:77550,proxyHit:true,proxyOutcome:"UP",
+   settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
+ assert.equal(win.outcome,"指数代理命中");assert.match(win.change,/^\\+0\\.06452%$/);
+ const lose=c.eventPriceComparison({...base,closePrice:77450,proxyHit:false,proxyOutcome:"DOWN",
+   settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
+ assert.equal(lose.outcome,"指数代理未命中");assert.match(lose.change,/^-0\\.06452%$/);
+ const missing=c.eventPriceComparison({...base,settlementStatus:"UNVERIFIABLE_PRICE_NEAR_EXPIRY"});
+ assert.equal(missing.outcome,"到期数据不足，无法核验");
+ const flat=c.eventPriceComparison({...base,closePrice:77500,proxyHit:null,proxyOutcome:"FLAT",
+   settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
+ assert.match(flat.outcome,/持平/);
+});
+test("record cards show locked index, expiry index, net change, result and both timestamps",()=>{
+ assert.ok(src.includes('"信号锁定指数价"'));
+ assert.ok(src.includes('"10分钟后指数价"'));
+ assert.ok(src.includes('"record-comparison"'));
+ assert.ok(src.includes("r.closeObservedAt"));
+ assert.ok(src.includes("state.eventOffset"));
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ for(const part of ["record-signal-grid","eRecordPrev","eRecordNext","eRecordPage"])
+  assert.ok(html.includes(part),part);
+});

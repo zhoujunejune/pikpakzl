@@ -2,7 +2,7 @@
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
-const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],timer:null};
+const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],eventOffset:0,eventPageSize:25,timer:null};
 const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101";
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
@@ -34,13 +34,39 @@ function node(tag,cls,t){
  if(t!==undefined)el.textContent=String(t);
  return el;
 }
+// These are public-index reference prices, NOT event-contract strike/settlement prices.
+function eventIndexPrice(v){
+ const value=Number(v);
+ return v===null||v===undefined||v===""||!Number.isFinite(value)||value<=0?
+   "—":value.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:8});
+}
+function eventPriceComparison(r){
+ const open=Number(r?.openPrice),close=Number(r?.closePrice);
+ const goodOpen=r?.openPrice!==null&&r?.openPrice!==undefined&&Number.isFinite(open)&&open>0;
+ const goodClose=r?.closePrice!==null&&r?.closePrice!==undefined&&Number.isFinite(close)&&close>0;
+ if(!goodOpen||!goodClose){
+  if(r?.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")
+   return {ready:false,outcome:"到期数据不足，无法核验",change:"—",tone:"warning"};
+  return {ready:false,outcome:Number.isFinite(r?.expiresAt)&&Date.now()>r.expiresAt?
+    "到期核验处理中":"等待10分钟到期核验",change:"—",tone:"warning"};
+ }
+ const delta=(close/open-1)*100;
+ const change=(delta>0?"+":"")+delta.toFixed(5)+"%";
+ const known=r?.settlementStatus!==null&&r?.settlementStatus!==undefined;
+ if(!known)return {ready:false,outcome:"到期价格已采集，核验尚未确认",change,tone:"warning"};
+ if(r.proxyOutcome==="FLAT"||close===open)
+  return {ready:true,outcome:"指数价格持平（不计胜率）",change,tone:"warning"};
+ if(r.proxyHit===true)return {ready:true,outcome:"指数代理命中",change,tone:"uptext"};
+ if(r.proxyHit===false)return {ready:true,outcome:"指数代理未命中",change,tone:"downtext"};
+ return {ready:false,outcome:"核验结果尚未确认",change,tone:"warning"};
+}
 function renderRecords(id,items,kind){
  const root=$(id);root.replaceChildren();
  if(!items.length){
   root.append(node("div","mini",kind==="event10"?"新策略暂无已保存的有效方向信号。":"暂无可核实的已保存信号记录。"));
   return;
  }
- for(const r of items.slice(0,12)){
+ for(const r of (kind==="event10"?items:items.slice(0,12))){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
   const title=node("div","record-title",kind==="event10"?dir(d)+" · 频率优化策略":dir(d));
@@ -56,10 +82,32 @@ function renderRecords(id,items,kind){
    else if(r.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")outcome="到期数据不足，未核验";
    else if(r.proxyOutcome==="FLAT")outcome="指数持平（不计命中率）";
   }
-  const desc=kind==="guardian"?
-    ("轮次 "+stamp(r.round)+" · "+outcome+" · "+(r.subjectiveConfidence==null?"置信度未提供":"模型主观置信度 "+Math.round(100*Number(r.subjectiveConfidence))+"%")):
-    (outcome+" · "+(r.status||"已保存")+" · 非实际事件订单");
-  wrap.append(node("div","record-note",desc));
+  if(kind==="event10"){
+   const pair=node("div","record-signal-grid");
+   const pricePair=[["信号锁定指数价",eventIndexPrice(r.openPrice)],
+     ["10分钟后指数价",eventIndexPrice(r.closePrice)]];
+   for(const [label,value] of pricePair){
+    const block=node("div","record-price-block");
+    block.append(node("div","record-price-label",label),
+                 node("div","record-price-value",value));
+    pair.append(block);
+   }
+   wrap.append(pair);
+   const info=eventPriceComparison(r);
+   const comparison=node("div","record-comparison");
+   comparison.append(node("span","record-change",info.change),
+                     node("span","record-outcome "+info.tone,info.outcome));
+   wrap.append(comparison);
+   const planned=Number.isFinite(r.expiresAt)?stamp(r.expiresAt):"—";
+   const sampled=Number.isFinite(r.closeObservedAt)?stamp(r.closeObservedAt):"—";
+   wrap.append(node("div","record-note","预定核验 "+planned+
+      " · 实际采样 "+sampled+" · 仅币安指数代理对比，非事件合约官方结算"));
+  }else{
+   const desc="轮次 "+stamp(r.round)+" · "+outcome+" · "+
+      (r.subjectiveConfidence==null?"置信度未提供":
+      "模型主观置信度 "+Math.round(100*Number(r.subjectiveConfidence))+"%");
+   wrap.append(node("div","record-note",desc));
+  }
   root.append(wrap);
  }
 }
@@ -156,10 +204,19 @@ function event(e,ledger){
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
  state.lastEvent=records;
  if(currentLedger){
-  put("eTotal","新版有效信号 "+(Number.isInteger(ledger.total)?ledger.total:records.length)+" 条（旧版不计入）");
+  const total=Number.isInteger(ledger.total)?ledger.total:records.length;
+  const first=total===0?0:state.eventOffset+1;
+  const last=Math.min(total,state.eventOffset+records.length);
+  put("eTotal","新策略 "+total+" 条 · 当前 "+first+"–"+last+" 条");
+  put("eRecordPage","第 "+(Math.floor(state.eventOffset/state.eventPageSize)+1)+
+    " / "+Math.max(1,Math.ceil(total/state.eventPageSize))+" 页");
+  $("eRecordPrev").disabled=state.busy||state.eventOffset===0;
+  $("eRecordNext").disabled=state.busy||state.eventOffset+records.length>=total;
   renderRecords("eRecords",records,"event10");
  }else{
   put("eTotal","新版明细暂时无法读取");
+  put("eRecordPage","暂不可用");
+  $("eRecordPrev").disabled=true;$("eRecordNext").disabled=true;
   $("eRecords").replaceChildren(node("div","mini","新版信号记录接口暂不可用；没有显示旧版历史，也不代表新版记录为零。"));
  }
  $("manualCheck").disabled=e.configured!==true||Boolean(e.active)||state.manualBusy;
@@ -169,6 +226,8 @@ function eventError(error){
  pill("eBadge","bad","连接异常");pill("eStatus","bad","暂不可用");
  for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy","eTotal"])put(id,"不可用");
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
+ $("eRecordPrev").disabled=true;$("eRecordNext").disabled=true;
+ put("eRecordPage","暂不可用");
  $("eRecords").replaceChildren(node("div","mini","记录接口当前不可用，不代表历史记录为空。"));
  $("manualCheck").disabled=true;
 }
@@ -180,7 +239,7 @@ async function refresh(){
    api("/guardian/api/status",7500),
    api("/api/status",7500),
    api("/event10/api/status",7500),
-   api("/event10/api/signals?limit=25&offset=0",9500)
+   api("/event10/api/signals?limit="+state.eventPageSize+"&offset="+state.eventOffset,9500)
   ]);
   const g=gr.status==="fulfilled"?gr.value:null;
   const t=tr.status==="fulfilled"?tr.value:null;
@@ -236,6 +295,16 @@ function navigate(page){
 }
 for(const btn of document.querySelectorAll("[data-go]"))btn.addEventListener("click",()=>navigate(btn.dataset.go));
 $("refresh").addEventListener("click",()=>void refresh());
+$("eRecordPrev").addEventListener("click",()=>{
+ if(state.busy||state.eventOffset===0)return;
+ state.eventOffset=Math.max(0,state.eventOffset-state.eventPageSize);
+ void refresh();
+});
+$("eRecordNext").addEventListener("click",()=>{
+ if(state.busy||$("eRecordNext").disabled)return;
+ state.eventOffset+=state.eventPageSize;
+ void refresh();
+});
 $("hotUpdateButton").addEventListener("click",()=>window.location.reload());
 $("manualCheck").addEventListener("click",async()=>{
  if(state.manualBusy)return;

@@ -63,7 +63,16 @@ a{color:inherit;text-decoration:none}
 .record{padding:12px 13px;background:#0d192a;border:1px solid #26384f;border-radius:12px}
 .record-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .record-title{font-size:14px;font-weight:700}
-.record-note{font-size:12px;color:var(--sub);margin-top:6px;overflow-wrap:anywhere}
+.record-note{font-size:12px;color:var(--sub);margin-top:8px;overflow-wrap:anywhere}
+.record-signal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
+.record-price-block{min-width:0;border:1px solid #31465f;background:#101e32;border-radius:10px;padding:10px}
+.record-price-label{font-size:11px;color:var(--sub);margin-bottom:5px}
+.record-price-value{font-size:14px;font-weight:710;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.record-comparison{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-top:11px;font-size:13px}
+.record-change{font-weight:720;font-variant-numeric:tabular-nums}
+.record-outcome{font-weight:650}
+.record-page{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
+.record-page .btn{min-height:37px;padding:7px 12px}
 .message{padding:12px;border:1px solid #40506a;border-radius:12px;background:#132239;font-size:12px;color:#b8cbe3;margin-top:10px;line-height:1.65}
 .section-panel{display:none}
 .section-panel.active{display:block}
@@ -138,7 +147,7 @@ a{color:inherit;text-decoration:none}
 <div class="message" id="manualResult" hidden aria-live="polite"></div>
 <div class="actions"><a class="btn" href="/event10/" rel="noopener">打开10分钟完整控制页面</a></div>
 </div>
-<div class="section"><div class="sect-head"><h2>频率优化策略信号记录</h2><small id="eTotal">读取中</small></div><div class="records" id="eRecords"><div class="mini">读取中…</div></div></div>
+<div class="section"><div class="sect-head"><h2>频率优化策略信号记录</h2><small id="eTotal">读取中</small></div><p class="mini">每条信号展示锁定指数价、到期指数价、涨跌幅及方向是否命中；均为公开行情代理，不是事件合约官方结算价。</p><div class="records" id="eRecords"><div class="mini">读取中…</div></div><div class="record-page"><button class="btn" type="button" id="eRecordPrev" disabled>上一页</button><span class="mini" id="eRecordPage">第 1 页</span><button class="btn" type="button" id="eRecordNext" disabled>下一页</button></div></div>
 </section>
 <section id="panel-more" class="section-panel" aria-label="应用设置">
 <h1 class="hi">应用与安全</h1><p class="desc">一个登录入口，两个独立服务</p>

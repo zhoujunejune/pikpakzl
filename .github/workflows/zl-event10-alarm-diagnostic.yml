@@ -1,3 +1,4 @@
+# Read-only external signal API audit requested 2026-10-31 18:25 Asia/Shanghai.
 name: Diagnose live Event10 latest signals for app alarm
 on:
   push:

@@ -385,6 +385,7 @@ public final class MainActivity extends Activity {
             "\n上次闹铃ID："+p.getString(SignalAlertService.PREF_LAST_ALARM,"无")+
             "\n最近判断："+alarmReason(p.getString(SignalAlertService.PREF_LAST_REASON,"暂无"))+
             "\n读取错误："+p.getString(SignalAlertService.PREF_LAST_ERROR,"无")+
+            "\n系统闹钟音量："+p.getInt("event10_alert_alarm_volume",-1)+"/"+p.getInt("event10_alert_alarm_max_volume",-1)+
             "\n系统通知："+(notifyAllowed?"已授权":"已关闭/未授权")+
             "\n屏幕中央悬浮弹窗："+(Settings.canDrawOverlays(this)?"已授权":"未授权，将仅显示系统通知")+
             "\n忽略电池优化："+(batteryUnrestricted?"是":"否，锁屏后可能暂停")+

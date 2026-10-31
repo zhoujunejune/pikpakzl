@@ -295,9 +295,14 @@ public final class MainActivity extends Activity {
                 "关闭时不响铃 · 开启后系统通知+闹铃（最多25秒）";
             if(enabled){
                 long last=SecureStore.prefs(this).getLong(SignalAlertService.PREF_LAST_POLL,0L);
+                long lastSuccess=SecureStore.prefs(this).getLong(SignalAlertService.PREF_LAST_SUCCESS,0L);
                 long since=SecureStore.prefs(this).getLong(SignalAlertService.PREF_ENABLED_SINCE,0L);
-                long age=System.currentTimeMillis()-(last>0?last:since);
-                if(age>40000L)status="⚠ 后台监听已中断超过40秒，点下方查看诊断";
+                long now=System.currentTimeMillis();
+                if(now-Math.max(last,since)>12000L){
+                    status="⚠ 后台监听超过12秒未运行，请检查后台权限";
+                }else if(now-Math.max(lastSuccess>=since?lastSuccess:0L,since)>15000L){
+                    status="⚠ 超过15秒未成功获取信号，请查看提醒诊断";
+                }
             }
             alarmStatus.setText(status);
         }
@@ -363,6 +368,8 @@ public final class MainActivity extends Activity {
             "\n本次开启时间："+timeOf(p.getLong(SignalAlertService.PREF_ENABLED_SINCE,0L))+
             "\n后台最后尝试："+timeOf(lastPoll)+
             "\n后台最后成功："+timeOf(lastSuccess)+
+            "\n最近接口耗时："+p.getLong(SignalAlertService.PREF_LAST_API_LATENCY_MS,0L)+"毫秒"+
+            "\n最近信号通知延迟："+(lastAlarm>0?p.getLong(SignalAlertService.PREF_LAST_ALARM_DELAY_MS,0L)+"毫秒":"无记录")+
             "\n最近信号："+timeOf(lastSignal)+
             "\n最近信号ID："+p.getString(SignalAlertService.PREF_LAST_SEEN,"无")+
             "\n上次闹铃："+timeOf(lastAlarm)+

@@ -51,6 +51,8 @@ public final class SignalAlertService extends Service {
     public static final String PREF_LAST_ALARM="event10_alert_last_alarm";
     public static final String PREF_LAST_ALARM_TIME="event10_alert_last_alarm_time";
     public static final String PREF_LAST_ERROR="event10_alert_last_error";
+    public static final String PREF_LAST_API_LATENCY_MS="event10_alert_last_api_latency_ms";
+    public static final String PREF_LAST_ALARM_DELAY_MS="event10_alert_last_alarm_delay_ms";
     public static final String PREF_HANDLED_IDS="event10_alert_handled_ids_v2";
     public static final String PREF_AUDIT_TRAIL="event10_alert_audit_trail_v2";
     public static final String PREF_LAST_AUDIT_KEY="event10_alert_last_audit_key_v2";
@@ -59,6 +61,9 @@ public final class SignalAlertService extends Service {
     private static final String ALARM_CHANNEL="zl_event10_alarm_v1";
     private static final int FOREGROUND_ID=101;
     private static final int SIGNAL_ID=102;
+    // Foreground-only low-latency polling: no speculative signals, no extra exchange requests.
+    // If a request fails, retry after 2s rather than waiting for the old 5s interval.
+    private static final int SIGNAL_POLL_SECONDS=2;
     private ScheduledExecutorService executor;
     private final AlarmPlayer sound=new AlarmPlayer();
     private volatile boolean stopped=false;
@@ -140,7 +145,7 @@ public final class SignalAlertService extends Service {
                 t.setDaemon(true);
                 return t;
             });
-            executor.scheduleWithFixedDelay(this::pollSafe,0,5,TimeUnit.SECONDS);
+            executor.scheduleWithFixedDelay(this::pollSafe,0,SIGNAL_POLL_SECONDS,TimeUnit.SECONDS);
         }
         return START_STICKY;
     }
@@ -181,8 +186,8 @@ public final class SignalAlertService extends Service {
         HttpURLConnection conn=(HttpURLConnection)url.openConnection();
         conn.setInstanceFollowRedirects(false);
         conn.setRequestMethod("GET");
-        conn.setConnectTimeout(6000);
-        conn.setReadTimeout(6000);
+        conn.setConnectTimeout(3500);
+        conn.setReadTimeout(4500);
         conn.setRequestProperty("Accept","application/json");
         conn.setRequestProperty("Cache-Control","no-store");
         conn.setRequestProperty("Authorization","Basic "+Base64.encodeToString(
@@ -228,12 +233,15 @@ public final class SignalAlertService extends Service {
     private void poll() throws Exception {
         SharedPreferences p=SecureStore.prefs(this);
         if(!p.getBoolean(PREF_ENABLED,false))return;
+        long requestStarted=System.currentTimeMillis();
         JSONObject response=fetch();
         if(!response.optBoolean("ok",false))throw new IllegalStateException("服务响应异常");
         JSONArray records=response.optJSONArray("records");
         if(records==null)throw new IllegalStateException("信号记录缺失");
         long now=System.currentTimeMillis();
-        p.edit().putLong(PREF_LAST_SUCCESS,now).remove(PREF_LAST_ERROR).apply();
+        p.edit().putLong(PREF_LAST_SUCCESS,now)
+            .putLong(PREF_LAST_API_LATENCY_MS,Math.max(0L,now-requestStarted))
+            .remove(PREF_LAST_ERROR).apply();
         String clockTime=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.CHINA)
             .format(new java.util.Date(now));
         if(records.length()==0){
@@ -310,6 +318,7 @@ public final class SignalAlertService extends Service {
             processed.add(id);
             p.edit().putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
                 .putLong(PREF_LAST_ALARM_TIME,System.currentTimeMillis())
+                .putLong(PREF_LAST_ALARM_DELAY_MS,Math.max(0L,System.currentTimeMillis()-opened))
                 .putString(PREF_LAST_REASON,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY").apply();
             audit(p,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY",
                 id,dir,opened,expires);

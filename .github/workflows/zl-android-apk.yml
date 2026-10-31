@@ -68,7 +68,11 @@ jobs:
           assert 'PREF_LAST_SUCCESS' in service
           assert 'PREF_LAST_ALARM_TIME' in service
           assert 'ordered.sort(' in service and 'PREF_HANDLED_IDS' in service
-          assert 'scheduleWithFixedDelay(this::pollSafe,0,5,TimeUnit.SECONDS)' in service
+          assert 'scheduleWithFixedDelay(this::pollSafe,0,SIGNAL_POLL_SECONDS,TimeUnit.SECONDS)' in service
+          assert 'SIGNAL_POLL_SECONDS=2' in service
+          assert 'setConnectTimeout(3500)' in service and 'setReadTimeout(4500)' in service
+          assert 'PREF_LAST_ALARM_DELAY_MS' in service and 'PREF_LAST_API_LATENCY_MS' in service
+          assert '超过15秒未成功获取信号' in j
           assert 'PREF_AUDIT_TRAIL' in service
           assert 'PARTIAL_WAKE_LOCK' in service
           assert '忽略电池优化' in j and '本次开启时间' in j
@@ -131,13 +135,13 @@ jobs:
           mkdir -p dist
           if [[ "$ZL_STABLE_SIGNING" == true ]]; then
             src=android-app/app/build/outputs/apk/release/app-release.apk
-            dest=dist/ZL-Control-v1.2.0-stable-release.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.0-STABLE-RELEASE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.1-stable-release.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.1-STABLE-RELEASE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=true' >> "$GITHUB_ENV"
           else
             src=android-app/app/build/outputs/apk/debug/app-debug.apk
-            dest=dist/ZL-Control-v1.2.0-DEBUG-ONLY-NOT-UPGRADEABLE.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.0-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.1-DEBUG-ONLY-NOT-UPGRADEABLE.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.1-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=false' >> "$GITHUB_ENV"
           fi
           cp "$src" "$dest"

@@ -183,6 +183,13 @@ public final class MainActivity extends Activity {
         diagnose.setOnClickListener(v->showAlarmDiagnostics());
         top.addView(diagnose,new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,dp(40)));
+        Button overlayAccess=new Button(this);
+        overlayAccess.setAllCaps(false);
+        overlayAccess.setText("信号屏幕弹窗权限（显示在其他应用上层）");
+        overlayAccess.setTextSize(11);
+        overlayAccess.setOnClickListener(v->openOverlayPermissionSettings());
+        top.addView(overlayAccess,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,dp(40)));
         outer.addView(top);
 
         alarmToggle.setChecked(SecureStore.prefs(this)
@@ -324,6 +331,8 @@ public final class MainActivity extends Activity {
             case "ALARM_CHANNEL_DISABLED":return "信号提醒通知渠道已被关闭";
             case "NOTIFICATIONS_DISABLED":return "App 系统通知已关闭";
             case "POLL_ERROR":return "后台服务器请求失败";
+            case "POPUP_CONFIRMED_BINANCE":return "已确认弹窗，结束本次提醒并打开币安";
+            case "POPUP_BINANCE_LAUNCH_FAILED":return "已停止本次提醒，但系统未允许启动币安";
             case "SIGNAL_TOO_OLD":return "信号过旧，不再提醒";
             case "BLOCKED":return "信号被提醒条件拦截";
             default:return reason==null||reason.isEmpty()?"暂无":reason;
@@ -377,6 +386,7 @@ public final class MainActivity extends Activity {
             "\n最近判断："+alarmReason(p.getString(SignalAlertService.PREF_LAST_REASON,"暂无"))+
             "\n读取错误："+p.getString(SignalAlertService.PREF_LAST_ERROR,"无")+
             "\n系统通知："+(notifyAllowed?"已授权":"已关闭/未授权")+
+            "\n屏幕中央悬浮弹窗："+(Settings.canDrawOverlays(this)?"已授权":"未授权，将仅显示系统通知")+
             "\n忽略电池优化："+(batteryUnrestricted?"是":"否，锁屏后可能暂停")+
             "\n\n最近提醒审计记录："+log;
         new AlertDialog.Builder(this).setTitle("10分钟信号提醒诊断")
@@ -392,6 +402,29 @@ public final class MainActivity extends Activity {
             .show();
     }
 
+    private void openOverlayPermissionSettings(){
+        try{
+            Intent request=new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:"+getPackageName()));
+            startActivity(request);
+        }catch(Exception e){
+            try{startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:"+getPackageName())));}
+            catch(Exception ignored){toast("请在手机设置中允许 ZL Control 显示在其他应用上层");}
+        }
+    }
+    private void showOverlayPermissionAdvice(){
+        if(Settings.canDrawOverlays(this))return;
+        new AlertDialog.Builder(this)
+            .setTitle("开启信号居中弹窗")
+            .setMessage("你已开启信号提醒。要让新 Higher / Lower 信号出现在其他应用的屏幕中央，"
+                +"还需要允许 ZL Control“显示在其他应用上层”。"
+                +"\n\n未授权时会继续使用普通系统通知和铃声；锁屏及部分系统场景可能限制弹窗。"
+                +"\n\n点击弹窗“确认并打开币安”后，本次响铃和弹窗都会结束，不会自动下单。")
+            .setPositiveButton("去授权悬浮窗",(dialog,which)->openOverlayPermissionSettings())
+            .setNegativeButton("暂时只用通知",null)
+            .show();
+    }
     private void openBackgroundSettings(){
         try{
             startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
@@ -406,7 +439,7 @@ public final class MainActivity extends Activity {
         if(pm==null||pm.isIgnoringBatteryOptimizations(getPackageName()))return;
         new AlertDialog.Builder(this)
             .setTitle("请允许后台运行，避免漏掉新信号")
-            .setMessage("你的手机此前显示未忽略电池优化。系统可能在锁屏时暂停每5秒检查一次的监听。"
+            .setMessage("你的手机此前显示未忽略电池优化。系统可能在锁屏时暂停每2秒检查一次的监听。"
                 +"\n\n建议在系统电池设置里为 ZL Control 开启“无限制 / 允许后台运行”，"
                 +"并允许开机自启动（手机提供时）。否则无法保证及时提醒。")
             .setPositiveButton("去设置",(dialog,which)->openBackgroundSettings())
@@ -446,6 +479,7 @@ public final class MainActivity extends Activity {
             SignalAlertService.start(this);
             toast("10分钟信号闹铃已开启。系统会显示持续监听通知。");
             showBackgroundPermissionAdvice();
+            showOverlayPermissionAdvice();
         }catch(Exception e){
             SecureStore.prefs(this).edit().putBoolean(SignalAlertService.PREF_ENABLED,false).apply();
             setToggle(false);

@@ -66,6 +66,8 @@ public final class SignalAlertService extends Service {
     private static final int SIGNAL_POLL_SECONDS=2;
     private ScheduledExecutorService executor;
     private final AlarmPlayer sound=new AlarmPlayer();
+    private SignalPopupOverlay signalPopup;
+    private volatile String activeAlarmSignalId;
     private volatile boolean stopped=false;
 
     public static void start(Context context){
@@ -81,6 +83,7 @@ public final class SignalAlertService extends Service {
 
     @Override public void onCreate(){
         super.onCreate();
+        signalPopup=new SignalPopupOverlay(this,this::confirmAndOpenBinance);
         SecureStore.prefs(this).edit().putString(PREF_LAST_STATE,"后台监听服务已启动").apply();
         NotificationManager nm=getSystemService(NotificationManager.class);
         NotificationChannel foreground=new NotificationChannel(FOREGROUND_CHANNEL,"10分钟信号后台监听",NotificationManager.IMPORTANCE_LOW);
@@ -127,7 +130,12 @@ public final class SignalAlertService extends Service {
     }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&ACTION_SILENCE.equals(intent.getAction())){
-            sound.stop();
+            String id=intent.getStringExtra("signal_id");
+            if(id!=null&&id.equals(activeAlarmSignalId)){
+                sound.stop();
+                activeAlarmSignalId=null;
+                if(signalPopup!=null)signalPopup.dismissIfMatches(id);
+            }
             getSystemService(NotificationManager.class)
                 .cancel(intent.getIntExtra("signal_notification_id",SIGNAL_ID));
             return START_STICKY;
@@ -354,7 +362,8 @@ public final class SignalAlertService extends Service {
         Intent silencer=new Intent(this,SignalAlertService.class)
             .setAction(ACTION_SILENCE)
             .setData(android.net.Uri.parse("zlcontrol://silence/"+android.net.Uri.encode(signalId)))
-            .putExtra("signal_notification_id",notificationId);
+            .putExtra("signal_notification_id",notificationId)
+            .putExtra("signal_id",signalId);
         PendingIntent silence=PendingIntent.getService(this,notificationId,silencer,
             PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
         PendingIntent binance=openBinanceIntent(signalId);
@@ -374,14 +383,60 @@ public final class SignalAlertService extends Service {
             .addAction(new Notification.Action.Builder(null,"停止响铃",silence).build())
             .build();
         getSystemService(NotificationManager.class).notify(notificationId,notice);
+        activeAlarmSignalId=signalId;
         boolean started=sound.play(this,25);
+        // Display only after the notification has been posted successfully.
+        // Overlay permission is opt-in, and notification is always the fallback.
+        if(signalPopup!=null)signalPopup.show(signalId,direction,opened,notificationId);
         status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name);
         return started;
     }
+    private void confirmAndOpenBinance(String id,int notificationId){
+        // Called by a real tap on the centered overlay. No auto trading.
+        if(!id.equals(activeAlarmSignalId))return;
+        sound.stop();
+        activeAlarmSignalId=null;
+        getSystemService(NotificationManager.class).cancel(notificationId);
+        SharedPreferences p=SecureStore.prefs(this);
+        p.edit().putString(PREF_LAST_REASON,"POPUP_CONFIRMED_BINANCE").apply();
+        audit(p,"POPUP_CONFIRMED_BINANCE",id,"USER_TAP",0L,0L);
+        try{
+            Intent launch=getPackageManager().getLaunchIntentForPackage("com.binance.dev");
+            if(launch!=null){
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(launch);
+            }else{
+                // This opens the app's existing Binance-help flow; never redirect
+                // to an untrusted download page or trade automatically.
+                Intent fallback=new Intent(this,MainActivity.class)
+                    .setAction(MainActivity.ACTION_OPEN_BINANCE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        |Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        |Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                startActivity(fallback);
+            }
+        }catch(Exception e){
+            try{
+                Intent fallback=new Intent(this,MainActivity.class)
+                    .setAction(MainActivity.ACTION_OPEN_BINANCE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        |Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        |Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                startActivity(fallback);
+            }catch(Exception ignored){}
+            p.edit().putString(PREF_LAST_REASON,"POPUP_BINANCE_LAUNCH_FAILED").apply();
+            audit(p,"POPUP_BINANCE_LAUNCH_FAILED",id,"OPEN_ACTIVITY_RESTRICTED",0L,0L);
+        }finally{
+            if(signalPopup!=null)signalPopup.dismissIfMatches(id);
+        }
+    }
+
     @Override public void onDestroy(){
         stopped=true;
         if(executor!=null){executor.shutdownNow();executor=null;}
         sound.stop();
+        activeAlarmSignalId=null;
+        if(signalPopup!=null)signalPopup.dismiss();
         getSystemService(NotificationManager.class).cancel(SIGNAL_ID);
         super.onDestroy();
     }

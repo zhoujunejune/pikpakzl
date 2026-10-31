@@ -24,6 +24,7 @@ jobs:
       - name: Validate app JS, service worker, install metadata and deploy shell
         run: |
           node --check mobile-app/app.js
+          node --test mobile-app/event10-current-only.test.mjs
           node --check mobile-app/sw.js
           python -m py_compile mobile-app/aliyun_deploy.py
           python - <<'PY'

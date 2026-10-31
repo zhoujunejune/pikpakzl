@@ -37,15 +37,13 @@ function node(tag,cls,t){
 function renderRecords(id,items,kind){
  const root=$(id);root.replaceChildren();
  if(!items.length){
-  root.append(node("div","mini","暂无可核实的已保存信号记录。"));
+  root.append(node("div","mini",kind==="event10"?"新策略暂无已保存的有效方向信号。":"暂无可核实的已保存信号记录。"));
   return;
  }
  for(const r of items.slice(0,12)){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
-  const version=kind==="event10"?(r.strategyVersion||r.decisionReviewVersion||r.ruleChecks?.strategyVersion):null;
-  const edition=version===EVENT10_FREQ_OPTIMIZED_VERSION?"六项频率优化策略":"旧版信号";
-  const title=node("div","record-title",kind==="event10"?dir(d)+" · "+edition:dir(d));
+  const title=node("div","record-title",kind==="event10"?dir(d)+" · 频率优化策略":dir(d));
   if(d==="UP")title.classList.add("uptext");
   if(d==="DOWN")title.classList.add("downtext");
   const when=kind==="guardian"?(r.at||r.round):(r.openedAt||r.checkedAt);
@@ -111,60 +109,63 @@ function guardianError(error){
  for(const id of ["gDirection","gSignal","gAccuracy","gFollow","gFollowLong","gOrder","gOrderFull","gError","gRound","gCounts"])put(id,"不可用");
  $("gRecords").replaceChildren(node("div","mini","当前未能读取信号数据，不能据此判断没有信号。"));
 }
-function currentEventRecord(e){
- const a=e.active||null;
- const b=e.lastCheck||null;
- const c=e.lastSession||null;
- return a||((Number(b?.checkedAt||b?.openedAt||0)>=Number(c?.openedAt||0))?b:c)||null;
-}
+// The ten-minute app is a CURRENT-STRATEGY ONLY view.
+// Old signal files stay on the server for audit, but are never displayed or counted.
 function eventVersion(r){
  return r?.strategyVersion||r?.decisionReviewVersion||r?.ruleChecks?.strategyVersion||null;
 }
-function mergeEventRecords(ledger,historyData){
+function currentEventRecord(e){
+ if(e?.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION)return e.active;
+ return [e?.lastCheck,e?.lastSession]
+  .filter(r=>r&&eventVersion(r)===EVENT10_FREQ_OPTIMIZED_VERSION)
+  .sort((a,b)=>Number(b.checkedAt??b.openedAt??0)-Number(a.checkedAt??a.openedAt??0))[0]||null;
+}
+function mergeEventRecords(ledger){
+ // Fail closed: a cached, old-version or missing ledger must never repopulate old rows.
+ if(ledger?.version!==EVENT10_FREQ_OPTIMIZED_VERSION||!Array.isArray(ledger.records))return [];
  const rows=new Map();
- for(const r of (Array.isArray(historyData?.records)?historyData.records:[])){
-  if(!r||!["UP","DOWN"].includes(r.direction)||!Number.isFinite(r.openedAt)||!r.id)continue;
-  rows.set(r.id,r);
- }
- // Ledger authoritative for duplicate IDs.
- for(const r of (Array.isArray(ledger?.records)?ledger.records:[])){
-  if(!r||!["UP","DOWN"].includes(r.direction)||!Number.isFinite(r.openedAt)||!r.id)continue;
+ for(const r of ledger.records){
+  if(!r||eventVersion(r)!==EVENT10_FREQ_OPTIMIZED_VERSION||
+     !["UP","DOWN"].includes(r.direction)||!Number.isFinite(r.openedAt)||!r.id)continue;
   rows.set(r.id,r);
  }
  return Array.from(rows.values()).sort((a,b)=>b.openedAt-a.openedAt);
 }
-function event(e,ledger,historyData){
+function event(e,ledger){
+ if(e?.decisionReviewVersion!==EVENT10_FREQ_OPTIMIZED_VERSION)
+  throw Error("十分钟服务尚未确认运行最新版信号策略，旧版统计不会显示");
+ const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION&&Array.isArray(ledger.records);
  const s=currentEventRecord(e);
- const stats=ledger?.stats||e.strategyStats||{};
- const records=mergeEventRecords(ledger,historyData);
- const legacy=records.filter(r=>eventVersion(r)!==EVENT10_FREQ_OPTIMIZED_VERSION);
- const oldSignal=!!s&&["UP","DOWN"].includes(s.direction)&&eventVersion(s)!==EVENT10_FREQ_OPTIMIZED_VERSION;
- const direction=s?.direction||null;
- setHeading("eDirection",direction);put("eSignal",dir(direction));
- put("ePhase",(oldSignal?"旧策略 · ":"")+(s?.status||"尚无已保存状态"));
- put("eActive",e.active?(oldSignal?"旧信号等待核对":"新信号等待核对"):"待机");
- put("eCount",stats.validDirections??"—");
- put("eCounts",(stats.validDirections??"—")+" / "+(stats.proxySettled??"—"));
+ // The status fallback is safe only after verifying the server's strategy version.
+ const stats=currentLedger?(ledger.stats||{}):(e.strategyStats||{});
+ const records=currentLedger?mergeEventRecords(ledger):[];
+ const active=!!e.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION;
+ setHeading("eDirection",s?.direction||null);
+ put("eSignal",dir(s?.direction||null));
+ put("ePhase",s?.status||"暂无新版信号");
+ put("eActive",active?"新版信号等待核对":"待机");
+ const validDirections=stats.validDirections??stats.total??"—";
+ put("eCount",validDirections);
+ put("eCounts",validDirections+" / "+(stats.proxySettled??"—"));
  const accuracy=pct(stats.proxyHits,stats.proxySettled);
  const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
- const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（暂无已核对样本）");
+ const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（新版暂无已核对样本）");
  put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
- put("eReason",(oldSignal?"这是旧版策略的历史信号，不属于当前Excel六项频率优化策略。\n":"")+(s?.reason||"暂无新策略有效信号；六项条件未全部通过时返回WAIT。"));
- pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 六项频率优化策略":"数据不可用");
- pill("eStatus",e.configured===true?"good":"bad",e.active?(oldSignal?"旧信号待核对":"新信号待核对"):e.configured===true?"就绪":"未就绪");
- const newTotal=Number.isInteger(ledger?.total)?ledger.total:(stats.total??0);
- if(historyData&&Array.isArray(historyData.records)){
-  put("eTotal","新版 "+newTotal+" 条 · 最近旧版 "+legacy.length+" 条");
- }else if(ledger){
-  put("eTotal","新版 "+newTotal+" 条 · 旧版历史暂不可用");
- }else{
-  put("eTotal","信号记录暂不可用");
- }
+ put("eReason",s?.reason||"当前仅展示频率优化策略信号；六项条件未满足时不产生方向。");
+ pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 频率优化策略":"数据不可用");
+ pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
  state.lastEvent=records;
- renderRecords("eRecords",records,"event10");
+ if(currentLedger){
+  put("eTotal","新版有效信号 "+(Number.isInteger(ledger.total)?ledger.total:records.length)+" 条（旧版不计入）");
+  renderRecords("eRecords",records,"event10");
+ }else{
+  put("eTotal","新版明细暂时无法读取");
+  $("eRecords").replaceChildren(node("div","mini","新版信号记录接口暂不可用；没有显示旧版历史，也不代表新版记录为零。"));
+ }
  $("manualCheck").disabled=e.configured!==true||Boolean(e.active)||state.manualBusy;
 }
 function eventError(error){
+ state.lastEvent=[];
  pill("eBadge","bad","连接异常");pill("eStatus","bad","暂不可用");
  for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy","eTotal"])put(id,"不可用");
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
@@ -175,22 +176,22 @@ async function refresh(){
  if(state.busy||document.hidden)return;
  state.busy=true;
  try{
-  const [gr,tr,er,lr,hr]=await Promise.allSettled([
+  const [gr,tr,er,lr]=await Promise.allSettled([
    api("/guardian/api/status",7500),
    api("/api/status",7500),
    api("/event10/api/status",7500),
-   api("/event10/api/signals?limit=25&offset=0",9500),
-   api("/event10/api/history",9500)
+   api("/event10/api/signals?limit=25&offset=0",9500)
   ]);
   const g=gr.status==="fulfilled"?gr.value:null;
   const t=tr.status==="fulfilled"?tr.value:null;
   const e=er.status==="fulfilled"?er.value:null;
   const ledger=lr.status==="fulfilled"?lr.value:null;
-  const legacyHistory=hr.status==="fulfilled"?hr.value:null;
   try{if(g)guardian(g,t);else throw gr.reason||Error("无数据");}catch(err){guardianError(err);}
-  try{if(e)event(e,ledger,legacyHistory);else throw er.reason||Error("无数据");}catch(err){eventError(err);}
+  try{if(e)event(e,ledger);else throw er.reason||Error("无数据");}catch(err){eventError(err);}
   // Do not claim that a bot is online when one of its API calls failed.
-  const count=Number(Boolean(g&&t))+Number(Boolean(e&&ledger));
+  const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION;
+  const currentService=e?.decisionReviewVersion===EVENT10_FREQ_OPTIMIZED_VERSION;
+  const count=Number(Boolean(g&&t))+Number(Boolean(e&&currentLedger&&currentService));
   $("healthDot").className="dot "+(count===2?"up":count===0?"down":"");
   put("healthText",count===2?"双服务已连接":count===0?"连接异常":"部分接口异常");
   put("updatedAt","刷新于 "+new Date().toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}));

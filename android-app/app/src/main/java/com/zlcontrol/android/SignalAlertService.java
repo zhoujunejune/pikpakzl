@@ -387,7 +387,7 @@ public final class SignalAlertService extends Service {
         boolean started=sound.play(this,25);
         // Display only after the notification has been posted successfully.
         // Overlay permission is opt-in, and notification is always the fallback.
-        if(signalPopup!=null)signalPopup.show(signalId,direction,opened,notificationId);
+        if(signalPopup!=null)signalPopup.show(signalId,direction,opened,signal.optLong("expiresAt",0L),notificationId);
         status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name);
         return started;
     }

@@ -1,6 +1,6 @@
 # retry after preserving intentionally stopped unrelated services
 # Deploy request: EVENT10 isolated late-index strategy production rollout (2026-10-30)
-name: EVENT10 high-selectivity six-gate isolated release
+name: EVENT10 frequency-optimized six-gate isolated release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -36,7 +36,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           root=Path("event10-bot")
-          v="EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031"
+          v="EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101"
           assert v in (root/"pure-signal.mjs").read_text()
           assert v in (root/"panel.html").read_text()
           assert 'NO_EVENT_CONTRACT_ORDER_API' in (root/"server.mjs").read_text()
@@ -114,7 +114,7 @@ jobs:
         run: |
           if [ "$TEST_RESULT" = "success" ] && [ "$DEPLOY_RESULT" = "success" ]; then
             status=success
-            description="EVENT10 six-gate isolated Aliyun release confirmed"
+            description="EVENT10 Excel frequency-optimized isolated Aliyun release confirmed"
           else
             status=failure
             description="EVENT10 release not confirmed: test=$TEST_RESULT deploy=$DEPLOY_RESULT"

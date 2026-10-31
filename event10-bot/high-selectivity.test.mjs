@@ -39,20 +39,20 @@ function evaluate(side=1,at=NOW){
 }
 test("Excel six hard gates Higher and Lower at any minute of UTC cycle",()=>{
   const up=evaluate(1),down=evaluate(-1);
-  assert.equal(RULE_VERSION,"EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031");
+  assert.equal(RULE_VERSION,"EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101");
   assert.equal(up.direction,"UP");assert.equal(down.direction,"DOWN");
   assert.equal(up.status,"PREDICTED");
   assert.equal(Object.keys(up.conditions).length,6);
   assert.ok(Object.values(up.conditions).every(Boolean));
   assert.ok(Object.values(down.conditions).every(Boolean));
-  assert.ok(up.evidence.volumeRatio>=1.5&&up.evidence.rsi14>=50&&up.evidence.rsi14<=75);
-  assert.ok(down.evidence.rsi14>=25&&down.evidence.rsi14<=50);
+  assert.ok(up.evidence.volumeRatio>=1.15&&up.evidence.rsi14>=45&&up.evidence.rsi14<=78);
+  assert.ok(down.evidence.rsi14>=22&&down.evidence.rsi14<=55);
   assert.equal(up.lateWindow,false);
   assert.equal(up.evidence.referenceIsActualEventContractStrike,false);
 });
 test("any missing mandatory gate yields WAIT/NO_SIGNAL and is never forced",()=>{
   const healthy=feed(),quiet=structuredClone(healthy);
-  quiet.candles["1m"].at(-1).volume=125;
+  quiet.candles["1m"].at(-1).volume=110;
   const args={reference:{observedAt:NOW},indexSnapshot:{price:100120,observedAt:NOW-300}};
   const lowVolume=evaluatePureSignal({...args,feed:quiet,orderBook:book()});
   assert.equal(lowVolume.direction,null);assert.equal(lowVolume.signal,"NO_SIGNAL");
@@ -64,9 +64,9 @@ test("any missing mandatory gate yields WAIT/NO_SIGNAL and is never forced",()=>
   const badFive=structuredClone(healthy);
   badFive.candles["5m"].at(-1).close=badFive.candles["5m"].at(-1).open-0.2;
   badFive.candles["5m"].at(-1).low=badFive.candles["5m"].at(-1).close-0.1;
-  assert.equal(evaluatePureSignal({...args,feed:badFive,orderBook:book()}).direction,null);
+  assert.equal(evaluatePureSignal({...args,feed:badFive,orderBook:book()}).direction,"UP");
 });
-test("three continuous active buys/sells may replace weak orderbook, never stale flow",()=>{
+test("aggressive trades cannot bypass spreadsheet mandatory orderbook gate",()=>{
   const mk=(isSell)=>[1,2,3].map((i)=>({T:NOW-1700+i*200,p:"1000",q:"0.1",m:isSell,a:i}));
   const flowBuy=parseAggressiveStreak(mk(false),NOW);
   const flowSell=parseAggressiveStreak(mk(true),NOW);
@@ -74,8 +74,8 @@ test("three continuous active buys/sells may replace weak orderbook, never stale
   assert.equal(flowSell.consecutiveTakerSells,3);
   const common={reference:{observedAt:NOW},
     indexSnapshot:{price:100120,observedAt:NOW-300}};
-  assert.equal(evaluatePureSignal({...common,feed:feed(1),aggressiveFlow:flowBuy}).direction,"UP");
-  assert.equal(evaluatePureSignal({...common,feed:feed(-1),aggressiveFlow:flowSell}).direction,"DOWN");
+  assert.equal(evaluatePureSignal({...common,feed:feed(1),aggressiveFlow:flowBuy}).direction,null);
+  assert.equal(evaluatePureSignal({...common,feed:feed(-1),aggressiveFlow:flowSell}).direction,null);
   assert.equal(evaluatePureSignal({...common,feed:feed(1),
     aggressiveFlow:{...flowBuy,lastTradeAt:NOW-9000}}).direction,null);
 });
@@ -110,7 +110,7 @@ test("auto/manual signal persisted and index proxy settles at own T+600; no orde
   assert.equal(session.ruleChecks.conditions.volume,true);
   assert.equal(engine.signals().stats.total,1);
   assert.equal(engine.signals().records[0].sixOfSix,true);
-  assert.equal(engine.status().providerModel,"PURE_SIGNAL_SIX_GATES_V1");
+  assert.equal(engine.status().providerModel,"PURE_SIGNAL_FREQ_OPTIMIZED_V2");
   assert.equal(engine.status().autoTradingEnabled,false);
   assert.equal(session.realOrderPlaced,false);
   now+=600800;price=100110;
@@ -119,4 +119,27 @@ test("auto/manual signal persisted and index proxy settles at own T+600; no orde
   assert.equal(engine.signals().records[0].settlementStatus,"INDEX_SIGNAL_TPLUS10_PROXY_ONLY");
   assert.equal(engine.signals().stats.proxySettled,1);
   assert.equal(engine.signals().records[0].strategyVersion,RULE_VERSION);
+});
+
+test("Excel 1.15x threshold and near-balanced depth pass with six gates",()=>{
+  const f=feed(1);f.candles["1m"].at(-1).volume=116;
+  const b=parseTop5Depth({bids:Array.from({length:5},(_,i)=>[String(999-i),"9.7"]),
+    asks:Array.from({length:5},(_,i)=>[String(1001+i),"10"]),T:NOW-200},NOW);
+  const r=evaluatePureSignal({feed:f,reference:{observedAt:NOW},
+    indexSnapshot:{price:100120,observedAt:NOW-100},orderBook:b});
+  assert.equal(r.direction,"UP");assert.ok(r.evidence.bidAskRatio>0.95);
+  assert.equal(r.evidence.volumeBasis,"LATEST_CLOSED_1M_FALLBACK");
+});
+test("Excel current forming 1m volume, bullish current body, and RSI boundaries are audited",()=>{
+  const f=feed(1), spot=f.latest.lastPrice;
+  f.candles["1m"].push({startMs:Math.floor(NOW/60000)*60000,
+    open:spot-1,high:spot+0.1,low:spot-2,close:spot,
+    volume:125,closed:false});
+  f.candles["1m"].at(-2).volume=100;
+  const r=evaluatePureSignal({feed:f,reference:{observedAt:NOW},
+    indexSnapshot:{price:100120,observedAt:NOW-300},orderBook:book()});
+  assert.equal(r.direction,"UP");
+  assert.equal(r.evidence.volumeBasis,"CURRENT_OPEN_1M");
+  assert.ok(r.evidence.liveCandleUp);
+  assert.equal(r.evidence.volumeCurrentOrLastClosed1m,125);
 });

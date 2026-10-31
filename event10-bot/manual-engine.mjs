@@ -251,13 +251,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_HIGH_SELECTIVITY_SIX_GATES_TPLUS10",
-      providerModel:"PURE_SIGNAL_SIX_GATES_V1",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_FREQUENCY_OPTIMIZED_SIX_GATES_TPLUS10",
+      providerModel:"PURE_SIGNAL_FREQ_OPTIMIZED_V2",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_HIGH_SELECTIVITY_6GATES_V1",
+      enrichmentVersion:"EVENT10_FREQ_OPTIMIZED_6GATES_V2",
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"disabled",reasoningEffort:null,
       lastReasoningObserved:null,lastReasoningTokenCount:null,
@@ -348,7 +348,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         source:"BINANCE_USDM_INDEX_SIGNAL_CAPTURE_TPLUS600_NOT_ORDER_STRIKE",
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_SIX_GATES_V1",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_FREQ_OPTIMIZED_V2",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -377,7 +377,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // Scan high-selectivity gates every 12 seconds at any time; each accepted
+    // Scan frequency-optimized Excel gates every 12 seconds at any time; each accepted
     // signal expires 600 seconds after its own capture. No orders.
     const nowMs=clock(),cycle=nowMs-Math.floor(nowMs%HORIZON_MS);
     if(lastRuleScanCycle!==cycle){lastRuleScanCycle=cycle;lastRuleScan=0;}

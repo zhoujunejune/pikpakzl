@@ -1,7 +1,7 @@
-// Deterministic BTC 10-minute directional rule. No LLM, no order execution.
+// Excel frequency-optimized BTC 10m signal rule; strict six gates, no LLM, no order execution.
 // Candle indicators use CONFIRMED CLOSED spot BTCUSDT candles at/before the
 // reference tick; depth/trades are explicitly USD-M public-market context.
-export const RULE_VERSION="EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031";
+export const RULE_VERSION="EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101";
 const n=v=>Number(v),valid=v=>typeof v==="number"&&Number.isFinite(v);
 const fmt=v=>valid(v)?v.toFixed(3):"缺失";
 const finitePositive=v=>valid(v)&&v>0;
@@ -88,9 +88,9 @@ export function parseAggressiveStreak(raw,receivedAt){
     consecutiveTakerBuys:count(false),consecutiveTakerSells:count(true),
     source:"BINANCE_USDM_BTCUSDT_AGGTRADES_10S"};
 }
-// Workbook: BTC_10分钟事件合约_高选择性信号策略.xlsx.
-// Six mandatory gates: confirmed 5m trend, 1m EMA momentum, price/3 candles,
-// >=1.5x last completed minute volume, top-5 depth OR aggressive streak,
+// Workbook: BTC_10分钟事件合约_频率优化信号策略.xlsx (4 tabs, 2026-11-01).
+// Six mandatory gates: 5m EMA trend, spot price/1m EMA, 2 candles or current candle,
+// >=1.15x current 1m volume (closed-candle fallback labeled), bid/ask ratio,
 // and Wilder RSI14. Full T+600 index proxy outcome; no real order execution.
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export function parseBinanceIndexQuote(raw,receivedAt){
@@ -133,18 +133,33 @@ export function evaluatePureSignal({feed,reference,indexSnapshot=null,
   const c1=one.map(b=>b.c),c5=five.map(b=>b.c);
   const ema1m9=ema(c1,9),ema1m21=ema(c1,21);
   const ema5m9=ema(c5,9),ema5m21=ema(c5,21);
-  const diff=(series)=>ema(series,9)-ema(series,21);
-  const prior1=diff(c1.slice(0,-1)),prior2=diff(c1.slice(0,-2));
-  const crossUp=(prior1<=0&&ema1m9>ema1m21)||(prior2<=0&&prior1>0&&ema1m9>ema1m21);
-  const crossDown=(prior1>=0&&ema1m9<ema1m21)||(prior2>=0&&prior1<0&&ema1m9<ema1m21);
-  const stayUp=prior1>0&&prior2>0&&ema1m9>ema1m21;
-  const stayDown=prior1<0&&prior2<0&&ema1m9<ema1m21;
-  const previous20=one.slice(-21,-1),latest1m=one.at(-1),latest5m=five.at(-1);
+  // Excel: 5m EMA direction, 1m EMA alignment, 2 closed candles OR live current candle.
+  // Use only verified, fully closed candles for historical EMA/RSI.
+  const latest1m=one.at(-1),latest5m=five.at(-1);
+  const raw1=feed?.candles?.["1m"];
+  const rows1=Array.isArray(raw1)?raw1:(raw1?.rows||raw1?.items||raw1?.candles||[]);
+  const minuteStart=Math.floor(at/60000)*60000;
+  const current1m=Array.isArray(rows1)?rows1.find(row=>{
+    const start=n(row?.startMs??row?.openTime);
+    return row?.closed===false&&start===minuteStart&&start<=at&&
+      finitePositive(n(row?.open))&&finitePositive(n(row?.close))&&
+      finitePositive(n(row?.high))&&finitePositive(n(row?.low))&&
+      valid(n(row?.volume))&&n(row.volume)>=0&&
+      n(row.high)>=Math.max(n(row.open),n(row.close))&&
+      n(row.low)<=Math.min(n(row.open),n(row.close));
+  }):null;
+  // Prefer the current minute's verified partial volume. If feed exposes only
+  // closed candles, use the most recent closed minute and disclose this basis
+  // per signal; do not mislabel fallback as intra-minute volume.
+  const previous20=current1m?one.slice(-20):one.slice(-21,-1);
+  const measuredVolume=current1m?n(current1m.volume):latest1m.v;
   const avgVolume=previous20.reduce((total,b)=>total+b.v,0)/20;
-  const volumeRatio=avgVolume>0?latest1m.v/avgVolume:null;
-  const volumeGate=Number.isFinite(volumeRatio)&&volumeRatio>=1.5;
-  const recent3=one.slice(-3),green=recent3.filter(b=>b.c>b.o).length;
-  const red=recent3.filter(b=>b.c<b.o).length;
+  const volumeRatio=avgVolume>0?measuredVolume/avgVolume:null;
+  const volumeGate=Number.isFinite(volumeRatio)&&volumeRatio>=1.15;
+  const recent2=one.slice(-2),green=recent2.filter(b=>b.c>b.o).length;
+  const red=recent2.filter(b=>b.c<b.o).length;
+  const liveCandleUp=!!current1m&&spot>n(current1m.open);
+  const liveCandleDown=!!current1m&&spot<n(current1m.open);
   const rsi14=rsiWilder(c1,14);
   const freshBook=!!orderBook&&Number.isSafeInteger(orderBook.observedAt)&&
     orderBook.observedAt<=at&&at-orderBook.observedAt<=5000;
@@ -156,28 +171,31 @@ export function evaluatePureSignal({feed,reference,indexSnapshot=null,
     aggressiveFlow.lastTradeAt<=at&&at-aggressiveFlow.lastTradeAt<=5000;
   const activeBuy=freshAgg&&aggressiveFlow.consecutiveTakerBuys>=3;
   const activeSell=freshAgg&&aggressiveFlow.consecutiveTakerSells>=3;
+  // Spreadsheet's bid/ask ratio definitions deliberately allow near balance.
+  // Aggressive trade streak is auxiliary context only, never a substitute gate.
+  const bidAskRatio=bookValid?bid/ask:null;
   const up={
-    trend5m:ema5m9>ema5m21&&latest5m.c>latest5m.o,
-    momentum1m:ema1m9>ema1m21&&(crossUp||stayUp),
-    pricePosition:spot>ema1m9&&green>=2,
+    trend5m:ema5m9>ema5m21,
+    momentum1m:spot>ema1m9&&ema1m9>=ema1m21,
+    pricePosition:green>=1||liveCandleUp,
     volume:volumeGate,
-    orderflow:(bookValid&&bid>ask)||activeBuy,
-    rsi:rsi14>=50&&rsi14<=75
+    orderflow:bookValid&&bidAskRatio>0.95,
+    rsi:rsi14>=45&&rsi14<=78
   };
   const down={
-    trend5m:ema5m9<ema5m21&&latest5m.c<latest5m.o,
-    momentum1m:ema1m9<ema1m21&&(crossDown||stayDown),
-    pricePosition:spot<ema1m9&&red>=2,
+    trend5m:ema5m9<ema5m21,
+    momentum1m:spot<ema1m9&&ema1m9<=ema1m21,
+    pricePosition:red>=1||liveCandleDown,
     volume:volumeGate,
-    orderflow:(bookValid&&ask>bid)||activeSell,
-    rsi:rsi14>=25&&rsi14<=50
+    orderflow:bookValid&&bidAskRatio<1.05,
+    rsi:rsi14>=22&&rsi14<=55
   };
   const all=x=>Object.values(x).every(v=>v===true);
   const direction=all(up)?"UP":all(down)?"DOWN":null;
   const failed=x=>Object.entries(x).filter(([,ok])=>!ok).map(([k])=>k).join("、");
   const reason=direction?
     (direction==="UP"?"看涨 Higher":"看跌 Lower")+
-    "：5分钟趋势、1分钟动量、价格位置、1分钟成交量≥20均量1.5倍、盘口/主动成交、RSI共6项全部满足；"+
+    "：5分钟趋势、1分钟动量、价格位置、1分钟成交量≥20均量1.15倍、前5档盘口、RSI共6项全部满足；"+
     "锁定本次信号的指数参考价，600秒后用相同指数代理核对。":
     "WAIT：看涨未通过 "+failed(up)+"；看跌未通过 "+failed(down)+"。六项必须全部满足。";
   return {strategyVersion:RULE_VERSION,direction,
@@ -192,10 +210,12 @@ export function evaluatePureSignal({feed,reference,indexSnapshot=null,
       ema1m9,ema1m21,ema5m9,ema5m21,
       last5mOpen:latest5m.o,last5mClose:latest5m.c,
       last1mOpen:latest1m.o,last1mClose:latest1m.c,
-      greenLast3:green,redLast3:red,
-      volumeLatestClosed1m:latest1m.v,volumePrior20Mean:avgVolume,
-      volumeRatio,rsi14,
-      crossUp,crossDown,stayUp,stayDown,
+      greenLast2:green,redLast2:red,liveCandleUp,liveCandleDown,
+      volumeCurrentOrLastClosed1m:measuredVolume,volumePrior20Mean:avgVolume,
+      volumeBasis:current1m?"CURRENT_OPEN_1M":"LATEST_CLOSED_1M_FALLBACK",
+      current1mStartMs:current1m?minuteStart:null,
+      volumeRatio,rsi14,bidAskRatio,
+      bonusMode:"CONTEXT_ONLY_NO_GATE_BYPASS",
       bidTop5QtyBtc:bookValid?bid:null,askTop5QtyBtc:bookValid?ask:null,
       aggressiveBuyConfirmed:activeBuy,aggressiveSellConfirmed:activeSell,
       lastClosed1mAt:latest1m.t,lastClosed5mAt:latest5m.t,

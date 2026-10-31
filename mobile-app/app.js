@@ -3,7 +3,7 @@
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],timer:null};
-const EVENT10_HIGH_SELECTIVITY_VERSION="EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031";
+const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101";
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
 }
@@ -44,7 +44,7 @@ function renderRecords(id,items,kind){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
   const version=kind==="event10"?(r.strategyVersion||r.decisionReviewVersion||r.ruleChecks?.strategyVersion):null;
-  const edition=version===EVENT10_HIGH_SELECTIVITY_VERSION?"六项新策略":"旧版信号";
+  const edition=version===EVENT10_FREQ_OPTIMIZED_VERSION?"六项频率优化策略":"旧版信号";
   const title=node("div","record-title",kind==="event10"?dir(d)+" · "+edition:dir(d));
   if(d==="UP")title.classList.add("uptext");
   if(d==="DOWN")title.classList.add("downtext");
@@ -137,8 +137,8 @@ function event(e,ledger,historyData){
  const s=currentEventRecord(e);
  const stats=ledger?.stats||e.strategyStats||{};
  const records=mergeEventRecords(ledger,historyData);
- const legacy=records.filter(r=>eventVersion(r)!==EVENT10_HIGH_SELECTIVITY_VERSION);
- const oldSignal=!!s&&["UP","DOWN"].includes(s.direction)&&eventVersion(s)!==EVENT10_HIGH_SELECTIVITY_VERSION;
+ const legacy=records.filter(r=>eventVersion(r)!==EVENT10_FREQ_OPTIMIZED_VERSION);
+ const oldSignal=!!s&&["UP","DOWN"].includes(s.direction)&&eventVersion(s)!==EVENT10_FREQ_OPTIMIZED_VERSION;
  const direction=s?.direction||null;
  setHeading("eDirection",direction);put("eSignal",dir(direction));
  put("ePhase",(oldSignal?"旧策略 · ":"")+(s?.status||"尚无已保存状态"));
@@ -149,8 +149,8 @@ function event(e,ledger,historyData){
  const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
  const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（暂无已核对样本）");
  put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
- put("eReason",(oldSignal?"这是旧版策略的历史信号，不属于当前Excel六项新策略。\n":"")+(s?.reason||"暂无新策略有效信号；六项条件未全部通过时返回WAIT。"));
- pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 六项新策略":"数据不可用");
+ put("eReason",(oldSignal?"这是旧版策略的历史信号，不属于当前Excel六项频率优化策略。\n":"")+(s?.reason||"暂无新策略有效信号；六项条件未全部通过时返回WAIT。"));
+ pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 六项频率优化策略":"数据不可用");
  pill("eStatus",e.configured===true?"good":"bad",e.active?(oldSignal?"旧信号待核对":"新信号待核对"):e.configured===true?"就绪":"未就绪");
  const newTotal=Number.isInteger(ledger?.total)?ledger.total:(stats.total??0);
  if(historyData&&Array.isArray(historyData.records)){

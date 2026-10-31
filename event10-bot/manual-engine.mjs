@@ -319,7 +319,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const reference={observedAt:decisionAt};
       const rule=evaluatePureSignal({feed,reference,
         indexSnapshot:filtered.indexQuote,orderBook:filtered.orderBook,
-        aggressiveFlow:filtered.aggressiveFlow});
+        aggressiveFlow:filtered.aggressiveFlow,futuresMinute:filtered.futuresMinute});
       const signalExpiry=decisionAt+HORIZON_MS; // each signal gets its own full 600s
       const openingIndex=null;
       const liveIndex=rule.evidence.liveIndexPrice;

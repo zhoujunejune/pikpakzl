@@ -36,7 +36,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           root=Path("event10-bot")
-          v="EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101"
+          v="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"
           assert v in (root/"pure-signal.mjs").read_text()
           assert v in (root/"panel.html").read_text()
           assert 'NO_EVENT_CONTRACT_ORDER_API' in (root/"server.mjs").read_text()

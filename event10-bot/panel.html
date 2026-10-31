@@ -53,7 +53,7 @@ th{color:#a9c6e7}
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">六项同时成立才出方向；数据缺失、量能不足、趋势冲突时返回WAIT。</div>
- <p class="sub">规则没有主观置信度。参考指数价来自USD-M，1/5分钟EMA、RSI和成交量来自现货K线，盘口来自USD-M。历史指标只用已收盘K线；如果有当前1分钟有效数据，则优先采用当前分钟量。</p>
+ <p class="sub">规则没有主观置信度。参考指数价来自USD-M，1/5分钟EMA、RSI和成交量来自现货K线，盘口来自USD-M。历史指标只用已收盘K线；当前USD-M 1分钟成交量是必需数据，不可用则不出信号。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
 <p class="sub">不限制固定UTC时间窗口，每条有效信号独立锁定指数参考价，600秒后核对代理涨跌。</p>
@@ -119,7 +119,7 @@ th{color:#a9c6e7}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101";
+const SIGNAL_VERSION="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -296,11 +296,11 @@ function display(d){
    if(e){
     const p=document.createElement("p");
     const num=v=>Number.isFinite(v)?Number(v).toFixed(2):"不可用";
-    p.textContent="指数参考价 "+num(e.liveIndexPrice)+" | 现货价 "+num(e.spotPrice)+" | 成交量 "+num(e.volumeRatio)+"倍（"+(e.volumeBasis==="CURRENT_OPEN_1M"?"当前1分钟":"最近已收盘1分钟降级")+"） | RSI "+num(e.rsi14)+" | 买/卖盘前5档 "+num(e.bidTop5QtyBtc)+"/"+num(e.askTop5QtyBtc);
+    p.textContent="指数参考价 "+num(e.liveIndexPrice)+" | 现货价 "+num(e.spotPrice)+" | 成交量 "+num(e.volumeRatio)+"倍（"+(e.volumeBasis==="CURRENT_USDM_FUTURES_1M"?"USD-M当前1分钟":"当前量缺失")+"） | RSI "+num(e.rsi14)+" | 买/卖盘前5档 "+num(e.bidTop5QtyBtc)+"/"+num(e.askTop5QtyBtc);
      detail.append(p);
    }
   }
-  $("dataQuality").textContent="EMA/RSI基于BTCUSDT现货已收盘1分钟/5分钟K线；成交量优先采用当前未收盘1分钟有效数据，不可用时降级到最近已收盘1分钟并记录口径。指数参考价与前5档盘口来自币安USD-M。"+
+  $("dataQuality").textContent="EMA/RSI基于BTCUSDT现货已收盘1分钟/5分钟K线；成交量使用USD-M正在形成的1分钟K线，对比此前20根完整1分钟K线，数据缺失则不出信号。指数参考价与前5档盘口来自币安USD-M。"+
     "所有六项满足才出方向；信号后600秒使用相同指数代理核对，不是事件合约订单结算。";
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";

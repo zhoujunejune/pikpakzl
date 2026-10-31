@@ -61,7 +61,7 @@ final class SignalPopupOverlay {
         return v;
     }
 
-    void show(String signalId,String direction,long openedAt,int noticeId){
+    void show(String signalId,String direction,long openedAt,long expiresAt,int noticeId){
         main.post(()->{
             // The normal system notification is the fallback when overlay access
             // is unavailable, e.g. Android denies it on the lock screen.
@@ -125,6 +125,10 @@ final class SignalPopupOverlay {
                 manager.addView(layout,params);
                 panel=layout;
                 showingId=signalId;
+                // A ten-minute prediction cannot remain actionable after expiry.
+                long remaining=expiresAt-System.currentTimeMillis();
+                if(remaining>0L)main.postDelayed(()->dismissIfMatches(signalId),remaining);
+                else dismissNow();
             }catch(Exception e){
                 dismissNow();
                 // Notification remains visible when the OS denies an overlay.

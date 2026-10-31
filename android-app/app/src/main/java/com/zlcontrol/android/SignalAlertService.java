@@ -42,7 +42,6 @@ public final class SignalAlertService extends Service {
     public static final String ACTION_STOP="com.zlcontrol.android.STOP_ALERTS";
     public static final String ACTION_SILENCE="com.zlcontrol.android.SILENCE_ALARM";
     public static final String ACTION_START="com.zlcontrol.android.START_ALERTS";
-    public static final String ACTION_LOCAL_TEST="com.zlcontrol.android.LOCAL_ALERT_TEST";
     public static final String PREF_ENABLED="event10_alert_enabled";
     public static final String PREF_ENABLED_SINCE="event10_alert_enabled_since";
     public static final String PREF_LAST_ID="event10_alert_last_id";
@@ -78,10 +77,6 @@ public final class SignalAlertService extends Service {
         Intent intent=new Intent(context,SignalAlertService.class).setAction(ACTION_START);
         if(Build.VERSION.SDK_INT>=26)context.startForegroundService(intent);
         else context.startService(intent);
-    }
-    public static void runLocalTest(Context context){
-        Intent intent=new Intent(context,SignalAlertService.class).setAction(ACTION_LOCAL_TEST);
-        context.startForegroundService(intent);
     }
     public static void stop(Context context){
         context.stopService(new Intent(context,SignalAlertService.class));
@@ -147,26 +142,6 @@ public final class SignalAlertService extends Service {
             }
             getSystemService(NotificationManager.class)
                 .cancel(intent.getIntExtra("signal_notification_id",SIGNAL_ID));
-            return START_STICKY;
-        }
-        if(intent!=null&&ACTION_LOCAL_TEST.equals(intent.getAction())){
-            if(SecureStore.prefs(this).getBoolean(PREF_ENABLED,false)){
-                long now=System.currentTimeMillis();
-                long lastReal=SecureStore.prefs(this).getLong(PREF_LAST_ALARM_TIME,0L);
-                if(now-lastReal>30000L){
-                    try{
-                        JSONObject demo=new JSONObject();
-                        demo.put("id","local-test-"+now);
-                        demo.put("direction","UP");
-                        demo.put("openedAt",now);
-                        demo.put("expiresAt",now+30000L);
-                        demo.put("trigger","LOCAL_TEST");
-                        alert("UP",demo);
-                        audit(SecureStore.prefs(this),"LOCAL_TEST",demo.optString("id"),
-                            "NOT_A_REAL_SIGNAL",now,now+30000L);
-                    }catch(Exception ignored){}
-                }
-            }
             return START_STICKY;
         }
         if(intent!=null&&ACTION_STOP.equals(intent.getAction())){
@@ -378,14 +353,13 @@ public final class SignalAlertService extends Service {
     }
     private boolean alert(String direction,JSONObject signal) {
         String name=direction.equals("UP")?"Higher · 看涨":"Lower · 看跌";
-        boolean isLocalTest=signal.optString("id","").startsWith("local-test-");
         String trigger="AUTO".equals(signal.optString("trigger"))?"后台自动信号":"手动检测信号";
         String signalId=signal.optString("id","");
         int notificationId=(signalId.hashCode()&0x3fffffff)+2000;
         long opened=signal.optLong("openedAt",System.currentTimeMillis());
         String signalTime=new java.text.SimpleDateFormat("MM-dd HH:mm:ss",java.util.Locale.CHINA)
             .format(new java.util.Date(opened));
-        String content=(isLocalTest?"本机测试（非真实信号） · ":"BTC 10分钟 · ")+name+" · "+signalTime+" · "+trigger;
+        String content="BTC 10分钟 · "+name+" · "+signalTime+" · "+trigger;
         // Reference-cycle expiry is NOT the expiry of a new Binance order.
         String detail=content+"。金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
             +"确认方向、开仓指数价格和最终到期时间，再由你手动下单。没有自动成交。";
@@ -399,7 +373,7 @@ public final class SignalAlertService extends Service {
         PendingIntent binance=openBinanceIntent(signalId);
         Notification notice=new Notification.Builder(this,ALARM_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(isLocalTest?"本机弹窗/铃声测试 · 不是预测信号":"新信号："+name+" · 前往币安手动下单")
+            .setContentTitle("新信号："+name+" · 前往币安手动下单")
             .setContentText(content)
             .setStyle(new Notification.BigTextStyle().bigText(detail))
             .setAutoCancel(true)

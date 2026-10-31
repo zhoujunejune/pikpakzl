@@ -82,6 +82,11 @@ jobs:
           assert 'launchBinance()' in j and 'openBinanceIntent' in service
           assert 'openEvent10Intent' in service
           assert 'signal_notification_id' in service
+          assert 'zl_event10_alarm_v2_audible' in service
+          assert 'RingtoneManager.TYPE_NOTIFICATION' in service
+          assert 'alerts.enableVibration(true)' in service
+          assert 'event10_alert_alarm_volume' in service and 'event10_alert_alarm_max_volume' in service
+          assert '系统闹钟音量' in j
           popup=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalPopupOverlay.java').read_text()
           for check in ('TYPE_APPLICATION_OVERLAY','Gravity.CENTER','确认并打开币安',
                         'Settings.canDrawOverlays','onConfirm','dismissIfMatches',
@@ -149,13 +154,13 @@ jobs:
           mkdir -p dist
           if [[ "$ZL_STABLE_SIGNING" == true ]]; then
             src=android-app/app/build/outputs/apk/release/app-release.apk
-            dest=dist/ZL-Control-v1.2.2-stable-release.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.2-STABLE-RELEASE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.3-stable-release.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.3-STABLE-RELEASE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=true' >> "$GITHUB_ENV"
           else
             src=android-app/app/build/outputs/apk/debug/app-debug.apk
-            dest=dist/ZL-Control-v1.2.2-DEBUG-ONLY-NOT-UPGRADEABLE.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.2-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.3-DEBUG-ONLY-NOT-UPGRADEABLE.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.3-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=false' >> "$GITHUB_ENV"
           fi
           cp "$src" "$dest"

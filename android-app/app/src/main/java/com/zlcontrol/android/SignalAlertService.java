@@ -5,6 +5,9 @@ import android.app.Service;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.media.AudioAttributes;
+import android.media.AudioManager;
+import android.media.RingtoneManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
@@ -58,7 +61,7 @@ public final class SignalAlertService extends Service {
     public static final String PREF_LAST_AUDIT_KEY="event10_alert_last_audit_key_v2";
     public static final String PREF_LAST_MISSED_TIME="event10_alert_last_missed_time_v2";
     private static final String FOREGROUND_CHANNEL="zl_event10_foreground_v1";
-    private static final String ALARM_CHANNEL="zl_event10_alarm_v1";
+    private static final String ALARM_CHANNEL="zl_event10_alarm_v2_audible";
     private static final int FOREGROUND_ID=101;
     private static final int SIGNAL_ID=102;
     // Foreground-only low-latency polling: no speculative signals, no extra exchange requests.
@@ -92,8 +95,9 @@ public final class SignalAlertService extends Service {
         nm.createNotificationChannel(foreground);
         NotificationChannel alerts=new NotificationChannel(ALARM_CHANNEL,"10分钟信号闹铃",NotificationManager.IMPORTANCE_HIGH);
         alerts.setDescription("出现新的10分钟事件信号时显示高优先级通知，响系统闹钟铃声");
-        alerts.setSound(null,null); // AlarmPlayer uses ALARM audio stream; avoid double ringing.
-        alerts.enableVibration(false); // AlarmPlayer handles the alarm vibration.
+        alerts.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+            new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT).build());
+        alerts.enableVibration(true); // Keep notification vibration when the alarm media route is inaudible.
         nm.createNotificationChannel(alerts);
         Notification ongoing=new Notification.Builder(this,FOREGROUND_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
@@ -384,6 +388,16 @@ public final class SignalAlertService extends Service {
             .build();
         getSystemService(NotificationManager.class).notify(notificationId,notice);
         activeAlarmSignalId=signalId;
+        AudioManager audio=(AudioManager)getSystemService(AUDIO_SERVICE);
+        int alarmVolume=audio==null?-1:audio.getStreamVolume(AudioManager.STREAM_ALARM);
+        int maxAlarmVolume=audio==null?-1:audio.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+        SharedPreferences diagnostics=SecureStore.prefs(this);
+        diagnostics.edit().putInt("event10_alert_alarm_volume",alarmVolume)
+            .putInt("event10_alert_alarm_max_volume",maxAlarmVolume).apply();
+        if(alarmVolume==0){
+            audit(diagnostics,"AUDIO_VOLUME_ZERO",signalId,"ALARM_STREAM_MUTED",opened,
+                signal.optLong("expiresAt",0L));
+        }
         boolean started=sound.play(this,25);
         // Display only after the notification has been posted successfully.
         // Overlay permission is opt-in, and notification is always the fallback.

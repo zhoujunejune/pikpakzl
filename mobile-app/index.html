@@ -71,8 +71,12 @@ a{color:inherit;text-decoration:none}
 .record-comparison{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-top:11px;font-size:13px}
 .record-change{font-weight:720;font-variant-numeric:tabular-nums}
 .record-outcome{font-weight:650}
-.record-page{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
-.record-page .btn{min-height:37px;padding:7px 12px}
+.event-record-viewport{position:relative;height:420px;height:clamp(320px,52dvh,570px);
+ overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;touch-action:pan-y;
+ -webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:#496783 transparent;
+ padding:2px 4px 6px 0}
+.event-record-viewport:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.event-record-footer{text-align:center;padding:11px 0 4px;min-height:37px}
 .message{padding:12px;border:1px solid #40506a;border-radius:12px;background:#132239;font-size:12px;color:#b8cbe3;margin-top:10px;line-height:1.65}
 .section-panel{display:none}
 .section-panel.active{display:block}
@@ -147,7 +151,11 @@ a{color:inherit;text-decoration:none}
 <div class="message" id="manualResult" hidden aria-live="polite"></div>
 <div class="actions"><a class="btn" href="/event10/" rel="noopener">打开10分钟完整控制页面</a></div>
 </div>
-<div class="section"><div class="sect-head"><h2>频率优化策略信号记录</h2><small id="eTotal">读取中</small></div><p class="mini">每条信号展示锁定指数价、到期指数价、涨跌幅及方向是否命中；均为公开行情代理，不是事件合约官方结算价。</p><div class="records" id="eRecords"><div class="mini">读取中…</div></div><div class="record-page"><button class="btn" type="button" id="eRecordPrev" disabled>上一页</button><span class="mini" id="eRecordPage">第 1 页</span><button class="btn" type="button" id="eRecordNext" disabled>下一页</button></div></div>
+<div class="section"><div class="sect-head"><h2>频率优化策略信号记录</h2><small id="eTotal">读取中</small></div>
+<p class="mini">在下面记录框内上下滑动，滑到底部自动加载更早的信号；价格及命中结果保持原样。所有结果均为指数行情代理，不是合约官方结算。</p>
+<div id="eRecordScroll" class="event-record-viewport" role="region" aria-label="十分钟信号记录，滑动加载更多" tabindex="0">
+<div class="records" id="eRecords"><div class="mini">读取中…</div></div></div>
+<div id="eRecordStatus" class="mini event-record-footer" role="status" aria-live="polite">同步记录中…</div></div>
 </section>
 <section id="panel-more" class="section-panel" aria-label="应用设置">
 <h1 class="hi">应用与安全</h1><p class="desc">一个登录入口，两个独立服务</p>

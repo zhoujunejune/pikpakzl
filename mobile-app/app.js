@@ -2,7 +2,7 @@
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
-const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],eventOffset:0,eventPageSize:25,timer:null};
+const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,timer:null};
 const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101";
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
@@ -69,6 +69,7 @@ function renderRecords(id,items,kind){
  for(const r of (kind==="event10"?items:items.slice(0,12))){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
+  if(kind==="event10")wrap.dataset.eventId=String(r.id);
   const title=node("div","record-title",kind==="event10"?dir(d)+" · 频率优化策略":dir(d));
   if(d==="UP")title.classList.add("uptext");
   if(d==="DOWN")title.classList.add("downtext");
@@ -179,6 +180,76 @@ function mergeEventRecords(ledger){
  }
  return Array.from(rows.values()).sort((a,b)=>b.openedAt-a.openedAt);
 }
+// Current-version ledger is durable on Alibaba; the WebView merely pages through it.
+function mergeEventRecordPages(current,incoming){
+ return mergeEventRecords({version:EVENT10_FREQ_OPTIMIZED_VERSION,
+  records:[...(Array.isArray(current)?current:[]),...(Array.isArray(incoming)?incoming:[])]});
+}
+function eventHistoryFingerprint(records){
+ return JSON.stringify(records.map(r=>[r.id,r.direction,r.openedAt,r.openPrice,
+  r.closePrice,r.closeObservedAt,r.settlementStatus,r.proxyOutcome,r.proxyHit,r.expiresAt]));
+}
+function drawEventHistory(){
+ const viewport=$("eRecordScroll"),root=$("eRecords");
+ if(!viewport||!root)return;
+ const signature=eventHistoryFingerprint(state.eventRecords);
+ if(signature!==state.eventHistorySignature){
+  const oldTop=viewport.scrollTop,scrolled=oldTop>14;
+  const first=scrolled?Array.from(root.children).find(el=>
+   el.dataset?.eventId&&el.offsetTop+el.offsetHeight>oldTop):null;
+  const id=first?.dataset?.eventId||null,gap=first?first.offsetTop-oldTop:0;
+  renderRecords("eRecords",state.eventRecords,"event10");
+  if(scrolled){
+   const after=id?Array.from(root.children).find(el=>el.dataset?.eventId===id):null;
+   viewport.scrollTop=after?Math.max(0,after.offsetTop-gap):oldTop;
+  }else viewport.scrollTop=0;
+  state.eventHistorySignature=signature;
+ }
+ put("eTotal","新策略 "+state.eventTotal+" 条 · 已加载 "+state.eventRecords.length+" 条");
+ let status;
+ if(state.eventHistoryBusy)status="正在加载更多历史信号…";
+ else if(state.eventHistoryError)status="加载遇到问题，请再向下滑动重试："+state.eventHistoryError;
+ else if(state.eventTotal===0)status="暂无新版信号";
+ else if(state.eventRecords.length>=state.eventTotal)status="已展示全部 "+state.eventTotal+" 条";
+ else status="向下滑动加载更多 · 已加载 "+state.eventRecords.length+" / "+state.eventTotal+" 条";
+ put("eRecordStatus",status);
+}
+function updateEventHistory(ledger){
+ if(ledger?.version!==EVENT10_FREQ_OPTIMIZED_VERSION||!Array.isArray(ledger.records))
+  return false;
+ state.eventRecords=mergeEventRecordPages(state.eventRecords,ledger.records);
+ state.lastEvent=state.eventRecords;
+ const count=Number.isInteger(ledger.total)&&ledger.total>=0?ledger.total:0;
+ state.eventTotal=Math.max(count,state.eventRecords.length);
+ state.eventHistoryError=null;
+ drawEventHistory();
+ return true;
+}
+async function loadMoreEventSignals(){
+ if(state.eventHistoryBusy||document.hidden||
+    state.eventRecords.length>=state.eventTotal||
+    !$("panel-event10").classList.contains("active"))return;
+ state.eventHistoryBusy=true;
+ state.eventHistoryError=null;
+ drawEventHistory();
+ try{
+  // Small page overlap protects against new top-of-list signals shifting offsets.
+  const offset=Math.max(0,state.eventRecords.length-3);
+  const page=await api("/event10/api/signals?limit="+state.eventPageSize+"&offset="+offset,9500);
+  if(page?.version!==EVENT10_FREQ_OPTIMIZED_VERSION||!Array.isArray(page.records))
+   throw Error("返回的策略版本不匹配");
+  const before=state.eventRecords.length;
+  updateEventHistory(page);
+  if(state.eventRecords.length===before&&state.eventTotal>before)
+   state.eventHistoryError="未读到新增历史，检查网络后再试";
+ }catch(e){state.eventHistoryError=String(e?.message||e).slice(0,110);}
+ finally{state.eventHistoryBusy=false;drawEventHistory();}
+}
+function onEventHistoryScroll(){
+ const v=$("eRecordScroll");
+ if(v&&!state.eventHistoryBusy&&v.scrollHeight-v.scrollTop-v.clientHeight<170)
+  void loadMoreEventSignals();
+}
 function event(e,ledger){
  if(e?.decisionReviewVersion!==EVENT10_FREQ_OPTIMIZED_VERSION)
   throw Error("十分钟服务尚未确认运行最新版信号策略，旧版统计不会显示");
@@ -202,33 +273,29 @@ function event(e,ledger){
  put("eReason",s?.reason||"当前仅展示频率优化策略信号；六项条件未满足时不产生方向。");
  pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 频率优化策略":"数据不可用");
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
- state.lastEvent=records;
  if(currentLedger){
-  const total=Number.isInteger(ledger.total)?ledger.total:records.length;
-  const first=total===0?0:state.eventOffset+1;
-  const last=Math.min(total,state.eventOffset+records.length);
-  put("eTotal","新策略 "+total+" 条 · 当前 "+first+"–"+last+" 条");
-  put("eRecordPage","第 "+(Math.floor(state.eventOffset/state.eventPageSize)+1)+
-    " / "+Math.max(1,Math.ceil(total/state.eventPageSize))+" 页");
-  $("eRecordPrev").disabled=state.busy||state.eventOffset===0;
-  $("eRecordNext").disabled=state.busy||state.eventOffset+records.length>=total;
-  renderRecords("eRecords",records,"event10");
+  updateEventHistory(ledger);
+ }else if(state.eventRecords.length){
+  state.eventHistoryError="无法刷新，已加载记录仍然可看";
+  drawEventHistory();
  }else{
-  put("eTotal","新版明细暂时无法读取");
-  put("eRecordPage","暂不可用");
-  $("eRecordPrev").disabled=true;$("eRecordNext").disabled=true;
-  $("eRecords").replaceChildren(node("div","mini","新版信号记录接口暂不可用；没有显示旧版历史，也不代表新版记录为零。"));
+  put("eTotal","新版记录接口暂不可用");
+  put("eRecordStatus","服务暂不可用，已存记录不会丢失");
+  $("eRecords").replaceChildren(node("div","mini","记录暂时无法读取，请稍后重试"));
  }
  $("manualCheck").disabled=e.configured!==true||Boolean(e.active)||state.manualBusy;
 }
 function eventError(error){
- state.lastEvent=[];
+ state.eventHistoryError="状态读取失败，已加载记录仍然保留";
+ drawEventHistory();
  pill("eBadge","bad","连接异常");pill("eStatus","bad","暂不可用");
- for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy","eTotal"])put(id,"不可用");
+ for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy"])put(id,"不可用");
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
- $("eRecordPrev").disabled=true;$("eRecordNext").disabled=true;
- put("eRecordPage","暂不可用");
- $("eRecords").replaceChildren(node("div","mini","记录接口当前不可用，不代表历史记录为空。"));
+ if(!state.eventRecords.length){
+  put("eTotal","记录接口暂时不可用");
+  put("eRecordStatus","数据未能读取，不能判断为空");
+  $("eRecords").replaceChildren(node("div","mini","连接异常，稍后重试"));
+ }
  $("manualCheck").disabled=true;
 }
 async function refresh(){
@@ -239,7 +306,7 @@ async function refresh(){
    api("/guardian/api/status",7500),
    api("/api/status",7500),
    api("/event10/api/status",7500),
-   api("/event10/api/signals?limit="+state.eventPageSize+"&offset="+state.eventOffset,9500)
+   api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",9500)
   ]);
   const g=gr.status==="fulfilled"?gr.value:null;
   const t=tr.status==="fulfilled"?tr.value:null;
@@ -295,16 +362,7 @@ function navigate(page){
 }
 for(const btn of document.querySelectorAll("[data-go]"))btn.addEventListener("click",()=>navigate(btn.dataset.go));
 $("refresh").addEventListener("click",()=>void refresh());
-$("eRecordPrev").addEventListener("click",()=>{
- if(state.busy||state.eventOffset===0)return;
- state.eventOffset=Math.max(0,state.eventOffset-state.eventPageSize);
- void refresh();
-});
-$("eRecordNext").addEventListener("click",()=>{
- if(state.busy||$("eRecordNext").disabled)return;
- state.eventOffset+=state.eventPageSize;
- void refresh();
-});
+$("eRecordScroll").addEventListener("scroll",onEventHistoryScroll,{passive:true});
 $("hotUpdateButton").addEventListener("click",()=>window.location.reload());
 $("manualCheck").addEventListener("click",async()=>{
  if(state.manualBusy)return;

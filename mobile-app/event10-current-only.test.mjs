@@ -73,8 +73,44 @@ test("record cards show locked index, expiry index, net change, result and both 
  assert.ok(src.includes('"10分钟后指数价"'));
  assert.ok(src.includes('"record-comparison"'));
  assert.ok(src.includes("r.closeObservedAt"));
- assert.ok(src.includes("state.eventOffset"));
+ assert.ok(src.includes("state.eventRecords"));
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
- for(const part of ["record-signal-grid","eRecordPrev","eRecordNext","eRecordPage"])
+ for(const part of ["record-signal-grid","eRecordScroll","eRecordStatus","event-record-viewport"])
   assert.ok(html.includes(part),part);
+});
+
+test("scrolling merges 125 signal rounds, deduplicates and updates settlement",()=>{
+ const from=src.indexOf("function eventVersion(r){"),to=src.indexOf("function event(e,ledger){",from);
+ const api=vm.runInNewContext(
+  "const EVENT10_FREQ_OPTIMIZED_VERSION="+JSON.stringify(version)+";\n"+
+  src.slice(from,to)+"\n({mergeEventRecordPages,eventHistoryFingerprint})");
+ const rounds=Array.from({length:125},(_,i)=>({
+  ...mk("sig-"+i,version,1000000-i*60000),openPrice:77500+i,closePrice:null,proxyHit:null
+ }));
+ let loaded=[];
+ for(let i=0;i<125;i+=25)
+  loaded=api.mergeEventRecordPages(loaded,rounds.slice(i,i+25));
+ assert.equal(loaded.length,125);
+ assert.equal(loaded[0].id,"sig-0");
+ assert.equal(loaded.at(-1).id,"sig-124");
+ const settled={...rounds[0],closePrice:77650.12345,proxyHit:true};
+ loaded=api.mergeEventRecordPages(loaded,[mk("newest",version,2000000),settled,rounds[1]]);
+ assert.equal(loaded.length,126);
+ assert.equal(loaded[0].id,"newest");
+ assert.equal(loaded.find(x=>x.id==="sig-0").closePrice,77650.12345);
+ assert.equal(loaded.at(-1).id,"sig-124");
+ assert.ok(api.eventHistoryFingerprint(loaded).includes("77650.12345"));
+});
+test("finger scrolling replaces static next-page buttons and keeps newest signals up top",()=>{
+ assert.ok(src.includes('addEventListener("scroll",onEventHistoryScroll'));
+ assert.ok(src.includes("async function loadMoreEventSignals(){"));
+ assert.ok(src.includes("state.eventRecords.length-3"));
+ assert.ok(src.includes("eventHistorySignature"));
+ assert.ok(src.includes("const id=first?.dataset?.eventId"));
+ assert.ok(!src.includes("eRecordNext"));
+ assert.ok(!src.includes("eRecordPrev"));
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ for(const piece of ["overflow-y:auto","touch-action:pan-y","eRecordScroll","eRecordStatus"])
+  assert.ok(html.includes(piece),piece);
+ assert.ok(!html.includes("下一页</button>"));
 });

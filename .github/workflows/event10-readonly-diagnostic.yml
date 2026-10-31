@@ -89,6 +89,17 @@ jobs:
               match=re.search(r'RULE_VERSION="([A-Za-z0-9_]+)"',target.read_text(errors='replace'))
               info['runtime']['diskRuleVersion']=match.group(1) if match else 'UNKNOWN'
 
+          # Post-release feed-shape audit. Metadata only, no market prices or credentials.
+          try:
+              with urllib.request.urlopen('http://127.0.0.1:13003/api/shadow-market-data',timeout=6) as resp:
+                  feed=json.load(resp)
+              raw=(feed.get('candles') or {}).get('1m') or []
+              candles=raw if isinstance(raw,list) else (raw.get('rows') or raw.get('items') or raw.get('candles') or [])
+              info['spot1mFeed']={'rows':len(candles),
+                  'closed':sum(1 for b in candles if isinstance(b,dict) and b.get('closed') is True),
+                  'forming':sum(1 for b in candles if isinstance(b,dict) and b.get('closed') is False),
+                  'last3Types':[(b.get('closed') if isinstance(b,dict) else None) for b in candles[-3:]]}
+          except Exception as e:info['spot1mFeedError']=str(type(e).__name__)+':'+str(e)[:100]
           print('EVENT10_LIVE_READONLY='+json.dumps(info,ensure_ascii=False,separators=(',',':')))
           REMOTE
           """

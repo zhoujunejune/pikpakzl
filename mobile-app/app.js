@@ -270,5 +270,8 @@ navigate(["overview","guardian","event10","more"].includes(initial)?initial:"ove
 void refresh();
 void checkHotUpdate();
 setInterval(()=>void refresh(),10000);
+// On the 10-minute screen, show server-confirmed signals in around 3s while visible.
+// Native Android notification service works independently when this page is hidden.
+setInterval(()=>{if(location.hash==="#event10")void refresh();},3000);
 setInterval(()=>{if(!document.hidden)void checkHotUpdate();},60000);
 if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("/app/sw.js",{scope:"/app/"}).catch(()=>{}));

@@ -82,6 +82,20 @@ jobs:
           assert 'launchBinance()' in j and 'openBinanceIntent' in service
           assert 'openEvent10Intent' in service
           assert 'signal_notification_id' in service
+          popup=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalPopupOverlay.java').read_text()
+          for check in ('TYPE_APPLICATION_OVERLAY','Gravity.CENTER','确认并打开币安',
+                        'Settings.canDrawOverlays','onConfirm','dismissIfMatches',
+                        'expiresAt-System.currentTimeMillis()'):
+            assert check in popup, check
+          for check in ('SYSTEM_ALERT_WINDOW','POST_NOTIFICATIONS'):
+            assert check in m, check
+          for check in ('showOverlayPermissionAdvice','ACTION_MANAGE_OVERLAY_PERMISSION',
+                        '屏幕中央悬浮弹窗'):
+            assert check in j, check
+          assert 'signalPopup.show(' in service and 'confirmAndOpenBinance' in service
+          assert 'sound.stop()' in service and 'activeAlarmSignalId' in service
+          assert 'onConfirm(signalId,noticeId)' in popup
+          print('ZL_CENTER_POPUP_CONFIRM_BINANCE_INVARIANTS_PASS')
           assert 'ZL_SIGNING_STORE_FILE' in Path('android-app/app/build.gradle').read_text()
           policy=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java').read_text()
           assert 'SIGNAL_EXPIRED' in policy and 'NO_SIGNAL' in policy
@@ -135,13 +149,13 @@ jobs:
           mkdir -p dist
           if [[ "$ZL_STABLE_SIGNING" == true ]]; then
             src=android-app/app/build/outputs/apk/release/app-release.apk
-            dest=dist/ZL-Control-v1.2.1-stable-release.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.1-STABLE-RELEASE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.2-stable-release.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.2-STABLE-RELEASE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=true' >> "$GITHUB_ENV"
           else
             src=android-app/app/build/outputs/apk/debug/app-debug.apk
-            dest=dist/ZL-Control-v1.2.1-DEBUG-ONLY-NOT-UPGRADEABLE.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.1-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.2-DEBUG-ONLY-NOT-UPGRADEABLE.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.2-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=false' >> "$GITHUB_ENV"
           fi
           cp "$src" "$dest"

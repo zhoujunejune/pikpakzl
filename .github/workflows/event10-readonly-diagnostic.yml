@@ -89,7 +89,7 @@ jobs:
               match=re.search(r'RULE_VERSION="([A-Za-z0-9_]+)"',target.read_text(errors='replace'))
               info['runtime']['diskRuleVersion']=match.group(1) if match else 'UNKNOWN'
 
-          # Final V3 live volume integration audit after verified deployment; # Post-release feed-shape audit. Metadata only, no market prices or credentials.
+          # Follow-up V3 read-only scan after minute-boundary error;  # Post-release feed-shape audit. Metadata only, no market prices or credentials.
           try:
               with urllib.request.urlopen('http://127.0.0.1:13003/api/shadow-market-data',timeout=6) as resp:
                   feed=json.load(resp)

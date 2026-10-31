@@ -1,0 +1,146 @@
+# Read-only connectivity check: EVENT10 and Android notification link, 2026-10-31 11:36 Asia/Shanghai.
+# Audit request after EVENT10 six-gate guard refused cutover on 2026-10-31
+name: EVENT10 live read-only diagnostic
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/event10-readonly-diagnostic.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Fetch live EVENT10 state without mutations
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID");sk=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET")
+          if not ak or not sk:raise RuntimeError("ALI_READONLY_CREDENTIALS_MISSING")
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          python3 - <<'REMOTE'
+          import json,urllib.request,datetime,subprocess,pathlib
+          def get(path):
+              with urllib.request.urlopen('http://127.0.0.1:13020'+path,timeout=7) as r:
+                  return json.load(r)
+          info={'timeUTC':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          p=subprocess.run(['systemctl','is-active','zl-event10-deepseek'],capture_output=True,text=True)
+          info['event10Service']=p.stdout.strip()
+          try:
+              st=get('/api/status')
+              info['status']={k:st.get(k) for k in ('ok','mode','decisionReviewVersion','providerModel','autoSignalEnabled','busyStart','busySettle','lastError','configured')}
+              for name in ('lastCheck','lastSession','active'):
+                  s=st.get(name)
+                  info[name]=None if not s else {k:s.get(k) for k in (
+                    'id','status','direction','reason','error','openedAt','checkedAt',
+                    'expiresAt','decisionReviewVersion','strategyVersion','model','signalCycleStartMs',
+                    'source','settlementStatus','openPrice','featureAvailability')}
+              info['lastDataProbe']=st.get('lastDataProbe')
+              info['strategyStats']=st.get('strategyStats')
+          except Exception as e:info['statusError']=str(type(e).__name__)+':'+str(e)[:160]
+          try:
+              log=get('/api/signals?limit=3')
+              info['ledger']={'version':log.get('version'),'total':log.get('total'),
+                'stats':log.get('stats'),'last3':[{
+                  k:s.get(k) for k in ('openedAt','strategyVersion','direction','settlementStatus')
+                } for s in log.get('records',[])[:3]]}
+          except Exception as e:info['ledgerError']=str(type(e).__name__)+':'+str(e)[:140]
+          try:
+              data=get('/api/data-health')
+              info['dataHealth']={'ok':data.get('ok'),'availability':data.get('availability')}
+          except Exception as e:info['dataHealthError']=str(type(e).__name__)+':'+str(e)[:140]
+          # Only emit short, whitelisted startup error signatures, never complete logs,
+          # requests, configuration or environment variables.
+          import re
+          journal=subprocess.run(['journalctl','-u','zl-event10-deepseek',
+            '--no-pager','-n','180','-o','cat'],capture_output=True,text=True,timeout=8)
+          safe=[]
+          for line in journal.stdout.splitlines():
+              if re.search(r'(SyntaxError|ReferenceError|TypeError|ERR_MODULE_NOT_FOUND|Cannot find module|Error:|EADDRINUSE|Failed to start|error code|exit-code)',line,re.I) and not re.search(r'(secret|token|password|authorization|bearer|api.?key|private)',line,re.I):
+                  safe.append(line[:180])
+          info['recentStartupErrors']=safe[-12:]
+          pid=subprocess.run(['systemctl','show','-p','MainPID','--value','zl-event10-deepseek'],
+            capture_output=True,text=True,timeout=5).stdout.strip()
+          info['runtime']={'mainPid':pid}
+          if pid.isdecimal() and int(pid)>0:
+              proc=pathlib.Path('/proc')/pid
+              try:info['runtime']['cwd']=str((proc/'cwd').resolve())
+              except Exception:pass
+              try:
+                  parts=(proc/'cmdline').read_bytes().split(b'\\x00')
+                  info['runtime']['nodeFilePaths']=[p.decode('utf8','replace')[:120] for p in parts
+                    if p.startswith(b'/opt/') and (p.endswith(b'.mjs') or p.endswith(b'node'))][:5]
+              except Exception:pass
+          target=pathlib.Path('/opt/zl-event10/pure-signal.mjs')
+          if target.exists():
+              match=re.search(r'RULE_VERSION="([A-Za-z0-9_]+)"',target.read_text(errors='replace'))
+              info['runtime']['diskRuleVersion']=match.group(1) if match else 'UNKNOWN'
+
+          # Follow-up V3 read-only scan after minute-boundary error;  # Post-release feed-shape audit. Metadata only, no market prices or credentials.
+          try:
+              with urllib.request.urlopen('http://127.0.0.1:13003/api/shadow-market-data',timeout=6) as resp:
+                  feed=json.load(resp)
+              raw=(feed.get('candles') or {}).get('1m') or []
+              candles=raw if isinstance(raw,list) else (raw.get('rows') or raw.get('items') or raw.get('candles') or [])
+              info['spot1mFeed']={'rows':len(candles),
+                  'closed':sum(1 for b in candles if isinstance(b,dict) and b.get('closed') is True),
+                  'forming':sum(1 for b in candles if isinstance(b,dict) and b.get('closed') is False),
+                  'last3Types':[(b.get('closed') if isinstance(b,dict) else None) for b in candles[-3:]]}
+          except Exception as e:info['spot1mFeedError']=str(type(e).__name__)+':'+str(e)[:100]
+          print('EVENT10_LIVE_READONLY='+json.dumps(info,ensure_ascii=False,separators=(',',':')))
+          REMOTE
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+              region_id="ap-southeast-1",endpoint="swas.ap-southeast-1.aliyuncs.com"))
+          instance="b67374069bb3457ba6a3a2ede9305d3f"
+          resp=cli.run_command(sw.RunCommandRequest(region_id="ap-southeast-1",instance_id=instance,
+              name="event10-readonly-inspect",type="RunShellScript",working_user="root",
+              command_content=script,timeout=100))
+          invoke=resp.body.invoke_id
+          if not invoke:raise RuntimeError("NO_READONLY_INVOKE_ID")
+          finished=False
+          for _ in range(55):
+              time.sleep(2)
+              result=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                region_id="ap-southeast-1",instance_id=instance,invoke_id=invoke)).body.invocation_result
+              if not result or str(result.invocation_status) not in ("Success","Failed","Aborted",
+                  "ExecutionTimeout","ExitCodeNonzero","ClientNotRunning","InstanceNotRunning"):continue
+              out=base64.b64decode(result.output or '').decode('utf8','replace')
+              for line in out.splitlines():
+                  if line.startswith("EVENT10_LIVE_READONLY="):print(line,flush=True)
+              if str(result.invocation_status)!="Success" or int(result.exit_code)!=0:
+                  raise RuntimeError('EVENT10_READONLY_FAILED_'+str(result.invocation_status)+'_'+out[-550:])
+              finished=True
+              break
+          if not finished:raise RuntimeError("EVENT10_READONLY_NOT_COMPLETED")
+          PY
+
+  report:
+    if: always()
+    needs: inspect
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish diagnostic run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.inspect.result }}
+        run: |
+          if [ "$RESULT" = "success" ]; then status=success; else status=failure; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$status" \
+            -f context="event10-live-readonly-diagnostic" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="EVENT10 live readonly probe: $RESULT" >/dev/null

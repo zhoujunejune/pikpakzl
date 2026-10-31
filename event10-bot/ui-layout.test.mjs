@@ -1,0 +1,110 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import {fileURLToPath} from "node:url";
+const page=fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),"panel.html"),"utf8");
+test("manual action shows the live result directly beneath its click button",()=>{
+ const click=page.indexOf('id="start"');
+ const immediate=page.indexOf('id="immediatePrediction"');
+ const endSection=page.indexOf('</section>',click);
+ const collector=page.indexOf("后台持续成交采集");
+ const complete=page.indexOf("完整分析详情（本轮 / 最近一轮）");
+ assert.ok(click>=0&&immediate>click&&immediate<endSection);
+ assert.ok(complete>endSection&&complete<collector);
+ assert.ok(page.includes('id="quickDirection"'));
+ assert.ok(page.includes('id="quickReason"'));
+ assert.ok(page.includes('id="quickPhase"'));
+ assert.ok(page.includes('id="quickOpen"'));
+});
+test("auto-refresh displays the confirmed newest server record; never a fabricated AI direction",()=>{
+ assert.match(page,/const s=d\.lastSession\|\|null/);
+ assert.match(page,/\$\("quickDirection"\)\.textContent=s\.direction\|\|/);
+ assert.match(page,/\$\("quickReason"\)\.textContent=s\.status==="ANALYZING"/);
+ assert.match(page,/setInterval\(refresh,4000\)/);
+ assert.match(page,/s\.analysisArguments\|\|\{\}/);
+ assert.match(page,/args\.upCase/);
+ assert.match(page,/args\.downCase/);
+ assert.match(page,/args\.decisiveEvidence/);
+ assert.match(page,/args\.uncertainty/);
+ assert.ok(page.includes('p.textContent=name+"："+val;'));
+});
+test("unique HTML ids and mobile width fit; no trading controls added",()=>{
+ const ids=[...page.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);
+ assert.equal(new Set(ids).size,ids.length);
+ assert.match(page,/@media\(max-width:700px\)/);
+ assert.match(page,/overflow-wrap:anywhere/);
+ assert.doesNotMatch(page,/\/fapi\/v1\/order|\/api\/v3\/order|trade\/submit|placeEventOrder/);
+});
+
+test("all visible analysis fields are served from Chinese display, not old English",()=>{
+ assert.match(page,/s\.displayChinese\?\.reason\|\|s\.reason/);
+ assert.match(page,/s\.displayChinese\|\|s\.analysisArguments/);
+ assert.match(page,/正在翻译旧版分析理由为简体中文/);
+ assert.match(page,/translate-legacy-only/);
+ assert.match(page,/review\.warnings\.slice\(0,5\)\.map\(readableWarning\)/);
+ assert.match(page,/支持UP的证据/);
+ assert.match(page,/支持DOWN的证据/);
+ assert.match(page,/最终决定性依据/);
+ assert.match(page,/不确定性/);
+});
+
+test("the saved DeepSeek confidence appears for current signal and every historic row; missing stays blank",()=>{
+ assert.ok(page.includes('id="quickConfidence"'));
+ assert.ok(page.includes('id="confidence"'));
+ assert.match(page,/const displayConfidence=s=>/);
+ assert.match(page,/s\.confidence\*100/);
+ assert.match(page,/typeof s\.confidence==="number"/);
+ assert.match(page,/s\.confidence>=0&&s\.confidence<=1/);
+ assert.match(page,/\$\("quickConfidence"\)\.textContent="主观置信度："\+displayConfidence\(s\)/);
+ assert.match(page,/\$\("confidence"\)\.textContent=displayConfidence\(s\)/);
+ assert.match(page,/s\.direction\|\|"—",displayConfidence\(s\)/);
+ assert.match(page,/td\.colSpan=7/);
+ assert.match(page,/AI主观置信度/);
+ assert.match(page,/不等于真实胜率或盈利概率/);
+ // Execute the exact formatting expression without calling model APIs.
+ const expression=page.match(/const displayConfidence=s=>[\s\S]*?;"?\s*\/\//);
+ // Anchor instead to the known following declaration; that is robust to comments.
+ const start=page.indexOf("const displayConfidence=s=>");
+ const end=page.indexOf("const phaseText=",start);
+ assert.ok(start>0&&end>start);
+ const segment=page.slice(start,end);
+ const fn=new Function(segment+"\nreturn displayConfidence;")();
+ assert.equal(fn({direction:"UP",confidence:0.643}),"64.3%");
+ assert.equal(fn({direction:"DOWN",confidence:0}),"0.0%");
+ assert.equal(fn({direction:"DOWN",confidence:1}),"100.0%");
+ assert.equal(fn({direction:"UP",confidence:null}),"—");
+ assert.equal(fn({direction:"UP",confidence:0.5}),"50.0%");
+ assert.equal(fn({direction:null,confidence:0.9}),"—");
+ assert.equal(fn({direction:"UP",confidence:1.5}),"—");
+ assert.equal(fn({direction:"UP",confidence:"0.65"}),"—");
+});
+
+test("the live statistics and history use V6 only, excluding V6.1 and legacy records",()=>{
+ assert.match(page,/const V6_VERSION="EVENT10_AI_PRICE_STRUCTURE_V6_20261024"/);
+ assert.match(page,/const v6Records=onlyV6\(log\.records\)/);
+ assert.match(page,/displayV6Stats\(v6Records\)/);
+ assert.match(page,/for\(const s of v6Records\)/);
+ assert.doesNotMatch(page,/stats\.proxyAccuracyPct/);
+ assert.match(page,/滚动窗口而非全量历史/);
+ assert.match(page,/旧版本数据保留在后台/);
+ const start=page.indexOf("const V6_VERSION=");
+ const end=page.indexOf("let active=",start);
+ assert.ok(start>=0&&end>start);
+ const getFns=new Function(page.slice(start,end)+"\nreturn {onlyV6,summarizedV6};");
+ const {onlyV6,summarizedV6}=getFns();
+ const all=[
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"UP",proxyHit:true},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6R1_20261025",direction:"DOWN",proxyHit:true},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"DOWN",proxyHit:false},
+  {decisionReviewVersion:"EVENT10_COMPACT_EVIDENCE_V5_20261024",direction:"UP",proxyHit:true},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"UP",proxyHit:null},
+  {decisionReviewVersion:"EVENT10_AI_PRICE_STRUCTURE_V6_20261024",direction:"DOWN",proxyHit:true}
+ ];
+ const v6=onlyV6(all);
+ assert.equal(v6.length,4);
+ assert.deepEqual(summarizedV6(v6),{total:4,decided:4,settled:3,hits:2,pct:"66.67%",
+  last5:"66.67%",last10:"66.67%"});
+ assert.equal(summarizedV6([]).pct,"—");
+ assert.equal(summarizedV6(onlyV6(all.filter(x=>x.direction==="UP"))).settled,1);
+});

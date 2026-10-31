@@ -1,0 +1,28 @@
+name: Diagnose Alibaba 30-second prediction no-signal (read-only)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_selective30_diagnose.py'
+      - '.github/workflows/zl-aliyun-selective30-diagnose.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-readonly-selective30-diagnosis
+  cancel-in-progress: false
+jobs:
+  readonly-diagnosis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/aliyun_selective30_diagnose.py
+      - run: pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect live Alibaba signal state, source freshness and last rounds
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_selective30_diagnose.py

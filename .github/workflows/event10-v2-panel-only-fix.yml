@@ -1,0 +1,110 @@
+name: EVENT10 V2 legacy-current-result UI-only repair
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/event10-v2-panel-only-fix.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+concurrency:
+  group: event10-v2-panel-only-repair
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - name: Validate old V1 signal excluded from current V2 panel
+        run: |
+          python3 -m py_compile event10-bot/aliyun_v2_panel_fix.py
+          node --test event10-bot/late-index.test.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,subprocess,tempfile
+          page=Path('event10-bot/panel.html').read_text()
+          assert 'isCurrentStrategyRecord' in page
+          assert '旧版Higher/Lower保留在历史记录中' in page
+          assert 'EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030' in page
+          match=re.search(r'<script>([\s\S]*?)</script>',page)
+          assert match
+          with tempfile.TemporaryDirectory() as tmp:
+              js=Path(tmp)/'panel.js';js.write_text(match.group(1))
+              subprocess.run(['node','--check',str(js)],check=True)
+          print('EVENT10_V2_UI_FILTER_TEST_PASSED=true')
+          PY
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Update only EVENT10 panel.html on Alibaba Cloud
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,re,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feature/zl-futures-bot-v1'
+          assert re.fullmatch('[0-9a-f]{40}',sha)
+          ak=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID')
+          sk=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          if not ak or not sk:raise RuntimeError('CLOUD_CREDS_MISSING')
+          script=f'''#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d /tmp/event10-v2-panel.XXXXXXXX)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 2 --max-time 35 'https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/aliyun_v2_panel_fix.py' -o "$tmp/repair.py"
+          python3 -m py_compile "$tmp/repair.py"
+          python3 "$tmp/repair.py" {sha}
+          '''
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          instance='b67374069bb3457ba6a3a2ede9305d3f'
+          run=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+              instance_id=instance,name='event10-v2-panel-only',
+              type='RunShellScript',working_user='root',command_content=script,timeout=280))
+          invoke=run.body.invoke_id
+          if not invoke:raise RuntimeError('NO_INVOCATION')
+          confirmed=False
+          for _ in range(130):
+              time.sleep(2)
+              r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                  region_id='ap-southeast-1',instance_id=instance,invoke_id=invoke)).body.invocation_result
+              if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+              raw=base64.b64decode(r.output or '').decode('utf8','replace')
+              for line in raw.splitlines():
+                  if line.startswith('EVENT10_V2_'):print(line,flush=True)
+              confirmed='EVENT10_V2_PANEL_FIX_SUCCEEDED=true' in raw
+              if str(r.invocation_status)!='Success' or int(r.exit_code)!=0 or not confirmed:
+                  raise RuntimeError('EVENT10_PANEL_ONLY_REMOTE_FAILED_'+str(r.invocation_status)+'_'+raw[-350:])
+              break
+          if not confirmed:raise RuntimeError('EVENT10_PANEL_ONLY_NOT_CONFIRMED')
+          PY
+  report:
+    if: always()
+    needs: [test, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish confirmed UI-only deployment outcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_RESULT: ${{ needs.test.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+        run: |
+          if [ "$TEST_RESULT" = "success" ] && [ "$DEPLOY_RESULT" = "success" ]; then status=success; else status=failure; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$status" \
+            -f context="event10-v2-ui-panel-only" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="V2 UI-only fix: test=$TEST_RESULT deploy=$DEPLOY_RESULT" >/dev/null

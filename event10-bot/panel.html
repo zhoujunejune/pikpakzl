@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0c1421"><title>EVENT10 · BTC 10分钟纯信号</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:#0c1421;color:#edf4ff;line-height:1.55}
+main{max-width:940px;margin:auto;padding:18px 14px 60px}
+h1{font-size:24px;margin:15px 0 3px}h2{font-size:17px;margin:0 0 12px}
+nav{display:flex;flex-wrap:wrap;gap:7px}
+nav a{color:#add5ff;text-decoration:none;background:#192b43;padding:8px 10px;border-radius:10px;font-size:13px}
+nav a.active{background:#285c9d;color:#fff}
+.card{background:#172439;border:1px solid #31435c;border-radius:16px;padding:17px;margin:14px 0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.metric{background:#101c2e;border-radius:11px;padding:13px;min-width:0;overflow-wrap:anywhere}
+.metric small{display:block;font-size:12px;color:#aabed6}
+.metric strong{display:block;font-size:19px;margin-top:4px;font-variant-numeric:tabular-nums}
+.sub{color:#b5c5d9;font-size:13px}
+.notice{background:#2c281e;border-left:4px solid #f2ba6a;padding:12px 14px;border-radius:8px;font-size:13px}
+.good{color:#49dda6}.bad{color:#ff8293}.yellow{color:#ffcf7b}
+button{padding:13px 18px;border-radius:12px;background:#1673c1;color:white;border:1px solid #3a99e5;font:600 16px system-ui;cursor:pointer;min-height:50px}
+button:disabled{opacity:.43;cursor:not-allowed}button.secondary{background:#1f3450}
+.status{border:1px solid #49627e;border-radius:25px;padding:5px 12px;font-size:13px}
+.signal-panel{background:#10283f;border:1px solid #326391;border-radius:14px;margin-top:14px;padding:15px;overflow-wrap:anywhere}
+.signal-direction{display:block;font-size:30px;font-weight:800;line-height:1.25;letter-spacing:.025em}
+.signal-price{font-size:13px;color:#b8d1ec;font-variant-numeric:tabular-nums}
+.signal-reason{font-size:14px;line-height:1.7;margin:10px 0 0;color:#dce9f9;white-space:pre-wrap;overflow-wrap:anywhere}
+.signal-detail-title{font-size:12px;color:#a9c5e6;margin:12px 0 4px;font-weight:700}
+
+.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #31445d}
+th{color:#a9c6e7}
+@media(max-width:700px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}button.primary{width:100%}}
+</style></head><body><main>
+<nav aria-label="机器人切换">
+<a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
+</nav>
+<h1>BTC 10分钟事件合约 · 纯信号</h1>
+<p class="sub">BTCUSDT · 5分钟趋势 + 1分钟动量 + 价格位置 + 放量1.15倍 + 盘口/主动成交 + RSI</p>
+<div class="notice">
+<strong>仅做信号，不会执行交易。</strong>
+按Excel频率优化策略检查6项条件，任意一项不满足即WAIT。信号生成时冻结币安指数参考价，600秒后进行代理核对；不代表实际合约订单，不自动交易。</div>
+<section class="card">
+<div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
+<button class="primary" id="start" type="button">立即检测六项条件</button>
+<div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时信号状态…</div>
+<div class="signal-panel" id="immediatePrediction" aria-live="polite" aria-atomic="false">
+ <div class="row"><strong>本轮信号检查结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
+ <div class="row" style="margin-top:10px">
+  <strong id="quickDirection" class="signal-direction">尚未分析</strong>
+  <strong id="quickConfidence" class="signal-price">通过条件：—</strong>
+  <span class="signal-price" id="quickOpen">锁定参考价：—</span>
+ </div>
+ <div id="quickReason" class="signal-reason">六项同时成立才出方向；数据缺失、量能不足、趋势冲突时返回WAIT。</div>
+ <p class="sub">规则没有主观置信度。参考指数价来自USD-M，1/5分钟EMA、RSI和成交量来自现货K线，盘口来自USD-M。历史指标只用已收盘K线；当前USD-M 1分钟成交量是必需数据，不可用则不出信号。</p>
+ <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
+</div>
+<p class="sub">不限制固定UTC时间窗口，每条有效信号独立锁定指数参考价，600秒后核对代理涨跌。</p>
+</section>
+<section class="card">
+<div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
+<div class="grid">
+<div class="metric"><small>信号锁定指数价（非订单Strike）</small><strong id="openPrice">—</strong></div>
+<div class="metric"><small>规则判断方向</small><strong id="direction">—</strong></div>
+<div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
+<div class="metric"><small>信号后10分钟指数价</small><strong id="closePrice">—</strong></div>
+</div>
+<div class="grid" style="margin-top:10px">
+<div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
+<div class="metric"><small>信号后600秒核对时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
+<div class="metric"><small>规则检查耗时</small><strong id="latency">—</strong></div>
+<div class="metric"><small>六项条件</small><strong id="confidence">—</strong></div>
+<div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
+</div>
+<p class="sub" id="reason">等待行情检查。</p>
+<div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
+<div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
+<p id="featureSummary" class="sub">从公开指数报价、已收盘现货K线及前5档盘口计算六条件；HTTP 451或关键行情过期则不出信号。</p>
+<div id="featureHealth" class="grid" aria-live="polite"></div>
+<p class="sub">仅使用公开指数价和盘口，锁定参考价不等于实际订单Strike。</p>
+<p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
+</section>
+<section class="card">
+<div class="row"><h2>后台持续成交采集（无需点击分析）</h2><span id="collectorState" class="status">检查中</span></div>
+<div class="grid">
+<div class="metric"><small>本进程已采集聚合成交</small><strong id="streamCount">—</strong></div>
+<div class="metric"><small>最近成交接收延迟</small><strong id="streamLag">—</strong></div>
+<div class="metric"><small>检测到的采集缺口</small><strong id="streamGaps">—</strong></div>
+<div class="metric"><small>连续数据覆盖</small><strong id="streamCoverage">—</strong></div>
+</div>
+<p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
+</section>
+<section class="card">
+<h2>新规则信号后10分钟命中率（指数代理）</h2>
+<div class="grid">
+<div class="metric"><small>新规则出信号</small><strong id="total">0</strong></div>
+<div class="metric"><small>新规则有效方向</small><strong id="decided">0</strong></div>
+<div class="metric"><small>新规则已核对</small><strong id="settled">0</strong></div>
+<div class="metric"><small>新规则代理命中率</small><strong id="accuracy">—</strong></div>
+<div class="metric"><small>新规则最近5轮</small><strong id="v6last5">—</strong></div>
+<div class="metric"><small>新规则最近10轮</small><strong id="v6last10">—</strong></div>
+</div>
+<p class="sub">全部新规则有效方向均永久追加到独立信号日志，统计所有已保存的新规则信号（不是最近50条的局部统计）。旧版预测历史继续保留且不会混入命中率。命中仅指公开行情代理，非官方事件合约结算。</p>
+</section>
+<section class="card">
+<div class="row"><h2>所有有效信号记录</h2><button type="button" class="secondary" id="refresh">立即刷新</button></div>
+<p class="sub" id="historySummary" aria-live="polite">载入已保存的信号…</p>
+<div class="tablewrap"><table><thead><tr>
+<th>出信号时间</th><th>来源</th><th>方向</th><th>信号锁定价</th><th>六项条件</th><th>成交量倍数</th><th>RSI(14)</th><th>到期指数价</th><th>代理结果</th>
+</tr></thead><tbody id="records"><tr><td colspan="9">读取中…</td></tr></tbody></table></div>
+<div class="row" style="margin-top:12px">
+<button type="button" class="secondary" id="newerSignals">上一页</button>
+<span class="sub" id="signalPage">第 1 页</span>
+<button type="button" class="secondary" id="olderSignals">下一页</button>
+</div>
+<p class="sub">每次满足全部六项条件的 Higher/Lower 都自动保存，包括后台无人操作时产生的信号。每页25条，可逐页查看全部记录；到期后补充公开行情代理核对结果。无信号和数据错误不计入有效方向或命中率，也不代表真实事件合约订单。</p>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const SIGNAL_VERSION="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101";
+const PAGE_SIZE=25;
+let signalPageOffset=0,signalTotal=0;
+const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
+function displaySignalStats(stats){
+ $("total").textContent=(stats?.total??0).toLocaleString("zh-CN");
+ $("decided").textContent=(stats?.validDirections??0).toLocaleString("zh-CN");
+ $("settled").textContent=(stats?.proxySettled??0).toLocaleString("zh-CN");
+ $("accuracy").textContent=pct(stats?.proxyAccuracyPct);
+ $("v6last5").textContent=pct(stats?.last5Pct);
+ $("v6last10").textContent=pct(stats?.last10Pct);
+}
+let active=null,inflight=false,pendingRequestId=null;
+const attemptedChineseTranslations=new Set();
+const hasChinese=text=>typeof text==="string"&&/[\u3400-\u9fff]/u.test(text);
+const needsChineseText=s=>{
+ if(!s||s.status!=="PREDICTED"||s.displayChinese)return false;
+ const parts=[s.reason,s.analysisArguments?.upCase,s.analysisArguments?.downCase,
+   s.analysisArguments?.decisiveEvidence,s.analysisArguments?.uncertainty];
+ return parts.some(t=>typeof t==="string"&&/[A-Za-z]{4,}/.test(t)&&!hasChinese(t));
+};
+const warningTitles={
+ BREAKOUT_VS_HIGHER_TREND:"3根1分钟K线确认突破，但与15分钟背景趋势冲突",
+ NO_PERSISTENT_SHORT_TREND:"最近3根已收盘1分钟K线方向未持续，不能把瞬间涨跌当趋势",
+ MISSING_VERIFIEDPRICESTRUCTURE:"1分钟K线价格结构数据不足，本轮不参考支撑阻力",
+ OVERSOLD_REVERSAL_RISK:"15分钟RSI明显偏弱或超卖，不能机械认定继续下跌",
+ OVERSOLD_SHORT_TERM_RECOVERY:"15分钟超卖但短周期出现转强迹象，必须认真评估反弹",
+ OVERBOUGHT_PULLBACK_RISK:"15分钟RSI明显偏高，不能机械认定继续上涨",
+ OVERBOUGHT_SHORT_TERM_WEAKENING:"15分钟偏强但短周期走弱，评估回调风险",
+ FLOW_PRICE_RESPONSE_UNVERIFIED:"合约成交采样不足，无法验证同一市场量价关系，不推断吸收",
+ HIGH_VOLUME_RANGE_HIGH:"异常放量且价格接近区间高点，警惕假突破和买单被吸收",
+ HIGH_VOLUME_RANGE_LOW:"异常放量且价格接近区间低点，警惕下跌延续或恐慌反转",
+ POSSIBLE_BUY_ABSORPTION:"主动买入较多但价格仍弱，存在买单被吸收的可能",
+ POSSIBLE_SELL_ABSORPTION:"主动卖出较多但价格偏强，存在卖单被吸收的可能",
+ HIGHER_TIMEFRAME_VS_FLOW_CONFLICT:"较大周期趋势与主动成交方向相互矛盾",
+ ORDERBOOK_VS_FLOW_CONFLICT:"盘口挂单压力与真实主动成交方向存在冲突",
+ FLOW_WINDOWS_DISAGREE:"不同成交数据窗口的方向不一致，应检查时间范围",
+ TIMEFRAME_TREND_CONFLICT:"不同时间周期的趋势方向存在分歧",
+ NO_VERIFIED_CONTINUOUS_FLOW:"没有完整有效的连续成交流，不可依据短时间抽样判断完整成交趋势"
+};
+const readableWarning=w=>{
+ const code=String(w||"").split(":")[0];
+ if(code.startsWith("MISSING_")){
+  const id=code.slice(8).toLowerCase();
+  const labels={fifteenminute:"15分钟K线",orderbook:"盘口数据",
+    aggressiveflow:"主动成交数据",futuresindex:"指数价格",openinterestchange:"持仓量变化",
+    continuousaggtrade:"连续成交流"};
+  return (labels[id]||"辅助行情")+"未通过校验，本轮不使用";
+ }
+ return warningTitles[code]||"其他数据冲突或质量限制（参阅下方数据覆盖情况）";
+};
+async function localizeLegacyLatest(s){
+ if(!needsChineseText(s)||attemptedChineseTranslations.has(s.id))return;
+ attemptedChineseTranslations.add(s.id);
+ try{
+  const response=await fetch("api/localize-latest",{method:"POST",credentials:"same-origin",
+    headers:{"X-Event10-Action":"translate-legacy-only"}});
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw Error("TRANSLATION_FAILED");
+  await refresh();
+ }catch{
+  $("quickReason").textContent="这轮记录来自旧版英文说明。中文翻译暂时不可用，可刷新页面重新尝试。";
+ }
+}
+
+const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{hour12:false}):"—";
+const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
+// Only display the actual confidence saved in this forecast's model response.
+// Never infer from outcome, history, signal direction or another round.
+const displayConfidence=s=>{
+ if(!s)return "—";
+ if(s.direction==="UP"||s.direction==="DOWN")return "6/6";
+ const count=x=>Object.values(x||{}).filter(v=>v===true).length;
+ const checks=s.upChecks||s.ruleChecks?.upChecks;
+ const down=s.downChecks||s.ruleChecks?.downChecks;
+ return checks?"看涨 "+count(checks)+"/5 · 看跌 "+count(down)+"/5":"—";
+};
+const phaseText={ANALYZING:"处理中",PREDICTED:"六项成立，方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
+const statusText=(v)=>{
+ if(v==="PUBLIC_MARKET_PROXY_ONLY")return "旧版现货代理核对";
+ if(v==="INDEX_CYCLE_PROXY_ONLY")return "旧版UTC指数周期已核对";
+  if(v==="INDEX_SIGNAL_TPLUS10_PROXY_ONLY")return "信号后10分钟已核对";
+ if(v==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")return "到期时数据不足";
+ if(v==="FAILED")return "分析失败";
+ return "尚未核对";
+};
+function directionStyle(el,v){el.className=v==="UP"?"good":v==="DOWN"?"bad":"yellow";}
+function updateClock(){
+ if(!active){$("remaining").textContent="—";return;}
+ let n=Math.max(0,Math.floor((active.expiresAt-Date.now())/1000));
+ $("remaining").textContent=String(Math.floor(n/60)).padStart(2,"0")+":"+String(n%60).padStart(2,"0");
+}
+const sectionNames={indexQuote:"币安指数报价",indexKlines:"指数1分钟K线",fifteenMinute:"15分钟K线",orderBook:"买卖盘口",aggressiveFlow:"主动成交订单流",futuresIndex:"指数价格/资金费率",openInterest:"实时持仓量",openInterestChange:"5分钟持仓变化",continuousAggTrade:"连续WebSocket成交历史"};
+const sourceErrorNames={
+ NEWER_THAN_REFERENCE_TICK:"采样时间晚于锁定参考价，已安全排除",
+ INCOMPLETE_OR_UNFRESH_STREAM_WINDOW:"所需历史窗口不完整或未通过时效检查",
+ COLLECTOR_UNAVAILABLE:"连续采集器未连接",
+ INSUFFICIENT_CONTINUOUS_UPTIME:"连接连续时间不足",
+ COLLECTION_GAP_IN_WINDOW:"采集窗口内存在断流或跳号",
+ TRADE_STREAM_STALE:"成交事件过期"
+};
+function showSources(coverage){
+ const el=$("featureHealth");el.replaceChildren();
+ const items=Object.entries(coverage||{});
+ const ready=items.filter(([,v])=>v.available).length;
+ $("featureSummary").textContent=items.length?
+  "上次检查或预测时，获得 "+ready+"/"+items.length+" 项辅助数据。这是当时的记录，不代表接口现在仍不可用。":
+  "尚未检查额外数据接口。首次点击预测时也会自动检查。";
+ for(const [k,v] of items){
+  const div=document.createElement("div");div.className="metric";
+  const name=document.createElement("small");name.textContent=sectionNames[k]||k;
+  const flag=document.createElement("strong");flag.style.fontSize="13px";
+  flag.textContent=v.available?"可用":"未用于分析："+(sourceErrorNames[v.error]||String(v.error||"UNKNOWN"));
+  flag.title=v.error||"";
+  if(!v.available&&Array.isArray(v.reasons)&&v.reasons.length){
+   const more=document.createElement("small");
+   more.textContent=v.reasons.join("；").slice(0,260);
+   div.append(more);
+  }
+  flag.className=v.available?"good":"yellow";div.append(name,flag);el.append(div);
+ }
+}
+// A persisted legacy V1 session must never be shown as the current V2 signal.
+const isCurrentStrategyRecord=s=>!!s&&(
+ s.strategyVersion===SIGNAL_VERSION||
+ s.decisionReviewVersion===SIGNAL_VERSION||
+ s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
+function display(d){
+ const recent=isCurrentStrategyRecord(d.lastCheck)?d.lastCheck:null;
+ const old=isCurrentStrategyRecord(d.lastSession)?d.lastSession:null;
+ const currentActive=isCurrentStrategyRecord(d.active)?d.active:null;
+ const recentIsLatest=!!recent&&
+   (recent.checkedAt??recent.openedAt??0)>=(old?.modelFinishedAt??old?.openedAt??0);
+ const s=currentActive||(recentIsLatest?recent:(old||recent||null));
+ active=currentActive;
+ $("engine").textContent=d.configured?"频率优化六项信号规则已启用":"行情服务暂不可用";
+ $("engine").className="status "+(d.configured?"good":"bad");
+ $("start").disabled=inflight||!d.configured||!!d.active; // Manual joins background scan
+ if(s){
+  const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";
+  $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
+  $("quickPhase").textContent=$("phase").textContent;
+  $("quickDirection").textContent=s.direction==="UP"?"看涨 Higher":s.direction==="DOWN"?"看跌 Lower":s.status==="DATA_ERROR"?"数据异常·无信号":noSignal?"无信号":s.direction||"—";
+  $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
+  $("quickConfidence").textContent="通过条件："+displayConfidence(s);
+  $("quickOpen").textContent="参考价："+price(s.openPrice)+" USDT";
+  $("quickReason").textContent=s.reason||(noSignal?"没有同时满足六项条件。":"等待行情校验。");
+  $("quickTimestamp").textContent="采样："+when(s.openedAt)+" ｜ "+
+    "全时段六项频率优化过滤"+
+    " ｜ 信号后完整600秒才核对，非事件合约官方交易记录。";
+  $("openPrice").textContent=price(s.openPrice);
+  $("openedAt").textContent=when(s.openedAt);
+  $("expiresAt").textContent=noSignal?"—":when(s.expiresAt);
+  $("direction").textContent=$("quickDirection").textContent;
+  $("confidence").textContent=displayConfidence(s);
+  directionStyle($("direction"),s.direction);
+  $("latency").textContent=Number.isFinite(s.checkLatencyMs??s.modelLatencyMs)?((s.checkLatencyMs??s.modelLatencyMs)/1000).toFixed(2)+"秒":"—";
+  $("closePrice").textContent=price(s.closePrice);
+  $("result").textContent=noSignal?"无信号（不计统计）":typeof s.proxyHit==="boolean"?
+    (s.proxyHit?"代理命中":"代理未命中"):
+    s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
+  $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
+  $("reason").textContent=s.reason||s.error||"等待条件检查";
+  const detail=$("analysisDetail");detail.replaceChildren();
+  const rule=s.ruleChecks||s,up=rule.upChecks,down=rule.downChecks;
+  if(up&&down){
+   const labels={trend5m:"5分钟EMA方向",momentum1m:"1分钟EMA动量",pricePosition:"价格与近2根K线",volume:"成交量≥1.15倍",orderflow:"前5档盘口买卖比",rsi:"RSI(14)过滤"};
+   for(const [direction,checks] of [["看涨",up],["看跌",down]]){
+    const p=document.createElement("p");
+    p.textContent=direction+"："+Object.entries(checks).map(([key,val])=>
+      (labels[key]||key)+" "+(val?"✓":"×")).join(" · ");
+    detail.append(p);
+   }
+   const e=rule.evidence;
+   if(e){
+    const p=document.createElement("p");
+    const num=v=>Number.isFinite(v)?Number(v).toFixed(2):"不可用";
+    p.textContent="指数参考价 "+num(e.liveIndexPrice)+" | 现货价 "+num(e.spotPrice)+" | 成交量 "+num(e.volumeRatio)+"倍（"+(e.volumeBasis==="CURRENT_USDM_FUTURES_1M"?"USD-M当前1分钟":"当前量缺失")+"） | RSI "+num(e.rsi14)+" | 买/卖盘前5档 "+num(e.bidTop5QtyBtc)+"/"+num(e.askTop5QtyBtc);
+     detail.append(p);
+   }
+  }
+  $("dataQuality").textContent="EMA/RSI基于BTCUSDT现货已收盘1分钟/5分钟K线；成交量使用USD-M正在形成的1分钟K线，对比此前20根完整1分钟K线，数据缺失则不出信号。指数参考价与前5档盘口来自币安USD-M。"+
+    "所有六项满足才出方向；信号后600秒使用相同指数代理核对，不是事件合约订单结算。";
+ }else{
+  $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
+  $("quickDirection").className="signal-direction yellow";
+  $("quickConfidence").textContent="通过条件：—";$("confidence").textContent="—";
+  $("quickOpen").textContent="参考价：—";
+  $("quickReason").textContent="六项条件同时成立才出信号；其余为无信号。";
+  $("quickTimestamp").textContent="后台每12秒检查六项频率优化条件；条件不满足即WAIT。";
+  for(const id of ["openPrice","direction","openedAt","expiresAt","closePrice","latency","result","remaining"]){
+    $(id).textContent="—";
+  }
+  $("reason").textContent="暂时没有V2方向信号；旧版Higher/Lower保留在历史记录中，不作为当前信号。";
+  $("dataQuality").textContent="新策略仅采用币安指数价、指数1分钟K线及永续合约前5档盘口。";
+  $("analysisDetail").replaceChildren();$("phase").textContent="等待V2检测";
+ }
+ showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
+ updateClock();
+}
+async function refreshCollector(){
+ try{
+  const r=await fetch("api/stream-health",{cache:"no-store"});
+  if(!r.ok)throw Error("COLLECTOR_HTTP_"+r.status);
+  const d=await r.json();
+  const live=d.connected&&d.lastReceivedAt!=null&&Date.now()-d.lastReceivedAt<=5000;
+  $("collectorState").textContent=live?"持续接收中":d.connected?"连接中·无新事件":"已断线/重连中";
+  $("collectorState").className="status "+(live?"good":"yellow");
+  $("streamCount").textContent=(d.totalSinceProcessStart??0).toLocaleString("zh-CN");
+  $("streamLag").textContent=d.lastEventLatencyMs==null?"—":d.lastEventLatencyMs+" ms";
+  $("streamGaps").textContent=d.gapCount??0;
+  const w=d.windows||{};
+  $("streamCoverage").textContent=["60s","300s","600s"].filter(x=>w[x]?.complete).map(x=>({ "60s":"1分钟","300s":"5分钟","600s":"10分钟"})[x]).join(" / ")||"数据积累中";
+  $("collectorExplanation").textContent="不点击时也持续采集，独立保存聚合成交日志。"+
+   (d.lastError?"最近错误："+d.lastError+"。":"")+
+   " 已记录重连次数："+(d.reconnectCount??0)+"；底层成交ID跳号："+(d.underlyingTradeIdSkips??0)+"（不等于聚合事件丢失）。每轮只使用真正完整的窗口。";
+ }catch{
+  $("collectorState").textContent="采集服务不可用";$("collectorState").className="status bad";
+  $("collectorExplanation").textContent="后台采集服务暂时无法验证，不能宣称采集正常。";
+ }
+}
+let statusRefreshBusy=false,historyRefreshBusy=false,refreshEpoch=0;
+// Live status is NEVER blocked by the large 50-record history response.
+async function refresh(){
+ if(inflight||statusRefreshBusy)return;
+ statusRefreshBusy=true;
+ const epoch=refreshEpoch;
+ try{
+  const r=await fetch("api/status",{cache:"no-store",signal:AbortSignal.timeout(3500)});
+  if(!r.ok)throw Error("HTTP "+r.status);
+  const d=await r.json();
+  if(epoch!==refreshEpoch||inflight)return;
+  display(d);
+  $("message").textContent=d.busyStart?"后台正在获取行情，完成后自动更新结果。":
+    d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
+    d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
+    d.lastCheck?.status==="NO_SIGNAL"?"检查已完成：六项未同时满足，无信号。":
+    "后台持续检查六项条件；条件不满足则不出方向。";
+ }catch(e){
+  if(epoch===refreshEpoch&&!inflight){
+   $("engine").textContent="状态接口异常";$("engine").className="status bad";
+   $("message").textContent="状态刷新失败："+String(e.message||e);
+  }
+ }finally{statusRefreshBusy=false;}
+}
+async function refreshHistory(){
+ if(historyRefreshBusy||inflight)return;
+ historyRefreshBusy=true;
+ const requestedOffset=signalPageOffset;
+ try{
+  const r=await fetch("api/signals?limit="+PAGE_SIZE+"&offset="+requestedOffset,{
+    cache:"no-store",signal:AbortSignal.timeout(4500)});
+  if(!r.ok)throw Error("HTTP "+r.status);
+  const log=await r.json();
+  if(log.version!==SIGNAL_VERSION||!Array.isArray(log.records))throw Error("INVALID_SIGNAL_HISTORY");
+  if(requestedOffset!==signalPageOffset)return;
+  const records=log.records;
+  signalTotal=log.total;
+  displaySignalStats(log.stats);
+  $("historySummary").textContent="已永久记录 "+signalTotal+" 条有效方向信号；"+
+    "已核对 "+(log.stats?.proxySettled??0)+" 条。每次新信号自动更新。";
+  const page=Math.floor(signalPageOffset/PAGE_SIZE)+1;
+  const totalPages=Math.max(1,Math.ceil(signalTotal/PAGE_SIZE));
+  $("signalPage").textContent="第 "+page+" / "+totalPages+" 页";
+  $("newerSignals").disabled=signalPageOffset===0;
+  $("olderSignals").disabled=signalPageOffset+records.length>=signalTotal;
+  const rows=$("records");rows.replaceChildren();
+  if(!records.length){
+   const tr=document.createElement("tr"),td=document.createElement("td");
+   td.colSpan=9;td.textContent="暂无符合全部六项条件的新规则方向信号";
+   tr.append(td);rows.append(tr);
+  }
+  for(const s of records){
+   const tr=document.createElement("tr");
+   const outcome=typeof s.proxyHit==="boolean"?
+      (s.proxyHit?"命中":"未命中"):
+      s.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY"?"行情不足，未核验":
+      s.proxyOutcome==="FLAT"?"持平（不计）":"待10分钟到期";
+   const x=s.direction==="UP"?"看涨 Higher":"看跌 Lower";
+   const volume=typeof s.volumeRatio==="number"?s.volumeRatio.toFixed(2)+"倍":"—";
+   const rsi=typeof s.rsi14==="number"?s.rsi14.toFixed(1):"—";
+   const cells=[
+     when(s.openedAt),s.trigger==="AUTO"?"自动":"手动",x,price(s.openPrice),
+     s.sixOfSix?"6/6":"历史记录",volume,rsi,price(s.closePrice),outcome
+   ];
+   for(const [i,v] of cells.entries()){
+    const td=document.createElement("td");td.textContent=v;
+    if(i===2)td.className=s.direction==="UP"?"good":"bad";
+    if(i===8)td.className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
+    tr.append(td);
+   }rows.append(tr);
+  }
+ }catch(e){
+  $("historySummary").textContent="信号历史暂无法读取，请点击刷新："+String(e.message||e);
+  // The current live direction is independent of the ledger display.
+ }finally{historyRefreshBusy=false;}
+}
+// The POST contains the definitive result. Paint it without any second GET.
+function showImmediateResult(session){
+ const signal=session?.direction==="UP"||session?.direction==="DOWN";
+ display({configured:true,busyStart:false,active:signal?session:null,
+   lastSession:signal?session:null,lastCheck:session,
+   lastDataProbe:null,lastFeatureCoverage:session?.featureAvailability||null});
+ $("message").textContent=session?.status==="DATA_ERROR"?
+   "本次数据异常，未产生方向。":signal?
+   "六项成立，已锁定信号时指数价；完整600秒后核对。":
+   "检查完成：六项未同时满足，无信号。";
+}
+async function startClick(){
+ if(inflight)return;
+ inflight=true;refreshEpoch++;$("start").disabled=true;$("message").textContent="正在检查币安指数价、现货K线、盘口及主动成交…";
+ $("quickPhase").textContent="正在启动";
+ $("quickDirection").textContent="正在检查六项条件…";
+ $("quickDirection").className="signal-direction yellow";
+ $("quickConfidence").textContent="通过条件：—";
+ $("quickReason").textContent="只有六项都满足才出方向；否则返回无信号。";
+ $("quickOpen").textContent="参考价：采集中";
+ if(!pendingRequestId){
+  const v=new Uint8Array(16);crypto.getRandomValues(v);
+  pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
+ }
+ try{
+  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",signal:AbortSignal.timeout(9000),
+    headers:{"X-Event10-Action":"manual-open","X-Event10-Request-ID":pendingRequestId}});
+  const d=await r.json();
+  if(!r.ok||!d.ok)throw Error(d.error||"启动失败");
+  pendingRequestId=null;
+  showImmediateResult(d.session);
+ }catch(e){
+  $("message").textContent="行情检查未完成："+String(e);
+  $("quickPhase").textContent="本次检查未完成";
+  $("quickDirection").textContent="无新信号";
+  $("quickDirection").className="signal-direction yellow";
+  $("quickConfidence").textContent="通过条件：—";
+  $("quickReason").textContent="行情检查未完成；请以本次实际通过的六项条件为准："+String(e);
+ }
+ finally{inflight=false;refreshEpoch++;void refresh();void refreshHistory();}
+}
+$("start").addEventListener("click",startClick);
+$("refresh").addEventListener("click",()=>{signalPageOffset=0;void refresh();void refreshHistory();});
+$("newerSignals").addEventListener("click",()=>{signalPageOffset=Math.max(0,signalPageOffset-PAGE_SIZE);void refreshHistory();});
+$("olderSignals").addEventListener("click",()=>{if(signalPageOffset+PAGE_SIZE<signalTotal){signalPageOffset+=PAGE_SIZE;void refreshHistory();}});
+$("checkDataSources").addEventListener("click",async()=>{
+ const btn=$("checkDataSources");btn.disabled=true;
+ $("featureSummary").textContent="正在检查币安公开接口连通性和时间戳…";
+ try{
+  const r=await fetch("api/data-health",{cache:"no-store"});
+  const data=await r.json();
+  if(!r.ok||!data.ok)throw Error(data.error||"检查失败");
+  showSources(data.availability);
+ }catch(e){$("featureSummary").textContent="数据源检查失败："+String(e);}
+ finally{btn.disabled=false;}
+});
+refresh();refreshHistory();refreshCollector();setInterval(refresh,3000);setInterval(refreshHistory,6000);setInterval(refreshCollector,6000);setInterval(updateClock,1000);
+</script></body></html>

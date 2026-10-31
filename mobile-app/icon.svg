@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#142d49"/><stop offset="1" stop-color="#071321"/></linearGradient></defs>
+<rect width="512" height="512" rx="112" fill="url(#g)"/>
+<rect x="50" y="50" width="412" height="412" rx="94" fill="none" stroke="#315779" stroke-width="10"/>
+<path d="M118 324l82-90 77 48 113-126" fill="none" stroke="#61b7ff" stroke-width="33" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="392" cy="153" r="20" fill="#4ee2b3"/>
+<text x="256" y="413" font-family="Arial,sans-serif" font-size="88" font-weight="800" text-anchor="middle" fill="#eaf6ff" letter-spacing="-4">ZL</text>
+</svg>

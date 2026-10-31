@@ -1,0 +1,49 @@
+name: GUARDIAN bounded early entry hotfix Alibaba
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_early_entry_hotfix_20261030.py
+      - .github/workflows/zl-guardian-early-entry-hotfix-20261030.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian-early-entry-hotfix
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Static and remote shell syntax
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_early_entry_hotfix_20261030.py
+          python - <<'PY'
+          import ast,subprocess
+          t=ast.parse(open('prediction-bot-v1/aliyun_guardian_early_entry_hotfix_20261030.py').read())
+          sh=next(x.value.value for x in t.body if isinstance(x,ast.Assign) and any(getattr(y,'id',None)=='REMOTE' for y in x.targets))
+          p=subprocess.run(['bash','-n'],input=sh,text=True,capture_output=True)
+          assert p.returncode==0,p.stderr
+          for x in ('FOLLOW_ENABLED_ABORT','OPEN_POSITION_ABORT','GUARDIAN_EARLY_INVARIANTS_PASS=true','GUARDIAN_EARLY_ENTRY_BACKUP'):
+           assert x in sh,x
+          assert 'place-order-bundle' not in sh
+          print('EARLY_TIMING_VERIFY_PASS=true')
+          PY
+  deploy:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/zl-futures-bot-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Guarded surgical patch; owner must have following disabled
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_early_entry_hotfix_20261030.py

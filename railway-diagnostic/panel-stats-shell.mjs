@@ -42,9 +42,9 @@ function log(event, extra = {}) {
 }
 
 const statsCard = `<div class="c" id="roundStatsCard">
-<div class="k">每轮判断与真实结果</div>
+<div class="k">DeepSeek 每轮预测与官方结算 · 独立统计</div>
 <div class="big" id="rsAccuracy">准确率读取中...</div>
-<div class="muted" id="rsMeta">仅统计新版RSI(14)直接输出方向与币安预测市场官方结算的准确率；实际订单盈亏另行统计。</div>
+<div class="muted" id="rsMeta">只统计 DEEPSEEK_5M_V1 自身预测与币安官方结算；不继承 Selective V2 / Edge 数据。</div>
 <div class="grid" style="margin-top:12px">
 <div class="kv"><div class="k">已结算</div><div class="v" id="rsSettled">-</div></div>
 <div class="kv"><div class="k">有效判断</div><div class="v" id="rsDecided">-</div></div>
@@ -103,6 +103,25 @@ globalThis.__active15sCandidateIds=[];
 async function load(){
  if(!e('signalPolicyCard'))return;
  try{
+  var r=await fetch('/api/order-signal-model?ts='+Date.now(),{cache:'no-store'});
+  var m=await r.json();
+  if(!r.ok||m.model!=='DEEPSEEK_5M_V1')throw Error('生产模型不匹配：'+(m.model||'未知'));
+  e('spTitle').textContent='DEEPSEEK_5M_V1 · DeepSeek AI 深度思考';
+  e('spRouteStages').innerHTML='<span class="on">唯一生产模型 DeepSeek</span><span>动态锁定，最晚第270秒</span><span>旧策略不参与生产</span>';
+  if(e('spLegacyRegistryWrap'))e('spLegacyRegistryWrap').style.display='none';
+  e('spQualified').textContent='DeepSeek · 唯一';
+  e('spObserve').textContent='Selective V2 / Edge 已退出下单路由';
+  e('spFreshness').textContent='已与生产选择器核对';
+  e('spRule').textContent='实时BTC行情与技术指标 → DeepSeek深度思考 → 有效UP/DOWN → 生产订单校验。';
+  e('spNotice').textContent='独立胜率从 DeepSeek 的已结算预测记录统计，旧模型命中记录不再混入。';
+  return;
+ }catch(err){
+  e('spTitle').textContent='DeepSeek 生产状态待核实';
+  e('spNotice').textContent='不能从旧统计推断生产状态：'+(err.message||err);return;
+ }
+ // Legacy model registry intentionally not used for production status.
+ try{
+
   // The live round-stats model catalog is authoritative; training registry is
   // historical and must never relabel the currently selected production route.
   var liveResponse=await fetch('/api/round-stats?ts='+Date.now(),{cache:'no-store'});
@@ -415,7 +434,87 @@ async function renderNoviceRoundStats(){
    '<td style="padding:9px 6px">'+(valid&&actual?'Binance Prediction 官方结算':valid?'等待官方结算':'未锁定有效行情，不计胜率')+'</td></tr>';
  }).join(''):'<tr><td colspan="8" style="padding:10px 6px;color:#8f98a8">新手混合模型尚无独立轮次记录</td></tr>';
 }
+async function renderDeepSeekRoundStats(){
+ function put(id,v){var n=e(id);if(n)n.textContent=String(v);}
+ try{
+  var results=await Promise.all([
+   fetch('/deepseek/api/history?limit=80&ts='+Date.now(),{cache:'no-store'}),
+   fetch('/deepseek/api/status?ts='+Date.now(),{cache:'no-store'})
+  ]);
+  if(!results[0].ok||!results[1].ok)throw Error('DeepSeek 独立账本接口不可用');
+  var ledger=await results[0].json(),status=await results[1].json();
+  if(ledger.ok!==true||ledger.model!=='DEEPSEEK_5M_V1'||status.model!=='DEEPSEEK_5M_V1'||
+     !Array.isArray(ledger.records))throw Error('DeepSeek 账本版本或响应结构无效');
+  var rows=ledger.records.filter(function(x){return Number.isSafeInteger(x.round)&&['UP','DOWN'].includes(x.direction)});
+  var settled=rows.filter(function(x){return ['UP','DOWN'].includes(x.actual)&&Number.isSafeInteger(x.settledAt)&&typeof x.hit==='boolean'});
+  // The history endpoint intentionally returns the last 80 rows ONLY.
+  // Authoritative lifetime counts come from the DeepSeek learner summary,
+  // never from rows.length (which would stick at 80/79 forever).
+  var totals=ledger.summary||{};
+  var totalPredictions=totals.allPredictions;
+  var totalSettled=totals.allOfficialSamples;
+  var totalHits=totals.allOfficialHits;
+  var totalMisses=totals.allOfficialMisses;
+  var validTotals=Number.isSafeInteger(totalPredictions)&&totalPredictions>=0&&
+    Number.isSafeInteger(totalSettled)&&totalSettled>=0&&
+    Number.isSafeInteger(totalHits)&&totalHits>=0&&
+    Number.isSafeInteger(totalMisses)&&totalMisses>=0&&
+    totalHits+totalMisses===totalSettled&&totalPredictions>=totalSettled;
+  if(!validTotals)throw Error('DeepSeek 累计统计不可用，请检查服务器学习账本版本');
+  var recentHits=settled.filter(function(x){return x.hit}).length;
+  put('rsAccuracy',totalSettled?(100*totalHits/totalSettled).toFixed(2)+'%（累计'+totalSettled+'轮）':'暂无已结算预测');
+  put('rsSettled',totalSettled);
+  put('rsDecided',totalPredictions);
+  put('rsCorrect',totalHits);
+  put('rsWrong',totalMisses);
+  put('rsWait','尚未全量记录');put('rsCoverage','未核定');
+  put('rsMeta','唯一生产模型：DEEPSEEK_5M_V1 · 累计已锁定 '+totalPredictions+
+   ' 轮、官方已结算 '+totalSettled+' 轮、待结算 '+(totalPredictions-totalSettled)+
+   ' 轮；下方仅显示最近最多80条信号（其中已结算 '+settled.length+
+   ' 条'+(settled.length?'，最近80条命中率 '+(100*recentHits/settled.length).toFixed(2)+'%':'')+
+   '）。累计统计不受80条显示窗口限制，不混入旧 Selective V2、Edge。尚未完整记录未锁定轮次，因此覆盖率未核定。');
+  var currentRound=Math.floor(Date.now()/300000)*300000;
+  if(status.round===currentRound&&!rows.some(function(x){return x.round===currentRound}))
+   rows.unshift({round:currentRound,direction:null,provider:status.providerModel,waiting:true});
+  rows.sort(function(a,b){return b.round-a.round});
+  var target=e('rsRows');
+  if(target)target.innerHTML=rows.length?rows.slice(0,40).map(function(x){
+   var actual=['UP','DOWN'].includes(x.actual)?x.actual:null;
+   var result=!x.direction?'NO_DECISION':!actual?'PENDING':x.hit?'HIT':'MISS';
+   var score=Number.isFinite(x.confidence)?x.confidence.toFixed(3)+'（模型自评，未校准）':'未提供';
+   var spent=Number.isFinite(x.signalLatencyMs)?(x.signalLatencyMs/1000).toFixed(2)+'s':'-';
+   return '<tr style="border-top:1px solid #2b313d">'+
+    '<td style="padding:9px 6px">'+esc(tm(x.round))+'</td>'+
+    '<td style="padding:9px 6px">'+badge(x.direction||'NO_DECISION')+'</td>'+
+    '<td style="padding:9px 6px">DeepSeek '+esc(x.provider||'deepseek-flash')+(x.waiting?'（思考中）':'')+'</td>'+
+    '<td style="padding:9px 6px">'+esc(x.waiting?'未锁定':score)+'</td>'+
+    '<td style="padding:9px 6px">'+esc(spent)+'</td>'+
+    '<td style="padding:9px 6px">'+badge(actual||'PENDING')+'</td>'+
+    '<td style="padding:9px 6px">'+badge(result)+'</td>'+
+    '<td style="padding:9px 6px">'+(actual?'Binance Prediction 官方结算源回填':x.waiting?'等待本轮判断':'等待官方结算')+'</td></tr>';
+   }).join(''):'<tr><td colspan="8" style="padding:10px 6px">DeepSeek 暂无已锁定预测，不显示旧模型记录</td></tr>';
+ }catch(err){
+  put('rsAccuracy','DeepSeek 统计未就绪');put('rsSettled','-');put('rsDecided','-');
+  put('rsCorrect','-');put('rsWrong','-');put('rsWait','-');put('rsCoverage','未核定');
+  put('rsMeta','独立账本验证失败，不使用旧模型数据兜底：'+(err.message||err));
+  var target=e('rsRows');
+  if(target)target.innerHTML='<tr><td colspan="8" style="padding:10px 6px">DeepSeek 独立统计暂不可用，请检查服务器预测记录</td></tr>';
+ }
+}
 async function load(){
+ try{
+  var r=await fetch('/api/order-signal-model?ts='+Date.now(),{cache:'no-store'});
+  var j=await r.json();
+  if(!r.ok||j.model!=='DEEPSEEK_5M_V1')throw Error('生产选中模型不匹配：'+(j.model||'未知'));
+  return await renderDeepSeekRoundStats();
+ }catch(err){
+  e('rsAccuracy').textContent='生产选择器未确认';
+  e('rsMeta').textContent='不能验证唯一生产模型为DeepSeek，禁止展示旧统计：'+(err.message||err);
+  e('rsCoverage').textContent='未核定';
+  e('rsRows').innerHTML='<tr><td colspan="8">请检查 DeepSeek 生产信号配置</td></tr>';
+  return;
+ }
+ // The following historical renderers are retired from the DeepSeek view.
  // Only the two currently selectable 8-second models use the reset ledger.
  // Keep the historical legacy diagnostics runnable when testing other production modes.
  if(globalThis.__orderModelStatsSelection==='DYNAMIC_ENTRY_5M_SHADOW_V1'){
@@ -572,6 +671,7 @@ var chosenOrderModel='BREAKOUT20_RSI_MACD_RANGE_V1';
 var hasLiveOrderModelSelection=false;
 var choiceRevision='',choiceBusy=false,choiceDirty=false,choiceReady=false;
 function chosenModelName(model){
+ if(model==='DEEPSEEK_5M_V1')return 'DeepSeek 5分钟 AI 深度思考';
  return model==='EDGE_5M_V1'?'EDGE_5M_V1 · 8秒概率优势':
  model==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'5分钟动态入场 DYNAMIC_ENTRY_5M_SHADOW_V1':
  model==='NOVICE_MIX_LOW_V1'?'新手错误混合 NOVICE_MIX_LOW_V1':'突破20%即可';
@@ -603,6 +703,14 @@ async function loadOrderModelChoice(){
 async function loadOrderModelStats(){
  if(!e('orderSignalModelStats'))return;
  try{
+  if(chosenOrderModel==='DEEPSEEK_5M_V1'){
+   var resp=await fetch('/deepseek/api/history?limit=100&ts='+Date.now(),{cache:'no-store'});
+   var data=await resp.json();
+   if(!resp.ok||data.model!=='DEEPSEEK_5M_V1'||data.ok!==true)throw Error('DeepSeek账本尚未就绪');
+   var report=data.summary||{},total=report.officialSamples||0;
+   e('orderSignalModelStats').textContent='DeepSeek 独立统计：'+(total?(100*(report.officialHits||0)/total).toFixed(2)+'%（'+total+'轮，样本不足）':'尚无已结算')+' · 记录 '+(report.predictions||0)+'轮 · 待结算 '+(report.unsettled||0)+'轮；不含旧模型数据';
+   return;
+  }
   var endpoint=chosenOrderModel==='EDGE_5M_V1'?'/api/shadow-breakout20/edge-5m':
  chosenOrderModel==='DYNAMIC_ENTRY_5M_SHADOW_V1'?'/api/shadow-breakout20/dynamic-entry':
  chosenOrderModel==='NOVICE_MIX_LOW_V1'?'/api/shadow-breakout20/novice-mix':'/api/shadow-breakout20/status';

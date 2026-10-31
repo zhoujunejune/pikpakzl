@@ -1,0 +1,28 @@
+name: DeepSeek live accuracy and learning read-only audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - .github/workflows/zl-deepseek-live-accuracy-audit.yml
+      - prediction-bot-v1/aliyun_deepseek_full_readonly_audit.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check read-only script syntax
+        run: python -m py_compile prediction-bot-v1/aliyun_deepseek_full_readonly_audit.py
+      - name: Install read-only Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Audit model accuracy, feature freshness and feedback
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_full_readonly_audit.py

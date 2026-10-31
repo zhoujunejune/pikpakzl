@@ -1,12 +1,14 @@
 import http from 'node:http';
+import {GUARDIAN_ID,guardianOrderSignal,guardianQuoteGate,guardianRegisterIntent,guardianMarkSubmitted} from './guardian-live-bridge.mjs';
+import {predictionWalletPayment,eligibleSpotFallback,explicitMpcInsufficient} from './payment-source-priority.mjs';
 import crypto from 'node:crypto';
 import { createClient } from 'redis';
 import WebSocket from 'ws';
 import { reconcileOrderUpdate } from './order-status-state.mjs';
 import {ORDER_DIRECTION_POLICY,mappedOrderSignal,pendingOrderMatchesProduction,hydrateDirectionSettings,refreshDirectionSettings,setDirectionMode,directionSettingsSnapshot} from './order-direction-policy.mjs';
 import {probeRailwayEgress} from './egress-ip-diagnostic.mjs';
-import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
-  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,validateEdgeSignal,RSI_INPUT_VERSION,
+import {BASE_MODEL,NOVICE_MODEL,DYNAMIC_MODEL,EDGE_MODEL,SELECTIVE8_MODEL,refreshModelSelection,setModelSelection,snapshot as modelSelectionSnapshot,
+  selectionPermitsRound,selectedSignalMatches,validateNoviceSignal,validateDynamicEntrySignal,validateEdgeSignal,validateSelective8ProductionLive,RSI_INPUT_VERSION,
   MAX_ORDER_SUBMIT_ATTEMPTS,claimOrderSubmitAttempt,closeOrderSubmitRound,releaseRejectedOrderSubmitAttempt,retryableRejectedOrderPost} from './production-signal-choice.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -22,6 +24,7 @@ const SIGNAL_REDIS_URL = String(process.env.SIGNAL_REDIS_URL || '').trim();
 const SIGNAL_REDIS_CHANNEL = String(process.env.SIGNAL_REDIS_CHANNEL || 'binance:prediction:lock:v1');
 const SIGNAL_WS_URL = String(process.env.SIGNAL_WS_URL || '').trim();
 const SIGNAL_MODEL_NAME = String(process.env.SIGNAL_MODEL_NAME || 'SITE_LOCK_MODEL_V1');
+const SELECTIVE8_LOCAL_URL='http://127.0.0.1:13002/api/production-signal';
 const NOVICE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/novice-mix';
 const DYNAMIC_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/dynamic-entry';
 const EDGE_LOCAL_URL='http://127.0.0.1:'+String(process.env.PANEL_PUBLIC_PORT||3000)+'/api/shadow-breakout20/edge-5m';
@@ -62,7 +65,28 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
   res.end(typeof body === 'string' ? body : JSON.stringify(body));
 }
 
-function pinOK(pin) {
+// For Alibaba only: the entire public entrypoint is behind Caddy Basic Auth.
+// Do not accept a request merely because a PIN was omitted. The proxy must
+// assert authenticated ingress, and POSTs must be same-origin browser requests.
+// Alibaba is an owner-authenticated HTTPS production site, not Render's
+// separately gated preview environment. This does not authorize a request:
+// /api/control still requires the Caddy-issued login assertion and same origin.
+// Automatic submissions are allowed only after the owner explicitly enabled
+// following with /api/control and remain restricted by order safeguards.
+function deploymentAllowsLiveFollowing(){
+  return process.env.ZL_OUTER_AUTH_ONLY==='true' &&
+    process.env.ZL_PUBLIC_ORIGIN==='https://prediction.47-237-188-69.sslip.io'
+      || process.env.RENDER_TRADING_USER_ARMED==='true';
+}
+
+function pinOK(pin, req) {
+  if (process.env.ZL_OUTER_AUTH_ONLY === 'true') {
+    const origin = String(process.env.ZL_PUBLIC_ORIGIN || '');
+    return Boolean(req && origin.startsWith('https://') &&
+      req.headers['x-zl-verified-login'] === '1' &&
+      req.headers.origin === origin &&
+      req.headers['sec-fetch-site'] === 'same-origin');
+  }
   return crypto.createHash('sha256').update(String(pin || '')).digest('hex') === CONTROL_PIN_SHA256;
 }
 
@@ -326,7 +350,49 @@ async function getSignal({ forceHttp = false } = {}) {
   try{choice=await refreshModelSelection()}catch{return null}
   const round=currentRoundMs();
   if(!selectionPermitsRound(round,choice))return null;
-  if(![NOVICE_MODEL,BASE_MODEL,DYNAMIC_MODEL,EDGE_MODEL].includes(choice.model))return null;
+  // GUARDIAN_LIVE_CONNECTOR_V1: independent, fail-closed model adapter.
+  // A subjective AI label is never a trade authorisation. The source itself
+  // must demonstrate official settlement evidence and forward calibration.
+  if(choice.model===GUARDIAN_ID){
+    try{
+      const response=await fetch('http://127.0.0.1:13049/api/status',{
+        cache:'no-store',signal:AbortSignal.timeout(1800)});
+      if(!response.ok)return null;
+      const signal=guardianOrderSignal(await response.json());
+      if(!signal.ok||signal.executionEligible!==true)return null;
+      return {...signal,status:'LOCKED',model:SIGNAL_MODEL_NAME,
+        rawDirection:signal.direction,transport:'aliyun_guardian5_calibrated'};
+    }catch(error){
+      console.error(JSON.stringify({event:'guardian_feed_unavailable',
+        error:String(error?.message||error).slice(0,100)}));return null;
+    }
+  }
+  if(choice.model!==SELECTIVE8_MODEL)return null;
+  if(choice.model===SELECTIVE8_MODEL){
+    // The user-selected source is the exact original V2 3-tier immutable
+    // 8-second route (Selective, Edge Rescue, real-market fallback).
+    // No RSI-only, EDGE5, dynamic or synthetic fallback may enter orders.
+    try{
+      const response=await fetch(SELECTIVE8_LOCAL_URL,{cache:'no-store',
+        signal:AbortSignal.timeout(2800),headers:{accept:'application/json'}});
+      if(!response.ok)return null;
+      const validated=validateSelective8ProductionLive(await response.json());
+      if(!validated.ok)return null;
+      return {
+        round:validated.round,status:'LOCKED',direction:validated.direction,
+        rawDirection:validated.direction,randomFlipApplied:false,
+        model:SIGNAL_MODEL_NAME,upstreamModel:SELECTIVE8_MODEL,
+        source:validated.source,generatedAt:validated.lockedAt,
+        lockedAt:validated.lockedAt,score:validated.score,
+        confidence:null,modelProbability:null,
+        inputVersion:validated.inputVersion,
+        qualityGate:validated.fallbackUsed?
+          'UNVERIFIED_REAL_MARKET_DIRECTION':'QUALIFIED_SELECTIVE8',
+        frozen:true,executionEligible:validated.executionEligible,
+        signalId:SIGNAL_MODEL_NAME+':'+validated.round+':'+SELECTIVE8_MODEL+':'+validated.source+':'+validated.direction,
+        transport:'aliyun_v2_selective_8sec_locked_source'};
+    }catch{return null}
+  }
   if(choice.model===EDGE_MODEL){
     try{
       const response=await fetch(EDGE_LOCAL_URL,{cache:'no-store',
@@ -345,7 +411,7 @@ async function getSignal({ forceHttp = false } = {}) {
         source:'SELECTIVE_V2_FAST8_PRIMARY',generatedAt:verified.lockedAt,
         lockedAt:verified.lockedAt,marketAt:verified.marketAt,
         frozen:true,executionEligible:verified.executionEligible,
-        qualityGate:verified.executionEligible?'EDGE5_OFFICIAL_CALIBRATED':'EDGE5_COLLECTING_UNCALIBRATED',
+        qualityGate:verified.calibrationReady?'EDGE5_OFFICIAL_CALIBRATED':'EDGE5_FROZEN_DIRECTION_UNCALIBRATED',
         signalId:SIGNAL_MODEL_NAME+':'+verified.round+':'+EDGE_MODEL+':'+verified.modelVersion+':'+verified.direction,
         transport:'railway_edge5m_readonly'};
     }catch{return null;}
@@ -416,7 +482,8 @@ async function refreshUiBalance() {
   if (balanceRefreshPromise) return balanceRefreshPromise;
   balanceRefreshPromise = (async () => {
     const next = await getPaymentBalances();
-    if (next?.ok) {
+    if (next?.ok || process.env.RENDER_MIGRATION_PREVIEW === 'true') {
+      // Preview negative-cache prevents public page polling from hammering Binance.
       lastBalance = next;
       lastBalanceAt = Date.now();
     }
@@ -430,8 +497,10 @@ async function refreshUiBalance() {
 }
 
 async function getUiBalance() {
-  if (lastBalance?.ok) {
-    if (Date.now() - lastBalanceAt >= UI_BALANCE_CACHE_MS) refreshUiBalance();
+  if (lastBalance?.ok || (process.env.RENDER_MIGRATION_PREVIEW === 'true' && lastBalance)) {
+    if (Date.now() - lastBalanceAt >=
+      (process.env.RENDER_MIGRATION_PREVIEW === 'true' ? 120000 : UI_BALANCE_CACHE_MS))
+      refreshUiBalance();
     return { ...lastBalance, cached: Date.now() - lastBalanceAt > 1000, cacheAgeMs: Math.max(0, Date.now() - lastBalanceAt) };
   }
   const fresh = await refreshUiBalance();
@@ -450,16 +519,10 @@ async function resolveWallet() {
   return { ok: true, walletAddress: match.walletAddress, walletId: match.walletId };
 }
 
-function paymentRoute(balance) {
-  const items = Array.isArray(balance?.items) ? balance.items.filter(x => x.enabled) : [];
-  const positive = items.filter(x => Number(x.availableBalanceDisplay) > 0);
-  const cedefi = positive.find(x => String(x.accountType).toUpperCase() === 'CEDEFI');
-  const spot = positive.find(x => String(x.accountType).toUpperCase() === 'SPOT');
-  const funding = positive.find(x => String(x.accountType).toUpperCase() === 'FUNDING');
-  if (cedefi) return { displayAccount: 'CeDeFi', accountType: 'SPOT', fundingSource: 'CEX' };
-  if (spot) return { displayAccount: 'SPOT', accountType: 'SPOT', fundingSource: 'CEX' };
-  if (funding) return { displayAccount: 'FUNDING', accountType: 'FUNDING', fundingSource: 'CEX' };
-  return { displayAccount: 'Prediction Wallet', accountType: 'SPOT', fundingSource: 'MPC' };
+function paymentRoute(_balance) {
+  // The payment-options API lists CEX accounts, not the separate MPC wallet.
+  // Do not mistake a positive SPOT balance for a reason to skip MPC.
+  return predictionWalletPayment();
 }
 
 function durationLooks5m(topic) {
@@ -554,6 +617,10 @@ async function prepareIntent(signal) {
     resolveWallet(), discoverTopic(signal.round),
     lastBalance?.ok ? Promise.resolve(lastBalance) : getPaymentBalances(),
   ]);
+  // CEX payment-options cannot establish the separate MPC Prediction balance.
+  // Prepare MPC first even when CEX is empty/unavailable. The actual Binance
+  // rejection is the only authority for falling back to a freshly checked Spot
+  // balance; do not touch Funding or silently split the order.
   if (!wallet.ok) return wallet;
   if (!marketResult.ok) return marketResult;
 
@@ -614,13 +681,16 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
   let choice;
   try{choice=await refreshModelSelection()}catch{return}
   if(!selectionPermitsRound(currentRoundMs(),choice))return;
-  if(signalOverride && choice.model!==BASE_MODEL)return;
+  if(signalOverride && choice.model!==SELECTIVE8_MODEL)return;
   const signal = signalOverride || await getSignal();
   if (!signal || signal.status !== 'LOCKED' || !signal.round || !['UP', 'DOWN'].includes(signal.direction)) return;
   if(choice.model===NOVICE_MODEL&&signal.upstreamModel!==NOVICE_MODEL)return;
   if(choice.model===DYNAMIC_MODEL&&signal.upstreamModel!==DYNAMIC_MODEL)return;
   if(choice.model===EDGE_MODEL&&signal.upstreamModel!==EDGE_MODEL)return;
-  // Display-only 8-second fallback must NEVER prepare/auto-confirm a real order.
+  if(choice.model===SELECTIVE8_MODEL&&signal.upstreamModel!==SELECTIVE8_MODEL)return;
+  if(choice.model===GUARDIAN_ID&&(signal.upstreamModel!==GUARDIAN_ID||signal.executionEligible!==true))return;
+  // Reject unverified or stale directional hints; validated genuine previous
+  // and current market fallback from Selective8 is distinct and eligible.
   if (signal.executionEligible===false) {
     console.log(JSON.stringify({event:'unverified_signal_order_blocked',
       round:signal.round,source:signal.source,qualityGate:signal.qualityGate}));
@@ -724,6 +794,11 @@ async function prepareWorker(signalOverride = null, trigger = 'poll') {
       marketTopicId: pendingAction.marketTopicId,
       quoteMode: pendingAction.quoteMode,
     }));
+    // wrapper.mjs owns the sole automatic-confirm scheduler and shares
+    // submitPendingOrder with manual confirmation. A second scheduler here
+    // would race and could attempt duplicate quotes/submissions. Deliberately
+    // no auto-submit call in this base handler.
+
   } finally {
     prepareInFlight = false;
   }
@@ -853,11 +928,11 @@ setInterval(() => refreshLastOrderStatus(false), 2500);
 
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>5分钟 API 实盘确认控制台</title><style>
 body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;padding:18px}.w{max-width:580px;margin:auto}.c{background:#191d27;border-radius:18px;padding:18px;margin:14px 0}.big{font-size:25px;font-weight:800}.on{color:#3ddc84}.off,.bad{color:#ff6868}.ok{color:#3ddc84}.warn{color:#f0b90b}.muted{color:#a8b0bd;font-size:14px;line-height:1.55}input,button{width:100%;box-sizing:border-box;padding:15px;border-radius:12px;margin-top:10px;font-size:17px}input{background:#0d1016;color:#fff;border:1px solid #3b4352}button{border:0;font-weight:800}.start{background:#28c76f;color:#06150b}.stop{background:#ff5c62;color:#fff}.confirm{background:#f0b90b;color:#161616;font-size:19px}.confirm:disabled{opacity:.45}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.kv{background:#10141c;padding:12px;border-radius:12px}.k{font-size:12px;color:#8f98a8}.v{font-size:17px;font-weight:700;margin-top:4px}.wallet{font-size:30px;font-weight:900;margin-top:6px}.pending{border:1px solid #454d5f}.hidden{display:none}</style></head><body><div class="w">
-<h2>5分钟 API 实盘确认控制台</h2>
-<div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：新一轮 LOCKED → 后端先准备市场/方向（不提前拿 Quote）→ 你点一次“确认下单” → 后端即时获取最新 Quote → 立刻调用 Binance Prediction 下单 API → 再核验真实订单状态。</div></div>
+<div class="c"><a href="/api-keys/" style="color:#86c5ff;font-weight:700">交易所 API 管理 · 选择机器人 / 配置交易所账户</a><div class="muted">API 配置与交易启停分开；不会在此展示已保存的密钥。</div></div>\n<h2>5分钟 API 实盘确认控制台</h2>
+<div class="c"><div id="switch" class="big">加载中...</div><div class="muted">流程：你登录阿里云控制台后开始跟随（默认关闭）→ 下一轮有效 LOCKED → 后端核对行情/方向和支付路径 → 自动获取最新 Quote → 每轮最多尝试提交一次 Binance Prediction 订单 → 再核验交易所成交状态。未完成概率校准的 EDGE 方向没有已验证的胜率优势。</div></div>
 <div class="c"><div class="k">Prediction 可用余额</div><div class="wallet" id="walletBalance">读取中...</div><div class="muted" id="walletMeta">正在连接 Binance Prediction...</div></div>
-<div class="c" id="tradeInputsCard"><div class="k">每轮金额与控制 PIN</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="password" autocomplete="off" inputmode="numeric" placeholder="控制 PIN（输入时隐藏）"><button class="start" onclick="setV(true)">开始跟随新信号</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
-<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">API_CONFIRM_LIVE</div></div></div></div>
+<div class="c" id="tradeInputsCard"><div class="k">每轮金额</div><input id="amount" type="number" inputmode="decimal" min="1" step="0.01" placeholder="每轮金额，例如 2"><input id="pin" type="hidden" value=""><button class="start" onclick="setV(true)">开始跟随（自动提交，下一轮生效）</button><button class="stop" onclick="setV(false)">停止跟随</button><button id="egressProbeBtn" type="button" class="confirm" style="background:#344155;color:#fff;font-size:15px" onclick="checkEgressIp()">检测 Railway 出口 IP（只读）</button><div id="egressProbeResult" class="muted" role="status" aria-live="polite">输入上方控制 PIN，点击检测；不会发出交易请求。</div><div class="muted">确认按钮出现时只代表方向/市场已经准备好，尚未拿 Quote。点击确认后才会即时获取 Quote 并马上提交；若报价剩余有效期不足，系统会拒绝提交，避免使用过期 Quote。</div></div>
+<div class="c"><div class="grid"><div class="kv"><div class="k">当前轮次</div><div class="v" id="round">-</div></div><div class="kv"><div class="k">状态</div><div class="v" id="status">-</div></div><div class="kv"><div class="k">生产信号（原始）</div><div class="v" id="direction">-</div></div><div class="kv"><div class="k">下单信号（按来源正向/反向）</div><div class="v" id="orderDirection">-</div></div><div class="kv"><div class="k">Score</div><div class="v" id="score">-</div></div><div class="kv"><div class="k">每轮金额</div><div class="v" id="amountView">-</div></div><div class="kv"><div class="k">模式</div><div class="v">网页登录 · 自动跟随 / 每轮一次</div></div></div></div>
 <div class="c pending"><div class="k">API 已准备的实盘订单</div><div class="big" id="pendingTitle">暂无</div><div class="muted" id="pendingMeta">开启后等待下一轮 LOCKED 信号。</div><button id="confirmBtn" class="confirm hidden" onclick="confirmOrder()">确认下单</button></div>
 <div class="c"><div class="k">最近一笔 API 下单结果</div><div class="big" id="orderTitle">暂无</div><div class="muted" id="orderMeta">-</div></div>
 <div id="riskControlsAnchor"></div>
@@ -865,9 +940,9 @@ body{font-family:system-ui,-apple-system;background:#0f1117;color:#fff;margin:0;
 let currentPending=null;
 let refreshBusy=false;
 function el(id){return document.getElementById(id)}
-async function refresh(){if(refreshBusy)return;refreshBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();el('switch').innerHTML=j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>';const s=j.signal||{};el('round').textContent=s.round??'-';el('status').textContent=s.status??'-';el('direction').textContent=s.direction??'-';el('score').textContent=s.score==null?'-':Number(s.score).toFixed(2);el('amountView').textContent=j.amount??'-';if(document.activeElement!==el('amount')&&j.amount!=null)el('amount').value=j.amount;const b=j.balance||{};const first=(b.items||[]).find(x=>x.enabled&&Number(x.availableBalanceDisplay)>0)||(b.items||[]).find(x=>x.enabled)||(b.items||[])[0];if(b.ok&&first){el('walletBalance').innerHTML='<span class="ok">'+first.availableBalanceDisplay+' USDT</span>';el('walletMeta').textContent='账户：'+first.accountType+' · Binance Prediction 实时可用余额'}else{el('walletBalance').innerHTML='<span class="bad">读取失败</span>';el('walletMeta').textContent=(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':'')}
-currentPending=j.pendingAction||null;const btn=el('confirmBtn');if(!currentPending){el('pendingTitle').textContent='暂无';el('pendingMeta').textContent=j.enabled?'正在等待下一轮 LOCKED，并准备市场/方向...':'开启后等待下一轮 LOCKED 信号。';btn.classList.add('hidden')}else if(currentPending.state==='READY'){el('pendingTitle').textContent=(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT';el('pendingMeta').textContent='市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · Quote：点击确认后即时获取';btn.textContent='确认 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';btn.disabled=false;btn.classList.remove('hidden')}else if(currentPending.state==='PREPARE_ERROR'){el('pendingTitle').textContent='准备失败';el('pendingMeta').textContent=(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':'');btn.classList.add('hidden')}else{el('pendingTitle').textContent=currentPending.state==='QUOTING'?'正在获取最新 Quote...':'正在提交...';el('pendingMeta').textContent='请稍候，不要重复点击。';btn.classList.add('hidden')}
-const o=j.lastOrder;if(o){const filled=o.state==='CONFIRMED_FILLED'||Number(o.fillPercentage||0)>=1||Number(o.filledUsdtAmount||0)>0;const failed=o.state==='CONFIRMED_FAILED';if(filled){el('orderTitle').innerHTML='<span class="ok">已成交</span>'}else if(failed){el('orderTitle').innerHTML='<span class="bad">下单失败</span>'}else{el('orderTitle').innerHTML='<span class="warn">已提交，核验中</span>'}el('orderMeta').textContent='orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:'')}else{el('orderTitle').textContent='暂无';el('orderMeta').textContent='-' }}catch(e){el('switch').textContent='状态读取失败'}finally{refreshBusy=false}}
+async function refresh(){if(refreshBusy)return;refreshBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();el('switch').innerHTML=j.enabled?'<span class="on">● 跟随已开启</span>':'<span class="off">● 跟随已停止</span>';const s=j.signal||{};el('round').textContent=s.round??'-';el('status').textContent=s.status??'-';el('direction').textContent=s.direction??'-';el('score').textContent=s.score==null?'-':Number(s.score).toFixed(2);el('amountView').textContent=j.amount??'-';if(document.activeElement!==el('amount')&&j.amount!=null)el('amount').value=j.amount;const b=j.balance||{};const first=(b.items||[]).find(x=>x.enabled&&Number(x.availableBalanceDisplay)>0)||(b.items||[]).find(x=>x.enabled)||(b.items||[])[0];if(b.ok&&first){el('walletBalance').innerHTML='<span class="ok">'+first.availableBalanceDisplay+' USDT</span>';el('walletMeta').textContent='账户：'+first.accountType+' · 交易所可用余额（预测钱包余额单独核算）'}else{el('walletBalance').innerHTML='<span class="bad">读取失败</span>';el('walletMeta').textContent=(b.error||'未返回余额')+(b.code!=null?' ('+b.code+')':'')}
+currentPending=j.pendingAction||null;const btn=el('confirmBtn');if(!currentPending){el('pendingTitle').textContent='暂无';el('pendingMeta').textContent=j.enabled?'正在等待下一轮 LOCKED，并准备市场/方向...':'开启后等待下一轮 LOCKED 信号。';btn.classList.add('hidden')}else if(currentPending.state==='READY'){el('pendingTitle').textContent=(currentPending.signal==='UP'?'上涨 / BUY_UP':'下跌 / BUY_DOWN')+' · '+currentPending.amount+' USDT';el('pendingMeta').textContent='市场 '+(currentPending.marketTitle||'-')+' / '+(currentPending.outcome||'-')+' · 支付 '+(currentPending.paymentAccount||'-')+' · Quote：点击确认后即时获取';btn.textContent='确认 '+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT（即时Quote后API下单）';btn.disabled=false;btn.classList.remove('hidden')}else if(currentPending.state==='PREPARE_ERROR'){el('pendingTitle').textContent=currentPending.error==='INSUFFICIENT_BALANCE'?'余额不足 · 本轮下单失败':'订单准备失败';el('pendingMeta').textContent=(currentPending.error||currentPending.state)+(currentPending.code!=null?' ('+currentPending.code+')':'');btn.classList.add('hidden')}else{el('pendingTitle').textContent=currentPending.state==='QUOTING'?'正在获取最新 Quote...':'正在提交...';el('pendingMeta').textContent='请稍候，不要重复点击。';btn.classList.add('hidden')}
+const o=j.lastOrder;if(o){const filled=o.state==='CONFIRMED_FILLED'||Number(o.fillPercentage||0)>=1||Number(o.filledUsdtAmount||0)>0;const failed=o.state==='CONFIRMED_FAILED'||o.state==='PLACE_ERROR';const unknown=o.state==='SUBMISSION_UNKNOWN'||o.state==='RECONCILIATION_REQUIRED';if(filled){el('orderTitle').innerHTML='<span class="ok">币安已确认成交</span>'}else if(failed){el('orderTitle').innerHTML='<span class="bad">下单失败</span>'}else if(unknown){el('orderTitle').innerHTML='<span class="warn">提交结果未知 · 禁止重复下单</span>'}else{el('orderTitle').innerHTML='<span class="warn">已提交，等待币安确认</span>'}el('orderMeta').textContent='orderId '+(o.orderId||'-')+' · '+(o.action||'-')+' · '+(o.amount||'-')+' USDT · 状态 '+(o.status||o.state||'-')+(o.filledUsdtAmount?' · 已成交 '+o.filledUsdtAmount+' USDT':'')+(o.error?' · '+o.error:'')}else{el('orderTitle').textContent='暂无';el('orderMeta').textContent='-' }}catch(e){el('switch').textContent='状态读取失败'}finally{refreshBusy=false}}
 async function setV(v){const a=Number(el('amount').value);if(v&&(!Number.isFinite(a)||a<1)){alert('请输入至少 1 USDT；实际最低金额仍以 Binance 返回为准');return}const r=await fetch('/api/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:v,amount:v?el('amount').value:undefined,pin:el('pin').value})});const j=await r.json();if(!r.ok){alert(j.error||'操作失败');return}refresh()}
 async function confirmOrder(){if(!currentPending||currentPending.state!=='READY')return;if(!confirm('确认提交真实订单：'+(currentPending.signal==='UP'?'BUY_UP ':'BUY_DOWN ')+currentPending.amount+' USDT？\n确认后后台会即时获取最新 Quote 并立即提交。'))return;const btn=el('confirmBtn');btn.disabled=true;btn.textContent='正在获取最新 Quote 并提交...';const r=await fetch('/api/confirm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pin:el('pin').value,confirmationToken:currentPending.confirmationToken})});const j=await r.json();if(r.ok){alert('订单已提交，正在核验 Binance 成交状态。orderId：'+j.orderId)}else{alert((j.error||'下单失败')+(j.code!=null?' ('+j.code+')':''))}refresh()}
 refresh();setInterval(refresh,1000);
@@ -879,169 +954,14 @@ async function readBody(req) {
   try { return JSON.parse(raw || '{}'); } catch { return {}; }
 }
 
-http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
 
-  if (req.method === 'POST' && url.pathname === '/api/egress-ip') {
-    const body = await readBody(req);
-    if (!pinOK(body.pin)) return send(res, 401, {ok:false,error:'控制 PIN 错误'});
-    const result = await probeRailwayEgress();
-    return send(res, result.ok ? 200 : 502, result);
+async function processOrderConfirmation(res,body,{automatic=false}={}){
+  if(automatic && (!enabled || !deploymentAllowsLiveFollowing() ||
+     process.env.AUTO_CONFIRM_ENABLED!=='true')){
+    return send(res,409,{ok:false,error:'自动跟随已经关闭'});
   }
 
-  if (req.method === 'GET' && url.pathname === '/healthz') {
-    return send(res, 200, {
-      ok: true,
-      mode: 'API_CONFIRM_LIVE',
-      quoteMode: 'FRESH_ON_CONFIRM',
-      hasSiteOrigin: Boolean(SITE_ORIGIN),
-      hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),
-      hasPredictionWallet: Boolean(ENV_WALLET_ADDRESS),
-      hasWalletId: Boolean(ENV_WALLET_ID),
-      signalModel: SIGNAL_MODEL_NAME,
-      orderSignalModel: modelSelectionSnapshot().model,
-      orderSignalModelReady: modelSelectionSnapshot().ready,
-      orderSignalModelEffectiveAfterRound:modelSelectionSnapshot().effectiveAfterRound,
-      orderSignalModelRevision:modelSelectionSnapshot().revision,
-      signalTransport: { ...signalTransport },
-    });
-  }
-
-  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) {
-    return send(res, 200, page, 'text/html; charset=utf-8');
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/order-signal-model') {
-    try{
-      const data=await refreshModelSelection();
-      return send(res,200,{ok:true,...data,selectionControlsOrders:true});
-    }catch(error){return send(res,503,{ok:false,error:'下单信号配置不可用：'+String(error?.message||error)})}
-  }
-  if (req.method === 'POST' && url.pathname === '/api/order-signal-model') {
-    const body=await readBody(req);
-    if(!pinOK(body.pin))return send(res,401,{ok:false,error:'控制 PIN 错误'});
-    if(['SUBMITTING','QUOTING'].includes(pendingAction?.state))
-      return send(res,409,{ok:false,error:'已有订单正在提交，暂不能切换信号'});
-    try{
-      const data=await setModelSelection(body.model,body.expectedRevision);
-      if(data.changed){
-        // Next-round-only change. No historical lock or prepared order survives.
-        pendingAction=null;pushedSignal=null;startAfterRound=currentRoundMs();
-        lastPrepareAttemptAt=0;
-      }
-      console.log(JSON.stringify({event:'order_signal_model_changed',model:data.model,
-        revision:data.revision,changed:data.changed,effectiveFrom:'NEXT_ROUND'}));
-      return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
-    }catch(error){
-      const m=String(error?.message||error);
-      return send(res,/INVALID_/.test(m)?400:/CONFLICT|IN_PROGRESS/.test(m)?409:503,{ok:false,error:m});
-    }
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/direction-mode') {
-    try { await refreshDirectionSettings(); }
-    catch(err){return send(res,503,{ok:false,error:'方向配置未就绪：'+String(err?.message||err)})}
-    const data=directionSettingsSnapshot();
-    return send(res,data.ready?200:503,{ok:data.ready,...data});
-  }
-  if (req.method === 'POST' && url.pathname === '/api/direction-mode') {
-    const body=await readBody(req);
-    if(!pinOK(body.pin))return send(res,401,{ok:false,error:'控制 PIN 错误'});
-    if(!directionSettingsSnapshot().ready)return send(res,503,{ok:false,error:'方向配置尚未同步'});
-    if(['SUBMITTING','QUOTING'].includes(pendingAction?.state))return send(res,409,{ok:false,error:'有订单正在处理，暂不能切换'});
-    try{
-      const data=await setDirectionMode(body.source,body.direction,body.mode,body.expectedRevision,currentRoundMs());
-      if(data.changed){
-        pendingAction=null;
-        startAfterRound=currentRoundMs();
-        lastPrepareAttemptAt=0;
-      }
-      console.log(JSON.stringify({event:'direction_mode_changed',source:body.source,direction:body.direction,mode:body.mode,
-        revision:data.revision,changed:data.changed,at:new Date().toISOString()}));
-      return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
-    }catch(err){
-      const message=String(err?.message||err);
-      return send(res,/INVALID_/.test(message)?400:/CONFLICT|IN_PROGRESS/.test(message)?409:503,{ok:false,error:message});
-    }
-  }
-  if (req.method === 'GET' && url.pathname === '/api/status') {
-    const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
-    try{await refreshDirectionSettings()}catch{}
-    const mapping=mappedOrderSignal(signal);
-    // The existing mobile UI renders these server-provided labels as text.
-    // Do not suggest an inverse order when the direction is display-only.
-    const displayOnly = signal?.status==='LOCKED' && signal.executionEligible===false;
-    const displaySignal = displayOnly
-      ? {...signal,status:'低置信度（仅展示，不下单）'} : signal;
-    return send(res, 200, {
-      ok: true,
-      enabled,
-      amount: tradeAmountText,
-      mode: 'API_CONFIRM_LIVE',
-      quoteMode: 'FRESH_ON_CONFIRM',
-      signal:displaySignal,
-      productionSignal: signal?.status==='LOCKED'?signal.direction:null,
-      modelOriginalSignal: signal?.status==='LOCKED'?signal.rawDirection??null:null,
-      signalRandomFlipApplied: signal?.status==='LOCKED'?false:null,
-      signalOutputMode: signal?.status==='LOCKED'?'RSI14_DIRECT_V1':null,
-      orderSignal: displayOnly?null:mapping.orderSignal,
-      orderMappingMode: mapping.mappingMode,
-      orderProductionSource: mapping.productionSource,
-      orderDirectionPolicy: mapping.mappingPolicy,
-      directionModes:directionSettingsSnapshot().modes,
-      directionModeReady:directionSettingsSnapshot().ready,
-      signalModel: SIGNAL_MODEL_NAME,
-      orderSignalModel:modelSelectionSnapshot().model,
-      orderSignalModelReady:modelSelectionSnapshot().ready,
-      orderSignalModelEffectiveAfterRound:modelSelectionSnapshot().effectiveAfterRound,
-      orderSignalModelRevision:modelSelectionSnapshot().revision,
-      signalTransport: { ...signalTransport },
-      balance,
-      startAfterRound,
-      pendingAction: publicPending(),
-      lastOrder: lastOrder ? { ...lastOrder, walletAddress: undefined, lastCheckedAt: undefined } : null,
-    });
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/balance') {
-    const balance = await getPaymentBalances();
-    lastBalance = balance;
-    return send(res, balance.ok ? 200 : 502, balance);
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/control') {
-    const body = await readBody(req);
-    if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
-    const nextEnabled = Boolean(body.enabled);
-    if (nextEnabled) {
-      if (lastOrder?.state === 'RECONCILIATION_REQUIRED')
-        return send(res, 409, { ok:false, error:'上一笔订单的成交与失败状态矛盾，请先核对交易所原始成交记录，禁止继续自动下单' });
-      const amount = cleanAmount(body.amount);
-      if (!amount || Number(amount) < 1) {
-        return send(res, 400, { ok: false, error: 'MARKET 市价单金额请至少填写 1 USDT，实际最低值以 Binance 为准' });
-      }
-      tradeAmountText = amount;
-      const current = await getSignal();
-      startAfterRound = current?.round ?? null;
-      pendingAction = null;
-    } else {
-      pendingAction = null;
-    }
-    enabled = nextEnabled;
-    console.log(JSON.stringify({
-      event: 'api_confirm_control',
-      enabled,
-      amount: tradeAmountText,
-      startAfterRound,
-      quoteMode: 'FRESH_ON_CONFIRM',
-      at: new Date().toISOString(),
-    }));
-    return send(res, 200, { ok: true, enabled, amount: tradeAmountText, startAfterRound, mode: 'API_CONFIRM_LIVE', quoteMode: 'FRESH_ON_CONFIRM' });
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/confirm') {
-    const body = await readBody(req);
-    if (!pinOK(body.pin)) return send(res, 401, { ok: false, error: 'PIN 错误' });
+    if (!automatic && !pinOK(body.pin, req)) return send(res, 401, { ok: false, error: 'PIN 错误' });
 
     const p = pendingAction;
     if (!p || p.state !== 'READY') return send(res, 409, { ok: false, error: '当前没有可确认的 API 订单' });
@@ -1115,10 +1035,37 @@ http.createServer(async (req, res) => {
     };
     if (intent.payment.fundingSource === 'CEX') placeBody.fundTransferAmount = intent.amountIn;
 
+    // STOP always takes effect before any actual external money-moving POST,
+    // including when the user presses it during fresh-quote acquisition.
+    if(!enabled||pendingAction!==p){
+      return send(res,409,{ok:false,error:'跟随已关闭，本次不会提交真实订单'});
+    }
     const startedAt = new Date().toISOString();
     const placeStartedAtMs = Date.now();
+    // Single successful claim before the only external money-moving POST.
+    // Redis CAS is fail-closed. Never retry an ambiguous Binance response.
+    try{
+      await claimOrderSubmitAttempt(p.round);
+    }catch(err){
+      p.state='PREPARE_ERROR';p.error='本轮已提交或订单状态未知，禁止重复提交';
+      return send(res,409,{ok:false,error:p.error,
+        reason:String(err?.message||err).slice(0,100)});
+    }
+    if(!enabled||pendingAction!==p){
+      // The unique round claim has been consumed. Never reuse it after STOP.
+      try{await closeOrderSubmitRound(p.round,'UNKNOWN')}catch{}
+      return send(res,409,{ok:false,error:'跟随已关闭，已取消提交，本轮不会重试'});
+    }
     const call = await signedPost('/sapi/v1/w3w/wallet/prediction/trade/place-order-bundle', placeBody);
     const placeFinishedAtMs = Date.now();
+    try{
+      await closeOrderSubmitRound(p.round,call.ok&&call.data?.orderId?'SUBMITTED':'UNKNOWN');
+    }catch(err){
+      enabled=false;p.state='SUBMISSION_UNKNOWN';
+      console.error(JSON.stringify({event:'order_submit_ledger_close_failed',
+        round:p.round,reason:String(err?.message||err).slice(0,130)}));
+      return send(res,503,{ok:false,error:'订单状态未能记录，跟随已关闭，请核对币安原始订单'});
+    }
 
     if (!call.ok) {
       const err = asError(call, 'PREDICTION_PLACE_ORDER_FAILED');
@@ -1190,14 +1137,201 @@ http.createServer(async (req, res) => {
     setTimeout(() => refreshLastOrderStatus(true), 1800);
     setTimeout(() => refreshLastOrderStatus(true), 3500);
     return send(res, 202, { ok: true, orderId: String(orderId), state: 'SUBMITTED_PENDING_CONFIRMATION' });
+
+}
+
+function makeInternalOrderResult(){
+ let status=null;
+ return {writeHead(code){status=code;},end(raw){
+   let body={};try{body=JSON.parse(String(raw||'{}'))}catch{}
+   console.log(JSON.stringify({event:'auto_order_attempt_result',
+     httpStatus:status,ok:body.ok===true,state:body.state||null,
+     code:body.code??null,error:body.error??null,
+     orderId:body.orderId??null,at:new Date().toISOString()}));
+ }};
+}
+
+http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+
+  if (req.method === 'POST' && url.pathname === '/api/egress-ip') {
+    const body = await readBody(req);
+    if (!pinOK(body.pin, req)) return send(res, 401, {ok:false,error:'控制 PIN 错误'});
+    const result = await probeRailwayEgress();
+    return send(res, result.ok ? 200 : 502, result);
+  }
+
+  if (req.method === 'GET' && url.pathname === '/healthz') {
+    return send(res, 200, {
+      ok: true,
+      mode: process.env.AUTO_CONFIRM_ENABLED==='true'?'AUTO_CONFIRM_LIVE':'MANUAL_CONFIRM_LIVE',
+      quoteMode: 'FRESH_ON_CONFIRM',
+      hasSiteOrigin: Boolean(SITE_ORIGIN),
+      hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),
+      hasPredictionWallet: Boolean(ENV_WALLET_ADDRESS),
+      hasWalletId: Boolean(ENV_WALLET_ID),
+      signalModel: SIGNAL_MODEL_NAME,
+      orderSignalModel: modelSelectionSnapshot().model,
+      orderSignalModelReady: modelSelectionSnapshot().ready,
+      orderSignalModelEffectiveAfterRound:modelSelectionSnapshot().effectiveAfterRound,
+      orderSignalModelRevision:modelSelectionSnapshot().revision,
+      signalTransport: { ...signalTransport },
+    });
+  }
+
+  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/trade-control')) {
+    return send(res, 200, page, 'text/html; charset=utf-8');
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/order-signal-model') {
+    try{
+      const data=await refreshModelSelection();
+      return send(res,200,{ok:true,...data,selectionControlsOrders:true});
+    }catch(error){return send(res,503,{ok:false,error:'下单信号配置不可用：'+String(error?.message||error)})}
+  }
+  if (req.method === 'POST' && url.pathname === '/api/order-signal-model') {
+    const body=await readBody(req);
+    if(!pinOK(body.pin, req))return send(res,401,{ok:false,error:'控制 PIN 错误'});
+    if(['SUBMITTING','QUOTING'].includes(pendingAction?.state))
+      return send(res,409,{ok:false,error:'已有订单正在提交，暂不能切换信号'});
+    try{
+      const data=await setModelSelection(body.model,body.expectedRevision);
+      if(data.changed){
+        // Next-round-only change. No historical lock or prepared order survives.
+        pendingAction=null;pushedSignal=null;startAfterRound=currentRoundMs();
+        lastPrepareAttemptAt=0;
+      }
+      console.log(JSON.stringify({event:'order_signal_model_changed',model:data.model,
+        revision:data.revision,changed:data.changed,effectiveFrom:'NEXT_ROUND'}));
+      return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
+    }catch(error){
+      const m=String(error?.message||error);
+      return send(res,/INVALID_/.test(m)?400:/CONFLICT|IN_PROGRESS/.test(m)?409:503,{ok:false,error:m});
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/direction-mode') {
+    try { await refreshDirectionSettings(); }
+    catch(err){return send(res,503,{ok:false,error:'方向配置未就绪：'+String(err?.message||err)})}
+    const data=directionSettingsSnapshot();
+    return send(res,data.ready?200:503,{ok:data.ready,...data});
+  }
+  if (req.method === 'POST' && url.pathname === '/api/direction-mode') {
+    const body=await readBody(req);
+    // Alibaba outer HTTPS login is the ONLY authority for saving direction
+    // settings. No page-level PIN, no implicit PIN fallback on this endpoint.
+    // A direct localhost POST or cross-origin request must not change orders.
+    if(process.env.ZL_OUTER_AUTH_ONLY!=='true'||!pinOK(null,req))
+      return send(res,401,{ok:false,error:'站点登录未通过或请求来源无效，请重新登录'});
+    if(!directionSettingsSnapshot().ready) {
+      try{await refreshDirectionSettings()}
+      catch(error){return send(res,503,{ok:false,error:'方向配置尚未同步：'+String(error?.message||error)})}
+    }
+    if(['SUBMITTING','QUOTING'].includes(pendingAction?.state))return send(res,409,{ok:false,error:'有订单正在处理，暂不能切换'});
+    try{
+      const data=await setDirectionMode(body.source,body.direction,body.mode,body.expectedRevision,currentRoundMs());
+      if(data.changed){
+        pendingAction=null;
+        startAfterRound=currentRoundMs();
+        lastPrepareAttemptAt=0;
+      }
+      console.log(JSON.stringify({event:'direction_mode_changed',source:body.source,direction:body.direction,mode:body.mode,
+        revision:data.revision,changed:data.changed,at:new Date().toISOString()}));
+      return send(res,200,{ok:true,...data,effectiveFrom:'NEXT_ROUND'});
+    }catch(err){
+      const message=String(err?.message||err);
+      return send(res,/INVALID_/.test(message)?400:/CONFLICT|IN_PROGRESS/.test(message)?409:503,{ok:false,error:message});
+    }
+  }
+  if (req.method === 'GET' && url.pathname === '/api/status') {
+    const [signal, balance] = await Promise.all([getSignal(), getUiBalance()]);
+    try{await refreshDirectionSettings()}catch{}
+    const mapping=mappedOrderSignal(signal);
+    // The existing mobile UI renders these server-provided labels as text.
+    // Do not suggest an inverse order when the direction is display-only.
+    const displayOnly = signal?.status==='LOCKED' && signal.executionEligible===false;
+    const displaySignal = displayOnly
+      ? {...signal,status:'低置信度（仅展示，不下单）'} : signal;
+    return send(res, 200, {
+      ok: true,
+      enabled,
+      amount: tradeAmountText,
+      mode: 'API_CONFIRM_LIVE',
+      quoteMode: 'FRESH_ON_CONFIRM',
+      signal:displaySignal,
+      productionSignal: signal?.status==='LOCKED'?signal.direction:null,
+      modelOriginalSignal: signal?.status==='LOCKED'?signal.rawDirection??null:null,
+      signalRandomFlipApplied: signal?.status==='LOCKED'?false:null,
+      signalOutputMode: signal?.status==='LOCKED'?'RSI14_DIRECT_V1':null,
+      orderSignal: displayOnly?null:mapping.orderSignal,
+      orderMappingMode: mapping.mappingMode,
+      orderProductionSource: mapping.productionSource,
+      orderDirectionPolicy: mapping.mappingPolicy,
+      directionModes:directionSettingsSnapshot().modes,
+      directionModeReady:directionSettingsSnapshot().ready,
+      signalModel: SIGNAL_MODEL_NAME,
+      orderSignalModel:modelSelectionSnapshot().model,
+      orderSignalModelReady:modelSelectionSnapshot().ready,
+      orderSignalModelEffectiveAfterRound:modelSelectionSnapshot().effectiveAfterRound,
+      orderSignalModelRevision:modelSelectionSnapshot().revision,
+      signalTransport: { ...signalTransport },
+      balance,
+      startAfterRound,
+      pendingAction: publicPending(),
+      lastOrder: lastOrder ? { ...lastOrder, walletAddress: undefined, lastCheckedAt: undefined } : null,
+    });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/balance') {
+    const balance = await getPaymentBalances();
+    lastBalance = balance;
+    return send(res, balance.ok ? 200 : 502, balance);
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/control') {
+    const body = await readBody(req);
+    if (body.enabled === true && !deploymentAllowsLiveFollowing()) {
+      return send(res, 403, {ok:false,error:'当前部署不允许实盘跟随'});
+    }
+    if (!pinOK(body.pin, req)) return send(res, 401, { ok: false, error: '请先通过站点登录验证' });
+    const nextEnabled = Boolean(body.enabled);
+    if (nextEnabled) {
+      if (lastOrder?.state === 'RECONCILIATION_REQUIRED')
+        return send(res, 409, { ok:false, error:'上一笔订单的成交与失败状态矛盾，请先核对交易所原始成交记录，禁止继续自动下单' });
+      const amount = cleanAmount(body.amount);
+      if (!amount || Number(amount) < 1) {
+        return send(res, 400, { ok: false, error: 'MARKET 市价单金额请至少填写 1 USDT，实际最低值以 Binance 为准' });
+      }
+      tradeAmountText = amount;
+      const current = await getSignal();
+      startAfterRound = current?.round ?? null;
+      pendingAction = null;
+    } else {
+      pendingAction = null;
+    }
+    enabled = nextEnabled;
+    console.log(JSON.stringify({
+      event: 'api_confirm_control',
+      enabled,
+      amount: tradeAmountText,
+      startAfterRound,
+      quoteMode: 'FRESH_ON_CONFIRM',
+      at: new Date().toISOString(),
+    }));
+    return send(res, 200, { ok: true, enabled, amount: tradeAmountText, startAfterRound, mode: 'API_CONFIRM_LIVE', quoteMode: 'FRESH_ON_CONFIRM' });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/confirm') {
+    const body = await readBody(req);
+    return processOrderConfirmation(res,body);
   }
 
   return send(res, 404, { ok: false, error: 'Not found' });
-}).listen(PORT, '0.0.0.0', async () => {
+}).listen(PORT, '127.0.0.1', async () => {
   console.log(JSON.stringify({
     event: 'control_panel_started',
     port: PORT,
-    mode: 'API_CONFIRM_LIVE',
+    mode: process.env.AUTO_CONFIRM_ENABLED==='true'?'AUTO_CONFIRM_LIVE':'MANUAL_CONFIRM_LIVE',
     quoteMode: 'FRESH_ON_CONFIRM',
     hasSiteOrigin: Boolean(SITE_ORIGIN),
     hasBinanceCredentials: Boolean(BINANCE_API_KEY && BINANCE_API_SECRET),
@@ -1209,7 +1343,8 @@ http.createServer(async (req, res) => {
   console.log(JSON.stringify({
     event: 'prediction_balance_check',
     ok: lastBalance.ok,
-    items: lastBalance.items || [],
+    items: process.env.RENDER_MIGRATION_PREVIEW === 'true' ? [] : (lastBalance.items || []),
+    itemCount: Array.isArray(lastBalance.items) ? lastBalance.items.length : 0,
     error: lastBalance.error || null,
   }));
   await auditSettledHistoryTopics(['6374907','6374910']);

@@ -1,0 +1,32 @@
+name: Deploy isolated DeepSeek trainable shadow to Alibaba
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - .github/workflows/zl-deepseek-online-shadow-deploy.yml
+      - prediction-bot-v1/aliyun_deepseek_online_shadow_deploy.py
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-deepseek-online-shadow
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Source syntax
+        run: python -m py_compile prediction-bot-v1/deepseek_online_shadow.py prediction-bot-v1/test_deepseek_online_shadow.py prediction-bot-v1/aliyun_deepseek_online_shadow_deploy.py
+      - name: Causal official-settlement regression tests
+        run: python -m unittest discover -s prediction-bot-v1 -p test_deepseek_online_shadow.py -v
+      - name: Install Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Install isolated no-order shadow trainer on SWAS
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_online_shadow_deploy.py

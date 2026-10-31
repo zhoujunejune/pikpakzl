@@ -1,0 +1,99 @@
+name: Install unified ZL mobile PWA on Alibaba
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'mobile-app/**'
+      - '.github/workflows/zl-unified-mobile-app.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-unified-mobile-static-release
+  cancel-in-progress: false
+jobs:
+  static-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate app JS, service worker, install metadata and deploy shell
+        run: |
+          node --check mobile-app/app.js
+          node --test mobile-app/event10-current-only.test.mjs
+          node --check mobile-app/sw.js
+          python -m py_compile mobile-app/aliyun_deploy.py
+          python - <<'PY'
+          import ast,json,subprocess
+          from pathlib import Path
+          root=Path('mobile-app')
+          m=json.loads((root/'manifest.webmanifest').read_text())
+          assert m['scope']=='/app/' and m['display']=='standalone'
+          assert {192,512}=={int(i['sizes'].split('x')[0]) for i in m['icons']}
+          assert all('/app/' in i['src'] for i in m['icons'])
+          html=(root/'index.html').read_text()
+          js=(root/'app.js').read_text()
+          assert '/app/manifest.webmanifest' in html
+          assert '/app/app.js' in html
+          for name in ('panel-guardian','panel-event10','gRecords','eRecords'):
+            assert name in html
+          for url in ('/guardian/api/status','/event10/api/status','/event10/api/signals','/event10/api/start'):
+            assert url in js
+          assert 'localStorage' not in js and 'sessionStorage' not in js
+          assert 'hotUpdateBanner' in html and 'appUpdateState' in html
+          assert '__ZL_APP_RELEASE_SHA__' in js and 'checkHotUpdate' in js
+          assert 'version.json' in (root/'aliyun_deploy.py').read_text()
+          tree=ast.parse((root/'aliyun_deploy.py').read_text())
+          remote=next(n.value.value for n in tree.body if isinstance(n,ast.Assign) and
+                      any(getattr(t,'id',None)=='REMOTE' for t in n.targets))
+          check=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          assert check.returncode==0,check.stderr
+          for key in ('MOBILE_AUTH_CHECK_FAILED_PATH','MOBILE_APP_PWA_RELEASED=true',
+                      'MOBILE_APP_TRADING_ENGINES_UNCHANGED=true','MOBILE_APP_ROLLED_BACK=true'):
+            assert key in remote
+          assert 'systemctl restart zl-prediction-trade' not in remote
+          assert 'systemctl restart zl-event10-deepseek' not in remote
+          print('MOBILE_APP_CI_TESTS_PASS')
+          PY
+  deploy-static:
+    needs: static-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install Alibaba SWAS SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy only static app; preserve Caddy authentication and trading PIDs
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python mobile-app/aliyun_deploy.py
+      - name: Verify authenticated public page and install assets
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,urllib.request
+          password=os.environ.get('ZL_PANEL_PASSWORD','')
+          if not password:
+              print('MOBILE_APP_AUTHENTICATED_PUBLIC_TEST_NOT_CONFIGURED')
+              raise SystemExit(0)
+          basic=base64.b64encode(('zl:'+password).encode()).decode()
+          base='https://prediction.47-237-188-69.sslip.io'
+          for path,needle in (('/app/','ZL CONTROL'),('/app/app.js','/guardian/api/status'),
+                              ('/app/manifest.webmanifest','"standalone"'),
+                              ('/app/version.json','"updateType":"web"'),
+                              ('/app/sw.js','fetch(event.request)')):
+              req=urllib.request.Request(base+path,headers={'Authorization':'Basic '+basic,'Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=14) as response:
+                  body=response.read(240000).decode('utf8','replace')
+                  assert response.status==200 and needle in body,(path,response.status)
+              print('MOBILE_APP_PUBLIC_ASSET_OK',path)
+          print('MOBILE_APP_PUBLIC_AUTHENTICATED_TESTS_PASS')
+          PY

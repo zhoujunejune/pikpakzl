@@ -1,0 +1,101 @@
+/* ZL_MINIMAL_TECH_UI_20261028
+   Unified presentation only. Does not change trading logic, event handlers, routes or data.
+   Deep navy, restrained blue accent, compact readable hierarchy.
+*/
+:root{
+  color-scheme:dark;
+  --zl-bg:#080f1b;--zl-surface:#101c2b;--zl-surface-2:#142235;
+  --zl-line:#273c54;--zl-line-soft:#203248;
+  --zl-text:#eff6ff;--zl-muted:#9fb0c4;--zl-blue:#54a9ff;
+  --zl-green:#47d8b1;--zl-red:#fb728e;
+}
+html{background:var(--zl-bg)!important}
+body{
+  background:radial-gradient(1100px 600px at 72% -180px,rgba(35,100,166,.16),transparent 72%),var(--zl-bg)!important;
+  color:var(--zl-text)!important;
+  font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif!important;
+  font-feature-settings:"tnum";font-optical-sizing:auto;
+  line-height:1.55;
+}
+body :is(main,.w){max-width:1220px;margin-left:auto;margin-right:auto}
+h1,h2,h3{color:var(--zl-text)!important;letter-spacing:-.018em}
+h1{font-weight:750!important;line-height:1.3}
+h2{font-weight:680!important}
+a{color:#8dc6ff}
+nav{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+nav a{
+  text-decoration:none!important;border-radius:9px!important;
+  background:rgba(20,34,53,.82)!important;border:1px solid #31435a!important;
+  color:#aebdd1!important;padding:8px 13px!important;transition:background .15s,border-color .15s;
+}
+nav a:is(.active,[aria-current=page]),nav a:hover{
+  background:#173453!important;border-color:#398fd5!important;color:#e7f5ff!important;
+}
+:is(article,.card,.w>.c){
+  background:linear-gradient(155deg,rgba(19,34,52,.98),rgba(13,25,39,.98))!important;
+  border:1px solid var(--zl-line)!important;border-radius:15px!important;
+  box-shadow:0 10px 30px rgba(0,0,0,.13)!important;
+}
+:is(.metric,.kv){
+  background:rgba(9,20,35,.74)!important;
+  border:1px solid var(--zl-line-soft)!important;border-radius:11px!important;
+  min-width:0;overflow-wrap:anywhere;
+}
+:is(.metric small,.k,.muted,.sub,small){color:var(--zl-muted)}
+:is(.metric strong,.v,.big){font-variant-numeric:tabular-nums}
+:is(.good,.ok,.positive){color:var(--zl-green)!important}
+:is(.bad,.negative,.error){color:var(--zl-red)!important}
+:is(button,.btn,input[type=button],input[type=submit]){
+  border-radius:9px!important;
+  transition:background-color .15s,border-color .15s,transform .15s;
+}
+:is(button,.btn,input[type=button],input[type=submit]):not(:disabled):hover{
+  filter:brightness(1.11);
+}
+button:disabled{cursor:not-allowed;opacity:.45}
+:is(input:not([type=checkbox]):not([type=radio]),select,textarea){
+  background:#0c1828!important;color:var(--zl-text)!important;
+  border:1px solid #35506a!important;border-radius:9px!important;
+  min-width:0;max-width:100%;box-sizing:border-box;
+}
+:is(input,select,textarea,button):focus-visible{
+  outline:2px solid #65b8ff!important;outline-offset:2px!important;
+}
+table{border-collapse:separate;border-spacing:0;width:100%;color:#deebf8}
+table thead th{
+  background:#17263a!important;color:#adc1d8!important;
+  font-size:12px;font-weight:660;letter-spacing:.01em;
+  border-bottom:1px solid #31465e!important;
+}
+table :is(th,td){border-color:#283b51!important}
+table tbody tr:nth-child(even){background:rgba(23,39,57,.35)}
+table tbody tr:hover{background:rgba(42,69,99,.32)}
+:where(.tablewrap){border-radius:10px}
+:is(.notice,.signal-panel){
+  background:rgba(17,43,66,.65)!important;border:1px solid #315777!important;
+  border-radius:12px!important;color:#d6e6f4!important;
+}
+.notice{border-left:3px solid #428dd2!important}
+.status{
+  border:1px solid #365570!important;border-radius:999px!important;
+  color:#c5d9ef!important;background:#13263a!important;
+}
+#banner{line-height:1.45;overflow-wrap:anywhere}
+:is(#edge,#accuracy,#total,#settled,#remaining,#streamCount){font-variant-numeric:tabular-nums}
+.grid{min-width:0}
+.grid>*{min-width:0}
+:where(.w) .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:760px){
+  body :is(main,.w){padding-left:12px!important;padding-right:12px!important}
+  :is(article,.card,.w>.c){border-radius:13px!important}
+  :is(.metric,.kv){padding:12px!important}
+  h1{font-size:clamp(21px,5vw,28px)!important}
+  h2{font-size:16px!important}
+  nav a{font-size:12px!important}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  :is(.metric strong,.v){overflow-wrap:anywhere}
+  table{font-size:12px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition-duration:0s!important;animation-duration:0s!important}
+}

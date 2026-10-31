@@ -1,0 +1,72 @@
+/* ZL_MINTECH_V2_REAL_LAYOUT_20261028: unified navigation + high-contrast clean fintech layout.
+   Presentation only. No quotes, positions, trading data, actions or API calls altered. */
+:root{--zl-bg:#080f1b;--zl-panel:#101d2c;--zl-panel-2:#122338;--zl-stroke:#263b51;--zl-accent:#55b3ff;--zl-text:#f2f7ff;--zl-mute:#99afc9;--zl-up:#32d7ad;--zl-down:#fa6b87;color-scheme:dark}
+html,body{background:#080f1b!important;color:var(--zl-text)!important;min-width:0}
+body{background:radial-gradient(700px 380px at 50% 0%,#13314d 0,rgba(13,33,52,.2) 62%,transparent 100%),#080f1b!important;font-family:Inter,-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC','Microsoft YaHei',sans-serif!important}
+*{box-sizing:border-box}
+.zl-v2-bar{position:relative;z-index:5;width:100%;background:rgba(8,15,27,.96);border-bottom:1px solid #223a51;margin:0;padding:0 20px!important}
+.zl-v2-inner{margin:auto;max-width:1220px;min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0}
+.zl-v2-brand{display:flex;align-items:center;gap:12px;min-width:0}
+.zl-v2-logo{width:36px;height:36px;flex:none;border:1px solid #327ac2;background:linear-gradient(140deg,#103c61,#0c2136);border-radius:11px;display:grid;place-items:center;color:#83d0ff;font-size:21px;font-weight:700}
+.zl-v2-product{display:flex;flex-direction:column;min-width:0;line-height:1.27}
+.zl-v2-product b{font-size:16px;color:#f4f8ff;font-weight:750;white-space:nowrap}
+.zl-v2-product small{font-size:11px;letter-spacing:.1em;color:#86a3be;margin-top:4px}
+.zl-v2-tabs{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.zl-v2-bar .zl-v2-tabs a{color:#aac0d6!important;padding:9px 14px!important;font-size:13px!important;text-decoration:none!important;border:1px solid transparent!important;background:transparent!important;border-radius:9px!important;line-height:1.2;font-weight:600}
+.zl-v2-bar .zl-v2-tabs a.is-active{color:#eaf7ff!important;background:#173a5a!important;border-color:#367fb5!important;box-shadow:inset 0 0 0 1px rgba(53,140,199,.11)}
+.zl-v2-bar .zl-v2-tabs a:not(.is-active):hover{background:#15263a!important}
+body :is(main,.w){max-width:1220px!important;width:100%;margin-left:auto!important;margin-right:auto!important;padding-top:22px!important}
+body main{padding-left:18px!important;padding-right:18px!important}
+body .w{padding-left:18px!important;padding-right:18px!important}
+h1{font-size:clamp(24px,3.2vw,30px)!important;font-weight:750!important;letter-spacing:-.025em!important;margin-top:6px!important}
+h2{font-size:17px!important;font-weight:700!important;letter-spacing:-.01em!important}
+h3{font-weight:690!important}
+body :is(article,.card,.w>.c){background:linear-gradient(145deg,#122237,#101b2b)!important;border:1px solid #293f57!important;border-radius:15px!important;box-shadow:0 2px 3px rgba(0,0,0,.08),0 15px 38px rgba(0,0,0,.12)!important;overflow:hidden}
+body :is(.metric,.kv){background:rgba(8,20,34,.71)!important;border:1px solid #213b53!important;border-radius:12px!important}
+body .metric{padding:15px!important}
+body .metric small,body .metric label{font-size:13px!important;color:#a5bdd4!important;letter-spacing:.01em}
+body .metric strong,body .metric .value{font-size:clamp(21px,3vw,28px)!important;line-height:1.28!important;font-weight:730!important;color:#f1f8ff!important;font-variant-numeric:tabular-nums}
+body .kv .v{font-size:clamp(16px,2vw,22px)!important;font-weight:700!important}
+body .sub,body .muted{color:#9bb0c8!important}
+body .good,body .ok{color:#33d7aa!important}
+body .bad{color:#fb6e8e!important}
+body .grid{gap:12px!important;min-width:0}
+body .grid>*{min-width:0}
+body button,body .btn{border-radius:10px!important;min-height:42px!important}
+body button:not(:disabled){box-shadow:0 3px 16px rgba(15,79,137,.18)}
+body button:focus-visible,body a:focus-visible,body input:focus-visible,body select:focus-visible{outline:2px solid #7ec9fa!important;outline-offset:2px}
+body table{width:100%;border-collapse:collapse}
+body table th{background:#17273c!important;color:#b0c8dd!important;border-bottom:1px solid #314960!important;font-weight:680!important}
+body table tr:nth-child(even){background:rgba(26,48,73,.3)}
+body .notice{background:#1b2e44!important;border:1px solid #436788!important;border-left:3px solid #58aef4!important;border-radius:10px!important}
+body .signal-panel{background:#112a41!important;border:1px solid #356b94!important}
+body #banner{padding:10px 14px!important;border-radius:10px!important;background:rgba(25,54,80,.8)!important;line-height:1.6!important}
+body #banner:not(:empty){font-size:15px!important;font-weight:690!important}
+body #edge,body #ask,body #round,body #checks{font-variant-numeric:tabular-nums}
+body .status{border-radius:999px!important}
+body nav:not(.zl-v2-tabs){border-radius:12px;gap:8px!important}
+body :is(article,.card,.w>.c)>h2:first-child{padding-bottom:6px;border-bottom:1px solid rgba(115,150,185,.1)}
+body a{color:#9cd5ff}
+body :is(input:not([type=checkbox]),select,textarea){background:#09192a!important;color:#e6f1ff!important;border:1px solid #3c5974!important;border-radius:9px!important}
+body main>p.sub,body .w>.muted{color:#90aac7!important}
+@media (min-width:1000px){body main{padding-left:24px!important;padding-right:24px!important}}
+@media (max-width:680px){
+  .zl-v2-bar{padding:0 12px!important}
+  .zl-v2-inner{padding:11px 0 8px;min-height:unset;gap:12px;display:block}
+  .zl-v2-logo{width:32px;height:32px;font-size:19px}
+  .zl-v2-product b{font-size:15px}
+  .zl-v2-tabs{margin-top:12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .zl-v2-bar .zl-v2-tabs a{padding:10px 4px!important;font-size:12px!important;text-align:center}
+  body :is(main,.w){padding:14px 12px 50px!important}
+  body :is(article,.card,.w>.c){padding:14px!important;border-radius:13px!important}
+  body h1{font-size:22px!important}
+  body h2{font-size:16px!important}
+  body .grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:9px!important}
+  body .metric{padding:11px!important}
+  body .metric .value,body .metric strong{font-size:21px!important}
+  body .metric small,body .metric label{font-size:12px!important}
+  body .kv{padding:11px!important}
+  body .kv .v{font-size:17px!important}
+  body nav:not(.zl-v2-tabs) a{padding:7px 10px!important;font-size:11px}
+}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}}

@@ -1,0 +1,185 @@
+name: Build ZL Control Android APK
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/zl-android-apk.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-control-android-apk
+  cancel-in-progress: false
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Use preinstalled Android SDK on official Ubuntu runner
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Verify native app security invariants
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          m=Path('android-app/app/src/main/AndroidManifest.xml').read_text()
+          j=Path('android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java').read_text()
+          for k in ('android:usesCleartextTraffic="false"','android:allowBackup="false"'):
+            assert k in m
+          for k in ('setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW)',
+                    'onReceivedSslError','handler.cancel()','onReceivedHttpAuthRequest',
+                    'https://','/app/','isTrusted(uri)'):
+            assert k in j,k
+          assert 'DEEPSEEK_API_KEY' not in j and 'BINANCE_API_KEY' not in j
+          service=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java').read_text()
+          keystore=Path('android-app/app/src/main/java/com/zlcontrol/android/SecureStore.java').read_text()
+          alarm=Path('android-app/app/src/main/java/com/zlcontrol/android/AlarmPlayer.java').read_text()
+          for k in ('/event10/api/signals?limit=50&offset=0',
+                    'PREF_LAST_ID','SignalAlarmPolicy.decide','FOREGROUND_SERVICE_TYPE_SPECIAL_USE',
+                    'Notification.CATEGORY_ALARM','System.currentTimeMillis()'):
+            assert k in service,k
+          for k in ('AndroidKeyStore','AES/GCM/NoPadding'):
+            assert k in keystore,k
+          for k in ('RingtoneManager.TYPE_ALARM','AudioAttributes.USAGE_ALARM'):
+            assert k in alarm,k
+          for k in ('POST_NOTIFICATIONS','FOREGROUND_SERVICE_SPECIAL_USE',
+                    'SignalAlertService'):
+            assert k in m,k
+          assert 'outer.setOnApplyWindowInsetsListener' in j
+          assert 'WindowInsets.Type.statusBars()' in j
+          assert 'PREF_ENABLED_SINCE' in j
+          assert '仅新 Higher / Lower 信号提醒' in j
+          assert 'PREF_ENABLED_SINCE' in service
+          assert 'SignalAlarmPolicy.decide' in service
+          assert 'PREF_LAST_REASON' in service
+          assert '查看提醒诊断' in j
+          assert 'PREF_LAST_SUCCESS' in service
+          assert 'PREF_LAST_ALARM_TIME' in service
+          assert 'ordered.sort(' in service and 'PREF_HANDLED_IDS' in service
+          assert 'scheduleWithFixedDelay(this::pollSafe,0,SIGNAL_POLL_SECONDS,TimeUnit.SECONDS)' in service
+          assert 'SIGNAL_POLL_SECONDS=2' in service
+          assert 'setConnectTimeout(3500)' in service and 'setReadTimeout(4500)' in service
+          assert 'PREF_LAST_ALARM_DELAY_MS' in service and 'PREF_LAST_API_LATENCY_MS' in service
+          assert '超过15秒未成功获取信号' in j
+          assert 'PREF_AUDIT_TRAIL' in service
+          assert 'PARTIAL_WAKE_LOCK' in service
+          assert '忽略电池优化' in j and '本次开启时间' in j
+          assert '后台权限设置' in j
+          assert 'WAKE_LOCK' in m
+          assert 'com.binance.dev' in m and 'ACTION_OPEN_BINANCE' in j
+          assert 'launchBinance()' in j and 'openBinanceIntent' in service
+          assert 'openEvent10Intent' in service
+          assert 'signal_notification_id' in service
+          assert 'zl_event10_alarm_v2_audible' in service
+          assert 'RingtoneManager.TYPE_NOTIFICATION' in service
+          assert 'alerts.enableVibration(true)' in service
+          assert 'event10_alert_alarm_volume' in service and 'event10_alert_alarm_max_volume' in service
+          assert '系统闹钟音量' in j
+          popup=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalPopupOverlay.java').read_text()
+          for check in ('TYPE_APPLICATION_OVERLAY','Gravity.CENTER','确认并打开币安',
+                        'Settings.canDrawOverlays','onConfirm','dismissIfMatches',
+                        'expiresAt-System.currentTimeMillis()'):
+            assert check in popup, check
+          for check in ('SYSTEM_ALERT_WINDOW','POST_NOTIFICATIONS'):
+            assert check in m, check
+          for check in ('showOverlayPermissionAdvice','ACTION_MANAGE_OVERLAY_PERMISSION',
+                        '屏幕中央悬浮弹窗'):
+            assert check in j, check
+          assert 'signalPopup.show(' in service and 'confirmAndOpenBinance' in service
+          assert 'sound.stop()' in service and 'activeAlarmSignalId' in service
+          assert 'onConfirm(signalId,noticeId)' in popup
+          print('ZL_CENTER_POPUP_CONFIRM_BINANCE_INVARIANTS_PASS')
+          assert 'ZL_SIGNING_STORE_FILE' in Path('android-app/app/build.gradle').read_text()
+          policy=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java').read_text()
+          assert 'SIGNAL_EXPIRED' in policy and 'NO_SIGNAL' in policy
+          print('ZL_NATIVE_SECURITY_INVARIANTS_PASS')
+          PY
+      - name: Run deterministic Event10 alarm policy regression tests
+        run: |
+          mkdir -p /tmp/zl-alarm-tests
+          javac -encoding UTF-8 -d /tmp/zl-alarm-tests \
+            android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java \
+            android-app/tests/SignalAlarmPolicyTest.java
+          java -cp /tmp/zl-alarm-tests com.zlcontrol.android.SignalAlarmPolicyTest
+      - name: Load persistent Android signing key (secrets only)
+        shell: bash
+        env:
+          ZL_ANDROID_KEYSTORE_B64: ${{ secrets.ZL_ANDROID_KEYSTORE_B64 }}
+          ZL_ANDROID_STORE_PASSWORD: ${{ secrets.ZL_ANDROID_STORE_PASSWORD }}
+          ZL_ANDROID_KEY_ALIAS: ${{ secrets.ZL_ANDROID_KEY_ALIAS }}
+          ZL_ANDROID_KEY_PASSWORD: ${{ secrets.ZL_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ZL_ANDROID_KEYSTORE_B64" || -z "$ZL_ANDROID_STORE_PASSWORD" || -z "$ZL_ANDROID_KEY_ALIAS" || -z "$ZL_ANDROID_KEY_PASSWORD" ]]; then
+            echo 'ZL_STABLE_SIGNING=false' >> "$GITHUB_ENV"
+            echo 'STABLE_RELEASE_NOT_BUILT: configure four signing secrets; debug APK is NOT suitable for upgrades'
+            exit 0
+          fi
+          printf '%s' "$ZL_ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/zl-control-release.jks"
+          chmod 600 "$RUNNER_TEMP/zl-control-release.jks"
+          keytool -list -keystore "$RUNNER_TEMP/zl-control-release.jks" -storepass "$ZL_ANDROID_STORE_PASSWORD" -alias "$ZL_ANDROID_KEY_ALIAS" >/dev/null
+          echo 'ZL_STABLE_SIGNING=true' >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_STORE_FILE=$RUNNER_TEMP/zl-control-release.jks" >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_STORE_PASSWORD=$ZL_ANDROID_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_KEY_ALIAS=$ZL_ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ZL_SIGNING_KEY_PASSWORD=$ZL_ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+      - name: Build release-signed APK if key exists, otherwise test-only debug APK
+        working-directory: android-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$ZL_STABLE_SIGNING" == true ]]; then
+            gradle --no-daemon --stacktrace :app:assembleRelease
+          else
+            gradle --no-daemon --stacktrace :app:assembleDebug
+          fi
+      - name: Verify APK signing and prepare output
+        shell: bash
+        env:
+          ZL_EXPECTED_CERT_SHA256: ${{ vars.ZL_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [[ "$ZL_STABLE_SIGNING" == true ]]; then
+            src=android-app/app/build/outputs/apk/release/app-release.apk
+            dest=dist/ZL-Control-v1.2.3-stable-release.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.3-STABLE-RELEASE' >> "$GITHUB_ENV"
+            echo 'ZL_RELEASE_UPGRADE_CAPABLE=true' >> "$GITHUB_ENV"
+          else
+            src=android-app/app/build/outputs/apk/debug/app-debug.apk
+            dest=dist/ZL-Control-v1.2.3-DEBUG-ONLY-NOT-UPGRADEABLE.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.3-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
+            echo 'ZL_RELEASE_UPGRADE_CAPABLE=false' >> "$GITHUB_ENV"
+          fi
+          cp "$src" "$dest"
+          test -s "$dest"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort | tail -1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort | tail -1)"
+          "$AAPT" dump badging "$dest" | head -n 7
+          "$APKSIGNER" verify --verbose --print-certs "$dest" | tee "$RUNNER_TEMP/apk-verification.txt"
+          if [[ "$ZL_STABLE_SIGNING" == true && -n "$ZL_EXPECTED_CERT_SHA256" ]]; then
+            actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-verification.txt" | head -n1)"
+            [[ "${actual,,}" == "${ZL_EXPECTED_CERT_SHA256,,}" ]] || {
+              echo 'RELEASE_CERTIFICATE_CHANGED: refusing upgrade artifact'; exit 1;
+            }
+          fi
+          sha256sum "$dest"
+          echo "ZL_RELEASE_UPGRADE_CAPABLE=$ZL_STABLE_SIGNING"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZL_ARTIFACT_NAME }}
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 90

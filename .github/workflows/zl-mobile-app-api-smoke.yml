@@ -1,0 +1,46 @@
+name: Unified mobile app read-only production API smoke
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-mobile-app-api-smoke.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-live-apis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify authenticated actual app and both robot read-only APIs
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,struct,urllib.request
+          password=os.environ.get('ZL_PANEL_PASSWORD','')
+          assert len(password)>=16,'EXISTING_LOGIN_SECRET_NOT_CONFIGURED'
+          base='https://prediction.47-237-188-69.sslip.io'
+          basic=base64.b64encode(('zl:'+password).encode()).decode()
+          def get(path):
+              req=urllib.request.Request(base+path,headers={
+                  'Authorization':'Basic '+basic,'Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=18) as res:
+                  assert res.status==200,(path,res.status)
+                  return res.read(450000)
+          routes=[
+            ('/api/status',lambda d:d.get('ok') is True),
+            ('/guardian/api/status',lambda d:d.get('ok') is True and d.get('model')=='ZL_GUARDIAN_5M_V1'),
+            ('/event10/api/status',lambda d:d.get('ok') is True),
+            ('/event10/api/signals?limit=1&offset=0',lambda d:d.get('ok') is True and isinstance(d.get('records'),list)),
+          ]
+          for path,check in routes:
+              data=json.loads(get(path))
+              assert check(data),'BAD_READONLY_RESPONSE '+path
+              print('MOBILE_APP_REAL_API_OK',path)
+          for size in [192,512]:
+              data=get(f'/app/icon-{size}.png')
+              assert data[:8]==b'\x89PNG\r\n\x1a\n'
+              assert struct.unpack('>II',data[16:24])==(size,size)
+              print('MOBILE_APP_ICON_OK',size)
+          print('MOBILE_APP_BOTH_BOTS_AUTHENTICATED_READONLY_VERIFIED')
+          PY

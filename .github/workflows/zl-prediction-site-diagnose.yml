@@ -1,0 +1,24 @@
+name: Diagnose prediction site unreachable
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['prediction-bot-v1/aliyun_site_diagnose.py','.github/workflows/zl-prediction-site-diagnose.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect Caddy and prediction health through Alibaba remote command
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_site_diagnose.py
+
+# Read-only follow-up for GUARDIAN visibility restart 502 on 2026-10-29.

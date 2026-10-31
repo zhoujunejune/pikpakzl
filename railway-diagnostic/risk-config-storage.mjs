@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import { createClient } from 'redis';
 
-export const RISK_CONFIG_FILE = '/tmp/risk-control.json';
+export const RISK_CONFIG_FILE = process.env.RISK_CONTROL_FILE || '/tmp/risk-control.json';
 export const RISK_REDIS_KEY = 'trade-control:risk-config:v1';
 let client = null;
 let connecting = null;
@@ -16,12 +16,14 @@ export function validatedRiskConfig(value) {
   const sl = Number(value.stopLossPercent);
   if (!Number.isFinite(tp) || tp < 1 || tp > 100 ||
       !Number.isFinite(sl) || sl < 1 || sl > 100) throw new Error('INVALID_RISK_CONFIG_PERCENT');
+  if(value.dynamicExitEnabled!==undefined&&typeof value.dynamicExitEnabled!=='boolean') throw new Error('INVALID_DYNAMIC_EXIT_BOOLEAN');
   if (typeof value.updatedAt !== 'string' || !Number.isFinite(Date.parse(value.updatedAt))) throw new Error('INVALID_RISK_CONFIG_DATE');
   return {
     takeProfitEnabled: value.takeProfitEnabled,
     takeProfitPercent: tp,
     stopLossEnabled: value.stopLossEnabled,
     stopLossPercent: sl,
+    dynamicExitEnabled: false, // Retired Guardian dynamic mode; normalize legacy Redis snapshots.
     updatedAt: value.updatedAt,
   };
 }

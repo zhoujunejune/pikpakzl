@@ -1,0 +1,109 @@
+name: Alibaba SWAS - independent real-market paper forward strategies
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - ".github/workflows/zl-aliyun-live-shadow.yml"
+      - "futures-research-panel/live_shadow.py"
+      - "futures-research-panel/auto_train.py"
+      - "futures-research-panel/test_auto_train.py"
+      - "futures-research-panel/install_live_shadow.sh"
+      - "futures-research-panel/test_live_shadow.py"
+      - "futures-research-panel/index.html"
+permissions:
+  contents: read
+concurrency:
+  group: zl-futures-shadow-only-standalone
+  cancel-in-progress: false
+jobs:
+  live-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: 'Offline tests - read-only API and virtual trade ledger'
+        run: |
+          bash -n futures-research-panel/install_live_shadow.sh
+          python -m py_compile futures-research-panel/auto_train.py futures-research-panel/live_shadow.py futures-research-panel/aliyun_live_deploy.py
+          python -m unittest discover -v -s futures-research-panel -p 'test_live_shadow.py'
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('futures-research-panel/index.html').read_text()
+          assert "/futures-lab/live.json" in s
+          js=s.split('<script>',1)[1].split('</script>',1)[0]
+          Path('/tmp/forward-shadow-page.js').write_text(js)
+          i=Path('futures-research-panel/install_live_shadow.sh').read_text()
+          assert 'systemctl restart zl-futures-bot-paper' not in i
+          assert 'systemctl restart zl-prediction' not in i
+          assert 'basic_auth {' in i
+          assert '127.0.0.1:13017' in i
+          source=Path('futures-research-panel/live_shadow.py').read_text()
+          assert 'BINANCE_API_SECRET' not in source
+          assert '/fapi/v1/order' not in source
+          assert 'import auto_train' in source and 'train_loop()' in source
+          assert 'autoParameterTraining' in source
+          PY
+          node --check /tmp/forward-shadow-page.js
+      - name: Install Alibaba SWAS client
+        run: pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy only independent shadow service and authenticated read-only endpoint
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python futures-research-panel/aliyun_live_deploy.py
+      - name: Verify HTTPS real-market shadow endpoint and production remains healthy
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,json,base64,os,time
+          base='https://47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def req(path,authorization=True):
+           headers={'Cache-Control':'no-cache'}
+           if authorization:headers['Authorization']=auth
+           with urllib.request.urlopen(urllib.request.Request(base+path,headers=headers),timeout=12) as r:return r.read()
+          try:
+           req('/futures-lab/live.json',False)
+           raise AssertionError('ANONYMOUS_SHADOW_ACCESS_MUST_BE_BLOCKED')
+          except urllib.error.HTTPError as ex:assert ex.code==401
+          page=req('/futures-lab/')
+          assert b'forwardStatus' in page and b'futures-lab/live.json' in page
+          report=json.loads(req('/futures-lab/report.json'))
+          assert len(report.get('rows',[]))==18
+          # Verify the EXACT browser URL, including the cache-buster.
+          # This previously returned 404 because Handler compared raw self.path.
+          status=json.loads(req('/futures-lab/live.json?t='+str(int(time.time()*1000))))
+          assert status.get('realOrders') is False
+          assert status.get('autoParameterTraining') is True
+          assert status.get('learning',{}).get('mode')=='walk_forward_parameter_search'
+          assert len(status.get('streams',[]))==9
+          assert status.get('kind')=='live_paper_forward_test'
+          print('SHADOW_FRONTEND_TIMESTAMPED_URL_HTTP_200=true')
+          print('SHADOW_RUNTIME_AVAILABLE=true')
+          print('SHADOW_STATUS_STREAMS',len(status.get('streams',[])))
+          # Training starts in its own daemon after the safe shadow restart.
+          # Never conflate enabled training with an actually finished run.
+          for attempt in range(20):
+           training=status.get('learning') or {}
+           if training.get('completedRuns',0)>=1:break
+           time.sleep(10)
+           status=json.loads(req('/futures-lab/live.json?t='+str(int(time.time()*1000))))
+          training=status.get('learning') or {}
+          print('SHADOW_TRAIN_RUNS',training.get('completedRuns'))
+          print('SHADOW_TRAIN_ERROR',str(training.get('error') or 'none')[:95])
+          learned=[r.get('learning') or {} for r in status.get('streams',[])]
+          print('SHADOW_TRAIN_STREAMS_WITH_STATUS',sum(bool(z.get('status')) for z in learned))
+          assert training.get('completedRuns',0)>=1,'AUTO_TRAIN_NOT_COMPLETED_YET'
+          assert sum(bool(z.get('status')) for z in learned)==9,'NOT_ALL_NINE_TRAINED'
+          assert all(not str(z.get('status')).startswith('TRAIN_FAILED') for z in learned),'TRAINING_FAILED'
+
+          print('SHADOW_FEED_FRESH',status.get('fresh'))
+          print('SHADOW_FEED_ERROR_CLASS',(status.get('error') or '').split(':')[0][:50])
+          futures=json.loads(req('/status'))
+          assert futures.get('mode')=='live'
+          print('PRODUCTION_FUTURES_MODE_STILL_LIVE=true')
+          print('SHADOW_DID_NOT_SUBMIT_REAL_ORDERS=true')
+          PY

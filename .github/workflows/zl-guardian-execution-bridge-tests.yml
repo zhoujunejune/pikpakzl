@@ -1,0 +1,36 @@
+name: GUARDIAN live execution isolated safety tests
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - railway-diagnostic/guardian-live-bridge.mjs
+      - railway-diagnostic/guardian-dynamic-exit.mjs
+      - railway-diagnostic/guardian-risk-integration.mjs
+      - railway-diagnostic/guardian-risk-integration.test.mjs
+      - railway-diagnostic/risk-runner.mjs
+      - railway-diagnostic/guardian-live-bridge.test.mjs
+      - railway-diagnostic/guardian-prepost-retry-regression.test.mjs
+      - railway-diagnostic/index.mjs
+      - railway-diagnostic/wrapper.mjs
+      - railway-diagnostic/risk-worker.mjs
+      - .github/workflows/zl-guardian-execution-bridge-tests.yml
+permissions: {contents: read}
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Parse both trade and risk source without connecting to an exchange
+        run: |
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --check railway-diagnostic/guardian-dynamic-exit.mjs
+          node --check railway-diagnostic/guardian-risk-integration.mjs
+          node --check railway-diagnostic/risk-runner.mjs
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --check railway-diagnostic/risk-worker.mjs
+      - name: Run deterministic entry, quote and token-scoped exit tests
+        run: node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs railway-diagnostic/guardian-prepost-retry-regression.test.mjs

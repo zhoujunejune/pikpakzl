@@ -39,7 +39,7 @@ test("the app never requests legacy event history or mixes old stats",()=>{
  assert.ok(!src.includes("legacyHistory"));
  assert.ok(src.includes("if(e?.decisionReviewVersion!==EVENT10_FREQ_OPTIMIZED_VERSION)"));
  assert.ok(src.includes("const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION"));
- assert.ok(src.includes('put("eTotal","新版有效信号 "'));
+ assert.ok(src.includes('put("eTotal","新策略 "'));
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
  assert.ok(html.includes("频率优化策略信号记录"));
  assert.ok(!html.includes("历史信号（新旧策略）"));
@@ -58,10 +58,10 @@ test("price comparison uses frozen index reference and exact settlement values",
  assert.equal(pending.change,"—");
  const win=c.eventPriceComparison({...base,closePrice:77550,proxyHit:true,proxyOutcome:"UP",
    settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
- assert.equal(win.outcome,"指数代理命中");assert.match(win.change,/^\\+0\\.06452%$/);
+ assert.equal(win.outcome,"指数代理命中");assert.match(win.change,/^\+0\.06452%$/);
  const lose=c.eventPriceComparison({...base,closePrice:77450,proxyHit:false,proxyOutcome:"DOWN",
    settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
- assert.equal(lose.outcome,"指数代理未命中");assert.match(lose.change,/^-0\\.06452%$/);
+ assert.equal(lose.outcome,"指数代理未命中");assert.match(lose.change,/^-0\.06452%$/);
  const missing=c.eventPriceComparison({...base,settlementStatus:"UNVERIFIABLE_PRICE_NEAR_EXPIRY"});
  assert.equal(missing.outcome,"到期数据不足，无法核验");
  const flat=c.eventPriceComparison({...base,closePrice:77500,proxyHit:null,proxyOutcome:"FLAT",

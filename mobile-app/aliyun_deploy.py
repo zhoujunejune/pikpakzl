@@ -21,11 +21,16 @@ mkdir -p -m 0700 "$BACK"
 changed=0
 success=0
 had_app=0
+checkpoint=PRECHECK
 trade_before=$(systemctl show zl-prediction-trade -p MainPID --value)
 event_before=$(systemctl show zl-event10-deepseek -p MainPID --value)
 finish(){
   code=$?
   trap - EXIT
+  if [ "$success" = 0 ];then
+    echo "MOBILE_APP_FAILED_CHECKPOINT=$checkpoint EXIT_CODE=$code"
+    systemctl show -p ActiveState -p SubState -p CanReload -p MainPID caddy 2>/dev/null || true
+  fi
   if [ "$changed" = 1 ] && [ "$success" = 0 ];then
     cp -p "$BACK/Caddyfile" "$CADDY" || true
     if [ "$had_app" = 1 ];then
@@ -170,17 +175,34 @@ for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png i
 done
 cp "$STAGE/Caddyfile.staged" "$CADDY"
 changed=1
+checkpoint=VALIDATE_CADDY
 caddy validate --config "$CADDY"
-systemctl reload caddy
+echo MOBILE_CADDY_CONFIG_VALID=true
+checkpoint=RELOAD_CADDY
+if ! systemctl reload caddy;then
+  echo MOBILE_CADDY_SYSTEMD_RELOAD_FAILED=true
+  if ! caddy reload --config "$CADDY" --adapter caddyfile;then
+    echo MOBILE_CADDY_ADMIN_RELOAD_FAILED=true
+    exit 45
+  fi
+fi
+echo MOBILE_CADDY_RELOAD_COMPLETED=true
+checkpoint=AUTHENTICATION_CHECK
 # A compromised public route must never reveal the app or trading APIs without login.
 for route in /app/ /app/app.js /app/version.json /app/manifest.webmanifest /api/status /guardian/api/status /event10/api/status;do
-  status=$(curl -skS --max-time 9 --resolve "$HOST:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$HOST$route")
+  if ! status=$(curl -skS --max-time 9 --resolve "$HOST:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$HOST$route");then
+    echo MOBILE_AUTH_CURL_FAILED_PATH=$route
+    exit 42
+  fi
   test "$status" = 401 || { echo "MOBILE_AUTH_CHECK_FAILED_PATH=$route STATUS=$status"; exit 41; }
 done
+echo MOBILE_AUTH_CHECKS_PASS=true
+checkpoint=PID_INVARIANT
 # Live trading and event strategy processes must not be touched by PWA deployment.
 test "$trade_before" = "$(systemctl show zl-prediction-trade -p MainPID --value)"
 test "$event_before" = "$(systemctl show zl-event10-deepseek -p MainPID --value)"
 systemctl is-active --quiet caddy
+checkpoint=COMPLETE
 echo MOBILE_APP_PWA_RELEASED=true
 echo MOBILE_APP_TRADING_ENGINES_UNCHANGED=true
 echo MOBILE_APP_HTTPS_URL="https://$HOST/app/"

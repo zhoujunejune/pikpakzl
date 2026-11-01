@@ -189,7 +189,7 @@ const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",
 // Only display the actual confidence saved in this forecast's model response.
 // Never infer from outcome, history, signal direction or another round.
 const displayConfidence=s=>s?.eventTag||s?.ruleChecks?.eventTag||"—";
-const phaseText={ANALYZING:"处理中",PREDICTED:"六项成立，方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
+const phaseText={ANALYZING:"处理中",PREDICTED:"反动量方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
  if(v==="PUBLIC_MARKET_PROXY_ONLY")return "旧版现货代理核对";
  if(v==="INDEX_CYCLE_PROXY_ONLY")return "旧版UTC指数周期已核对";
@@ -247,9 +247,9 @@ function display(d){
    (recent.checkedAt??recent.openedAt??0)>=(old?.modelFinishedAt??old?.openedAt??0);
  const s=currentActive||(recentIsLatest?recent:(old||recent||null));
  active=currentActive;
- $("engine").textContent=d.configured?"频率优化六项信号规则已启用":"行情服务暂不可用";
+ $("engine").textContent=d.configured?"强制反动量研究策略已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
- $("start").disabled=inflight||!d.configured||!!d.active; // Manual joins background scan
+ $("start").disabled=inflight||!d.configured; // Manual joins background scan
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";
   $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
@@ -260,7 +260,7 @@ function display(d){
   $("quickOpen").textContent="参考价："+price(s.openPrice)+" USDT";
   $("quickReason").textContent=s.reason||(noSignal?"没有同时满足六项条件。":"等待行情校验。");
   $("quickTimestamp").textContent="采样："+when(s.openedAt)+" ｜ "+
-    "全时段六项频率优化过滤"+
+    "下次自动检查："+when(d.nextAutoCheckAt)+" · 上次检查："+when(d.lastAutoCheckAt)+
     " ｜ 信号后完整600秒才核对，非事件合约官方交易记录。";
   $("openPrice").textContent=price(s.openPrice);
   $("openedAt").textContent=when(s.openedAt);
@@ -288,14 +288,14 @@ function display(d){
   $("quickDirection").className="signal-direction yellow";
   $("quickConfidence").textContent="通过条件：—";$("confidence").textContent="—";
   $("quickOpen").textContent="参考价：—";
-  $("quickReason").textContent="六项条件同时成立才出信号；其余为无信号。";
-  $("quickTimestamp").textContent="后台每12秒检查六项频率优化条件；条件不满足即WAIT。";
+  $("quickReason").textContent="上涨≥0.05%看跌；下跌≤-0.05%看涨；其余看涨。";
+  $("quickTimestamp").textContent="北京时间00/12/24/36/48分自动检测，数据异常不出方向。";
   for(const id of ["openPrice","direction","openedAt","expiresAt","closePrice","latency","result","remaining"]){
     $(id).textContent="—";
   }
-  $("reason").textContent="暂时没有V2方向信号；旧版Higher/Lower保留在历史记录中，不作为当前信号。";
-  $("dataQuality").textContent="新策略仅采用币安指数价、指数1分钟K线及永续合约前5档盘口。";
-  $("analysisDetail").replaceChildren();$("phase").textContent="等待V2检测";
+  $("reason").textContent="新策略尚无信号，旧数据不参与统计。";
+  $("dataQuality").textContent="新策略仅使用四根连续已收盘1分钟K线和实时指数报价。";
+  $("analysisDetail").replaceChildren();$("phase").textContent="等待反动量检测";
  }
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
  updateClock();
@@ -336,8 +336,8 @@ async function refresh(){
   $("message").textContent=d.busyStart?"后台正在获取行情，完成后自动更新结果。":
     d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
-    d.lastCheck?.status==="NO_SIGNAL"?"检查已完成：六项未同时满足，无信号。":
-    "后台持续检查六项条件；条件不满足则不出方向。";
+    d.lastCheck?.status==="NO_SIGNAL"?"检查已完成：数据质量未通过，无信号。":
+    "每12分钟一个自动检查槽，数据异常不出方向。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";
@@ -369,7 +369,7 @@ async function refreshHistory(){
   const rows=$("records");rows.replaceChildren();
   if(!records.length){
    const tr=document.createElement("tr"),td=document.createElement("td");
-   td.colSpan=11;td.textContent="暂无符合全部六项条件的新规则方向信号";
+   td.colSpan=11;td.textContent="新策略暂无有效方向信号";
    tr.append(td);rows.append(tr);
   }
   for(const s of records){
@@ -405,17 +405,17 @@ function showImmediateResult(session){
    lastDataProbe:null,lastFeatureCoverage:session?.featureAvailability||null});
  $("message").textContent=session?.status==="DATA_ERROR"?
    "本次数据异常，未产生方向。":signal?
-   "六项成立，已锁定信号时指数价；完整600秒后核对。":
-   "检查完成：六项未同时满足，无信号。";
+   "已锁定指数代理价，满600秒后核验。":
+   "检查完成：数据质量未通过，无信号。";
 }
 async function startClick(){
  if(inflight)return;
- inflight=true;refreshEpoch++;$("start").disabled=true;$("message").textContent="正在检查币安指数价、现货K线、盘口及主动成交…";
+ inflight=true;refreshEpoch++;$("start").disabled=true;$("message").textContent="正在获取指数价和已收盘1分钟K线…";
  $("quickPhase").textContent="正在启动";
- $("quickDirection").textContent="正在检查六项条件…";
+ $("quickDirection").textContent="正在检查3分钟净涨跌…";
  $("quickDirection").className="signal-direction yellow";
  $("quickConfidence").textContent="通过条件：—";
- $("quickReason").textContent="只有六项都满足才出方向；否则返回无信号。";
+ $("quickReason").textContent="只用3分钟净涨跌判断方向，数据异常不生成方向。";
  $("quickOpen").textContent="参考价：采集中";
  if(!pendingRequestId){
   const v=new Uint8Array(16);crypto.getRandomValues(v);
@@ -434,7 +434,7 @@ async function startClick(){
   $("quickDirection").textContent="无新信号";
   $("quickDirection").className="signal-direction yellow";
   $("quickConfidence").textContent="通过条件：—";
-  $("quickReason").textContent="行情检查未完成；请以本次实际通过的六项条件为准："+String(e);
+  $("quickReason").textContent="行情检查未完成，无有效方向："+String(e);
  }
  finally{inflight=false;refreshEpoch++;void refresh();void refreshHistory();}
 }

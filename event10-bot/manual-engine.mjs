@@ -131,8 +131,8 @@ function slimSignal(h) {
     referenceBasis:h.referenceBasis??null,
     horizonMs:Number.isFinite(h.openedAt)&&Number.isFinite(h.expiresAt)?h.expiresAt-h.openedAt:null,
     direction:h.direction,openPrice:h.openPrice,
-    fiveOfFive:h.ruleChecks?.conditions?Object.values(h.ruleChecks.conditions).every(Boolean):true,
-    sixOfSix:h.ruleChecks?.conditions?Object.keys(h.ruleChecks.conditions).length===6&&Object.values(h.ruleChecks.conditions).every(Boolean):false,
+    signalId:h.id,eventTag:h.ruleChecks?.eventTag??h.eventTag??null,
+    change3mPct:h.ruleChecks?.change3mPct??h.change3mPct??null,requestId:h.id,
     volumeRatio:Number.isFinite(evidence.volumeRatio)?evidence.volumeRatio:null,
     rsi14:Number.isFinite(evidence.rsi14)?evidence.rsi14:null,
     leadPct:Number.isFinite(evidence.signedLeadPct)?Math.abs(evidence.signedLeadPct):null,
@@ -141,6 +141,7 @@ function slimSignal(h) {
         evidence.leadingAmount,2):null,
     checks:h.ruleChecks?.conditions||null,
     closePrice:h.closePrice??null,closeObservedAt:h.closeObservedAt??null,
+    expirySampleLagMs:h.expirySampleLagMs??null,
     proxyHit:typeof h.proxyHit==="boolean"?h.proxyHit:null,
     proxyOutcome:h.proxyOutcome??null,
     settlementStatus:h.settlementStatus??null,
@@ -192,7 +193,7 @@ function openSignalLedger(file,sessionHistory) {
     const result={
       closePrice:h.closePrice??null,closeObservedAt:h.closeObservedAt??null,
       proxyHit:typeof h.proxyHit==="boolean"?h.proxyHit:null,
-      proxyOutcome:h.proxyOutcome??null,
+      proxyOutcome:h.proxyOutcome??null,expirySampleLagMs:h.expirySampleLagMs??null,
       settlementStatus:h.settlementStatus??null,status:h.status
     };
     if(existing.settlementStatus===result.settlementStatus&&
@@ -222,7 +223,7 @@ function openSignalLedger(file,sessionHistory) {
 
 export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) {
   const feedUrl=String(env.EVENT10_READONLY_FEED||"http://127.0.0.1:13003/api/shadow-market-data");
-  const streamUrl="http://127.0.0.1:13021/api/features";
+  // Stream collector is not a gate of this strategy.
   const file=String(env.EVENT10_STATE_FILE||"/var/lib/zl-event10/manual-sessions-v2.json");
   const persistedSessions=load(file);
   const ledgerFile=String(env.EVENT10_SIGNAL_LOG_FILE||path.join(path.dirname(file),"rule-signals-v1.ndjson"));
@@ -234,30 +235,26 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   }
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,modelCalls=0,lastError=null;
-  let lastRuleScan=0,lastRuleScanCycle=null,lastCheck=null,inFlightStart=null;
-  let lastCheckAt=0;
+  let lastCheck=null,inFlightStart=null;
+  let lastCheckAt=0,lastAutoCheckAt=null;
+  const autoAttempts=new Map();
   let lastDataProbe=null;
   const persist=()=>store(file,history);
   const latest=()=>history.at(-1)||null;
-  const stats=()=>{const current=history.filter(x=>x.decisionReviewVersion===RULE_VERSION);
-    const decided=current.filter(x=>["UP","DOWN"].includes(x.direction));
-    const settled=current.filter(x=>typeof x.proxyHit==="boolean");
-    const hits=settled.filter(x=>x.proxyHit).length;
-    return {total:current.length,validDirections:decided.length,
-      proxySettled:settled.length,proxyHits:hits,proxyMisses:settled.length-hits,
-      proxyAccuracyPct:settled.length?round(100*hits/settled.length,2):null,
-      officialSettled:0,officialAccuracyPct:null};
-  };
+  const stats=()=>({...signalLedger.list(1,0).stats,
+    officialSettled:0,officialAccuracyPct:null});
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_FREQUENCY_OPTIMIZED_SIX_GATES_TPLUS10",
-      providerModel:"PURE_SIGNAL_FREQ_OPTIMIZED_V2",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"FORCED_CONTRARIAN_12M_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_FORCED_CONTRARIAN_V1",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_FREQ_OPTIMIZED_6GATES_V2",
+      enrichmentVersion:"EVENT10_FORCED_CONTRARIAN_12M_V1",
+       autoIntervalMs:720000,lastAutoCheckAt,
+       nextAutoCheckAt:(Math.floor(clock()/720000)+1)*720000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"disabled",reasoningEffort:null,
       lastReasoningObserved:null,lastReasoningTokenCount:null,
@@ -282,9 +279,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     const existing=history.find(x=>x.id===id);
     if(existing)return existing;
     if(signalLedger.all.has(id))return signalLedger.all.get(id);
-    if(inFlightStart)return inFlightStart;
-    const active=history.findLast(x=>x.status==="PREDICTED"&&clock()<x.expiresAt);
-    if(active)return active;
+    if(inFlightStart)throw Error("ANALYSIS_ALREADY_RUNNING");
     const promise=capture(id);
     inFlightStart=promise;
     try{return await promise;}
@@ -343,12 +338,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         enrichment:{source:market.source,features:filtered,
           available:Object.keys(filtered).length,total:market.total},
         featureAvailability:availability,sourceWarnings:market.caveats,
-        featureBundleVersion:RULE_VERSION,decisionReviewVersion:RULE_VERSION,
+        featureBundleVersion:RULE_VERSION,decisionReviewVersion:RULE_VERSION,strategyVersion:RULE_VERSION,
         decisionReview:null,compactEvidence:null,analysisArguments:null,
         source:"BINANCE_USDM_INDEX_SIGNAL_CAPTURE_TPLUS600_NOT_ORDER_STRIKE",
         status:"PREDICTED",direction:rule.direction,
-        ruleChecks:rule,signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_FREQ_OPTIMIZED_V2",attempts:0,confidence:null,reason:rule.reason,
+        ruleChecks:rule,eventTag:rule.eventTag,change3mPct:rule.change3mPct,
+         signalCycleStartMs:rule.cycleStartAt,
+        model:"PURE_SIGNAL_FORCED_CONTRARIAN_V1",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -377,19 +373,21 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // Scan frequency-optimized Excel gates every 12 seconds at any time; each accepted
-    // signal expires 600 seconds after its own capture. No orders.
-    const nowMs=clock(),cycle=nowMs-Math.floor(nowMs%HORIZON_MS);
-    if(lastRuleScanCycle!==cycle){lastRuleScanCycle=cycle;lastRuleScan=0;}
-    if(nowMs-lastRuleScan>=12000&&
-        !busyStart&&!history.some(x=>x.signalCycleStartMs===cycle&&
-          x.decisionReviewVersion===RULE_VERSION&&x.direction)&&
-        !history.some(x=>x.status==="PREDICTED"&&x.expiresAt>nowMs)){
-      lastRuleScan=nowMs;
-      void start("auto-six-"+Math.floor(nowMs/12000)).catch(e=>{
-        lastError="AUTO_SCAN_"+String(e?.message||e).slice(0,100);
+    // Beijing 00/12/24/36/48 minute slots; same UTC minute boundaries.
+    // At most three attempts in first 20 seconds; stable IDs prevent duplicates.
+    const nowMs=clock(),slotStart=Math.floor(nowMs/720000)*720000;
+    const slotId="auto-12m-"+slotStart;
+    const previous=autoAttempts.get(slotStart)||{count:0,lastAt:0};
+    if(nowMs-slotStart<20000&&!busyStart&&!inFlightStart&&
+       !signalLedger.all.has(slotId)&&previous.count<3&&
+       (previous.count===0||nowMs-previous.lastAt>=3500)){
+      autoAttempts.set(slotStart,{count:previous.count+1,lastAt:nowMs});
+      lastAutoCheckAt=nowMs;
+      void start(slotId).catch(error=>{
+        lastError="AUTO_SLOT_"+String(error?.message||error).slice(0,100);
       });
     }
+    for(const key of autoAttempts.keys())if(key<slotStart-720000)autoAttempts.delete(key);
     const expiring=history.filter(h=>
       h.status==="PREDICTED" && h.proxyHit===null && h.proxyOutcome===null &&
       clock()>=h.expiresAt && !h.settlementStatus);
@@ -405,6 +403,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"||
         h.decisionReviewVersion==="EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"||
         h.decisionReviewVersion==="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030");
       const oldSessions=pending.filter(h=>!indexSessions.includes(h));
@@ -423,7 +422,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

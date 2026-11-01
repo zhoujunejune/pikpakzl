@@ -188,14 +188,7 @@ const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{
 const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
 // Only display the actual confidence saved in this forecast's model response.
 // Never infer from outcome, history, signal direction or another round.
-const displayConfidence=s=>{
- if(!s)return "—";
- if(s.direction==="UP"||s.direction==="DOWN")return "6/6";
- const count=x=>Object.values(x||{}).filter(v=>v===true).length;
- const checks=s.upChecks||s.ruleChecks?.upChecks;
- const down=s.downChecks||s.ruleChecks?.downChecks;
- return checks?"看涨 "+count(checks)+"/5 · 看跌 "+count(down)+"/5":"—";
-};
+const displayConfidence=s=>s?.eventTag||s?.ruleChecks?.eventTag||"—";
 const phaseText={ANALYZING:"处理中",PREDICTED:"六项成立，方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
  if(v==="PUBLIC_MARKET_PROXY_ONLY")return "旧版现货代理核对";
@@ -283,25 +276,13 @@ function display(d){
   $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
   $("reason").textContent=s.reason||s.error||"等待条件检查";
   const detail=$("analysisDetail");detail.replaceChildren();
-  const rule=s.ruleChecks||s,up=rule.upChecks,down=rule.downChecks;
-  if(up&&down){
-   const labels={trend5m:"5分钟EMA方向",momentum1m:"1分钟EMA动量",pricePosition:"价格与近2根K线",volume:"成交量≥1.15倍",orderflow:"前5档盘口买卖比",rsi:"RSI(14)过滤"};
-   for(const [direction,checks] of [["看涨",up],["看跌",down]]){
-    const p=document.createElement("p");
-    p.textContent=direction+"："+Object.entries(checks).map(([key,val])=>
-      (labels[key]||key)+" "+(val?"✓":"×")).join(" · ");
-    detail.append(p);
-   }
-   const e=rule.evidence;
-   if(e){
-    const p=document.createElement("p");
-    const num=v=>Number.isFinite(v)?Number(v).toFixed(2):"不可用";
-    p.textContent="指数参考价 "+num(e.liveIndexPrice)+" | 现货价 "+num(e.spotPrice)+" | 成交量 "+num(e.volumeRatio)+"倍（"+(e.volumeBasis==="CURRENT_USDM_FUTURES_1M"?"USD-M当前1分钟":"当前量缺失")+"） | RSI "+num(e.rsi14)+" | 买/卖盘前5档 "+num(e.bidTop5QtyBtc)+"/"+num(e.askTop5QtyBtc);
-     detail.append(p);
-   }
-  }
-  $("dataQuality").textContent="EMA/RSI基于BTCUSDT现货已收盘1分钟/5分钟K线；成交量使用USD-M正在形成的1分钟K线，对比此前20根完整1分钟K线，数据缺失则不出信号。指数参考价与前5档盘口来自币安USD-M。"+
-    "所有六项满足才出方向；信号后600秒使用相同指数代理核对，不是事件合约订单结算。";
+  const rule=s.ruleChecks||s;
+   const desc=document.createElement("p");
+   desc.textContent="触发类型："+(rule.eventTag||"—")+" · 3分钟净涨跌："+(
+     Number.isFinite(rule.change3mPct)?rule.change3mPct.toFixed(5)+"%":"—")+
+     " · 4根连续已收盘1分钟K线 · 可选过滤器关闭";
+   detail.append(desc);
+   $("dataQuality").textContent="四根已收盘1分钟K线计算3分钟净涨跌，方向锁定时采集指数代理价，满600秒后同源核验；非官方结算。";
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
@@ -388,7 +369,7 @@ async function refreshHistory(){
   const rows=$("records");rows.replaceChildren();
   if(!records.length){
    const tr=document.createElement("tr"),td=document.createElement("td");
-   td.colSpan=9;td.textContent="暂无符合全部六项条件的新规则方向信号";
+   td.colSpan=11;td.textContent="暂无符合全部六项条件的新规则方向信号";
    tr.append(td);rows.append(tr);
   }
   for(const s of records){
@@ -398,16 +379,16 @@ async function refreshHistory(){
       s.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY"?"行情不足，未核验":
       s.proxyOutcome==="FLAT"?"持平（不计）":"待10分钟到期";
    const x=s.direction==="UP"?"看涨 Higher":"看跌 Lower";
-   const volume=typeof s.volumeRatio==="number"?s.volumeRatio.toFixed(2)+"倍":"—";
-   const rsi=typeof s.rsi14==="number"?s.rsi14.toFixed(1):"—";
-   const cells=[
-     when(s.openedAt),s.trigger==="AUTO"?"自动":"手动",x,price(s.openPrice),
-     s.sixOfSix?"6/6":"历史记录",volume,rsi,price(s.closePrice),outcome
-   ];
-   for(const [i,v] of cells.entries()){
+   const change=typeof s.change3mPct==="number"?s.change3mPct.toFixed(5)+"%":"—";
+    const returned=(typeof s.openPrice==="number"&&typeof s.closePrice==="number")?
+      ((s.closePrice/s.openPrice-1)*100).toFixed(5)+"%":"—";
+    const cells=[when(s.openedAt),s.trigger==="AUTO"?"自动":"手动",x,
+      s.eventTag||"—",change,price(s.openPrice),when(s.expiresAt),
+      price(s.closePrice),when(s.closeObservedAt),returned,outcome];
+    for(const [i,v] of cells.entries()){
     const td=document.createElement("td");td.textContent=v;
     if(i===2)td.className=s.direction==="UP"?"good":"bad";
-    if(i===8)td.className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
+    if(i===10)td.className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
     tr.append(td);
    }rows.append(tr);
   }

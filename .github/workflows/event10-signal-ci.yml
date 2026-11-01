@@ -1,4 +1,4 @@
-name: EVENT10 isolated DeepSeek signal CI (no deploy)
+name: EVENT10 current research signal CI (no deploy)
 on:
   push:
     branches: [feature/event10-deepseek-signal]
@@ -24,7 +24,7 @@ jobs:
       - name: Validate syntax and tests, with no live Binance or DeepSeek credentials
         run: |
           node --check event10-bot/server.mjs
-          node --test event10-bot/server.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/compact-evidence.test.mjs event10-bot/price-structure.test.mjs event10-bot/trade-stream-collector.test.mjs event10-bot/ui-layout.test.mjs event10-bot/chinese-display.test.mjs
+          node --test event10-bot/forced-contrarian.test.mjs event10-bot/market-enrichment.test.mjs event10-bot/decision-review.test.mjs event10-bot/compact-evidence.test.mjs event10-bot/price-structure.test.mjs event10-bot/trade-stream-collector.test.mjs event10-bot/chinese-display.test.mjs
       - name: Verify confidence UI-only cloud deploy syntax and safe gates
         run: |
           python3 -m py_compile futures-research-panel/aliyun_nav_deploy.py

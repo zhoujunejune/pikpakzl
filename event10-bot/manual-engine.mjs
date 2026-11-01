@@ -2,9 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import {tenMinuteWindow} from "./market-enrichment.mjs";
-import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
+import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./contrarian-signal.mjs";
 import {confirmedPriceStructure} from "./price-structure.mjs";
 export const HORIZON_MS = 600_000;
+export const AUTO_SLOT_MS = 720_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
 const round = (v,n=5)=>Number(v.toFixed(n));
@@ -132,7 +133,10 @@ function slimSignal(h) {
     horizonMs:Number.isFinite(h.openedAt)&&Number.isFinite(h.expiresAt)?h.expiresAt-h.openedAt:null,
     direction:h.direction,openPrice:h.openPrice,
     fiveOfFive:h.ruleChecks?.conditions?Object.values(h.ruleChecks.conditions).every(Boolean):true,
-    sixOfSix:h.ruleChecks?.conditions?Object.keys(h.ruleChecks.conditions).length===6&&Object.values(h.ruleChecks.conditions).every(Boolean):false,
+    sixOfSix:false,
+    contrarianRulePassed:h.ruleChecks?.conditions?.contrarianRuleApplied===true,
+    momentumPct:Number.isFinite(evidence.threeMinuteChangePct)?evidence.threeMinuteChangePct:null,
+    momentumRule:evidence.threeMinuteRule||null,
     volumeRatio:Number.isFinite(evidence.volumeRatio)?evidence.volumeRatio:null,
     rsi14:Number.isFinite(evidence.rsi14)?evidence.rsi14:null,
     leadPct:Number.isFinite(evidence.signedLeadPct)?Math.abs(evidence.signedLeadPct):null,
@@ -251,13 +255,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_FREQUENCY_OPTIMIZED_SIX_GATES_TPLUS10",
-      providerModel:"PURE_SIGNAL_FREQ_OPTIMIZED_V2",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"PURE_RULES_FORCED_CONTRARIAN_12M_TPLUS10",
+      providerModel:"PURE_SIGNAL_FORCED_CONTRARIAN_12M_V1",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_FREQ_OPTIMIZED_6GATES_V2",
+      enrichmentVersion:"EVENT10_FORCED_CONTRARIAN_12M",
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"disabled",reasoningEffort:null,
       lastReasoningObserved:null,lastReasoningTokenCount:null,
@@ -283,8 +287,6 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     if(existing)return existing;
     if(signalLedger.all.has(id))return signalLedger.all.get(id);
     if(inFlightStart)return inFlightStart;
-    const active=history.findLast(x=>x.status==="PREDICTED"&&clock()<x.expiresAt);
-    if(active)return active;
     const promise=capture(id);
     inFlightStart=promise;
     try{return await promise;}
@@ -317,9 +319,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         else filtered[k]=v;
       }
       const reference={observedAt:decisionAt};
-      const rule=evaluatePureSignal({feed,reference,
-        indexSnapshot:filtered.indexQuote,orderBook:filtered.orderBook,
-        aggressiveFlow:filtered.aggressiveFlow,futuresMinute:filtered.futuresMinute});
+      const rule=evaluatePureSignal({feed,reference,indexSnapshot:filtered.indexQuote});
       const signalExpiry=decisionAt+HORIZON_MS; // each signal gets its own full 600s
       const openingIndex=null;
       const liveIndex=rule.evidence.liveIndexPrice;
@@ -348,7 +348,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         source:"BINANCE_USDM_INDEX_SIGNAL_CAPTURE_TPLUS600_NOT_ORDER_STRIKE",
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_FREQ_OPTIMIZED_V2",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_FORCED_CONTRARIAN_12M_V1",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -377,16 +377,14 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // Scan frequency-optimized Excel gates every 12 seconds at any time; each accepted
-    // signal expires 600 seconds after its own capture. No orders.
-    const nowMs=clock(),cycle=nowMs-Math.floor(nowMs%HORIZON_MS);
-    if(lastRuleScanCycle!==cycle){lastRuleScanCycle=cycle;lastRuleScan=0;}
-    if(nowMs-lastRuleScan>=12000&&
-        !busyStart&&!history.some(x=>x.signalCycleStartMs===cycle&&
-          x.decisionReviewVersion===RULE_VERSION&&x.direction)&&
-        !history.some(x=>x.status==="PREDICTED"&&x.expiresAt>nowMs)){
+    // Auto exactly once per 12-minute slot; retries only within its first
+    // 45 seconds for temporary market-data faults, never fabricates signals.
+    const nowMs=clock(),slot=Math.floor(nowMs/AUTO_SLOT_MS);
+    const autoId="auto-contrarian-"+slot;
+    if(nowMs-slot*AUTO_SLOT_MS<45000&&nowMs-lastRuleScan>=5000&&
+       !busyStart&&!signalLedger.all.has(autoId)){
       lastRuleScan=nowMs;
-      void start("auto-six-"+Math.floor(nowMs/12000)).catch(e=>{
+      void start(autoId).catch(e=>{
         lastError="AUTO_SCAN_"+String(e?.message||e).slice(0,100);
       });
     }
@@ -405,6 +403,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"||
         h.decisionReviewVersion==="EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"||
         h.decisionReviewVersion==="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030");
       const oldSessions=pending.filter(h=>!indexSessions.includes(h));
@@ -423,7 +422,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

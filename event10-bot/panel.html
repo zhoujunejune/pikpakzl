@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项过滤 · 每12分钟自动检查</p>
+<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项均衡过滤 · 每5分钟自动检查</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-选择性趋势策略：5分钟与1分钟EMA方向、最近3分钟动量、成交量和RSI共同确认才输出Higher/Lower。不满足条件返回无信号。锁定指数代理价并于600秒后核验，不自动下单。</div>
+均衡趋势策略：5分钟与1分钟EMA方向、最近3分钟动量、成交量和RSI共同确认才输出Higher/Lower。不满足条件返回无信号。锁定指数代理价并于600秒后核验，不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -53,10 +53,10 @@ th{color:#a9c6e7}
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">5分钟/1分钟EMA、3分钟动量、成交量、RSI及收盘结构严格过滤；不会强制Higher。指数代理价不等于真实事件合约Strike。</p>
+ <p class="sub">5分钟/1分钟EMA、3分钟≥0.05%动量、≥0.90倍成交量、RSI及收盘结构均衡过滤；不会强制Higher。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
-<p class="sub">自动检测按北京时间每小时00/12/24/36/48分；手动检测独立，每条信号生成后完整600秒核验。</p>
+<p class="sub">自动检测按北京时间每小时00/05/10/15/20/25/30/35/40/45/50/55分；手动检测独立，每条信号生成后完整600秒核验。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -76,7 +76,7 @@ th{color:#a9c6e7}
 <p class="sub" id="reason">等待行情检查。</p>
 <div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
-<p id="featureSummary" class="sub">由已收盘1分钟与5分钟现货K线以及实时USD-M指数报价生成选择性研究信号；数据不足不出方向。</p>
+<p id="featureSummary" class="sub">由已收盘1分钟与5分钟现货K线以及实时USD-M指数报价生成均衡趋势研究信号；数据不足不出方向。</p>
 <div id="featureHealth" class="grid" aria-live="polite"></div>
 <p class="sub">币安USD-M公开指数代理，不等于事件合约实际开仓Strike或官方到期结算。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
@@ -119,7 +119,7 @@ th{color:#a9c6e7}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_SELECTIVE_TREND_V1_20261102";
+const SIGNAL_VERSION="EVENT10_BALANCED_TREND_5M_V2_20261102";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -247,7 +247,7 @@ function display(d){
    (recent.checkedAt??recent.openedAt??0)>=(old?.modelFinishedAt??old?.openedAt??0);
  const s=currentActive||(recentIsLatest?recent:(old||recent||null));
  active=currentActive;
- $("engine").textContent=d.configured?"选择性趋势策略已启用":"行情服务暂不可用";
+ $("engine").textContent=d.configured?"均衡趋势策略已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
  if(s){
@@ -288,8 +288,8 @@ function display(d){
   $("quickDirection").className="signal-direction yellow";
   $("quickConfidence").textContent="规则类型：—";$("confidence").textContent="—";
   $("quickOpen").textContent="参考价：—";
-  $("quickReason").textContent="只有趋势、动量、成交量与RSI共振才出方向；否则NO_SIGNAL。";
-  $("quickTimestamp").textContent="北京时间00/12/24/36/48分自动检测，数据异常不出方向。";
+  $("quickReason").textContent="趋势、动量、成交量与RSI共振才出方向；不足则NO_SIGNAL。不保证更高命中率。";
+  $("quickTimestamp").textContent="北京时间00/05/10/15/20/25/30/35/40/45/50/55分自动检测，数据异常不出方向。";
   for(const id of ["openPrice","direction","openedAt","expiresAt","closePrice","latency","result","remaining"]){
     $(id).textContent="—";
   }
@@ -337,7 +337,7 @@ async function refresh(){
     d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查完成：当前没有符合策略的方向优势。":
-    "每12分钟一个自动检查槽，数据异常不出方向。";
+    "每5分钟一个自动检查槽，数据异常不出方向。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";

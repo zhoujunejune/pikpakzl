@@ -27,7 +27,7 @@ function sample(side=1,at=T,flat=false){
 const calc=(side=1,feed=sample(side),at=T)=>evaluatePureSignal({
   feed,reference:{observedAt:at},indexSnapshot:quote(at)});
 test("V1 Higher/Lower require six matching conditions",()=>{
-  assert.equal(RULE_VERSION,"EVENT10_SELECTIVE_TREND_V1_20261102");
+  assert.equal(RULE_VERSION,"EVENT10_BALANCED_TREND_5M_V2_20261102");
   for(const side of [1,-1]){
     const r=calc(side);
     assert.equal(r.direction,side===1?"UP":"DOWN");
@@ -77,7 +77,7 @@ test("manual and automatic signals are version-isolated, and expire at own T+600
   const s=await f.engine.start("manual-selective-v1-00001");
   assert.equal(s.direction,"UP");assert.equal(s.realOrderPlaced,false);
   assert.equal(s.expiresAt-s.openedAt,600000);
-  assert.equal(f.engine.status().providerModel,"PURE_SIGNAL_SELECTIVE_TREND_V1");
+  assert.equal(f.engine.status().providerModel,"PURE_SIGNAL_BALANCED_TREND_V2");
   assert.equal(f.engine.signals().total,1);
   f.setNow(s.expiresAt+1000);f.setPrice(70001);await f.engine.tick();
   const row=f.engine.signals().records[0];
@@ -98,4 +98,30 @@ test("old strategies stay in history but cannot contaminate new accuracy",()=>{
   const e=createEngine({env:{EVENT10_STATE_FILE:stateFile},clock:()=>T});
   assert.equal(e.history().length,1);
   assert.equal(e.signals().total,0);
+});
+
+test("V2 allows near-average volume but retains both trend directions",()=>{
+  const f=sample(1);
+  f.candles["1m"].at(-1).volume=95;
+  assert.equal(calc(1,f).direction,"UP");
+  const opposing=sample(1);opposing.candles["5m"]=sample(-1).candles["5m"];
+  assert.equal(calc(1,opposing).signal,"NO_SIGNAL");
+});
+test("auto checks at five-minute slots, no duplicate within a slot",async()=>{
+  const f=engineFixture();
+  const tickAt=async ms=>{
+    f.setNow(ms);await f.engine.tick();
+    await new Promise(resolve=>setImmediate(resolve));
+    await new Promise(resolve=>setImmediate(resolve));
+  };
+  const a=T+4*60000+2000;
+  await tickAt(a);
+  assert.equal(f.engine.signals().total,1);
+  assert.equal(f.engine.signals().records[0].id,"auto-5m-"+(Math.floor(a/300000)*300000));
+  await tickAt(a+2000);
+  assert.equal(f.engine.signals().total,1);
+  await tickAt(a+5*60000);
+  assert.equal(f.engine.signals().total,2);
+  assert.equal(f.engine.status().autoIntervalMs,300000);
+  assert.ok(f.engine.signals().records.every(x=>x.realOrderPlaced===false));
 });

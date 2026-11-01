@@ -1,8 +1,8 @@
 // Selective BTC ten-minute research signal. No exchange orders.
 // Signals require independent 1m/5m trend, momentum, RSI and volume agreement.
-export const RULE_VERSION="EVENT10_SELECTIVE_TREND_V1_20261102";
+export const RULE_VERSION="EVENT10_BALANCED_TREND_5M_V2_20261102";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
-export const AUTO_SLOT_MS=720000;
+export const AUTO_SLOT_MS=300000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
 const round=(x,n=5)=>Number(x.toFixed(n));
 export function parseBinanceIndexQuote(raw,receivedAt){
@@ -77,17 +77,17 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   const upChecks={
     trend5m:ema5Fast>ema5Slow&&ema5Fast>prev5Fast,
     trend1m:ema1Fast>ema1Slow&&last.c>ema1Fast,
-    momentum:change3mPct>=0.07&&change3mPct<=0.42,
+    momentum:change3mPct>=0.05&&change3mPct<=0.42,
     structure:bullish>=2&&last.c>last.o,
-    volume:volumeRatio>=1.10,
+    volume:volumeRatio>=0.90,
     rsi:rsi14>=50&&rsi14<=72
   };
   const downChecks={
     trend5m:ema5Fast<ema5Slow&&ema5Fast<prev5Fast,
     trend1m:ema1Fast<ema1Slow&&last.c<ema1Fast,
-    momentum:change3mPct<=-0.07&&change3mPct>=-0.42,
+    momentum:change3mPct<=-0.05&&change3mPct>=-0.42,
     structure:bearish>=2&&last.c<last.o,
-    volume:volumeRatio>=1.10,
+    volume:volumeRatio>=0.90,
     rsi:rsi14>=28&&rsi14<=50
   };
   const up=Object.values(upChecks).every(Boolean);
@@ -134,7 +134,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["选择性趋势策略要求65根1m及40根5m连续已收盘K线，6项趋势动量过滤共振。未满足条件返回NO_SIGNAL。",
+    caveats:["选择性趋势策略要求65根1m及40根5m连续已收盘K线，6项趋势动量过滤共振（动量≥0.05%、量比≥0.90）。未满足条件返回NO_SIGNAL。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

@@ -37,13 +37,13 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 5分钟趋势 + 1分钟动量 + 价格位置 + 放量1.15倍 + 盘口/主动成交 + RSI</p>
+<p class="sub">BTCUSDT · 4根已收盘1分钟K线 · 3分钟净涨跌反向决策 · 每12分钟自动触发</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-按Excel频率优化策略检查6项条件，任意一项不满足即WAIT。信号生成时冻结币安指数参考价，600秒后进行代理核对；不代表实际合约订单，不自动交易。</div>
+反动量研究策略：3分钟上涨≥0.05%输出Lower；下跌≤-0.05%输出Higher；其余强制Higher。行情异常不出信号。方向确定后锁定指数代理价，600秒后核验。不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
-<button class="primary" id="start" type="button">立即检测六项条件</button>
+<button class="primary" id="start" type="button">立即检测反动量规则</button>
 <div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时信号状态…</div>
 <div class="signal-panel" id="immediatePrediction" aria-live="polite" aria-atomic="false">
  <div class="row"><strong>本轮信号检查结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
@@ -52,11 +52,11 @@ th{color:#a9c6e7}
   <strong id="quickConfidence" class="signal-price">通过条件：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
- <div id="quickReason" class="signal-reason">六项同时成立才出方向；数据缺失、量能不足、趋势冲突时返回WAIT。</div>
- <p class="sub">规则没有主观置信度。参考指数价来自USD-M，1/5分钟EMA、RSI和成交量来自现货K线，盘口来自USD-M。历史指标只用已收盘K线；当前USD-M 1分钟成交量是必需数据，不可用则不出信号。</p>
+ <div id="quickReason" class="signal-reason">只需4根连续已收盘1分钟K线和新鲜指数价；数据异常返回DATA_ERROR。</div>
+ <p class="sub">机械反动量规则不需要EMA、RSI、盘口、成交量过滤；三个可选过滤器默认关闭。公开指数价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
-<p class="sub">不限制固定UTC时间窗口，每条有效信号独立锁定指数参考价，600秒后核对代理涨跌。</p>
+<p class="sub">自动检测按北京时间每小时00/12/24/36/48分；手动检测独立，每条信号生成后完整600秒核验。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -70,15 +70,15 @@ th{color:#a9c6e7}
 <div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>信号后600秒核对时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>规则检查耗时</small><strong id="latency">—</strong></div>
-<div class="metric"><small>六项条件</small><strong id="confidence">—</strong></div>
+<div class="metric"><small>规则触发类型</small><strong id="confidence">—</strong></div>
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
 <p class="sub" id="reason">等待行情检查。</p>
 <div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
-<p id="featureSummary" class="sub">从公开指数报价、已收盘现货K线及前5档盘口计算六条件；HTTP 451或关键行情过期则不出信号。</p>
+<p id="featureSummary" class="sub">从已收盘1分钟现货K线和实时USD-M指数报价生成研究信号；数据缺失不生成有效方向。</p>
 <div id="featureHealth" class="grid" aria-live="polite"></div>
-<p class="sub">仅使用公开指数价和盘口，锁定参考价不等于实际订单Strike。</p>
+<p class="sub">币安USD-M公开指数代理，不等于事件合约实际开仓Strike或官方到期结算。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
 </section>
 <section class="card">
@@ -107,19 +107,19 @@ th{color:#a9c6e7}
 <div class="row"><h2>所有有效信号记录</h2><button type="button" class="secondary" id="refresh">立即刷新</button></div>
 <p class="sub" id="historySummary" aria-live="polite">载入已保存的信号…</p>
 <div class="tablewrap"><table><thead><tr>
-<th>出信号时间</th><th>来源</th><th>方向</th><th>信号锁定价</th><th>六项条件</th><th>成交量倍数</th><th>RSI(14)</th><th>到期指数价</th><th>代理结果</th>
-</tr></thead><tbody id="records"><tr><td colspan="9">读取中…</td></tr></tbody></table></div>
+<th>出信号时间</th><th>来源</th><th>方向</th><th>触发类型</th><th>3分钟净涨跌</th><th>锁定指数价</th><th>预定到期</th><th>到期指数价</th><th>实际采样</th><th>到期涨跌</th><th>代理结果</th>
+</tr></thead><tbody id="records"><tr><td colspan="11">读取中…</td></tr></tbody></table></div>
 <div class="row" style="margin-top:12px">
 <button type="button" class="secondary" id="newerSignals">上一页</button>
 <span class="sub" id="signalPage">第 1 页</span>
 <button type="button" class="secondary" id="olderSignals">下一页</button>
 </div>
-<p class="sub">每次满足全部六项条件的 Higher/Lower 都自动保存，包括后台无人操作时产生的信号。每页25条，可逐页查看全部记录；到期后补充公开行情代理核对结果。无信号和数据错误不计入有效方向或命中率，也不代表真实事件合约订单。</p>
+<p class="sub">真实有效方向信号按新版本永久追加保存；手动与自动分开记录。持平、待核验、无法核验不计入命中率；非官方结算。</p>
 </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101";
+const SIGNAL_VERSION="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";

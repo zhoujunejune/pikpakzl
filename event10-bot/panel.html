@@ -37,7 +37,7 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 4根已收盘1分钟K线 · 1分钟/5分钟趋势共振 · 每12分钟自动触发</p>
+<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项过滤 · 每12分钟自动检查</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
 选择性趋势策略：5分钟与1分钟EMA方向、最近3分钟动量、成交量和RSI共同确认才输出Higher/Lower。不满足条件返回无信号。锁定指数代理价并于600秒后核验，不自动下单。</div>
@@ -49,7 +49,7 @@ th{color:#a9c6e7}
  <div class="row"><strong>本轮信号检查结果</strong><span class="status" id="quickPhase">尚未开始</span></div>
  <div class="row" style="margin-top:10px">
   <strong id="quickDirection" class="signal-direction">尚未分析</strong>
-  <strong id="quickConfidence" class="signal-price">通过条件：—</strong>
+  <strong id="quickConfidence" class="signal-price">规则类型：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
@@ -286,7 +286,7 @@ function display(d){
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
-  $("quickConfidence").textContent="通过条件：—";$("confidence").textContent="—";
+  $("quickConfidence").textContent="规则类型：—";$("confidence").textContent="—";
   $("quickOpen").textContent="参考价：—";
   $("quickReason").textContent="只有趋势、动量、成交量与RSI共振才出方向；否则NO_SIGNAL。";
   $("quickTimestamp").textContent="北京时间00/12/24/36/48分自动检测，数据异常不出方向。";
@@ -414,7 +414,7 @@ async function startClick(){
  $("quickPhase").textContent="正在启动";
  $("quickDirection").textContent="正在检查趋势共振…";
  $("quickDirection").className="signal-direction yellow";
- $("quickConfidence").textContent="通过条件：—";
+ $("quickConfidence").textContent="规则类型：—";
  $("quickReason").textContent="正在核对多周期趋势、动量、成交量与RSI；不足则无信号。";
  $("quickOpen").textContent="参考价：采集中";
  if(!pendingRequestId){
@@ -433,7 +433,7 @@ async function startClick(){
   $("quickPhase").textContent="本次检查未完成";
   $("quickDirection").textContent="无新信号";
   $("quickDirection").className="signal-direction yellow";
-  $("quickConfidence").textContent="通过条件：—";
+  $("quickConfidence").textContent="规则类型：—";
   $("quickReason").textContent="行情检查未完成，无有效方向："+String(e);
  }
  finally{inflight=false;refreshEpoch++;void refresh();void refreshHistory();}

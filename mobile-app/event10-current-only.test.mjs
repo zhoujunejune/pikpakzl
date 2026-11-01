@@ -4,7 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const src=fs.readFileSync(new URL("./app.js",import.meta.url),"utf8");
-const version="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101";
+const version="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101";
 const from=src.indexOf("function eventVersion(r){");
 const to=src.indexOf("function event(e,ledger){",from);
 assert.ok(from>0&&to>from,"current strategy filtering helpers must exist");
@@ -41,7 +41,7 @@ test("the app never requests legacy event history or mixes old stats",()=>{
  assert.ok(src.includes("const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION"));
  assert.ok(src.includes('put("eTotal","新策略 "'));
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
- assert.ok(html.includes("频率优化策略信号记录"));
+ assert.ok(html.includes("强制反动量研究策略信号记录"));
  assert.ok(!html.includes("历史信号（新旧策略）"));
 });
 

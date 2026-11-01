@@ -3,7 +3,7 @@
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,timer:null};
-const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101";
+const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101";
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
 }
@@ -70,7 +70,7 @@ function renderRecords(id,items,kind){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
   if(kind==="event10")wrap.dataset.eventId=String(r.id);
-  const title=node("div","record-title",kind==="event10"?dir(d)+" · 频率优化策略":dir(d));
+  const title=node("div","record-title",kind==="event10"?dir(d)+" · 强制反动量研究策略":dir(d));
   if(d==="UP")title.classList.add("uptext");
   if(d==="DOWN")title.classList.add("downtext");
   const when=kind==="guardian"?(r.at||r.round):(r.openedAt||r.checkedAt);
@@ -101,6 +101,9 @@ function renderRecords(id,items,kind){
    wrap.append(comparison);
    const planned=Number.isFinite(r.expiresAt)?stamp(r.expiresAt):"—";
    const sampled=Number.isFinite(r.closeObservedAt)?stamp(r.closeObservedAt):"—";
+   const motion=typeof r.change3mPct==="number"?r.change3mPct.toFixed(5)+"%":"—";
+   const trigger=r.trigger==="AUTO"?"自动":"手动";
+   wrap.append(node("div","record-note",trigger+" · "+(r.eventTag||"—")+" · 3分钟净涨跌 "+motion));
    wrap.append(node("div","record-note","预定核验 "+planned+
       " · 实际采样 "+sampled+" · 仅币安指数代理对比，非事件合约官方结算"));
   }else{
@@ -187,7 +190,8 @@ function mergeEventRecordPages(current,incoming){
 }
 function eventHistoryFingerprint(records){
  return JSON.stringify(records.map(r=>[r.id,r.direction,r.openedAt,r.openPrice,
-  r.closePrice,r.closeObservedAt,r.settlementStatus,r.proxyOutcome,r.proxyHit,r.expiresAt]));
+  r.closePrice,r.closeObservedAt,r.settlementStatus,r.proxyOutcome,r.proxyHit,r.expiresAt,
+  r.eventTag,r.change3mPct,r.trigger]));
 }
 function drawEventHistory(){
  const viewport=$("eRecordScroll"),root=$("eRecords");
@@ -254,9 +258,10 @@ function event(e,ledger){
  if(e?.decisionReviewVersion!==EVENT10_FREQ_OPTIMIZED_VERSION)
   throw Error("十分钟服务尚未确认运行最新版信号策略，旧版统计不会显示");
  const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION&&Array.isArray(ledger.records);
+ if(!currentLedger)throw Error("新策略历史接口未就绪，旧版记录不予回填");
  const s=currentEventRecord(e);
  // The status fallback is safe only after verifying the server's strategy version.
- const stats=currentLedger?(ledger.stats||{}):(e.strategyStats||{});
+ const stats=ledger.stats||{};
  const records=currentLedger?mergeEventRecords(ledger):[];
  const active=!!e.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION;
  setHeading("eDirection",s?.direction||null);
@@ -270,8 +275,8 @@ function event(e,ledger){
  const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
  const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（新版暂无已核对样本）");
  put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
- put("eReason",s?.reason||"当前仅展示频率优化策略信号；六项条件未满足时不产生方向。");
- pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 频率优化策略":"数据不可用");
+ put("eReason",s?.reason||"当前仅展示强制反动量研究策略信号；六项条件未满足时不产生方向。");
+ pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 强制反动量研究策略":"数据不可用");
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
  if(currentLedger){
   updateEventHistory(ledger);
@@ -283,7 +288,7 @@ function event(e,ledger){
   put("eRecordStatus","服务暂不可用，已存记录不会丢失");
   $("eRecords").replaceChildren(node("div","mini","记录暂时无法读取，请稍后重试"));
  }
- $("manualCheck").disabled=e.configured!==true||Boolean(e.active)||state.manualBusy;
+ $("manualCheck").disabled=e.configured!==true||state.manualBusy;
 }
 function eventError(error){
  state.eventHistoryError="状态读取失败，已加载记录仍然保留";

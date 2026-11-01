@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guarded EVENT10-only high-selectivity six-gate strategy deployment on existing Aliyun host.
+"""Guarded EVENT10-only forced contrarian 12-minute research strategy deployment on existing Aliyun host.
 Does NOT touch five-minute bots, futures bots, Caddy, credentials or live orders.
 """
 import base64
@@ -18,10 +18,10 @@ from datetime import datetime, timezone
 ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
-LEGACY_VERSIONS={"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101"}
-TARGET="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"
+LEGACY_VERSIONS={"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
+TARGET="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
-FILES=("pure-signal.mjs","manual-engine.mjs","panel.html","high-selectivity.test.mjs")
+FILES=("pure-signal.mjs","manual-engine.mjs","panel.html","forced-contrarian.test.mjs")
 OTHER_UNITS=("zl-prediction-trade","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
 
 def cmd(*args, timeout=75):
@@ -45,7 +45,7 @@ def validate_state(s,version):
         # Keep the active session; never cut over near its 600s deadline.
         if (active.get("decisionReviewVersion") not in LEGACY_VERSIONS or
             not isinstance(expiry,(int,float)) or
-            expiry-time.time()*1000 < 180000):
+            expiry-time.time()*1000 < 25000):
             return False
     return (s.get("configured") is True and
         s.get("decisionReviewVersion")==version and
@@ -102,7 +102,7 @@ def main():
             raise RuntimeError("PINNED_ARTIFACT_VERSION_MISMATCH")
         for name in ("server.mjs","manual-engine.mjs","pure-signal.mjs"):
             cmd(NODE,"--check",str(folder/name))
-        cmd(NODE,"--test",str(folder/"high-selectivity.test.mjs"),timeout=110)
+        cmd(NODE,"--test",str(folder/"forced-contrarian.test.mjs"),timeout=110)
         print("EVENT10_HS_TESTS_PASSED=true",flush=True)
         if not validate_state(status(),before.get("decisionReviewVersion")):
             raise RuntimeError("EVENT10_PREDEPLOY_STATE_CHANGED")
@@ -127,7 +127,7 @@ def main():
                 try:
                     snap=status()
                     if snap.get("decisionReviewVersion")==TARGET and \
-                       snap.get("providerModel")=="PURE_SIGNAL_FREQ_OPTIMIZED_V2" and \
+                       snap.get("providerModel")=="PURE_SIGNAL_FORCED_CONTRARIAN_V1" and \
                        snap.get("autoTradingEnabled") is False and \
                        snap.get("executionAvailable") is False:
                         ready=True

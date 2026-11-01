@@ -18,10 +18,10 @@ from datetime import datetime, timezone
 ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
-LEGACY_VERSIONS={"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
-TARGET="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"
+LEGACY_VERSIONS={"EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101"}
+TARGET="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
-FILES=("contrarian-signal.mjs","manual-engine.mjs","panel.html","high-selectivity.test.mjs")
+FILES=("pure-signal.mjs","manual-engine.mjs","panel.html","high-selectivity.test.mjs")
 OTHER_UNITS=("zl-prediction-trade","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
 
 def cmd(*args, timeout=75):
@@ -97,10 +97,10 @@ def main():
             with urllib.request.urlopen(URL+sha+"/event10-bot/"+name,timeout=35) as r:
                 data[name]=r.read()
             (folder/name).write_bytes(data[name])
-        if TARGET not in data["contrarian-signal.mjs"].decode() or \
+        if TARGET not in data["pure-signal.mjs"].decode() or \
            TARGET not in data["panel.html"].decode():
             raise RuntimeError("PINNED_ARTIFACT_VERSION_MISMATCH")
-        for name in ("server.mjs","manual-engine.mjs","contrarian-signal.mjs"):
+        for name in ("server.mjs","manual-engine.mjs","pure-signal.mjs"):
             cmd(NODE,"--check",str(folder/name))
         cmd(NODE,"--test",str(folder/"high-selectivity.test.mjs"),timeout=110)
         print("EVENT10_HS_TESTS_PASSED=true",flush=True)
@@ -127,7 +127,7 @@ def main():
                 try:
                     snap=status()
                     if snap.get("decisionReviewVersion")==TARGET and \
-                       snap.get("providerModel")=="PURE_SIGNAL_FORCED_CONTRARIAN_12M_V1" and \
+                       snap.get("providerModel")=="PURE_SIGNAL_FREQ_OPTIMIZED_V2" and \
                        snap.get("autoTradingEnabled") is False and \
                        snap.get("executionAvailable") is False:
                         ready=True
@@ -157,7 +157,7 @@ def main():
             try:
                 probe=json.loads(fetch_local("/api/data-health"))
                 av=probe.get("availability") or {}
-                for name in ("indexQuote",):
+                for name in ("indexQuote","indexKlines","orderBook","aggressiveFlow"):
                     print("EVENT10_HS_"+name.upper()+"="+
                       ("AVAILABLE" if av.get(name,{}).get("available") else
                        str(av.get(name,{}).get("error","UNAVAILABLE"))),flush=True)

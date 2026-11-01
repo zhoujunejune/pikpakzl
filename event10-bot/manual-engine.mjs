@@ -246,13 +246,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"FORCED_CONTRARIAN_12M_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_FORCED_CONTRARIAN_V1",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"SELECTIVE_TREND_12M_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_SELECTIVE_TREND_V1",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_FORCED_CONTRARIAN_12M_V1",
+      enrichmentVersion:"EVENT10_SELECTIVE_TREND_V1",
        autoIntervalMs:720000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/720000)+1)*720000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -344,7 +344,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_FORCED_CONTRARIAN_V1",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_SELECTIVE_TREND_V1",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -403,6 +403,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"||
         h.decisionReviewVersion==="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"||
         h.decisionReviewVersion==="EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"||
         h.decisionReviewVersion==="EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030");

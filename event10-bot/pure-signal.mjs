@@ -36,8 +36,13 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     throw Error("REALTIME_BINANCE_INDEX_REQUIRED");
   const four=verifiedThreeMinuteCloses(feed,at),first=four[0],last=four[3];
   const change3mPct=(last.close/first.close-1)*100;
-  const flat=Math.abs(change3mPct)<0.05; // equality is NOT flat
-  const direction=flat?"UP":change3mPct>=0.05?"DOWN":"UP";
+  // Compare price displacement directly to avoid 0.05% floating-point
+  // rounding treating an exactly-on-boundary rise as a flat signal.
+  const displacement=last.close-first.close;
+  const threshold=first.close*0.0005;
+  const tolerance=Math.max(1e-10,first.close*1e-12);
+  const flat=Math.abs(displacement)+tolerance<threshold;
+  const direction=flat?"UP":displacement>=0?"DOWN":"UP";
   const eventTag=flat?"FLAT_FORCE_UP":
     direction==="DOWN"?"THREE_MIN_UP_REVERSE_DOWN":"THREE_MIN_DOWN_REVERSE_UP";
   const reason=flat?"3分钟波动小于0.05%，按机械规则强制Higher。":

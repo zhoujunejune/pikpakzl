@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {RULE_VERSION,verifiedClosedCandles,evaluatePureSignal} from "./pure-signal.mjs";
 import {createEngine,scoreProxy} from "./manual-engine.mjs";
-const T=Date.parse("2026-11-02T00:02:00Z");
+const T=Date.parse("2026-11-02T00:01:00Z");
 const quote=(at=T,p=70000)=>({price:p,observedAt:at-100,source:"BINANCE_USDM_BTCUSDT_INDEX_PRICE"});
 function sample(side=1,at=T,flat=false){
   const one=[],five=[];

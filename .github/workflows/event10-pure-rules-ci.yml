@@ -46,7 +46,7 @@ jobs:
           assert 'INDEX_SIGNAL_TPLUS10_PROXY_ONLY' in s
           assert 'autoTradingEnabled:false' in s
           assert 'verifiedClosedCandles' in rule and 'FILTERED_NO_EDGE' in rule
-          assert 'THREE_MIN_UP_REVERSE_DOWN' in rule
-          assert 'THREE_MIN_DOWN_REVERSE_UP' in rule
+          assert 'TREND_CONFIRMED_HIGHER' in rule
+          assert 'TREND_CONFIRMED_LOWER' in rule
           print('EVENT10_PURE_SIGNAL_NO_AI_OR_TRADE_GATE=true')
           PY

@@ -1,0 +1,93 @@
+name: EVENT10 historical frequency read-only comparison
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-frequency-readonly-comparison.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud-swas-open20200601==4.0.0
+      - name: Read cached 1m/5m market history and compare signal selection without orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak,sk=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID'),os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk,'NO_API_AUTH'
+          script=r"""#!/bin/bash
+          set -eu
+          cd /opt/zl-event10
+          /opt/zl-prediction-node/bin/node --input-type=module <<'NODE'
+          import {evaluatePureSignal} from './pure-signal.mjs';
+          const r=await fetch("http://127.0.0.1:13003/api/shadow-market-data",{signal:AbortSignal.timeout(9000)});
+          if(!r.ok)throw Error("FEED_HTTP_"+r.status);
+          const feed=await r.json();
+          const one=(feed.candles?.['1m']?.rows||feed.candles?.['1m']||[]).filter(x=>x.closed===true);
+          const five=(feed.candles?.['5m']?.rows||feed.candles?.['5m']||[]).filter(x=>x.closed===true);
+          if(one.length<100||five.length<50)throw Error("NOT_ENOUGH_HISTORY");
+          const slots=[];
+          const minAt=Math.max(Number(one[65].startMs)+60000,Number(five[40].startMs)+300000);
+          const maxAt=Number(one.at(-12).startMs)+60000;
+          for(let at=Math.ceil(minAt/300000)*300000+8000;at<maxAt;at+=300000)slots.push(at);
+          let old=0,newCount=0,oldHits=0,newHits=0,accepted=0,newWins=0,oldWins=0,oldRejected=0,coreDirection=0;
+          const evals=[];
+          for(const at of slots){
+            const p=one.filter(x=>Number(x.startMs)+60000<=at).at(-1);
+            const exp=one.filter(x=>Number(x.startMs)+60000<=at+600000).at(-1);
+            if(!p||!exp)continue;
+            let v;
+            try{v=evaluatePureSignal({feed,reference:{observedAt:at},indexSnapshot:{price:Number(p.close),observedAt:at-100}});}
+            catch{continue;}
+            accepted++;
+            const move=(Number(exp.close)-Number(p.close));
+            const actual=move>0?'UP':move<0?'DOWN':null;
+            if(v.direction){
+              old++; if(actual&&actual===v.direction)oldHits++;if(actual)oldWins++;
+            }else oldRejected++;
+            const q=v.evidence||{},up=v.upChecks||{},down=v.downChecks||{};
+            let direction=null;
+            if(up.trend5m&&up.trend1m&&q.change3mPct>=0.03&&q.change3mPct<=0.45&&q.rsi14>=25&&q.rsi14<=85)direction='UP';
+            if(down.trend5m&&down.trend1m&&q.change3mPct<=-0.03&&q.change3mPct>=-0.45&&q.rsi14>=15&&q.rsi14<=75)direction='DOWN';
+            if(direction){newCount++;if(actual&&direction===actual)newHits++;if(actual)newWins++;}
+            if((up.trend5m&&up.trend1m)||(down.trend5m&&down.trend1m))coreDirection++;
+            evals.push({at,old:v.direction,proposed:direction,actual});
+          }
+          const percent=(x,n)=>n?Number((100*x/n).toFixed(2)):null;
+          const out={dataSource:"CLOSED_SPOT_CANDLE_PROXY_RESEARCH_NOT_OFFICIAL_EVENT_OUTCOME",
+            firstAt:slots[0],lastAt:slots.at(-1),totalSlots:slots.length,evaluated:accepted,
+            liveV2:{signals:old,hits:oldHits,settledDirectional:oldWins,hitPct:percent(oldHits,oldWins)},
+            proposed:{signals:newCount,hits:newHits,settledDirectional:newWins,hitPct:percent(newHits,newWins)},
+            dualTrendChecks:coreDirection,oldRejected,disclaimer:"Historical spot candle close is not exact intra-minute Binance index entry/settlement."};
+          console.log('FREQ_COMPARE',JSON.stringify(out));
+          NODE
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          res=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+             name='event10-readonly-frequency-comparison',type='RunShellScript',working_user='root',
+             command_content=script,timeout=90))
+          invoke=res.body.invoke_id
+          assert invoke
+          for _ in range(50):
+            time.sleep(2)
+            r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+                instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+            if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning'):continue
+            data=base64.b64decode(r.output or '').decode('utf-8','replace')
+            for line in data.splitlines():
+              if line.startswith('FREQ_COMPARE'):print(line,flush=True)
+            if str(r.invocation_status)!='Success' or int(r.exit_code)!=0:raise RuntimeError('FREQ_COMPARISON_FAILED '+data[-500:])
+            break
+          else:raise RuntimeError('FREQ_TIMED_OUT')
+          PY

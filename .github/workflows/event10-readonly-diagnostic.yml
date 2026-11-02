@@ -101,6 +101,83 @@ jobs:
                   'forming':sum(1 for b in candles if isinstance(b,dict) and b.get('closed') is False),
                   'last3Types':[(b.get('closed') if isinstance(b,dict) else None) for b in candles[-3:]]}
           except Exception as e:info['spot1mFeedError']=str(type(e).__name__)+':'+str(e)[:100]
+          # Read-only signal miss attribution: latest strategy only, no file writes.
+          try:
+              import collections,statistics
+              ledger=get('/api/signals?limit=100&offset=0')
+              sessions=get('/api/history')
+              byid={h.get('id'):h for h in sessions.get('records',[]) if isinstance(h,dict)}
+              signal_version=ledger.get('version')
+              entries=[r for r in ledger.get('records',[]) if
+                  r.get('strategyVersion')==signal_version and isinstance(r.get('proxyHit'),bool)]
+              def group(rows):
+                  n=len(rows)
+                  w=sum(1 for r in rows if r.get('proxyHit') is True)
+                  m=n-w
+                  return {'n':n,'hits':w,'misses':m,'hitPct':round(100*w/n,2) if n else None}
+              def qual(r):
+                  return r.get('signalQuality') or ((byid.get(r.get('id')) or {}).get('signalQuality')) or 'UNKNOWN'
+              def feat(r):
+                  s=byid.get(r.get('id')) or {}
+                  f=s.get('features') or (s.get('ruleChecks') or {}).get('evidence') or {}
+                  return f if isinstance(f,dict) else {}
+              def rsi_zone(r):
+                  v=r.get('rsi14')
+                  if not isinstance(v,(float,int)):v=feat(r).get('rsi14')
+                  if not isinstance(v,(float,int)):return 'UNKNOWN'
+                  return 'RSI_ge_63' if v>=63 else 'RSI_le_37' if v<=37 else 'RSI_between_37_63'
+              def rsi_override(r):
+                  if qual(r)!='STANDARD_RESEARCH':return False
+                  return (rsi_zone(r)=='RSI_ge_63' and r.get('direction')=='DOWN') or (rsi_zone(r)=='RSI_le_37' and r.get('direction')=='UP')
+              def bias(r):
+                  f=feat(r)
+                  a,b,c,d=(f.get(x) for x in ['ema1Fast','ema1Slow','ema5Fast','ema5Slow'])
+                  if not all(isinstance(x,(int,float)) for x in (a,b,c,d)):return 'UNKNOWN'
+                  if a>b and c>d:return 'BOTH_UP'
+                  if a<b and c<d:return 'BOTH_DOWN'
+                  return 'CONFLICT'
+              def against_bias(r):
+                  b=bias(r);side=r.get('direction')
+                  return (b=='BOTH_UP' and side=='DOWN') or (b=='BOTH_DOWN' and side=='UP')
+              def price_move_bps(r):
+                  a,b=r.get('openPrice'),r.get('closePrice')
+                  return round((b/a-1)*10000,2) if isinstance(a,(int,float)) and a>0 and isinstance(b,(int,float)) else None
+              def groupby(fn):
+                  buckets=collections.defaultdict(list)
+                  for r in entries:buckets[str(fn(r))].append(r)
+                  return {k:group(v) for k,v in sorted(buckets.items())}
+              def timestamp(ms):
+                  if not isinstance(ms,(int,float)):return None
+                  tz=datetime.timezone(datetime.timedelta(hours=8))
+                  return datetime.datetime.fromtimestamp(ms/1000,tz).strftime('%m-%d %H:%M:%S')
+              miss=[r for r in entries if r.get('proxyHit') is False]
+              analysis={'version':signal_version,'totalSignals':ledger.get('total'),
+                  'allSettled':group(entries),'byQuality':groupby(qual),
+                  'byDirection':groupby(lambda r:r.get('direction')),
+                  'byRsiZone':groupby(rsi_zone),
+                  'byStandardRsiOverride':groupby(lambda r:'OVERRIDE' if rsi_override(r) else ('OTHER_STANDARD' if qual(r)=='STANDARD_RESEARCH' else 'FILTERED')),
+                  'byEmaBias':groupby(bias),
+                  'byAgainstEmaBias':groupby(lambda r:'AGAINST' if against_bias(r) else 'NOT_AGAINST'),
+                  'byMinute':groupby(lambda r:datetime.datetime.fromtimestamp(r['openedAt']/1000,datetime.timezone.utc).strftime('%M') if isinstance(r.get('openedAt'),(int,float)) else 'UNKNOWN'),
+                  'recent10':group(entries[:10]),
+                  'misses':[]}
+              for r in miss:
+                  f=feat(r);m=price_move_bps(r)
+                  s=byid.get(r.get('id')) or {}
+                  analysis['misses'].append({'time':timestamp(r.get('openedAt')),
+                    'direction':r.get('direction'),'quality':qual(r),'eventTag':r.get('eventTag'),
+                    'rsi':r.get('rsi14'),'rsiOverride':rsi_override(r),
+                    'change3mPct':r.get('change3mPct'),'volumeRatio':r.get('volumeRatio'),
+                    'emaBias':bias(r),'againstEmaBias':against_bias(r),
+                    'returnBps':m,'settlementLagMs':r.get('expirySampleLagMs'),
+                    'last1mBullish':f.get('bullishLast3'),'last1mBearish':f.get('bearishLast3'),
+                    'conditions':r.get('checks'),'settlementStatus':r.get('settlementStatus')})
+              moves=[abs(price_move_bps(r)) for r in miss if price_move_bps(r) is not None]
+              analysis['missMoveAbsBpsMedian']=round(statistics.median(moves),2) if moves else None
+              analysis['missWithin5Bps']=sum(1 for x in moves if x<=5)
+              analysis['missWithin10Bps']=sum(1 for x in moves if x<=10)
+              print('EVENT10_MISS_ANALYSIS='+json.dumps(analysis,ensure_ascii=False,separators=(',',':')),flush=True)
+          except Exception as e:print('EVENT10_MISS_ANALYSIS_ERROR='+str(type(e).__name__)+':'+str(e)[:240],flush=True)
           print('EVENT10_LIVE_READONLY='+json.dumps(info,ensure_ascii=False,separators=(',',':')))
           REMOTE
           """

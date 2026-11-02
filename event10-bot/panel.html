@@ -92,7 +92,7 @@ th{color:#a9c6e7}
 <p id="collectorExplanation" class="sub">常驻采集器运行时持续写入阿里云交易事件日志；无点击时也会继续收集。这里是 Binance 合约聚合成交流（100ms），并非未经聚合的每笔原始成交。</p>
 </section>
 <section class="card">
-<h2>新规则信号后10分钟命中率（指数代理）</h2>
+<h2>从本次重置后的信号命中率（指数代理）</h2>
 <div class="grid">
 <div class="metric"><small>新规则出信号</small><strong id="total">0</strong></div>
 <div class="metric"><small>新规则有效方向</small><strong id="decided">0</strong></div>
@@ -114,12 +114,12 @@ th{color:#a9c6e7}
 <span class="sub" id="signalPage">第 1 页</span>
 <button type="button" class="secondary" id="olderSignals">下一页</button>
 </div>
-<p class="sub">真实有效方向信号按新版本永久追加保存；手动与自动分开记录。持平、待核验、无法核验不计入命中率；非官方结算。</p>
+<p class="sub">仅统计本次重置后生成的信号；之前全部记录不展示、不计入胜率。手动与自动分开记录。持平、待核验、无法核验不计入命中率；非官方结算。</p>
 </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_HYBRID_3PH_V4_20261102";
+const SIGNAL_VERSION="EVENT10_HYBRID_3PH_V4_FRESH_20261102";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";

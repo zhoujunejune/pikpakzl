@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
-LEGACY_VERSIONS={"EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
-TARGET="EVENT10_HYBRID_3PH_V4_20261102"
+LEGACY_VERSIONS={"EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
+TARGET="EVENT10_HYBRID_3PH_V4_FRESH_20261102"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
 FILES=("pure-signal.mjs","manual-engine.mjs","panel.html","selective-trend.test.mjs")
 OTHER_UNITS=("zl-prediction-trade","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
@@ -81,8 +81,9 @@ def main():
     history=json.loads(fetch_local("/api/history"))
     if not history.get("ok") or not isinstance(history.get("records"),list):
         raise RuntimeError("EVENT10_HISTORY_UNREADABLE")
-    old_count=sum(1 for h in history["records"] if
+    old_count=(sum(1 for h in history["records"] if
                   (h.get("strategyVersion") or h.get("decisionReviewVersion"))==TARGET)
+               if before.get("decisionReviewVersion")==TARGET else 0)
     other_pids={u:pid(u) for u in OTHER_UNITS}
     # Intentionally stopped unrelated services are valid; do not start them.
     # Their exact pre-deploy states are compared again after deployment.
@@ -138,12 +139,14 @@ def main():
             if not ready:raise RuntimeError("EVENT10_NEW_VERSION_NOT_SERVING")
             # Guarded hot cutover preserves existing active legacy signal IDs
             # and leaves their own T+600 proxy settlement with the new engine.
-            if before.get("active"):
+            if before.get("active") and before.get("decisionReviewVersion")==TARGET:
                 prior=before["active"]
                 resumed=status().get("active")
                 if not resumed or resumed.get("id")!=prior.get("id") or \
                    resumed.get("expiresAt")!=prior.get("expiresAt"):
                     raise RuntimeError("PREEXISTING_ACTIVE_SIGNAL_NOT_PRESERVED")
+            # Historical V4 pending sessions remain on disk for their own T+600 settlement,
+            # but are no longer surfaced in the fresh version history or stats.
             after=json.loads(fetch_local("/api/history"))
             if not after.get("ok") or len(after.get("records",[]))<old_count:
                 raise RuntimeError("EVENT10_V4_HISTORY_COUNT_DECREASED")

@@ -1,6 +1,6 @@
 // Selective BTC ten-minute research signal. No exchange orders.
 // Signals require independent 1m/5m trend, momentum, RSI and volume agreement.
-export const RULE_VERSION="EVENT10_HYBRID_3PH_V4_20261102";
+export const RULE_VERSION="EVENT10_HYBRID_3PH_V4_FRESH_20261102";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;

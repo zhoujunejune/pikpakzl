@@ -21,7 +21,7 @@ function feed(at=START,side=1,flat=false){
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
 test("three ordinary references at 00/20/40, explicitly not high confidence",()=>{
- assert.equal(RULE_VERSION,"EVENT10_HYBRID_3PH_V4_20261102");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_HYBRID_3PH_V4_FRESH_20261102");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
   const r=evaluate(START+m*60000);
   assert.ok(["UP","DOWN"].includes(r.direction));assert.equal(r.quality,"STANDARD_RESEARCH");
@@ -71,7 +71,7 @@ test("only V4 records are returned to public history and status, even with legac
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v4-history-filter-"));
  const file=path.join(dir,"state.json");
  const old={id:"old-2026",openedAt:START-900000,expiresAt:START-300000,
-   strategyVersion:"EVENT10_FREQ_2M_TREND_V3_20261102",decisionReviewVersion:"EVENT10_FREQ_2M_TREND_V3_20261102",status:"COMPLETE",direction:"DOWN",proxyHit:false};
+   strategyVersion:"EVENT10_HYBRID_3PH_V4_20261102",decisionReviewVersion:"EVENT10_HYBRID_3PH_V4_20261102",status:"COMPLETE",direction:"DOWN",proxyHit:false};
  const now={id:"current-v4",openedAt:START-600000,expiresAt:START,
    strategyVersion:RULE_VERSION,decisionReviewVersion:RULE_VERSION,status:"COMPLETE",direction:"UP",openPrice:70000,proxyHit:true};
  fs.writeFileSync(file,JSON.stringify([now,old]));
@@ -83,4 +83,24 @@ test("only V4 records are returned to public history and status, even with legac
  assert.equal(engine.signals().stats.proxyHits,1);
  const persisted=JSON.parse(fs.readFileSync(file,"utf8"));
  assert.equal(persisted.length,2); // Old immutable audit data isn't physically destroyed.
+});
+
+test("explicit reset: 15 previous V4 signals must yield zero visible new-version results",()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-reset-"));
+ const file=path.join(dir,"sessions.json"),ledger=file.replace("sessions.json","rule-signals-v1.ndjson");
+ const oldVersion="EVENT10_HYBRID_3PH_V4_20261102";
+ const oldRows=Array.from({length:15},(_,i)=>({
+  id:"old-v4-"+i,openedAt:START-3600000+i*1000,expiresAt:START-3000000+i*1000,
+  decisionReviewVersion:oldVersion,strategyVersion:oldVersion,
+  direction:"UP",status:"PREDICTED",openPrice:70000,proxyHit:i%2===0
+ }));
+ fs.writeFileSync(file,JSON.stringify(oldRows));
+ fs.writeFileSync(ledger,oldRows.map(s=>JSON.stringify({kind:"SIGNAL",signal:{...s,strategyVersion:oldVersion}})).join("\n")+"\n");
+ const engine=createEngine({env:{EVENT10_STATE_FILE:file,EVENT10_SIGNAL_LOG_FILE:ledger},clock:()=>START});
+ assert.equal(engine.history().length,0);
+ assert.equal(engine.signals().total,0);
+ assert.equal(engine.signals().stats.proxySettled,0);
+ assert.equal(engine.status().lastSession,null);
+ assert.equal(engine.status().decisionReviewVersion,RULE_VERSION);
+ assert.equal(JSON.parse(fs.readFileSync(file,"utf8")).length,15);
 });

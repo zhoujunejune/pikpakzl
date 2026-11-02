@@ -26,21 +26,23 @@ function sample(side=1,at=T,flat=false){
 }
 const calc=(side=1,feed=sample(side),at=T)=>evaluatePureSignal({
   feed,reference:{observedAt:at},indexSnapshot:quote(at)});
-test("V1 Higher/Lower require six matching conditions",()=>{
-  assert.equal(RULE_VERSION,"EVENT10_BALANCED_TREND_5M_V2_20261102");
+test("V3 Higher/Lower require all core gates and optional confirmations",()=>{
+  assert.equal(RULE_VERSION,"EVENT10_FREQ_2M_TREND_V3_20261102");
   for(const side of [1,-1]){
     const r=calc(side);
     assert.equal(r.direction,side===1?"UP":"DOWN");
     assert.equal(r.status,"PREDICTED");
-    assert.ok(Object.values(r.conditions).every(Boolean));
+    assert.ok(["trend5m","trend1m","momentum"].every(k=>r.conditions[k]));
+  assert.ok(["structure","volume","rsi"].filter(k=>r.conditions[k]).length>=2);
     assert.equal(r.evidence.referenceIsActualEventContractStrike,false);
     assert.equal(r.confidence,null);
   }
 });
-test("flat and insufficient volume are NO_SIGNAL, not forced Higher",()=>{
+test("flat and at least two missing auxiliary gates are NO_SIGNAL",()=>{
   const flat=calc(1,sample(1,T,true));assert.equal(flat.direction,null);
   assert.equal(flat.status,"NO_SIGNAL");
   const low=sample(1);low.candles["1m"].at(-1).volume=50;
+  for(const row of low.candles["1m"].slice(-3))row.open=row.close;
   const r=calc(1,low);assert.equal(r.direction,null);
   assert.equal(r.upChecks.volume,false);
 });
@@ -77,7 +79,7 @@ test("manual and automatic signals are version-isolated, and expire at own T+600
   const s=await f.engine.start("manual-selective-v1-00001");
   assert.equal(s.direction,"UP");assert.equal(s.realOrderPlaced,false);
   assert.equal(s.expiresAt-s.openedAt,600000);
-  assert.equal(f.engine.status().providerModel,"PURE_SIGNAL_BALANCED_TREND_V2");
+  assert.equal(f.engine.status().providerModel,"PURE_SIGNAL_FREQ_2M_TREND_V3");
   assert.equal(f.engine.signals().total,1);
   f.setNow(s.expiresAt+1000);f.setPrice(70001);await f.engine.tick();
   const row=f.engine.signals().records[0];
@@ -107,21 +109,45 @@ test("V2 allows near-average volume but retains both trend directions",()=>{
   const opposing=sample(1);opposing.candles["5m"]=sample(-1).candles["5m"];
   assert.equal(calc(1,opposing).signal,"NO_SIGNAL");
 });
-test("auto checks at five-minute slots, no duplicate within a slot",async()=>{
+test("auto checks at two-minute slots, no duplicate within a slot",async()=>{
   const f=engineFixture();
   const tickAt=async ms=>{
     f.setNow(ms);await f.engine.tick();
     await new Promise(resolve=>setImmediate(resolve));
     await new Promise(resolve=>setImmediate(resolve));
   };
-  const a=T+4*60000+2000;
+  const a=T+1*60000+2000;
   await tickAt(a);
   assert.equal(f.engine.signals().total,1);
-  assert.equal(f.engine.signals().records[0].id,"auto-5m-"+(Math.floor(a/300000)*300000));
+  assert.equal(f.engine.signals().records[0].id,"auto-2m-"+(Math.floor(a/120000)*120000));
   await tickAt(a+2000);
   assert.equal(f.engine.signals().total,1);
-  await tickAt(a+5*60000);
+  await tickAt(a+2*60000);
   assert.equal(f.engine.signals().total,2);
-  assert.equal(f.engine.status().autoIntervalMs,300000);
+  assert.equal(f.engine.status().autoIntervalMs,120000);
   assert.ok(f.engine.signals().records.every(x=>x.realOrderPlaced===false));
+});
+
+test("V3 accepts 2 of 3 auxiliary gates but requires both 1m and 5m trend",()=>{
+ for(const side of [1,-1]){
+  const x=sample(side);x.candles["1m"].at(-1).volume=45;
+  const y=calc(side,x);
+  assert.equal(y.direction,side>0?"UP":"DOWN");
+  assert.equal(y.conditions.volume,false);
+  const conflict=sample(side);conflict.candles["5m"]=sample(-side).candles["5m"];
+  assert.equal(calc(side,conflict).direction,null);
+ }
+});
+test("V3 vetoes overextended RSI and does not invent a direction with missing feed",()=>{
+ const x=sample(1);
+ for(let i=0;i<x.candles["1m"].length;i++){
+  x.candles["1m"][i].close=1000+i*0.8;
+  x.candles["1m"][i].open=x.candles["1m"][i].close-0.6;
+  x.candles["1m"][i].high=x.candles["1m"][i].close+0.2;
+  x.candles["1m"][i].low=x.candles["1m"][i].open-0.2;
+ }
+ const z=calc(1,x);
+ assert.ok(z.evidence.rsi14>=80);
+ assert.equal(z.direction,null);
+ assert.throws(()=>calc(1,{...x,candles:{"1m":x.candles["1m"]}}),/MISSING_5m_CANDLES/);
 });

@@ -246,15 +246,15 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"BALANCED_TREND_5M_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_BALANCED_TREND_V2",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"FREQ_2M_TREND_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_FREQ_2M_TREND_V3",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_BALANCED_TREND_V2",
-       autoIntervalMs:300000,lastAutoCheckAt,
-       nextAutoCheckAt:(Math.floor(clock()/300000)+1)*300000,
+      enrichmentVersion:"EVENT10_FREQ_2M_TREND_V3",
+       autoIntervalMs:120000,lastAutoCheckAt,
+       nextAutoCheckAt:(Math.floor(clock()/120000)+1)*120000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"disabled",reasoningEffort:null,
       lastReasoningObserved:null,lastReasoningTokenCount:null,
@@ -344,7 +344,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_BALANCED_TREND_V2",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_FREQ_2M_TREND_V3",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -373,10 +373,10 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // Beijing 00/05/10/.../55 minute slots; same UTC minute boundaries.
+    // Beijing 00/02/04/.../58 minute slots; same UTC minute boundaries.
     // At most three attempts in first 20 seconds; stable IDs prevent duplicates.
-    const nowMs=clock(),slotStart=Math.floor(nowMs/300000)*300000;
-    const slotId="auto-5m-"+slotStart;
+    const nowMs=clock(),slotStart=Math.floor(nowMs/120000)*120000;
+    const slotId="auto-2m-"+slotStart;
     const previous=autoAttempts.get(slotStart)||{count:0,lastAt:0};
     if(nowMs-slotStart<20000&&!busyStart&&!inFlightStart&&
        !signalLedger.all.has(slotId)&&previous.count<3&&
@@ -387,7 +387,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         lastError="AUTO_SLOT_"+String(error?.message||error).slice(0,100);
       });
     }
-    for(const key of autoAttempts.keys())if(key<slotStart-300000)autoAttempts.delete(key);
+    for(const key of autoAttempts.keys())if(key<slotStart-120000)autoAttempts.delete(key);
     const expiring=history.filter(h=>
       h.status==="PREDICTED" && h.proxyHit===null && h.proxyOutcome===null &&
       clock()>=h.expiresAt && !h.settlementStatus);
@@ -403,6 +403,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_BALANCED_TREND_5M_V2_20261102"||
         h.decisionReviewVersion==="EVENT10_SELECTIVE_TREND_V1_20261102"||
         h.decisionReviewVersion==="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"||
         h.decisionReviewVersion==="EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"||
@@ -424,7 +425,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

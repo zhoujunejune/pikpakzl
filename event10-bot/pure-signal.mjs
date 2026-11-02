@@ -1,8 +1,8 @@
 // Selective BTC ten-minute research signal. No exchange orders.
 // Signals require independent 1m/5m trend, momentum, RSI and volume agreement.
-export const RULE_VERSION="EVENT10_BALANCED_TREND_5M_V2_20261102";
+export const RULE_VERSION="EVENT10_FREQ_2M_TREND_V3_20261102";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
-export const AUTO_SLOT_MS=300000;
+export const AUTO_SLOT_MS=120000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
 const round=(x,n=5)=>Number(x.toFixed(n));
 export function parseBinanceIndexQuote(raw,receivedAt){
@@ -77,21 +77,25 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   const upChecks={
     trend5m:ema5Fast>ema5Slow&&ema5Fast>prev5Fast,
     trend1m:ema1Fast>ema1Slow&&last.c>ema1Fast,
-    momentum:change3mPct>=0.05&&change3mPct<=0.42,
+    momentum:change3mPct>=0.04&&change3mPct<=0.42,
     structure:bullish>=2&&last.c>last.o,
     volume:volumeRatio>=0.90,
-    rsi:rsi14>=50&&rsi14<=72
+    rsi:rsi14>=47&&rsi14<=77
   };
   const downChecks={
     trend5m:ema5Fast<ema5Slow&&ema5Fast<prev5Fast,
     trend1m:ema1Fast<ema1Slow&&last.c<ema1Fast,
-    momentum:change3mPct<=-0.05&&change3mPct>=-0.42,
+    momentum:change3mPct<=-0.04&&change3mPct>=-0.42,
     structure:bearish>=2&&last.c<last.o,
     volume:volumeRatio>=0.90,
-    rsi:rsi14>=28&&rsi14<=50
+    rsi:rsi14>=23&&rsi14<=53
   };
-  const up=Object.values(upChecks).every(Boolean);
-  const down=Object.values(downChecks).every(Boolean);
+  // Mandatory trend gates and momentum plus any two confirmations.
+  // Guard against RSI extremes even if the other two confirmations pass.
+  const core=checks=>checks.trend5m&&checks.trend1m&&checks.momentum;
+  const secondary=checks=>Number(checks.structure)+Number(checks.volume)+Number(checks.rsi);
+  const up=core(upChecks)&&secondary(upChecks)>=2&&rsi14<=80;
+  const down=core(downChecks)&&secondary(downChecks)>=2&&rsi14>=20;
   const direction=up&&!down?"UP":down&&!up?"DOWN":null;
   const eventTag=direction==="UP"?"TREND_CONFIRMED_HIGHER":
     direction==="DOWN"?"TREND_CONFIRMED_LOWER":"FILTERED_NO_EDGE";
@@ -100,9 +104,9 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     "Lower："+Object.entries(downChecks).filter(([,v])=>!v).map(([k])=>k).join("/")
   ];
   const reason=direction?(
-    direction==="UP"?"5分钟与1分钟趋势共振，3分钟动量、成交量及RSI均支持看涨。":
-      "5分钟与1分钟趋势共振，3分钟动量、成交量及RSI均支持看跌。"):
-    "趋势与动量尚未形成一致优势，本轮不出方向。"+failed.join("；");
+    direction==="UP"?"5分钟与1分钟趋势一致，3分钟动量有效，形态/量比/RSI中至少两项确认看涨。":
+      "5分钟与1分钟趋势一致，3分钟动量有效，形态/量比/RSI中至少两项确认看跌。"):
+    "核心趋势或辅助确认不足，本轮不出方向。"+failed.join("；");
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",eventTag,reason,confidence:null,
     change3mPct:round(change3mPct),snapshotAt:at,
@@ -134,7 +138,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["选择性趋势策略要求65根1m及40根5m连续已收盘K线，6项趋势动量过滤共振（动量≥0.05%、量比≥0.90）。未满足条件返回NO_SIGNAL。",
+    caveats:["研究信号：65根1m及40根5m已收盘K线，1m/5m趋势与3分钟±0.04%动量必须一致；形态/量比/RSI至少2项，极端RSI否决。无优势NO_SIGNAL。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

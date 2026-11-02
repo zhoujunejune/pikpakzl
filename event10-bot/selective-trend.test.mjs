@@ -21,7 +21,7 @@ function feed(at=START,side=1,flat=false){
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_TREND_CONFIRMED_V5_20261103");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_FRESH_NONOVERLAP_V6_20261103");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -48,6 +48,56 @@ test("EMA conflict, low volume, and 3m pump must suppress signals",()=>{
  const lowRsiDown=feed(at,-1),lowLast=lowRsiDown.candles["1m"].at(-1);
  lowLast.close-=80;lowLast.low=lowLast.close-0.1;
  assert.notEqual(evaluate(at,"AUTO",lowRsiDown).direction,"UP");
+});
+test("one-minute and five-minute closed candles must be current, never replay old bars",()=>{
+ const at=START+300000+1000;
+ const stale1=feed(at);
+ stale1.candles["1m"]=feed(at-60000).candles["1m"];
+ assert.throws(()=>evaluate(at,"AUTO",stale1),/STALE_1m_LAST_CLOSED_CANDLE/);
+ const stale5=feed(at);
+ stale5.candles["5m"]=feed(at-300000).candles["5m"];
+ assert.throws(()=>evaluate(at,"AUTO",stale5),/STALE_5m_LAST_CLOSED_CANDLE/);
+});
+test("abnormally large volume and momentum spikes must not be chased",()=>{
+ const at=START+60000;
+ for(const side of [1,-1]){
+   const highVolume=feed(at,side);
+   highVolume.candles["1m"].at(-1).volume=500;
+   assert.equal(evaluate(at,"AUTO",highVolume).direction,null);
+   const runaway=feed(at,side);
+   const bar=runaway.candles["1m"].at(-1);
+   bar.close+=side*10;bar.high=Math.max(bar.open,bar.close)+0.1;
+   bar.low=Math.min(bar.open,bar.close)-0.1;
+   assert.equal(evaluate(at,"AUTO",runaway).direction,null);
+ }
+});
+test("no overlapping 600-second signals, across manual, auto and process restart",async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
+ const file=path.join(dir,"sessions.json");
+ let now=START+1000,price=70000;
+ const fetcher=async url=>url.includes("shadow-market-data")?{ok:true,json:async()=>feed(now)}:
+  url.includes("premiumIndex")?{ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:String(price),time:now-100})}:
+  Promise.reject(Error("UNEXPECTED_URL"));
+ const opts={env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher};
+ const id=()=> "auto-1m-"+(Math.floor(now/60000)*60000);
+ let engine=createEngine(opts);
+ const first=await engine.start(id());
+ assert.equal(first.direction,"UP");
+ now=START+60000+1000;
+ const blocked=await engine.start(id());
+ assert.equal(blocked.status,"NO_SIGNAL");
+ assert.equal(blocked.quality,"COOLDOWN");
+ assert.match(blocked.reason,/重叠/);
+ assert.equal(engine.signals().total,1);
+ engine=createEngine(opts);
+ now=START+120000+1000;
+ const manual=await engine.start("manually-triggered-001");
+ assert.equal(manual.status,"NO_SIGNAL");
+ assert.equal(engine.signals().total,1);
+ now=first.expiresAt+1000;
+ const next=await engine.start(id());
+ assert.equal(next.direction,"UP");
+ assert.equal(engine.signals().total,2);
 });
 test("missing data and stale index abstain instead of inventing a direction",()=>{
  const at=START;

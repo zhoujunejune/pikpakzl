@@ -1,6 +1,6 @@
 // Selective BTC ten-minute research signal. No exchange orders or guaranteed frequency.
 // Signals require aligned 1m/5m trend, moderate momentum, candle structure, volume AND RSI.
-export const RULE_VERSION="EVENT10_TREND_CONFIRMED_V5_20261103";
+export const RULE_VERSION="EVENT10_FRESH_NONOVERLAP_V6_20261103";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -33,7 +33,12 @@ export function verifiedClosedCandles(feed,interval,asOf,count){
   const out=rows.slice(-count);
   for(let i=1;i<out.length;i++)if(out[i].at-out[i-1].at!==ms)
     throw Error("NONCONTIGUOUS_"+interval+"_CANDLES");
-  if(asOf-(out.at(-1).at+ms)>(interval==="1m"?90000:420000))
+  // Reject the preceding bar once a newer completed interval is expected.
+  // Previously, 1m bars lagging 60s and 5m bars lagging 5m still passed.
+  const expectedLastClose=Math.floor(asOf/ms)*ms;
+  if(out.at(-1).at+ms<expectedLastClose)
+    throw Error("STALE_"+interval+"_LAST_CLOSED_CANDLE");
+  if(asOf-(out.at(-1).at+ms)>(interval==="1m"?60000:300000))
     throw Error("STALE_"+interval+"_CANDLES");
   return out;
 }
@@ -77,31 +82,32 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   const upChecks={
     trend5m:ema5Fast>ema5Slow&&ema5Fast>prev5Fast,
     trend1m:ema1Fast>ema1Slow&&last.c>ema1Fast,
-    momentum:change3mPct>=0.035&&change3mPct<=0.22,
+    momentum:change3mPct>=0.035&&change3mPct<=0.18,
     structure:bullish>=2&&last.c>last.o,
-    volume:volumeRatio>=0.90,
+    volume:volumeRatio>=0.90&&volumeRatio<=2.50,
     rsi:rsi14>=45&&rsi14<=70
   };
   const downChecks={
     trend5m:ema5Fast<ema5Slow&&ema5Fast<prev5Fast,
     trend1m:ema1Fast<ema1Slow&&last.c<ema1Fast,
-    momentum:change3mPct<=-0.035&&change3mPct>=-0.22,
+    momentum:change3mPct<=-0.035&&change3mPct>=-0.18,
     structure:bearish>=2&&last.c<last.o,
-    volume:volumeRatio>=0.90,
+    volume:volumeRatio>=0.90&&volumeRatio<=2.50,
     rsi:rsi14>=30&&rsi14<=55
   };
   // There are no fixed signal quotas. RSI extremes never trigger reversal by themselves.
+  // Avoid high-volume capitulation and momentum spikes; 10m de-dup happens in engine.
   // All six conditions are required; avoid late entries after an extended 3m impulse.
   const core=checks=>checks.trend5m&&checks.trend1m&&checks.momentum;
   const confirmed=checks=>core(checks)&&checks.structure&&checks.volume&&checks.rsi;
   const passUp=confirmed(upChecks),passDown=confirmed(downChecks);
   let direction=null,quality="NO_SIGNAL",eventTag="FILTERED_NO_EDGE";
-  let reason="本分钟未通过全部确认：1分钟与5分钟趋势一致、3分钟适度动量、K线结构、成交量及RSI；不强制猜方向。";
+  let reason="本分钟未通过数据时效、趋势共振、适度动量、K线结构、正常成交量及RSI的全部要求；不强制猜方向。";
   if(passUp!==passDown){
     direction=passUp?"UP":"DOWN";
     quality="FILTERED_RESEARCH";
     eventTag=direction==="UP"?"CONFIRMED_TREND_HIGHER":"CONFIRMED_TREND_LOWER";
-    reason="增强过滤方向：趋势共振、适度动量、K线结构、成交量、RSI全部确认；仍可能误判，不保证胜率。";
+    reason="增强过滤方向：已收盘K线新鲜、趋势共振、适度动量、正常成交量、K线结构与RSI确认；仍可能误判。";
   }
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",eventTag,reason,quality,confidence:null,
@@ -134,7 +140,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["研究信号：每分钟检查；趋势、动量、K线结构、成交量和RSI必须同时达标；没有最低出信号频率承诺。",
+    caveats:["研究信号：每分钟扫描；必须使用最新已收盘1m/5m K线，限制高量极端行情，且有效信号之间不重叠600秒；不保证最低信号频率或胜率。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

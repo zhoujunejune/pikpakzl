@@ -249,13 +249,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"TREND_CONFIRMED_V5_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_TREND_CONFIRMED_V5",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"FRESH_NONOVERLAP_V6_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_FRESH_NONOVERLAP_V6",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_TREND_CONFIRMED_V5",
+      enrichmentVersion:"EVENT10_FRESH_NONOVERLAP_V6",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -319,7 +319,24 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const rule=evaluatePureSignal({feed,reference,
         indexSnapshot:filtered.indexQuote,orderBook:filtered.orderBook,
         aggressiveFlow:filtered.aggressiveFlow,futuresMinute:filtered.futuresMinute,trigger:id.startsWith("auto-")?"AUTO":"MANUAL"});
-      const signalExpiry=decisionAt+HORIZON_MS; // each signal gets its own full 600s
+      // A 10-minute prediction must not be counted repeatedly from overlapping windows.
+      // Include preserved legacy signals, so a deployment cannot bypass the cooldown.
+      const priorOverlapping=Array.from(signalLedger.all.values()).filter(h=>
+        ["UP","DOWN"].includes(h.direction)&&Number.isFinite(h.openedAt)&&
+        Number.isFinite(h.expiresAt)&&h.openedAt<=decisionAt&&h.expiresAt>decisionAt);
+      if(rule.direction&&priorOverlapping.length){
+        const cooldownEndsAt=Math.max(...priorOverlapping.map(h=>h.expiresAt));
+        rule.direction=null;
+        rule.signal="NO_SIGNAL";
+        rule.status="NO_SIGNAL";
+        rule.quality="COOLDOWN";
+        rule.eventTag="OVERLAPPING_TPLUS600";
+        rule.conditions=null;
+        rule.reason="上一轮有效10分钟信号尚未到期，为避免重叠信号和重复押注，同一窗口内不再产生新方向。";
+        rule.evidence.quality="COOLDOWN";
+        rule.evidence.cooldownUntil=cooldownEndsAt;
+      }
+      const signalExpiry=decisionAt+HORIZON_MS; // each accepted signal gets its own full 600s
       const openingIndex=null;
       const liveIndex=rule.evidence.liveIndexPrice;
       lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,
@@ -348,7 +365,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_TREND_CONFIRMED_V5",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_FRESH_NONOVERLAP_V6",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -407,6 +424,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_TREND_CONFIRMED_V5_20261103"||
         h.decisionReviewVersion==="EVENT10_HYBRID_3PH_V4_FRESH_20261102"||
         h.decisionReviewVersion==="EVENT10_HYBRID_3PH_V4_20261102"||
         h.decisionReviewVersion==="EVENT10_FREQ_2M_TREND_V3_20261102"||
@@ -432,7 +450,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

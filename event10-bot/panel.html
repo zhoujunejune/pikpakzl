@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项条件同时确认 · 每分钟检测 · 未达标不出方向</p>
+<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项条件同时确认 · 每分钟扫描 · 600秒内不重复给方向</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-不再按固定时间强制给方向；每分钟检查1m/5m趋势、动量、K线结构、成交量和RSI，条件全部满足才出信号。无信号是正常过滤，出信号不保证命中。锁定指数代理价，600秒后核验，不自动下单。</div>
+每分钟扫描最新已收盘1m/5m行情，严格过滤失效K线、异常放量、过强追涨杀跌；任意10分钟窗口仅保留一条有效方向。无信号正常，不自动下单，600秒后核验指数代理价。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -53,10 +53,10 @@ th{color:#a9c6e7}
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">RSI超买/超卖不再单独反向；1m/5m趋势冲突、成交量不足或追涨杀跌过度时不出信号。指数代理价不等于真实事件合约Strike。</p>
+ <p class="sub">过期K线不出信号；1m/5m趋势冲突、成交量不足或暴增、过度追涨杀跌时不出信号；已有600秒信号未到期时不重复出方向。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
-<p class="sub">自动检测每分钟执行；手动检测独立，条件不满足均不出方向。每条有效信号生成后完整600秒核验。</p>
+<p class="sub">自动扫描每分钟执行；无论自动还是手动检测，已有10分钟信号未到期前不再重复出方向。已发信号仍按600秒核验。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -119,7 +119,7 @@ th{color:#a9c6e7}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_TREND_CONFIRMED_V5_20261103";
+const SIGNAL_VERSION="EVENT10_FRESH_NONOVERLAP_V6_20261103";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -337,7 +337,7 @@ async function refresh(){
     d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查完成：当前没有符合策略的方向优势。":
-    "每分钟检查，只有六项条件全部通过才出信号；数据异常不出方向。";
+    "每分钟检查，最新K线有效且无重叠10分钟信号时，才可能出方向。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";

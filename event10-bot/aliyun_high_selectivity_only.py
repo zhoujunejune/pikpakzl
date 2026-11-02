@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guarded EVENT10-only trend-confirmed selective strategy deployment on existing Aliyun host.
+"""Guarded EVENT10-only fresh-candle nonoverlapping selective strategy deployment on existing Aliyun host.
 Does NOT touch five-minute bots, futures bots, Caddy, credentials or live orders.
 """
 import base64
@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
-LEGACY_VERSIONS={"EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
-TARGET="EVENT10_TREND_CONFIRMED_V5_20261103"
+LEGACY_VERSIONS={"EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
+TARGET="EVENT10_FRESH_NONOVERLAP_V6_20261103"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
 FILES=("pure-signal.mjs","manual-engine.mjs","panel.html","selective-trend.test.mjs")
 OTHER_UNITS=("zl-prediction-trade","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
@@ -129,7 +129,7 @@ def main():
                 try:
                     snap=status()
                     if snap.get("decisionReviewVersion")==TARGET and \
-                       snap.get("providerModel")=="PURE_SIGNAL_TREND_CONFIRMED_V5" and \
+                       snap.get("providerModel")=="PURE_SIGNAL_FRESH_NONOVERLAP_V6" and \
                        snap.get("autoTradingEnabled") is False and \
                        snap.get("executionAvailable") is False:
                         ready=True

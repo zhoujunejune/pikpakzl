@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 三项核心+三选二确认 · 每2分钟自动检查</p>
+<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 三项核心+三选二确认 · 每分钟自动检查，常规方向每20分钟</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-高频趋势策略：5分钟与1分钟EMA及3分钟动量必须同向，形态/成交量/RSI至少两项确认才输出Higher/Lower。不满足条件返回无信号。锁定指数代理价并于600秒后核验，不自动下单。</div>
+双层信号策略：每小时00/20/40分生成常规方向参考；其他分钟只有趋势和辅助条件确认才输出增强过滤方向。常规参考不代表高胜率。锁定指数代理价并于600秒后核验，不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -53,10 +53,10 @@ th{color:#a9c6e7}
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">5分钟/1分钟EMA与3分钟≥0.04%动量是核心条件；K线形态、量比、RSI至少2项确认。极端RSI仍排除。指数代理价不等于真实事件合约Strike。</p>
+ <p class="sub">常规方向使用RSI极值和EMA趋势；增强过滤方向仍要求趋势共振、动量和两项辅助条件。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
-<p class="sub">自动检测按北京时间每小时00/02/04/…/58分；手动检测独立，每条信号生成后完整600秒核验。</p>
+<p class="sub">自动检测按北京时间每小时00/20/40分；手动检测独立，每条信号生成后完整600秒核验。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -119,7 +119,7 @@ th{color:#a9c6e7}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_FREQ_2M_TREND_V3_20261102";
+const SIGNAL_VERSION="EVENT10_HYBRID_3PH_V4_20261102";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -188,7 +188,7 @@ const when=t=>Number.isFinite(Number(t))&&t?new Date(t).toLocaleString("zh-CN",{
 const price=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:5}):"—";
 // Only display the actual confidence saved in this forecast's model response.
 // Never infer from outcome, history, signal direction or another round.
-const displayConfidence=s=>s?.eventTag||s?.ruleChecks?.eventTag||"—";
+const displayConfidence=s=>(s?.signalQuality||s?.ruleChecks?.quality||"—")+" · "+(s?.eventTag||s?.ruleChecks?.eventTag||"—");
 const phaseText={ANALYZING:"处理中",PREDICTED:"趋势方向已确定",NO_SIGNAL:"检查完成：无信号",DATA_ERROR:"行情数据异常：无信号",FAILED:"检查失败",COMPLETE:"已核对"};
 const statusText=(v)=>{
  if(v==="PUBLIC_MARKET_PROXY_ONLY")return "旧版现货代理核对";
@@ -289,7 +289,7 @@ function display(d){
   $("quickConfidence").textContent="规则类型：—";$("confidence").textContent="—";
   $("quickOpen").textContent="参考价：—";
   $("quickReason").textContent="趋势、动量必须一致；形态/成交量/RSI至少两项确认。仍允许NO_SIGNAL，不承诺更高命中率。";
-  $("quickTimestamp").textContent="北京时间00/02/04/…/58分自动检测，数据异常不出方向。";
+  $("quickTimestamp").textContent="北京时间00/20/40分自动检测，数据异常不出方向。";
   for(const id of ["openPrice","direction","openedAt","expiresAt","closePrice","latency","result","remaining"]){
     $(id).textContent="—";
   }
@@ -337,7 +337,7 @@ async function refresh(){
     d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查完成：当前没有符合策略的方向优势。":
-    "每2分钟一个自动检查槽，数据异常不出方向。";
+    "每分钟检查，每20分钟产生一条常规参考方向，数据异常不出方向。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";

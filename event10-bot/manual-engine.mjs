@@ -241,7 +241,9 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const autoAttempts=new Map();
   let lastDataProbe=null;
   const persist=()=>store(file,history);
-  const latest=()=>history.at(-1)||null;
+  // Historical sessions are kept only for outstanding legacy proxy settlement;
+  // the live API and current strategy dashboard expose V4 records exclusively.
+  const latest=()=>history.filter(x=>x.decisionReviewVersion===RULE_VERSION).at(-1)||null;
   const stats=()=>({...signalLedger.list(1,0).stats,
     officialSettled:0,officialAccuracyPct:null});
   const status=()=>{
@@ -265,7 +267,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       strategyStats:{total:ledgerStats.total,proxySettled:ledgerStats.proxySettled,
         proxyHits:ledgerStats.proxyHits,proxyAccuracyPct:ledgerStats.proxyAccuracyPct}};
   };
-  const all=(limit=50)=>history.slice(-Math.max(1,Math.min(Number(limit)||50,200))).reverse();
+  const all=(limit=50)=>history.filter(x=>x.decisionReviewVersion===RULE_VERSION)
+    .slice(-Math.max(1,Math.min(Number(limit)||50,200))).reverse();
   const readFeed=async()=>{
     const r=await fetcher(feedUrl,{signal:AbortSignal.timeout(2300),
       headers:{Accept:"application/json"}});

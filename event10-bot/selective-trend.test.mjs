@@ -63,5 +63,24 @@ test("older versions excluded and flat comparison never a win",()=>{
   decisionReviewVersion:"EVENT10_FREQ_2M_TREND_V3_20261102",status:"PREDICTED",direction:"UP",
   openPrice:100,proxyHit:true}]));
  const x=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>START});
- assert.equal(x.history().length,1);assert.equal(x.signals().total,0);
+ assert.equal(x.history().length,0);assert.equal(x.status().lastSession,null);
+ assert.equal(x.signals().total,0);
+});
+
+test("only V4 records are returned to public history and status, even with legacy sessions on disk",()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v4-history-filter-"));
+ const file=path.join(dir,"state.json");
+ const old={id:"old-2026",openedAt:START-900000,expiresAt:START-300000,
+   strategyVersion:"EVENT10_FREQ_2M_TREND_V3_20261102",decisionReviewVersion:"EVENT10_FREQ_2M_TREND_V3_20261102",status:"COMPLETE",direction:"DOWN",proxyHit:false};
+ const now={id:"current-v4",openedAt:START-600000,expiresAt:START,
+   strategyVersion:RULE_VERSION,decisionReviewVersion:RULE_VERSION,status:"COMPLETE",direction:"UP",openPrice:70000,proxyHit:true};
+ fs.writeFileSync(file,JSON.stringify([now,old]));
+ const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>START+60000});
+ assert.equal(engine.history().length,1);
+ assert.equal(engine.history()[0].id,"current-v4");
+ assert.equal(engine.status().lastSession.id,"current-v4");
+ assert.equal(engine.signals().total,1);
+ assert.equal(engine.signals().stats.proxyHits,1);
+ const persisted=JSON.parse(fs.readFileSync(file,"utf8"));
+ assert.equal(persisted.length,2); // Old immutable audit data isn't physically destroyed.
 });

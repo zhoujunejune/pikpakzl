@@ -1,0 +1,89 @@
+name: EVENT10 live read-only signal diagnosis
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-live-readonly-diagnostic.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect only local EVENT10 status, ledger and upstream feed; never mutate
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
+          sk=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk,'READ_ONLY_CREDENTIALS_UNAVAILABLE'
+          script='''#!/bin/bash
+          set -eu
+          python3 - <<'REMOTE'
+          import json, urllib.request, time
+          def read(endpoint):
+              try:
+                  with urllib.request.urlopen(endpoint,timeout=6) as r:
+                      return json.loads(r.read(800000))
+              except Exception as e:
+                  return {'ok':False,'diagnosticError':type(e).__name__+':'+str(e)[:100]}
+          s=read('http://127.0.0.1:13020/api/status')
+          l=read('http://127.0.0.1:13020/api/signals?limit=8&offset=0')
+          f=read('http://127.0.0.1:13003/api/shadow-market-data')
+          print('DIAG_STATUS_OK',s.get('ok'),flush=True)
+          print('DIAG_STRATEGY',s.get('decisionReviewVersion'),flush=True)
+          print('DIAG_MODE',s.get('mode'),flush=True)
+          print('DIAG_LAST_ERROR',str(s.get('lastError') or '')[:160],flush=True)
+          c=s.get('lastCheck') or {}
+          print('DIAG_LAST_CHECK',c.get('status'),c.get('checkedAt'),flush=True)
+          print('DIAG_LAST_CHECK_ERROR',str(c.get('error') or '')[:180],flush=True)
+          print('DIAG_LAST_CHECK_REASON',str(c.get('reason') or '')[:220],flush=True)
+          print('DIAG_LAST_CHECK_GATES',json.dumps({
+              'up':c.get('upChecks'), 'down':c.get('downChecks'),
+              'change3mPct':c.get('change3mPct')
+          },ensure_ascii=False),flush=True)
+          print('DIAG_AUTO_INTERVAL_MS',s.get('autoIntervalMs'),flush=True)
+          print('DIAG_AUTO_LAST_CHECK',s.get('lastAutoCheckAt'),flush=True)
+          print('DIAG_LEDGER',json.dumps({'ok':l.get('ok'),'version':l.get('version'),
+              'total':l.get('total'),'stats':l.get('stats')},ensure_ascii=False),flush=True)
+          print('DIAG_FEED_OK',f.get('ok'),flush=True)
+          print('DIAG_FEED_CONNECTED',(f.get('latest') or {}).get('marketFeedConnected'),flush=True)
+          print('DIAG_FEED_ERROR',str(f.get('errors') or f.get('diagnosticError') or '')[:220],flush=True)
+          for interval in ('1m','5m'):
+              block=(f.get('candles') or {}).get(interval)
+              rows=block if isinstance(block,list) else (block or {}).get('rows',[])
+              valid=[x for x in rows if isinstance(x,dict) and x.get('closed') is True]
+              print('DIAG_FEED_'+interval+'_CLOSED',len(valid),flush=True)
+          REMOTE
+          '''
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',
+              endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          instance='b67374069bb3457ba6a3a2ede9305d3f'
+          rsp=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=instance,
+              name='event10-readonly-signal-health',type='RunShellScript',
+              working_user='root',command_content=script,timeout=55))
+          invoke=rsp.body.invoke_id
+          assert invoke,'READONLY_NO_INVOKE_ID'
+          for _ in range(40):
+              time.sleep(2)
+              r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+                  instance_id=instance,invoke_id=invoke)).body.invocation_result
+              if not r or str(r.invocation_status) not in ('Success','Failed','Aborted',
+                  'ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+              output=base64.b64decode(r.output or '').decode('utf-8','replace')
+              for line in output.splitlines():
+                  if line.startswith('DIAG_'): print(line,flush=True)
+              assert str(r.invocation_status)=='Success' and int(r.exit_code)==0,'READONLY_REMOTE_DIAG_FAILED'
+              break
+          else: raise RuntimeError('READONLY_REMOTE_DIAG_TIMED_OUT')
+          PY

@@ -198,7 +198,7 @@ jobs:
                   "ExecutionTimeout","ExitCodeNonzero","ClientNotRunning","InstanceNotRunning"):continue
               out=base64.b64decode(result.output or '').decode('utf8','replace')
               for line in out.splitlines():
-                  if line.startswith("EVENT10_LIVE_READONLY="):print(line,flush=True)
+                  if line.startswith(("EVENT10_LIVE_READONLY=","EVENT10_MISS_ANALYSIS=","EVENT10_MISS_ANALYSIS_ERROR=")):print(line,flush=True)
               if str(result.invocation_status)!="Success" or int(result.exit_code)!=0:
                   raise RuntimeError('EVENT10_READONLY_FAILED_'+str(result.invocation_status)+'_'+out[-550:])
               finished=True

@@ -1,3 +1,4 @@
+# 2026-11-03 07:55+08 read-only connectivity root-cause audit.
 name: Diagnose prediction site unreachable
 on:
   push:

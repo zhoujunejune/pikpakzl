@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guarded EVENT10-only selective trend 1-minute scan hybrid research strategy deployment on existing Aliyun host.
+"""Guarded EVENT10-only trend-confirmed selective strategy deployment on existing Aliyun host.
 Does NOT touch five-minute bots, futures bots, Caddy, credentials or live orders.
 """
 import base64
@@ -19,7 +19,7 @@ ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
 LEGACY_VERSIONS={"EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
-TARGET="EVENT10_HYBRID_3PH_V4_FRESH_20261102"
+TARGET="EVENT10_TREND_CONFIRMED_V5_20261103"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
 FILES=("pure-signal.mjs","manual-engine.mjs","panel.html","selective-trend.test.mjs")
 OTHER_UNITS=("zl-prediction-trade","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
@@ -129,7 +129,7 @@ def main():
                 try:
                     snap=status()
                     if snap.get("decisionReviewVersion")==TARGET and \
-                       snap.get("providerModel")=="PURE_SIGNAL_HYBRID_3PH_V4" and \
+                       snap.get("providerModel")=="PURE_SIGNAL_TREND_CONFIRMED_V5" and \
                        snap.get("autoTradingEnabled") is False and \
                        snap.get("executionAvailable") is False:
                         ready=True
@@ -149,7 +149,7 @@ def main():
             # but are no longer surfaced in the fresh version history or stats.
             after=json.loads(fetch_local("/api/history"))
             if not after.get("ok") or len(after.get("records",[]))<old_count:
-                raise RuntimeError("EVENT10_V4_HISTORY_COUNT_DECREASED")
+                raise RuntimeError("EVENT10_HISTORY_COUNT_DECREASED")
             if other_pids!={u:pid(u) for u in OTHER_UNITS}:
                 raise RuntimeError("NON_EVENT10_SERVICE_RESTARTED")
             print("EVENT10_HS_DEPLOY_SUCCEEDED=true",flush=True)

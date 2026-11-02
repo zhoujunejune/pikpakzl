@@ -242,20 +242,20 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   let lastDataProbe=null;
   const persist=()=>store(file,history);
   // Historical sessions are kept only for outstanding legacy proxy settlement;
-  // the live API and current strategy dashboard expose V4 records exclusively.
+  // the live API and current strategy dashboard expose only the active version.
   const latest=()=>history.filter(x=>x.decisionReviewVersion===RULE_VERSION).at(-1)||null;
   const stats=()=>({...signalLedger.list(1,0).stats,
     officialSettled:0,officialAccuracyPct:null});
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"HYBRID_3PH_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_HYBRID_3PH_V4",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"TREND_CONFIRMED_V5_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_TREND_CONFIRMED_V5",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_HYBRID_3PH_V4",
+      enrichmentVersion:"EVENT10_TREND_CONFIRMED_V5",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -348,7 +348,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_HYBRID_3PH_V4",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_TREND_CONFIRMED_V5",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -377,7 +377,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // Every minute is checked; regular baseline direction at 00/20/40.
+    // Every minute is checked; there are no forced baseline directions.
     // At most three attempts in first 20 seconds; stable IDs prevent duplicates.
     const nowMs=clock(),slotStart=Math.floor(nowMs/60000)*60000;
     const slotId="auto-1m-"+slotStart;
@@ -407,6 +407,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_HYBRID_3PH_V4_FRESH_20261102"||
         h.decisionReviewVersion==="EVENT10_HYBRID_3PH_V4_20261102"||
         h.decisionReviewVersion==="EVENT10_FREQ_2M_TREND_V3_20261102"||
         h.decisionReviewVersion==="EVENT10_BALANCED_TREND_5M_V2_20261102"||
@@ -431,7 +432,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

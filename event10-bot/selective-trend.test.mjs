@@ -9,7 +9,7 @@ function feed(at=START,side=1,flat=false){
  for(const [k,n,step] of [["1m",65,60000],["5m",40,300000]]){
   let price=1000;const start=Math.floor(at/step)*step;const a=[];
   for(let i=0;i<n;i++){
-   const inc=flat?0:side*(k==="1m"?[2,-1.4,2,-0.8][i%4]:[2,-0.5,2.2,-0.3][i%4]);
+   const inc=flat?0:side*(k==="1m"?[1,-0.7,1,-0.4][i%4]:[2,-0.5,2.2,-0.3][i%4]);
    const next=price+inc;
    a.push({startMs:start-(n-i)*step,closed:true,open:price,close:next,
     high:Math.max(price,next)+0.1,low:Math.min(price,next)-0.1,volume:i===n-1?140:100});
@@ -20,19 +20,34 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
-test("three ordinary references at 00/20/40, explicitly not high confidence",()=>{
- assert.equal(RULE_VERSION,"EVENT10_HYBRID_3PH_V4_FRESH_20261102");assert.equal(AUTO_SLOT_MS,60000);
+test("no forced directions at 00/20/40: flat markets always abstain",()=>{
+ assert.equal(RULE_VERSION,"EVENT10_TREND_CONFIRMED_V5_20261103");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
-  const r=evaluate(START+m*60000);
-  assert.ok(["UP","DOWN"].includes(r.direction));assert.equal(r.quality,"STANDARD_RESEARCH");
-  assert.equal(r.confidence,null);assert.match(r.reason,/不保证命中率/);
+   const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
+   assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
+   assert.equal(r.confidence,null);assert.match(r.reason,/不强制/);
  }
 });
-test("enhanced signals only in extra slot or manual, never blind force",()=>{
- const f=evaluate(START+5*60000);assert.equal(f.quality,"FILTERED_RESEARCH");
- assert.ok(["UP","DOWN"].includes(f.direction));
- assert.equal(evaluate(START+60000).direction,null);
- assert.equal(evaluate(START+3*60000,"MANUAL",feed(START+3*60000,1,true)).direction,null);
+test("aligned moderate trends may signal on any minute or manually",()=>{
+ for(const m of [0,1,5,20,40]){
+   const r=evaluate(START+m*60000);
+   assert.equal(r.direction,"UP");assert.equal(r.quality,"FILTERED_RESEARCH");
+ }
+ assert.equal(evaluate(START+3*60000,"MANUAL").direction,"UP");
+});
+test("EMA conflict, low volume, and 3m pump must suppress signals",()=>{
+ const at=START+60000;
+ const conflicting=feed(at);conflicting.candles["5m"]=feed(at,-1).candles["5m"];
+ assert.equal(evaluate(at,"AUTO",conflicting).direction,null);
+ assert.equal(evaluate(at,"AUTO",feed(at,-1)).direction,"DOWN");
+ const weakVolume=feed(at);weakVolume.candles["1m"].at(-1).volume=20;
+ assert.equal(evaluate(at,"AUTO",weakVolume).direction,null);
+ const spike=feed(at),bar=spike.candles["1m"].at(-1);
+ bar.close+=60;bar.high=bar.close+0.1;
+ assert.equal(evaluate(at,"AUTO",spike).direction,null);
+ const lowRsiDown=feed(at,-1),lowLast=lowRsiDown.candles["1m"].at(-1);
+ lowLast.close-=80;lowLast.low=lowLast.close-0.1;
+ assert.notEqual(evaluate(at,"AUTO",lowRsiDown).direction,"UP");
 });
 test("missing data and stale index abstain instead of inventing a direction",()=>{
  const at=START;
@@ -49,7 +64,7 @@ test("engine saves version, 600-second index result, no order and persistent rec
  const opts={env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher};
  const engine=createEngine(opts);await engine.tick();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));
  const signal=engine.signals().records[0];
- assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"STANDARD_RESEARCH");
+ assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"FILTERED_RESEARCH");
  assert.equal(signal.expiresAt-signal.openedAt,600000);assert.equal(signal.realOrderPlaced,false);
  assert.equal(engine.status().autoTradingEnabled,false);assert.equal(engine.status().autoIntervalMs,60000);
  now=signal.expiresAt+1000;price=70001;await engine.tick();

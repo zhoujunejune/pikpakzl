@@ -178,6 +178,14 @@ jobs:
               analysis['missMoveAbsBpsMedian']=round(statistics.median(moves),2) if moves else None
               analysis['missWithin5Bps']=sum(1 for x in moves if x<=5)
               analysis['missWithin10Bps']=sum(1 for x in moves if x<=10)
+              # Compact read-only summary of all new-version settled signals, ordered oldest first.
+              detail=[{'time':timestamp(r.get('openedAt')),'hit':r.get('proxyHit'),'side':r.get('direction'),
+                 'rsi':r.get('rsi14'),'momentum3mPct':r.get('change3mPct'),
+                 'volumeRatio':r.get('volumeRatio'),'returnBps':price_move_bps(r),
+                 'emaBias':bias(r),'quality':qual(r)}
+                 for r in sorted(entries,key=lambda r:r.get('openedAt',0))]
+              print('EVENT10_ENTRY_AUDIT='+json.dumps({'version':signal_version,
+                'entries':detail,'total':ledger.get('total')},ensure_ascii=False,separators=(',',':')),flush=True)
               print('EVENT10_MISS_ANALYSIS='+json.dumps(analysis,ensure_ascii=False,separators=(',',':')),flush=True)
           except Exception as e:print('EVENT10_MISS_ANALYSIS_ERROR='+str(type(e).__name__)+':'+str(e)[:240],flush=True)
           print('EVENT10_LIVE_READONLY='+json.dumps(info,ensure_ascii=False,separators=(',',':')))
@@ -200,7 +208,7 @@ jobs:
                   "ExecutionTimeout","ExitCodeNonzero","ClientNotRunning","InstanceNotRunning"):continue
               out=base64.b64decode(result.output or '').decode('utf8','replace')
               for line in out.splitlines():
-                  if line.startswith(("EVENT10_LIVE_READONLY=","EVENT10_MISS_ANALYSIS=","EVENT10_MISS_ANALYSIS_ERROR=")):print(line,flush=True)
+                  if line.startswith(("EVENT10_LIVE_READONLY=","EVENT10_MISS_ANALYSIS=","EVENT10_MISS_ANALYSIS_ERROR=","EVENT10_ENTRY_AUDIT=")):print(line,flush=True)
               if str(result.invocation_status)!="Success" or int(result.exit_code)!=0:
                   raise RuntimeError('EVENT10_READONLY_FAILED_'+str(result.invocation_status)+'_'+out[-550:])
               finished=True

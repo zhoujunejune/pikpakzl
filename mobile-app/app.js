@@ -3,7 +3,7 @@
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,timer:null};
-const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101";
+let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
 }
@@ -70,7 +70,7 @@ function renderRecords(id,items,kind){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
   if(kind==="event10")wrap.dataset.eventId=String(r.id);
-  const title=node("div","record-title",kind==="event10"?dir(d)+" · 强制反动量研究策略":dir(d));
+  const title=node("div","record-title",kind==="event10"?dir(d)+" · 当前信号策略":dir(d));
   if(d==="UP")title.classList.add("uptext");
   if(d==="DOWN")title.classList.add("downtext");
   const when=kind==="guardian"?(r.at||r.round):(r.openedAt||r.checkedAt);
@@ -275,8 +275,8 @@ function event(e,ledger){
  const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
  const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（新版暂无已核对样本）");
  put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
- put("eReason",s?.reason||"当前仅展示强制反动量研究策略信号；六项条件未满足时不产生方向。");
- pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 强制反动量研究策略":"数据不可用");
+ put("eReason",s?.reason||"显示当前版本信号，未满足过滤条件时不会输出方向。");
+ pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 当前信号策略":"数据不可用");
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
  if(currentLedger){
   updateEventHistory(ledger);
@@ -317,6 +317,16 @@ async function refresh(){
   const t=tr.status==="fulfilled"?tr.value:null;
   const e=er.status==="fulfilled"?er.value:null;
   const ledger=lr.status==="fulfilled"?lr.value:null;
+  // Adopt the live version only when the service and signal ledger agree.
+  // Reset only local UI records on upgrade, never clear Alibaba history.
+  const currentVersion=e?.decisionReviewVersion;
+  if(typeof currentVersion==="string"&&/^EVENT10_[A-Z0-9_]{8,100}$/.test(currentVersion)&&
+     ledger?.version===currentVersion&&Array.isArray(ledger.records)&&
+     currentVersion!==EVENT10_FREQ_OPTIMIZED_VERSION){
+    EVENT10_FREQ_OPTIMIZED_VERSION=currentVersion;
+    state.eventRecords=[];state.lastEvent=[];state.eventTotal=0;
+    state.eventHistorySignature="";state.eventHistoryError=null;
+  }
   try{if(g)guardian(g,t);else throw gr.reason||Error("无数据");}catch(err){guardianError(err);}
   try{if(e)event(e,ledger);else throw er.reason||Error("无数据");}catch(err){eventError(err);}
   // Do not claim that a bot is online when one of its API calls failed.

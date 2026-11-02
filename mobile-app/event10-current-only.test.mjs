@@ -41,7 +41,7 @@ test("the app never requests legacy event history or mixes old stats",()=>{
  assert.ok(src.includes("const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION"));
  assert.ok(src.includes('put("eTotal","新策略 "'));
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
- assert.ok(html.includes("强制反动量研究策略信号记录"));
+ assert.ok(html.includes("当前策略信号记录"));
  assert.ok(!html.includes("历史信号（新旧策略）"));
 });
 
@@ -113,4 +113,13 @@ test("finger scrolling replaces static next-page buttons and keeps newest signal
  for(const piece of ["overflow-y:auto","touch-action:pan-y","eRecordScroll","eRecordStatus"])
   assert.ok(html.includes(piece),piece);
  assert.ok(!html.includes("下一页</button>"));
+});
+
+test("app discovers current strategy from matching status and ledger without hardcoding",()=>{
+ assert.ok(src.includes("let EVENT10_FREQ_OPTIMIZED_VERSION=null;"));
+ assert.ok(src.includes("ledger?.version===currentVersion"));
+ assert.ok(src.includes("currentVersion!==EVENT10_FREQ_OPTIMIZED_VERSION"));
+ assert.ok(src.includes("EVENT10_FREQ_OPTIMIZED_VERSION=currentVersion"));
+ assert.ok(src.includes("state.eventRecords=[]"));
+ assert.ok(!src.includes('const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"'));
 });

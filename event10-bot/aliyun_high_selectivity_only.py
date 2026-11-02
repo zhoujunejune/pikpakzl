@@ -81,7 +81,8 @@ def main():
     history=json.loads(fetch_local("/api/history"))
     if not history.get("ok") or not isinstance(history.get("records"),list):
         raise RuntimeError("EVENT10_HISTORY_UNREADABLE")
-    old_count=len(history["records"])
+    old_count=sum(1 for h in history["records"] if
+                  (h.get("strategyVersion") or h.get("decisionReviewVersion"))==TARGET)
     other_pids={u:pid(u) for u in OTHER_UNITS}
     # Intentionally stopped unrelated services are valid; do not start them.
     # Their exact pre-deploy states are compared again after deployment.
@@ -145,7 +146,7 @@ def main():
                     raise RuntimeError("PREEXISTING_ACTIVE_SIGNAL_NOT_PRESERVED")
             after=json.loads(fetch_local("/api/history"))
             if not after.get("ok") or len(after.get("records",[]))<old_count:
-                raise RuntimeError("EVENT10_HISTORY_COUNT_DECREASED")
+                raise RuntimeError("EVENT10_V4_HISTORY_COUNT_DECREASED")
             if other_pids!={u:pid(u) for u in OTHER_UNITS}:
                 raise RuntimeError("NON_EVENT10_SERVICE_RESTARTED")
             print("EVENT10_HS_DEPLOY_SUCCEEDED=true",flush=True)

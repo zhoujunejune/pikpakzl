@@ -182,7 +182,13 @@ jobs:
               detail=[{'time':timestamp(r.get('openedAt')),'hit':r.get('proxyHit'),'side':r.get('direction'),
                  'rsi':r.get('rsi14'),'momentum3mPct':r.get('change3mPct'),
                  'volumeRatio':r.get('volumeRatio'),'returnBps':price_move_bps(r),
-                 'emaBias':bias(r),'quality':qual(r)}
+                 'emaBias':bias(r),'quality':qual(r),
+                 'last1mClosedAt':feat(r).get('lastClosed1mAt'),
+                 'last5mClosedAt':feat(r).get('lastClosed5mAt'),
+                 'last1mBarAgeMs':r.get('openedAt')-feat(r).get('lastClosed1mAt')-60000
+                   if isinstance(feat(r).get('lastClosed1mAt'),(int,float)) else None,
+                 'last5mBarAgeMs':r.get('openedAt')-feat(r).get('lastClosed5mAt')-300000
+                   if isinstance(feat(r).get('lastClosed5mAt'),(int,float)) else None}
                  for r in sorted(entries,key=lambda r:r.get('openedAt',0))]
               print('EVENT10_ENTRY_AUDIT='+json.dumps({'version':signal_version,
                 'entries':detail,'total':ledger.get('total')},ensure_ascii=False,separators=(',',':')),flush=True)

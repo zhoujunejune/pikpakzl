@@ -28,6 +28,24 @@ jobs:
           sh=zoneinfo.ZoneInfo('Asia/Shanghai')
           now=datetime.datetime.now(sh)
           print('SERVER_CHECK_LOCAL_SHANGHAI',now.isoformat())
+          # Check the actual app HTML and static files over public TLS, using the same Basic Auth as native Android.
+          import urllib.error,hashlib,socket,ssl,collections
+          for endpoint in ['/app/','/app/app.js','/app/sw.js','/app/manifest.webmanifest','/app/version.json','/event10/']:
+            req=urllib.request.Request(base+endpoint,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+            try:
+              with urllib.request.urlopen(req,timeout=12) as f:
+                data=f.read(350000)
+                body=data.decode('utf-8','replace')
+                expected=endpoint=='/app/' and ('ZL CONTROL' in body and '/app/app.js' in body) or endpoint=='/app/app.js' and '/event10/api/status' in body
+                print('PUBLIC_ASSET',endpoint,'http',f.status,'bytes',len(data),'type',f.headers.get('Content-Type'),'sha12',hashlib.sha256(data).hexdigest()[:12],'expected',expected if endpoint in ['/app/','/app/app.js'] else 'na','htmlTitle',body.split('<title>')[1].split('</title>')[0][:55] if '<title>' in body else 'na')
+            except urllib.error.HTTPError as e:print('PUBLIC_ASSET_HTTP_ERROR',endpoint,e.code)
+            except Exception as e:print('PUBLIC_ASSET_ERROR',endpoint,type(e).__name__,str(e)[:130])
+          # Unauthenticated request should be HTTP 401; distinguish auth rejection from blank response.
+          try:
+            with urllib.request.urlopen(urllib.request.Request(base+'/app/',headers={'Cache-Control':'no-cache'}),timeout=10) as res:
+              print('PUBLIC_NOAUTH',res.status,res.headers.get('Content-Type'),len(res.read(20000)))
+          except urllib.error.HTTPError as e: print('PUBLIC_NOAUTH_HTTP',e.code,'www_authenticate_present',bool(e.headers.get('WWW-Authenticate')))
+          except Exception as e: print('PUBLIC_NOAUTH_ERROR',type(e).__name__,str(e)[:130])
           status=get('/event10/api/status')
           print('EVENT10_STATUS',json.dumps({
             k:status.get(k) for k in ('ok','model','lastError') 

@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项条件同时确认 · 每分钟扫描 · 600秒内不重复给方向</p>
+<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项基础确认 + V7反转风险过滤 · 每分钟扫描 · 600秒内不重复给方向</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-每分钟扫描最新已收盘1m/5m行情，严格过滤失效K线、异常放量、过强追涨杀跌；任意10分钟窗口仅保留一条有效方向。无信号正常，不自动下单，600秒后核验指数代理价。</div>
+V7已接入实际自动/手动信号：过滤RSI衰竭、异常放量、反向影线、价格区间边缘和15分钟背景冲突；两次方向信号间隔至少600秒，只显示信号，不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -53,7 +53,7 @@ th{color:#a9c6e7}
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">过期K线不出信号；1m/5m趋势冲突、成交量不足或暴增、过度追涨杀跌时不出信号；已有600秒信号未到期时不重复出方向。指数代理价不等于真实事件合约Strike。</p>
+ <p class="sub">V7拒绝极端RSI、过度放量、反向拒绝影线及背景趋势冲突。连续3轮错误触发有时限暂停，所有信号仅供研究。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
 <p class="sub">自动扫描每分钟执行；无论自动还是手动检测，已有10分钟信号未到期前不再重复出方向。已发信号仍按600秒核验。</p>
@@ -119,7 +119,7 @@ th{color:#a9c6e7}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_FRESH_NONOVERLAP_V6_20261103";
+const SIGNAL_VERSION="EVENT10_REVERSAL_GUARD_V7_20261103";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";

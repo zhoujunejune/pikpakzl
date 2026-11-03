@@ -9,19 +9,21 @@ function feed(at=START,side=1,flat=false){
  for(const [k,n,step] of [["1m",65,60000],["5m",40,300000]]){
   let price=1000;const start=Math.floor(at/step)*step;const a=[];
   for(let i=0;i<n;i++){
-   const inc=flat?0:side*(k==="1m"?[1,-0.7,1,-0.4][i%4]:[2,-0.5,2.2,-0.3][i%4]);
+   const inc=flat?0:side*(k==="1m"?[0.65,-0.455,0.65,-0.26][i%4]:[2,-0.5,2.2,-0.3][i%4]);
    const next=price+inc;
    a.push({startMs:start-(n-i)*step,closed:true,open:price,close:next,
     high:Math.max(price,next)+0.1,low:Math.min(price,next)-0.1,volume:i===n-1?140:100});
    price=next;
-  }candles[k]=a;
+  }
+  if(k==="1m"&&!flat){a.at(-9).high+=12;a.at(-10).low-=12;}
+  candles[k]=a;
  }
  return {ok:true,readOnly:true,symbol:"BTCUSDT",latest:{marketFeedConnected:true},candles};
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_FRESH_NONOVERLAP_V6_20261103");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_REVERSAL_GUARD_V7_20261103");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -98,6 +100,14 @@ test("no overlapping 600-second signals, across manual, auto and process restart
  const next=await engine.start(id());
  assert.equal(next.direction,"UP");
  assert.equal(engine.signals().total,2);
+});
+test("V7 second stage rejects extreme RSI direction and retains NO_SIGNAL semantics",()=>{
+ const at=START+60000;
+ const f=feed(at,-1),last=f.candles["1m"].at(-1);
+ last.close-=3;last.low=Math.min(last.low,last.close-0.1);
+ const r=evaluate(at,"AUTO",f);
+ assert.notEqual(r.direction,"UP");
+ assert.equal(r.confidence,null);
 });
 test("missing data and stale index abstain instead of inventing a direction",()=>{
  const at=START;

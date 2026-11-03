@@ -119,8 +119,13 @@ def main():
                 if (ROOT/name).is_file():
                     atomic_install(ROOT/name,data[name])
                 else:
+                    # New imported modules must inherit the readable owner/group
+                    # and permission bits of existing JavaScript modules.
+                    # A root-owned 0640 file is unreadable by the service user.
+                    template=(ROOT/"pure-signal.mjs").stat()
                     (ROOT/name).write_bytes(data[name])
-                    os.chmod(ROOT/name,0o640)
+                    os.chown(ROOT/name,template.st_uid,template.st_gid)
+                    os.chmod(ROOT/name,template.st_mode & 0o777)
                 changed.append(name)
             cmd("systemctl","restart",UNIT,timeout=45)
             ready=False

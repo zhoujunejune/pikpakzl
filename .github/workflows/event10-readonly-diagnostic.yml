@@ -1,3 +1,4 @@
+# 2026-11-03 21:40 Asia/Shanghai: verify V8 live status after Aliyun signal-only release; read only.
 # 2026-11-03 16:15 Asia/Shanghai: check V7 no-signal production state and exact gating.
 # Verify EVENT10 V7 live after 2026-11-03 10:14 Asia/Shanghai guarded release; read only.
 # Live root-cause audit for 10-minute signal underperformance: RSI, EMA timing, direction bias and settlement; read-only.

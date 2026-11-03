@@ -22,8 +22,17 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
+test("V8 does not silently reapply the V7 secondary rejection wick veto",()=>{
+ const at=START+60000;
+ const bullish=feed(at,1);
+ const last=bullish.candles["1m"].at(-1);
+ last.high+=20; // baseline six trend gates still pass, V7 would veto
+ const out=evaluate(at,"AUTO",bullish);
+ assert.equal(out.direction,"UP");
+ assert.equal(out.strategyVersion,RULE_VERSION);
+});
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_REVERSAL_GUARD_V7_20261103");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_BALANCED_SIGNAL_V8_20261103");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -101,7 +110,7 @@ test("no overlapping 600-second signals, across manual, auto and process restart
  assert.equal(next.direction,"UP");
  assert.equal(engine.signals().total,2);
 });
-test("V7 second stage rejects extreme RSI direction and retains NO_SIGNAL semantics",()=>{
+test("V8 still filters risky momentum without forcing a direction",()=>{
  const at=START+60000;
  const f=feed(at,-1),last=f.candles["1m"].at(-1);
  last.close-=3;last.low=Math.min(last.low,last.close-0.1);

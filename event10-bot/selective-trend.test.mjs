@@ -9,7 +9,7 @@ function feed(at=START,side=1,flat=false){
  for(const [k,n,step] of [["1m",65,60000],["5m",40,300000]]){
   let price=1000;const start=Math.floor(at/step)*step;const a=[];
   for(let i=0;i<n;i++){
-   const inc=flat?0:side*(k==="1m"?[0.65,-0.455,0.65,-0.26][i%4]:[2,-0.5,2.2,-0.3][i%4]);
+   const inc=flat?0:side*(k==="1m"?[0.7,-0.7,0.7,-0.4][i%4]:[2,-0.5,2.2,-0.3][i%4]);
    const next=price+inc;
    a.push({startMs:start-(n-i)*step,closed:true,open:price,close:next,
     high:Math.max(price,next)+0.1,low:Math.min(price,next)-0.1,volume:i===n-1?140:100});

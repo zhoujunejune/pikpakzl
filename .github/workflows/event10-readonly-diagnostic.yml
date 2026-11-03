@@ -1,3 +1,4 @@
+# 2026-11-03 live V6 event10 win-rate on-demand read-only audit; no strategy changes.
 # Verify V6 fresh-candle and nonoverlapping production status after isolated deployment (read only).
 # Diagnose V5 clustered false DOWN signals at 01:42/01:46/01:47 local; read-only per-entry details.
 # 2026-11-03 V5 latest signal win-rate read-only check; no strategy or order changes.

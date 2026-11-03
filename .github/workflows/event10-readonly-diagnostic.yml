@@ -1,3 +1,4 @@
+# Live root-cause audit for 10-minute signal underperformance: RSI, EMA timing, direction bias and settlement; read-only.
 # 2026-11-03 live V6 event10 win-rate on-demand read-only audit; no strategy changes.
 # Verify V6 fresh-candle and nonoverlapping production status after isolated deployment (read only).
 # Diagnose V5 clustered false DOWN signals at 01:42/01:46/01:47 local; read-only per-entry details.

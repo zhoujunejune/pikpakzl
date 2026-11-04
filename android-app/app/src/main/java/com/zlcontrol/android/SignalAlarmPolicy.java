@@ -4,6 +4,8 @@ package com.zlcontrol.android;
 public final class SignalAlarmPolicy {
     private SignalAlarmPolicy() {}
     public static final String ALERT = "ALERT";
+    // Late discovery is recorded as a missed alert, never presented as a fresh opportunity.
+    public static final long MAX_FRESH_ALERT_AGE_MS = 120_000L;
     public static String decide(String direction,String id,String lastId,long openedAt,
                                 long expiresAt,long enabledAt,long nowMs){
         if(!"UP".equals(direction)&&!"DOWN".equals(direction))return "NO_SIGNAL";
@@ -21,6 +23,7 @@ public final class SignalAlarmPolicy {
         }else if(nowMs-openedAt>360000L){
             return "SIGNAL_TOO_OLD";
         }
+        if(nowMs-openedAt>MAX_FRESH_ALERT_AGE_MS)return "SIGNAL_TOO_LATE";
         return ALERT;
     }
 }

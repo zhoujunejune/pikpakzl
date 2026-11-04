@@ -139,6 +139,30 @@ test("V10 retains V9 NO_SIGNAL protection for risky momentum",()=>{
  assert.notEqual(r.direction,"UP");
  assert.equal(r.confidence,null);
 });
+test("transient stale 1m data recovers and clears current error without erasing audit",async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-fresh-"));
+ const file=path.join(dir,"state.json");
+ let now=START+1000,stale=true;
+ const fetcher=async url=>url.includes("shadow-market-data")?{
+   ok:true,json:async()=>feed(stale?now-60000:now)
+ }:url.includes("premiumIndex")?{
+   ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:"70000",time:now-100})
+ }:Promise.reject(Error("UNEXPECTED_URL"));
+ const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
+ const bad=await engine.start("test-stale-scan-0001");
+ assert.equal(bad.status,"DATA_ERROR");
+ assert.match(engine.status().lastError,/STALE_1m/);
+ assert.equal(engine.status().lastSuccessfulScanAt,null);
+ const rememberedAt=engine.status().lastDataErrorAt;
+ now=START+16000;stale=false;
+ const good=await engine.start("test-recovered-scan-0002");
+ assert.equal(good.direction,"UP");
+ assert.equal(engine.status().lastError,null);
+ assert.equal(engine.status().lastSuccessfulScanAt,now);
+ assert.equal(engine.status().lastDataErrorAt,rememberedAt);
+ assert.match(engine.status().lastDataError,/STALE_1m/);
+ assert.ok(Number.isFinite(good.ruleChecks.evidence.lastClosed1mAt));
+});
 test("missing data and stale index abstain instead of inventing a direction",()=>{
  const at=START;
  assert.throws(()=>evaluate(at,"AUTO",{...feed(at),candles:{"1m":feed(at).candles["1m"]}}),/MISSING_5m_CANDLES/);

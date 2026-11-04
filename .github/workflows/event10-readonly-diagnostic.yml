@@ -1,3 +1,4 @@
+# 2026-11-04: post-release verify UI freshness and recovered scan error on live V10.
 # 2026-11-04: verify independent Binance spot OHLC, futures index timestamps, live feed freshness, scan cadence (read only).
 # 2026-11-04 V10 post-deploy read-only check: 4m signal gap, independent T+600 and service status.
 # 2026-11-04 V10 post-deployment read-only verification: signal count, 4m gap, T+600 settlement.
@@ -151,6 +152,9 @@ jobs:
                   'mode':mstate.get('mode'),'lastError':mstate.get('lastError'),
                   'lastAutoCheckAt':mstate.get('lastAutoCheckAt'),
                   'lastAutoCheckAgeMs':now_ms-mstate.get('lastAutoCheckAt') if isinstance(mstate.get('lastAutoCheckAt'),(float,int)) else None,
+                  'lastSuccessfulScanAt':mstate.get('lastSuccessfulScanAt'),
+                  'lastDataErrorAt':mstate.get('lastDataErrorAt'),
+                  'lastDataError':mstate.get('lastDataError'),
                   'lastScanCheckLatencyMs':(mstate.get('lastCheck') or {}).get('checkLatencyMs'),
                   'lastScanIndexAgeMs':(mstate.get('lastCheck') or {}).get('openAgeMs'),
                   'sourceOk':source.get('ok'),'readOnly':source.get('readOnly'),

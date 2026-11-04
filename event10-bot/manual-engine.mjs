@@ -372,17 +372,19 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // Clear stale-feed error after BOTH latest closed bars and the index
       // quote have passed the fresh-data validation in evaluatePureSignal.
       lastSuccessfulScanAt=clock();lastError=null;
-      // Observation-only V10 can assess a new direction after 4 minutes, while
+      // V11 and legacy V10 require 4 minutes between accepted research signals;
       // each accepted prediction keeps its OWN T+600 settlement timestamp.
-      // Legacy V9/V8 sessions keep the old 10-minute cooldown on cutover.
+      // Older versions retain their previous 10-minute overlap protection.
       const blocking=Array.from(signalLedger.all.values()).filter(h=>
         ["UP","DOWN"].includes(h.direction)&&Number.isFinite(h.openedAt)&&
         Number.isFinite(h.expiresAt)&&h.openedAt<=decisionAt&&
-        ((h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION)
+        ((h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION||
+          h.decisionReviewVersion==="EVENT10_FREQUENCY_V10_20261104")
           ?h.openedAt+MIN_SIGNAL_GAP_MS>decisionAt:h.expiresAt>decisionAt));
       if(rule.direction&&blocking.length){
         const cooldownEndsAt=Math.max(...blocking.map(h=>
-          (h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION)
+          (h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION||
+          h.decisionReviewVersion==="EVENT10_FREQUENCY_V10_20261104")
             ?h.openedAt+MIN_SIGNAL_GAP_MS:h.expiresAt));
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
         rule.quality="COOLDOWN";rule.eventTag="V11_MIN_SIGNAL_GAP";

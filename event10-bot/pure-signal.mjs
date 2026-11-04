@@ -1,7 +1,7 @@
-// BTC ten-minute V7: live signal-only, no exchange orders or guaranteed accuracy.
+// BTC ten-minute V10: signal-only V9 directional gates; independent T+600 verification.
 // V8 uses the existing six-gate filter without V7 secondary veto.
 // Signals require aligned 1m/5m trend, moderate momentum, candle structure, volume AND RSI.
-export const RULE_VERSION="EVENT10_TARGETED_MOMENTUM_V9_20261104";
+export const RULE_VERSION="EVENT10_FREQUENCY_V10_20261104";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -118,7 +118,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     direction=passUp?"UP":"DOWN";
     quality="FILTERED_RESEARCH";
     eventTag=direction==="UP"?"CONFIRMED_TREND_HIGHER":"CONFIRMED_TREND_LOWER";
-    reason="V9定向过滤：多周期趋势和动量一致，UP限制RSI低于63，DOWN额外确认15分钟累计跌幅不少于0.05%；结果仍可能出错。";
+    reason="V10沿用V9方向规则：UP限制RSI低于63，DOWN确认15分钟累计跌幅至少0.05%；仅调整有效信号最短间隔，仍可能误判。";
   }
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",eventTag,reason,quality,confidence:null,
@@ -152,7 +152,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V9信号：保留V8趋势确认，UP增加RSI<63保护，DOWN增加15分钟跌幅≥0.05%确认；每分钟扫描，不强制方向，600秒内去重。",
+    caveats:["V10信号：沿用V9严格方向条件，每分钟扫描；有效信号至少相隔4分钟，每条独立观察10分钟，可能重叠但无自动下单；不保证命中率。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

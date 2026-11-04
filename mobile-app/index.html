@@ -145,14 +145,21 @@ a{color:inherit;text-decoration:none}
 <div class="kvline"><span class="label">分析状态</span><span class="value" id="ePhase">—</span></div>
 <div class="kvline"><span class="label">新版有效方向 / 已核对</span><span class="value" id="eCounts">—</span></div>
 <div class="kvline"><span class="label">新版独立代理命中率</span><span class="value" id="eProxyAccuracy">—</span></div>
+<div class="stat-row">
+<div class="stat"><span class="k">高标准代理命中率</span><span class="v" id="eStrictPct">—</span><span class="mini" id="eStrictCount">0条</span></div>
+<div class="stat"><span class="k">普通信号代理命中率</span><span class="v" id="eStandardPct">—</span><span class="mini" id="eStandardCount">0条</span></div>
+</div>
+<div class="message" id="eScanAudit" aria-live="polite">正在读取最近一小时信号筛选情况…</div>
+<div class="mini" id="eScanGates">尚无拒绝原因统计。</div>
+<div class="mini" id="eFreshness" style="margin-top:9px">正在核实最近一次行情扫描时间…</div>
 <div class="message" id="eReason">正在同步最近一次规则检查结果…</div>
 <button class="btn primary full" style="margin-top:14px" type="button" id="manualCheck">立即手动检测信号</button>
-<div class="mini" style="margin-top:9px">仅触发原有 /event10/ 检测，不会下单；行情异常不生成方向。</div>
+<div class="mini" style="margin-top:9px">只提供研究方向，不自动下单。安卓原生提醒每2秒检查，延迟超过120秒的信号会记为过晚而不补响；手机锁屏、系统权限和网络仍可能影响及时性。</div>
 <div class="message" id="manualResult" hidden aria-live="polite"></div>
 <div class="actions"><a class="btn" href="/event10/" rel="noopener">打开10分钟完整控制页面</a></div>
 </div>
 <div class="section"><div class="sect-head"><h2>当前策略信号记录</h2><small id="eTotal">读取中</small></div>
-<p class="mini">在下面记录框内上下滑动，滑到底部自动加载更早的信号；价格及命中结果保持原样。所有结果均为指数行情代理，不是合约官方结算。</p>
+<p class="mini">在记录框内上下滑动加载更早信号。每条记录标明高标准/普通、出信号时间和结果。信号依据现货K线判断、用币安合约指数价格做十分钟代理核验，并非事件合约的官方开仓价或官方结算。</p>
 <div id="eRecordScroll" class="event-record-viewport" role="region" aria-label="十分钟信号记录，滑动加载更多" tabindex="0">
 <div class="records" id="eRecords"><div class="mini">读取中…</div></div></div>
 <div id="eRecordStatus" class="mini event-record-footer" role="status" aria-live="polite">同步记录中…</div></div>
@@ -164,7 +171,7 @@ a{color:inherit;text-decoration:none}
 <div class="kvline"><span class="label">网页热更新</span><span class="value" id="appUpdateState">检查中</span></div>
 <div class="kvline"><span class="label">网页版本</span><span class="value" id="appBuildVersion">—</span></div>
 <div class="kvline"><span class="label">登录保护</span><span class="value">沿用 Caddy Basic Auth</span></div>
-<div class="kvline"><span class="label">自动刷新</span><span class="value">页面可见时每10秒</span></div>
+<div class="kvline"><span class="label">自动刷新</span><span class="value">10分钟页面约3秒独立刷新；其他页面约10秒；安卓原生提醒每2秒单独轮询</span></div>
 <div class="kvline"><span class="label">交易 API 密钥</span><span class="value">不存储在本 App</span></div>
 <div class="kvline"><span class="label">交易策略与止盈止损</span><span class="value">由原系统独立管理，不作修改</span></div>
 <div class="message">如需修改跟随开关、交易金额、止损或资金账户，请进入5分钟机器人原控制台。关闭本 App 不会关闭服务器机器人；本 App 也不会擅自提交订单。</div>

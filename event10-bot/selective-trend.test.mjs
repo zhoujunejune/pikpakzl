@@ -22,7 +22,7 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
-test("V9 retains six core gates without the old wide secondary veto",()=>{
+test("V11 strict retains six core gates without the old wide secondary veto",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
  const last=bullish.candles["1m"].at(-1);
@@ -31,7 +31,7 @@ test("V9 retains six core gates without the old wide secondary veto",()=>{
  assert.equal(out.direction,"UP");
  assert.equal(out.strategyVersion,RULE_VERSION);
 });
-test("V9 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
+test("V11 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
  const at=START+60000;
  const up=feed(at,1);
  const q=up.candles["1m"].at(-1);
@@ -45,17 +45,17 @@ test("V9 long RSI threshold stays below 63 and down requires 15m persistence",()
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_FREQUENCY_V10_20261104");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_TIERED_V11_20261105");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
-   assert.equal(r.confidence,null);assert.match(r.reason,/不强制/);
+   assert.equal(r.confidence,null);assert.match(r.reason,/强制/);
  }
 });
 test("aligned moderate trends may signal on any minute or manually",()=>{
  for(const m of [0,1,5,20,40]){
    const r=evaluate(START+m*60000);
-   assert.equal(r.direction,"UP");assert.equal(r.quality,"FILTERED_RESEARCH");
+   assert.equal(r.direction,"UP");assert.equal(r.quality,"STRICT_RESEARCH");
  }
  assert.equal(evaluate(START+3*60000,"MANUAL").direction,"UP");
 });
@@ -72,6 +72,29 @@ test("EMA conflict, low volume, and 3m pump must suppress signals",()=>{
  const lowRsiDown=feed(at,-1),lowLast=lowRsiDown.candles["1m"].at(-1);
  lowLast.close-=80;lowLast.low=lowLast.close-0.1;
  assert.notEqual(evaluate(at,"AUTO",lowRsiDown).direction,"UP");
+});
+test("V11 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
+ const at=START+60000;
+ const moderate=feed(at,1);moderate.candles["1m"].at(-1).volume=75;
+ const r=evaluate(at,"AUTO",moderate);
+ assert.equal(r.direction,"UP");
+ assert.equal(r.quality,"STANDARD_RESEARCH");
+ assert.equal(r.conditions.volume,true);
+ assert.equal(r.upChecks.volume,false);
+ const mismatch=feed(at,1);mismatch.candles["1m"].at(-1).volume=75;
+ mismatch.candles["5m"]=feed(at,-1).candles["5m"];
+ assert.equal(evaluate(at,"AUTO",mismatch).direction,null);
+});
+test("V11 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
+ const at=START+60000;
+ const falling=feed(at,-1),last=falling.candles["1m"].at(-1);
+ const base=evaluate(at,"AUTO",falling);
+ assert.equal(base.direction,"DOWN");
+ last.low=last.close-10;
+ const result=evaluate(at,"AUTO",falling);
+ assert.equal(result.direction,null);
+ assert.equal(result.downChecks.bounceGuard,false);
+ assert.equal(result.eventTag,"V11_DOWN_REBOUND_RISK");
 });
 test("one-minute and five-minute closed candles must be current, never replay old bars",()=>{
  const at=START+300000+1000;
@@ -95,7 +118,7 @@ test("abnormally large volume and momentum spikes must not be chased",()=>{
    assert.equal(evaluate(at,"AUTO",runaway).direction,null);
  }
 });
-test("V10 4m gap permits independent overlapping 10m observations across restart",async()=>{
+test("V11 4m gap permits independent overlapping 10m observations across restart",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
@@ -131,7 +154,7 @@ test("V10 4m gap permits independent overlapping 10m observations across restart
  assert.equal(next.direction,"UP");
  assert.equal(engine.signals().total,3);
 });
-test("V10 retains V9 NO_SIGNAL protection for risky momentum",()=>{
+test("V11 retains V9 NO_SIGNAL protection for risky momentum",()=>{
  const at=START+60000;
  const f=feed(at,-1),last=f.candles["1m"].at(-1);
  last.close-=3;last.low=Math.min(last.low,last.close-0.1);
@@ -197,10 +220,13 @@ test("engine saves version, 600-second index result, no order and persistent rec
  const opts={env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher};
  const engine=createEngine(opts);await engine.tick();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));
  const signal=engine.signals().records[0];
- assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"FILTERED_RESEARCH");
+ assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"STRICT_RESEARCH");
  assert.equal(signal.expiresAt-signal.openedAt,600000);assert.equal(signal.realOrderPlaced,false);
  assert.equal(engine.status().autoTradingEnabled,false);assert.equal(engine.status().autoIntervalMs,60000);
  assert.equal(engine.status().minSignalGapMs,240000);
+ assert.equal(engine.signals().stats.byTier.STRICT_RESEARCH.total,1);
+ assert.equal(engine.signals().stats.byTier.STANDARD_RESEARCH.total,0);
+ assert.equal(engine.status().scanDiagnostics.lastHour.strictSignals,1);
  now=signal.expiresAt+1000;price=70001;await engine.tick();
  assert.equal(engine.signals().stats.proxySettled,1);
  assert.equal(createEngine(opts).signals().total,1);

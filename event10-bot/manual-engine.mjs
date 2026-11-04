@@ -237,6 +237,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   }
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,modelCalls=0,lastError=null;
+  let lastDataError=null,lastDataErrorAt=null,lastSuccessfulScanAt=null;
   let lastCheck=null,inFlightStart=null;
   let lastCheckAt=0,lastAutoCheckAt=null;
   const autoAttempts=new Map();
@@ -260,6 +261,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          x.decisionReviewVersion===RULE_VERSION&&x.status==="PREDICTED"&&
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:0,lastError,
+       lastDataError,lastDataErrorAt,lastSuccessfulScanAt,
       enrichmentVersion:"EVENT10_FREQUENCY_V10",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
@@ -324,6 +326,9 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const rule=evaluatePureSignal({feed,reference,
         indexSnapshot:filtered.indexQuote,orderBook:filtered.orderBook,
         aggressiveFlow:filtered.aggressiveFlow,futuresMinute:filtered.futuresMinute,trigger:id.startsWith("auto-")?"AUTO":"MANUAL"});
+      // Clear stale-feed error after BOTH latest closed bars and the index
+      // quote have passed the fresh-data validation in evaluatePureSignal.
+      lastSuccessfulScanAt=clock();lastError=null;
       // Observation-only V10 can assess a new direction after 4 minutes, while
       // each accepted prediction keeps its OWN T+600 settlement timestamp.
       // Legacy V9/V8 sessions keep the old 10-minute cooldown on cutover.
@@ -400,7 +405,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // Market-data failures are NOT valid directions. Return a terminal
       // read-only DATA_ERROR result so the UI can stop its loading state.
       const error=String(e?.message||e).slice(0,160);
-      lastError=error;
+      lastError=error;lastDataError=error;lastDataErrorAt=clock();
       lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,openedAt:null,openPrice:null,
         status:"DATA_ERROR",signal:"NO_SIGNAL",direction:null,
         reason:"数据检查未完成："+error+"。本次未产生交易方向。",

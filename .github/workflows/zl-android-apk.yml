@@ -7,7 +7,7 @@ on:
       - '.github/workflows/zl-android-apk.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: zl-control-android-apk
   cancel-in-progress: false
@@ -183,3 +183,29 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 90
+
+      - name: Publish verified APK to GitHub Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$ZL_STABLE_SIGNING" == true ]]; then
+            tag=zl-control-v1.2.4-stable
+            title="ZL Control v1.2.4 (stable-signed)"
+            notes="BTC 10-minute EVENT10 signal alerts. This APK is signed by the configured stable keystore. Confirm matching signer before upgrading."
+            prerelease=()
+          else
+            tag=zl-control-v1.2.4-debug-only
+            title="ZL Control v1.2.4 (DEBUG ONLY - reinstall required)"
+            notes="BTC 10-minute EVENT10 signal alerts. No stable release signing secrets were available. DEBUG-ONLY APK cannot upgrade an existing differently signed app; uninstalling can erase app-local state. This is not a production-signed APK."
+            prerelease=(--prerelease)
+          fi
+          file="$(find dist -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$file" && test -s "$file"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$file" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "$file" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes "$notes" "${prerelease[@]}"
+          fi
+          echo "APK_DOWNLOAD_RELEASE=https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"

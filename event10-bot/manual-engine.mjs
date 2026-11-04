@@ -238,6 +238,41 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const persistedSessions=load(file);
   const ledgerFile=String(env.EVENT10_SIGNAL_LOG_FILE||path.join(path.dirname(file),"rule-signals-v1.ndjson"));
   const signalLedger=openSignalLedger(ledgerFile,persistedSessions);
+  const auditFile=String(env.EVENT10_SCAN_AUDIT_FILE||path.join(path.dirname(file),"rule-scan-audit-v11.json"));
+  let scanAudit=[];
+  try{const rows=JSON.parse(fs.readFileSync(auditFile,"utf8"));
+    if(Array.isArray(rows))scanAudit=rows.filter(x=>Number.isFinite(x?.at)&&typeof x?.id==="string").slice(-3000);
+  }catch(e){if(e.code!=="ENOENT")throw e;}
+  function registerScan(id,at,rule){
+    const side=Number(rule?.change3mPct)<0?"DOWN":"UP";
+    const checks=rule?.direction?{}:(side==="UP"?rule?.standardUpChecks:rule?.standardDownChecks)||{};
+    const fails=Object.entries(checks).filter(([,ok])=>ok===false).map(([gate])=>gate);
+    const rec={id,at,source:id.startsWith("auto-")?"AUTO":"MANUAL",direction:rule?.direction||null,
+      tier:rule?.direction?rule.quality:null,tag:rule?.eventTag||rule?.status||"DATA_ERROR",fails,
+      dataError:rule?.status==="DATA_ERROR"};
+    const ix=scanAudit.findIndex(x=>x.id===id);
+    if(ix>=0)scanAudit[ix]=rec;else scanAudit.push(rec);
+    scanAudit=scanAudit.filter(x=>x.at>=at-86400000).slice(-3000);
+    try{store(auditFile,scanAudit)}catch(err){lastError="SCAN_AUDIT_WRITE_"+String(err?.message||err).slice(0,100);}
+  }
+  function scanSummary(){
+    const aggregate=rows=>{
+      const byReason={};let strict=0,standard=0,none=0,errors=0;
+      for(const x of rows){
+        if(x.tier==="STRICT_RESEARCH")strict++;
+        else if(x.tier==="STANDARD_RESEARCH")standard++;
+        else{if(x.dataError)errors++;else none++;
+          if(x.fails.length){for(const k of x.fails)byReason[k]=(byReason[k]||0)+1;}
+          else byReason[x.tag]=(byReason[x.tag]||0)+1;}
+      }
+      return {checks:rows.length,strictSignals:strict,standardSignals:standard,
+        noSignal:none,dataErrors:errors,byReason};
+    };
+    return {lastHour:aggregate(scanAudit.filter(x=>x.at>=clock()-3600000&&x.at<=clock()+1000)),
+      last24Hours:aggregate(scanAudit),lastScanAt:scanAudit.at(-1)?.at??null,
+      note:"一次无信号可能有多个未通过条件；自动同一分钟重试只计一次，手动独立统计。"};
+  }
+
   // Only pending/last 500 full sessions remain hot; the signal ledger retains all.
   const history=persistedSessions.slice(-500);
   for(const h of history)if(h.status==="ANALYZING"){
@@ -269,7 +304,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          x.decisionReviewVersion===RULE_VERSION&&x.status==="PREDICTED"&&
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:0,lastError,
-       lastDataError,lastDataErrorAt,lastSuccessfulScanAt,
+       lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
       enrichmentVersion:"EVENT10_TIERED_V11",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
@@ -378,7 +413,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         ...rule,featureAvailability:availability};
       lastDataProbe={checkedAt:clock(),available:Object.keys(filtered).length,
         total:market.total,availability};
-      if(!rule.direction)return lastCheck;
+      if(!rule.direction){registerScan(id,clock(),rule);return lastCheck;}
       const session={id,clickReceivedAt,openedAt:decisionAt,
         clickToCaptureMs:clock()-clickReceivedAt,expiresAt:signalExpiry,
         openPrice:liveIndex,cycleOpenIndexPrice:openingIndex,liveIndexPrice:liveIndex,
@@ -408,7 +443,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       signalLedger.add(session);
       history.push(session);
       if(history.length>500)history.splice(0,history.length-500);
-      persist();return session;
+      persist();registerScan(id,clock(),rule);return session;
      }catch(e){
       // Market-data failures are NOT valid directions. Return a terminal
       // read-only DATA_ERROR result so the UI can stop its loading state.
@@ -418,7 +453,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"DATA_ERROR",signal:"NO_SIGNAL",direction:null,
         reason:"数据检查未完成："+error+"。本次未产生交易方向。",
         error,featureAvailability:lastDataProbe?.availability||null};
-      return lastCheck;
+      registerScan(id,clock(),lastCheck);return lastCheck;
     }
     finally{busyStart=false;}
   }

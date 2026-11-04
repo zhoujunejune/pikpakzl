@@ -1,3 +1,4 @@
+# 2026-11-05 check live 5m LLM services and active order signal source before temporarily stopping AI calls.
 name: Audit exact Selective 8-second model source and live order selection
 on:
   push:

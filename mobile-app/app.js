@@ -104,9 +104,9 @@ function renderRecords(id,items,kind){
    const sampled=Number.isFinite(r.closeObservedAt)?stamp(r.closeObservedAt):"—";
    const motion=typeof r.change3mPct==="number"?r.change3mPct.toFixed(5)+"%":"—";
    const trigger=r.trigger==="AUTO"?"自动":"手动";
-   const delayAge=Number.isFinite(r.openedAt)?Math.max(0,Math.round((Date.now()-r.openedAt)/1000)):"—";
+
    wrap.append(node("div","record-note",trigger+" · "+eventTier(r)+" · "+(r.eventTag||"—")+" · 3分钟净涨跌 "+motion));
-   wrap.append(node("div","record-note","信号时间 "+stamp(r.openedAt)+" · 距今 "+delayAge+"秒；信号不是事件合约下单指令"));
+   wrap.append(node("div","record-note","信号时间 "+stamp(r.openedAt)+" · 非事件合约真实下单价格"));
    wrap.append(node("div","record-note","预定核验 "+planned+
       " · 实际采样 "+sampled+" · 仅币安指数代理对比，非事件合约官方结算"));
   }else{
@@ -319,22 +319,25 @@ function eventError(error){
  }
  $("manualCheck").disabled=true;
 }
-async function refresh(){
- if(state.busy||document.hidden)return;
- state.busy=true;
+// Event10 never waits for Guardian HTTP requests. A slow five-minute bot
+// cannot delay a newly accepted V11 signal on the visible ten-minute screen.
+function refreshConnectionBadge(){
+ const count=Number(state.guardianOnline)+Number(state.eventOnline);
+ $("healthDot").className="dot "+(count===2?"up":count===0?"down":"");
+ put("healthText",count===2?"双服务已连接":count===0?"连接异常":"部分接口异常");
+ put("updatedAt","刷新于 "+new Date().toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}));
+}
+async function refreshEvent10Only(){
+ if(state.eventRefreshBusy||document.hidden)return;
+ state.eventRefreshBusy=true;
  try{
-  const [gr,tr,er,lr]=await Promise.allSettled([
-   api("/guardian/api/status",7500),
-   api("/api/status",7500),
-   api("/event10/api/status",7500),
-   api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",9500)
+  const [er,lr]=await Promise.allSettled([
+   api("/event10/api/status",3500),
+   api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",4500)
   ]);
-  const g=gr.status==="fulfilled"?gr.value:null;
-  const t=tr.status==="fulfilled"?tr.value:null;
   const e=er.status==="fulfilled"?er.value:null;
   const ledger=lr.status==="fulfilled"?lr.value:null;
-  // Adopt the live version only when the service and signal ledger agree.
-  // Reset only local UI records on upgrade, never clear Alibaba history.
+  // Adopt a new strategy only after status and ledger agree on the same version.
   const currentVersion=e?.decisionReviewVersion;
   if(typeof currentVersion==="string"&&/^EVENT10_[A-Z0-9_]{8,100}$/.test(currentVersion)&&
      ledger?.version===currentVersion&&Array.isArray(ledger.records)&&
@@ -343,15 +346,30 @@ async function refresh(){
     state.eventRecords=[];state.lastEvent=[];state.eventTotal=0;
     state.eventHistorySignature="";state.eventHistoryError=null;
   }
-  try{if(g)guardian(g,t);else throw gr.reason||Error("无数据");}catch(err){guardianError(err);}
-  try{if(e)event(e,ledger);else throw er.reason||Error("无数据");}catch(err){eventError(err);}
-  // Do not claim that a bot is online when one of its API calls failed.
+  try{if(e)event(e,ledger);else throw er.reason||Error("无数据");}
+  catch(err){eventError(err);}
   const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION;
   const currentService=e?.decisionReviewVersion===EVENT10_FREQ_OPTIMIZED_VERSION;
-  const count=Number(Boolean(g&&t))+Number(Boolean(e&&currentLedger&&currentService));
-  $("healthDot").className="dot "+(count===2?"up":count===0?"down":"");
-  put("healthText",count===2?"双服务已连接":count===0?"连接异常":"部分接口异常");
-  put("updatedAt","刷新于 "+new Date().toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}));
+  state.eventOnline=Boolean(e&&currentLedger&&currentService);
+  refreshConnectionBadge();
+ }finally{state.eventRefreshBusy=false;}
+}
+async function refresh(){
+ if(state.busy||document.hidden)return;
+ state.busy=true;
+ // Start Event10 independently before the slower Guardian two-endpoint read.
+ void refreshEvent10Only();
+ try{
+  const [gr,tr]=await Promise.allSettled([
+   api("/guardian/api/status",7500),
+   api("/api/status",7500)
+  ]);
+  const g=gr.status==="fulfilled"?gr.value:null;
+  const t=tr.status==="fulfilled"?tr.value:null;
+  try{if(g)guardian(g,t);else throw gr.reason||Error("无数据");}
+  catch(err){guardianError(err);}
+  state.guardianOnline=Boolean(g&&t);
+  refreshConnectionBadge();
  }finally{state.busy=false;}
 }
 
@@ -413,7 +431,7 @@ $("manualCheck").addEventListener("click",async()=>{
   const data=await res.json();
   if(!res.ok||data.ok!==true)throw Error(data.error||"HTTP "+res.status);
   result.textContent="服务端已接受手动检测请求；请查看下方状态。此操作不会提交交易订单。";
-  await refresh();
+  await refreshEvent10Only();
  }catch(err){
   result.textContent="检测未确认："+String(err).slice(0,180)+"。请先核实当前状态，避免重复点击。";
  }finally{state.manualBusy=false;$("manualCheck").disabled=false;}
@@ -431,6 +449,6 @@ void checkHotUpdate();
 setInterval(()=>void refresh(),10000);
 // On the 10-minute screen, show server-confirmed signals in around 3s while visible.
 // Native Android notification service works independently when this page is hidden.
-setInterval(()=>{if(location.hash==="#event10")void refresh();},3000);
+setInterval(()=>{if(location.hash==="#event10")void refreshEvent10Only();},3000);
 setInterval(()=>{if(!document.hidden)void checkHotUpdate();},60000);
 if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("/app/sw.js",{scope:"/app/"}).catch(()=>{}));

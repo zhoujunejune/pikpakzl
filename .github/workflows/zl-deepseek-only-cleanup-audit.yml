@@ -1,3 +1,4 @@
+# 2026-11-05 check live 5m LLM services and active order signal source before temporarily stopping AI calls.
 name: Inspect retired prediction services before DeepSeek-only cleanup
 on:
   push:

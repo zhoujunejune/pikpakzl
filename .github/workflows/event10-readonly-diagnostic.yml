@@ -1,3 +1,4 @@
+# 2026-11-04 V10 post-deploy read-only check: 4m signal gap, independent T+600 and service status.
 # 2026-11-04 V10 post-deployment read-only verification: signal count, 4m gap, T+600 settlement.
 # 2026-11-04 V9 low signal-frequency audit before changing strategy; read-only.
 # 2026-11-04 15:52 Asia/Shanghai: verify V9 targeted guards and signal-only runtime after Aliyun deploy.

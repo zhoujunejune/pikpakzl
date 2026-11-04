@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项基础确认 + V8适度过滤 · 每分钟扫描 · 600秒内不重复给方向</p>
+<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项基础确认 + V9针对性反转防护 · 每分钟扫描 · 600秒内不重复给方向</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V8已接入实际自动/手动信号：保留多周期趋势、3分钟动量、成交量、K线结构及RSI六项确认；取消V7过严的二次否决。相邻有效信号间隔至少600秒，只显示信号，不自动下单。</div>
+V9已直接接入自动和手动信号：保留V8六项基础确认；看涨RSI须低于63，看跌额外要求最近15分钟累计跌幅至少0.05%。每分钟扫描、有效信号600秒去重；只提供方向、不下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -53,7 +53,7 @@ V8已接入实际自动/手动信号：保留多周期趋势、3分钟动量、�
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">V8保留极端RSI及异常动量限制，取消多层叠加否决。连续3轮错误触发有时限暂停，信号仅供观察，无法保证命中率。指数代理价不等于真实事件合约Strike。</p>
+ <p class="sub">V9针对性减少高RSI追涨和短线追空反弹。连续3次结算错误触发有时限暂停；拒绝方向时应显示原因，不保证命中率。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 </div>
 <p class="sub">自动扫描每分钟执行；无论自动还是手动检测，已有10分钟信号未到期前不再重复出方向。已发信号仍按600秒核验。</p>
@@ -119,7 +119,7 @@ V8已接入实际自动/手动信号：保留多周期趋势、3分钟动量、�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_BALANCED_SIGNAL_V8_20261103";
+const SIGNAL_VERSION="EVENT10_TARGETED_MOMENTUM_V9_20261104";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";

@@ -242,7 +242,7 @@ jobs:
               instance_id='b67374069bb3457ba6a3a2ede9305d3f',
               name='zl-android-signing-readonly-file-presence',type='RunShellScript',
               command_content=script,timeout=80))
-          script="\\n".join(line[10:] if line.startswith("          ") else line for line in script.splitlines())+"\\n"
+          script="\n".join(line[10:] if line.startswith("          ") else line for line in script.splitlines())+"\n"
           invoke=result.body.invoke_id
           if not invoke:raise RuntimeError('ANDROID_SIGNING_AUDIT_NO_INVOCATION')
           for i in range(25):

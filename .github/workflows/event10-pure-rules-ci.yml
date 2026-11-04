@@ -51,7 +51,7 @@ jobs:
           assert 'const signalExpiry=decisionAt+HORIZON_MS' in s
           assert 'h.expiresAt>decisionAt' in s  # legacy cutover still waits 10m
           assert 'nowMs-previous.lastAt>=14000' in s
-          assert 'CONFIRMED_TREND_HIGHER' in rule
-          assert 'CONFIRMED_TREND_LOWER' in rule
+          assert 'V11_STRICT_HIGHER' in rule
+          assert 'V11_STRICT_LOWER' in rule
           print('EVENT10_PURE_SIGNAL_NO_AI_OR_TRADE_GATE=true')
           PY

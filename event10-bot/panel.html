@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · 六项基础确认 + V10频率优化 · 每分钟扫描 · 有效信号至少间隔4分钟</p>
+<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · V11高标准/普通两档研究信号 · 每分钟扫描 · 最短信号间隔4分钟</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V10保留V9的六项方向筛选及高RSI/弱下跌保护；每4分钟可产生新的有效方向，即使之前10分钟预测尚未到期。每条独立锁价并在600秒后核验。信号可能重叠且相关，不自动下单。</div>
+V11采用高标准与普通两档，继续要求1分钟、5分钟趋势一致，增加看跌反弹风险过滤。每条信号独立锁价并在600秒后核验，最短信号间隔4分钟，只提供研究方向、不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -53,7 +53,7 @@ V10保留V9的六项方向筛选及高RSI/弱下跌保护；每4分钟可产生�
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">V10保留V9防追涨、弱趋势防追空，延迟K线可在本分钟内重试。连续3次错误有时限暂停；方向信号可能互相重叠，不能当作独立交易样本。指数代理价不等于真实事件合约Strike。</p>
+ <p class="sub">V11保留高位防追涨，增加看跌衰竭、下影线和RSI反弹过滤；延迟K线可以本分钟重试。连续3次错误有时限暂停；方向信号可能互相重叠，不能当作独立交易样本。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 <p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
 </div>
@@ -102,14 +102,24 @@ V10保留V9的六项方向筛选及高RSI/弱下跌保护；每4分钟可产生�
 <div class="metric"><small>新规则最近5轮</small><strong id="v6last5">—</strong></div>
 <div class="metric"><small>新规则最近10轮</small><strong id="v6last10">—</strong></div>
 </div>
+<div class="grid" style="margin-top:12px">
+<div class="metric"><small>高标准信号 / 已结算</small><strong id="strictTierCount">0 / 0</strong></div>
+<div class="metric"><small>高标准代理命中率</small><strong id="strictTierWin">—</strong></div>
+<div class="metric"><small>普通信号 / 已结算</small><strong id="standardTierCount">0 / 0</strong></div>
+<div class="metric"><small>普通信号代理命中率</small><strong id="standardTierWin">—</strong></div>
+</div>
 <p class="sub">全部新规则有效方向均永久追加到独立信号日志，统计所有已保存的新规则信号（不是最近50条的局部统计）。旧版预测历史继续保留且不会混入命中率。命中仅指公开行情代理，非官方事件合约结算。</p>
 </section>
 <section class="card">
+<h2>最近1小时 · 为什么没有出信号</h2>
+<p class="sub" id="scanAudit">正在读取扫描统计…</p>
+<p class="sub" id="gateStats">正在读取各项拒绝原因…</p>
+<p class="sub">同一次无信号可能有多个原因；自动同一分钟的重试只计一次。</p>
 <div class="row"><h2>所有有效信号记录</h2><button type="button" class="secondary" id="refresh">立即刷新</button></div>
 <p class="sub" id="historySummary" aria-live="polite">载入已保存的信号…</p>
 <div class="tablewrap"><table><thead><tr>
-<th>出信号时间</th><th>来源</th><th>方向</th><th>触发类型</th><th>3分钟净涨跌</th><th>锁定指数价</th><th>预定到期</th><th>到期指数价</th><th>实际采样</th><th>到期涨跌</th><th>代理结果</th>
-</tr></thead><tbody id="records"><tr><td colspan="11">读取中…</td></tr></tbody></table></div>
+<th>出信号时间</th><th>来源</th><th>等级</th><th>方向</th><th>触发类型</th><th>3分钟净涨跌</th><th>锁定指数价</th><th>预定到期</th><th>到期指数价</th><th>实际采样</th><th>到期涨跌</th><th>代理结果</th>
+</tr></thead><tbody id="records"><tr><td colspan="12">读取中…</td></tr></tbody></table></div>
 <div class="row" style="margin-top:12px">
 <button type="button" class="secondary" id="newerSignals">上一页</button>
 <span class="sub" id="signalPage">第 1 页</span>
@@ -120,7 +130,7 @@ V10保留V9的六项方向筛选及高RSI/弱下跌保护；每4分钟可产生�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_FREQUENCY_V10_20261104";
+const SIGNAL_VERSION="EVENT10_TIERED_V11_20261105";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -131,6 +141,11 @@ function displaySignalStats(stats){
  $("accuracy").textContent=pct(stats?.proxyAccuracyPct);
  $("v6last5").textContent=pct(stats?.last5Pct);
  $("v6last10").textContent=pct(stats?.last10Pct);
+ const strict=stats?.byTier?.STRICT_RESEARCH,standard=stats?.byTier?.STANDARD_RESEARCH;
+ $("strictTierCount").textContent=(strict?.total??0)+" / "+(strict?.settled??0);
+ $("strictTierWin").textContent=pct(strict?.accuracyPct);
+ $("standardTierCount").textContent=(standard?.total??0)+" / "+(standard?.settled??0);
+ $("standardTierWin").textContent=pct(standard?.accuracyPct);
 }
 let active=null,inflight=false,pendingRequestId=null;
 const attemptedChineseTranslations=new Set();
@@ -241,6 +256,10 @@ const isCurrentStrategyRecord=s=>!!s&&(
  s.decisionReviewVersion===SIGNAL_VERSION||
  s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
 function display(d){
+ const audit=d.scanDiagnostics?.lastHour;
+ const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V11_MIN_SIGNAL_GAP:"4分钟间隔",DATA_ERROR:"数据过期"};
+ $("scanAudit").textContent=audit?"最近1小时检查 "+audit.checks+" 次，高标准 "+audit.strictSignals+" 条，普通 "+audit.standardSignals+" 条，无信号 "+audit.noSignal+" 次，数据异常 "+audit.dataErrors+" 次。":"扫描审计暂未就绪";
+ $("gateStats").textContent=audit&&Object.keys(audit.byReason||{}).length?"未通过条件："+Object.entries(audit.byReason).sort((a,b)=>b[1]-a[1]).map(([k,v])=>(names[k]||k)+" "+v+"次").join("、")+"。":"本小时暂未累计拒绝原因。";
   // Display verified scan freshness; direction is minute-scanned, not per tick.
   const verifiedAt=d.lastSuccessfulScanAt;
   const audit=d.lastCheck||{};
@@ -297,7 +316,7 @@ function display(d){
      Number.isFinite(rule.change3mPct)?rule.change3mPct.toFixed(5)+"%":"—")+
      " · 1m/5m趋势共振 · 形态、量比与RSI全部确认";
    detail.append(desc);
-   $("dataQuality").textContent="已收盘1m与5m多周期趋势共振和量价过滤，方向锁定时采集指数代理价，满600秒后同源核验；非官方结算。";
+   $("dataQuality").textContent="指标来自币安BTC现货已收盘1m/5m K线；锁定与600秒后核验来自币安U本位合约指数价。两者并非完全同一价格口径，也不等于事件合约官方Strike或结算。";
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
@@ -384,7 +403,7 @@ async function refreshHistory(){
   const rows=$("records");rows.replaceChildren();
   if(!records.length){
    const tr=document.createElement("tr"),td=document.createElement("td");
-   td.colSpan=11;td.textContent="新策略暂无有效方向信号";
+   td.colSpan=12;td.textContent="新策略暂无有效方向信号";
    tr.append(td);rows.append(tr);
   }
   for(const s of records){
@@ -397,13 +416,13 @@ async function refreshHistory(){
    const change=typeof s.change3mPct==="number"?s.change3mPct.toFixed(5)+"%":"—";
     const returned=(typeof s.openPrice==="number"&&typeof s.closePrice==="number")?
       ((s.closePrice/s.openPrice-1)*100).toFixed(5)+"%":"—";
-    const cells=[when(s.openedAt),s.trigger==="AUTO"?"自动":"手动",x,
+    const cells=[when(s.openedAt),s.trigger==="AUTO"?"自动":"手动",s.signalQuality==="STRICT_RESEARCH"?"高标准":"普通",x,
       s.eventTag||"—",change,price(s.openPrice),when(s.expiresAt),
       price(s.closePrice),when(s.closeObservedAt),returned,outcome];
     for(const [i,v] of cells.entries()){
     const td=document.createElement("td");td.textContent=v;
-    if(i===2)td.className=s.direction==="UP"?"good":"bad";
-    if(i===10)td.className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
+    if(i===3)td.className=s.direction==="UP"?"good":"bad";
+    if(i===11)td.className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
     tr.append(td);
    }rows.append(tr);
   }

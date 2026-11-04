@@ -40,14 +40,14 @@ jobs:
           for forbidden in ['DEEPSEEK_API_KEY','DEEPSEEK_API_URL','/fapi/v1/order',
                             '/api/v3/order','/papi/v1/order']:
             assert forbidden not in s+rule,forbidden
-          assert 'if(!rule.direction)return lastCheck' in s
+          assert 'if(!rule.direction){registerScan(id,clock(),rule);return lastCheck;}' in s
           assert 'const signalExpiry=decisionAt+HORIZON_MS' in s
           assert 'openPrice:liveIndex' in s
           assert 'INDEX_SIGNAL_TPLUS10_PROXY_ONLY' in s
           assert 'autoTradingEnabled:false' in s
           assert 'verifiedClosedCandles' in rule and 'FILTERED_NO_EDGE' in rule
           assert 'expectedLastClose' in rule and 'STALE_' in rule
-          assert 'MIN_SIGNAL_GAP_MS = 240_000' in s and 'V10_MIN_SIGNAL_GAP' in s
+          assert 'MIN_SIGNAL_GAP_MS = 240_000' in s and 'V11_MIN_SIGNAL_GAP' in s
           assert 'const signalExpiry=decisionAt+HORIZON_MS' in s
           assert 'h.expiresAt>decisionAt' in s  # legacy cutover still waits 10m
           assert 'nowMs-previous.lastAt>=14000' in s

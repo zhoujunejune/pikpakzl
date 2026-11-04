@@ -67,6 +67,8 @@ public final class SignalAlertService extends Service {
     // Foreground-only low-latency polling: no speculative signals, no extra exchange requests.
     // If a request fails, retry after 2s rather than waiting for the old 5s interval.
     private static final int SIGNAL_POLL_SECONDS=2;
+    private static final String SIGNAL_FULL_URL="https://prediction.47-237-188-69.sslip.io/event10/api/signals?limit=50&offset=0";
+    private static final String SIGNAL_FAST_URL="https://prediction.47-237-188-69.sslip.io/event10/api/signals?limit=8&offset=0";
     private ScheduledExecutorService executor;
     private final AlarmPlayer sound=new AlarmPlayer();
     private SignalPopupOverlay signalPopup;
@@ -190,11 +192,11 @@ public final class SignalAlertService extends Service {
             if(lock!=null&&lock.isHeld())lock.release();
         }
     }
-    private JSONObject fetch() throws Exception {
+    private JSONObject fetch(boolean catchUp) throws Exception {
         String[] credentials=SecureStore.loadLogin(this);
         if(credentials==null)throw new IllegalStateException("登录信息不可用，请重新登录");
         // No caller-provided URLs: credentials are transmitted only to the verified HTTPS host.
-        URL url=new URL("https://prediction.47-237-188-69.sslip.io/event10/api/signals?limit=50&offset=0");
+        URL url=new URL(catchUp?SIGNAL_FULL_URL:SIGNAL_FAST_URL);
         HttpURLConnection conn=(HttpURLConnection)url.openConnection();
         conn.setInstanceFollowRedirects(false);
         conn.setRequestMethod("GET");
@@ -246,7 +248,11 @@ public final class SignalAlertService extends Service {
         SharedPreferences p=SecureStore.prefs(this);
         if(!p.getBoolean(PREF_ENABLED,false))return;
         long requestStarted=System.currentTimeMillis();
-        JSONObject response=fetch();
+        // Fast endpoint is sufficient for normal 4-minute spacing; full history
+        // reconciles after a long offline gap or on service startup.
+        long previousSuccess=p.getLong(PREF_LAST_SUCCESS,0L);
+        boolean catchUp=previousSuccess<=0L||requestStarted-previousSuccess>60_000L;
+        JSONObject response=fetch(catchUp);
         if(!response.optBoolean("ok",false))throw new IllegalStateException("服务响应异常");
         JSONArray records=response.optJSONArray("records");
         if(records==null)throw new IllegalStateException("信号记录缺失");
@@ -293,13 +299,14 @@ public final class SignalAlertService extends Service {
                 processed.add(id);
                 continue;
             }
-            if("SIGNAL_EXPIRED".equals(decision)||"SIGNAL_TOO_OLD".equals(decision)){
+            if("SIGNAL_EXPIRED".equals(decision)||"SIGNAL_TOO_OLD".equals(decision)||
+               "SIGNAL_TOO_LATE".equals(decision)){
                 // Keep an explicit missed event so diagnosis can distinguish it from no signal.
                 processed.add(id);
                 missed++;
                 p.edit().putLong(PREF_LAST_MISSED_TIME,now)
                     .putString(PREF_LAST_REASON,decision).apply();
-                audit(p,"MISSED_EXPIRED",id,dir,opened,expires);
+                audit(p,"MISSED_EXPIRED",id,decision+" "+dir,opened,expires);
                 continue;
             }
             if(!SignalAlarmPolicy.ALERT.equals(decision)){
@@ -326,6 +333,8 @@ public final class SignalAlertService extends Service {
             }
             // Notification/audio dispatch. Mark handled only after the attempt; retry transient
             // failures on the next poll while the signal remains live.
+            long ageMs=Math.max(0L,System.currentTimeMillis()-opened);
+            if(ageMs>15_000L)audit(p,"DELAYED_ALERT",id,dir+" delayMs="+ageMs,opened,expires);
             boolean soundStarted=alert(dir,signal);
             processed.add(id);
             p.edit().putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
@@ -359,7 +368,11 @@ public final class SignalAlertService extends Service {
         long opened=signal.optLong("openedAt",System.currentTimeMillis());
         String signalTime=new java.text.SimpleDateFormat("MM-dd HH:mm:ss",java.util.Locale.CHINA)
             .format(new java.util.Date(opened));
-        String content="BTC 10分钟 · "+name+" · "+signalTime+" · "+trigger;
+        String tier="STRICT_RESEARCH".equals(signal.optString("signalQuality"))?"高标准":
+            "STANDARD_RESEARCH".equals(signal.optString("signalQuality"))?"普通":"等级待确认";
+        long ageSeconds=Math.max(0L,(System.currentTimeMillis()-opened)/1000L);
+        String freshness=ageSeconds>15L?" · 发现延迟"+ageSeconds+"秒":" · 及时发现";
+        String content="BTC 10分钟 · "+tier+" · "+name+" · "+signalTime+" · "+trigger+freshness;
         // Reference-cycle expiry is NOT the expiry of a new Binance order.
         String detail=content+"。金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
             +"确认方向、开仓指数价格和最终到期时间，再由你手动下单。没有自动成交。";
@@ -373,7 +386,7 @@ public final class SignalAlertService extends Service {
         PendingIntent binance=openBinanceIntent(signalId);
         Notification notice=new Notification.Builder(this,ALARM_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("新信号："+name+" · 前往币安手动下单")
+            .setContentTitle("新信号："+tier+" · "+name+" · 请核对价格")
             .setContentText(content)
             .setStyle(new Notification.BigTextStyle().bigText(detail))
             .setAutoCancel(true)

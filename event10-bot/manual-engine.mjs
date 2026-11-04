@@ -5,6 +5,7 @@ import {tenMinuteWindow} from "./market-enrichment.mjs";
 import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
 import {confirmedPriceStructure} from "./price-structure.mjs";
 export const HORIZON_MS = 600_000;
+export const MIN_SIGNAL_GAP_MS = 240_000; // 4-minute spacing, each signal still settles after 10 minutes.
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
 const round = (v,n=5)=>Number(v.toFixed(n));
@@ -249,13 +250,17 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"TARGETED_MOMENTUM_V9_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_TARGETED_V9",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"FREQUENCY_V10_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_FREQUENCY_V10",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
-      horizonMs:HORIZON_MS,busyStart,busySettle,modelCalls:0,lastError,
-      enrichmentVersion:"EVENT10_TARGETED_V9",
+      horizonMs:HORIZON_MS,minSignalGapMs:MIN_SIGNAL_GAP_MS,
+       overlappingObservationsAllowed:true,activeSignalCount:history.filter(x=>
+         x.decisionReviewVersion===RULE_VERSION&&x.status==="PREDICTED"&&
+         !x.settlementStatus&&clock()<x.expiresAt).length,
+       busyStart,busySettle,modelCalls:0,lastError,
+      enrichmentVersion:"EVENT10_FREQUENCY_V10",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -319,20 +324,22 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const rule=evaluatePureSignal({feed,reference,
         indexSnapshot:filtered.indexQuote,orderBook:filtered.orderBook,
         aggressiveFlow:filtered.aggressiveFlow,futuresMinute:filtered.futuresMinute,trigger:id.startsWith("auto-")?"AUTO":"MANUAL"});
-      // A 10-minute prediction must not be counted repeatedly from overlapping windows.
-      // Include preserved legacy signals, so a deployment cannot bypass the cooldown.
-      const priorOverlapping=Array.from(signalLedger.all.values()).filter(h=>
+      // Observation-only V10 can assess a new direction after 4 minutes, while
+      // each accepted prediction keeps its OWN T+600 settlement timestamp.
+      // Legacy V9/V8 sessions keep the old 10-minute cooldown on cutover.
+      const blocking=Array.from(signalLedger.all.values()).filter(h=>
         ["UP","DOWN"].includes(h.direction)&&Number.isFinite(h.openedAt)&&
-        Number.isFinite(h.expiresAt)&&h.openedAt<=decisionAt&&h.expiresAt>decisionAt);
-      if(rule.direction&&priorOverlapping.length){
-        const cooldownEndsAt=Math.max(...priorOverlapping.map(h=>h.expiresAt));
-        rule.direction=null;
-        rule.signal="NO_SIGNAL";
-        rule.status="NO_SIGNAL";
-        rule.quality="COOLDOWN";
-        rule.eventTag="OVERLAPPING_TPLUS600";
+        Number.isFinite(h.expiresAt)&&h.openedAt<=decisionAt&&
+        ((h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION)
+          ?h.openedAt+MIN_SIGNAL_GAP_MS>decisionAt:h.expiresAt>decisionAt));
+      if(rule.direction&&blocking.length){
+        const cooldownEndsAt=Math.max(...blocking.map(h=>
+          (h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION)
+            ?h.openedAt+MIN_SIGNAL_GAP_MS:h.expiresAt));
+        rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
+        rule.quality="COOLDOWN";rule.eventTag="V10_MIN_SIGNAL_GAP";
         rule.conditions=null;
-        rule.reason="上一轮有效10分钟信号尚未到期，为避免重叠信号和重复押注，同一窗口内不再产生新方向。";
+        rule.reason="上一次有效信号未达到4分钟最短间隔；每条方向仍独立按10分钟核验，无自动交易。";
         rule.evidence.quality="COOLDOWN";
         rule.evidence.cooldownUntil=cooldownEndsAt;
       }
@@ -343,7 +350,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       if(rule.direction&&recent.length===3&&recent.every(h=>h.proxyHit===false)&&
         decisionAt-recent[0].closeObservedAt<15*60000){
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-        rule.quality="NO_SIGNAL";rule.eventTag="V9_LOSS_STREAK_PAUSE";
+        rule.quality="NO_SIGNAL";rule.eventTag="V10_LOSS_STREAK_PAUSE";
         rule.conditions=null;rule.reason="最近三条已结算方向均错误，暂停15分钟信号；研究规则不保证胜率。";
         rule.evidence.reviewTag="V9_LOSS_STREAK_PAUSE";
       }
@@ -376,7 +383,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_TARGETED_V9",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_FREQUENCY_V10",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -406,13 +413,14 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
     // Every minute is checked; there are no forced baseline directions.
-    // At most three attempts in first 20 seconds; stable IDs prevent duplicates.
+    // Space three attempts over ~30s so delayed closed candles can catch up.
+    // Stable slot IDs prevent duplicates; no extra accepted directions are fabricated.
     const nowMs=clock(),slotStart=Math.floor(nowMs/60000)*60000;
     const slotId="auto-1m-"+slotStart;
     const previous=autoAttempts.get(slotStart)||{count:0,lastAt:0};
-    if(nowMs-slotStart<20000&&!busyStart&&!inFlightStart&&
+    if(nowMs-slotStart<45000&&!busyStart&&!inFlightStart&&
        !signalLedger.all.has(slotId)&&previous.count<3&&
-       (previous.count===0||nowMs-previous.lastAt>=3500)){
+       (previous.count===0||nowMs-previous.lastAt>=14000)){
       autoAttempts.set(slotStart,{count:previous.count+1,lastAt:nowMs});
       lastAutoCheckAt=nowMs;
       void start(slotId).catch(error=>{
@@ -435,6 +443,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_TARGETED_MOMENTUM_V9_20261104"||
         h.decisionReviewVersion==="EVENT10_BALANCED_SIGNAL_V8_20261103"||
         h.decisionReviewVersion==="EVENT10_REVERSAL_GUARD_V7_20261103"||
         h.decisionReviewVersion==="EVENT10_FRESH_NONOVERLAP_V6_20261103"||
@@ -464,7 +473,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

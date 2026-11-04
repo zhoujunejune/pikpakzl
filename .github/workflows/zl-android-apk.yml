@@ -154,13 +154,13 @@ jobs:
           mkdir -p dist
           if [[ "$ZL_STABLE_SIGNING" == true ]]; then
             src=android-app/app/build/outputs/apk/release/app-release.apk
-            dest=dist/ZL-Control-v1.2.3-stable-release.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.3-STABLE-RELEASE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.4-stable-release.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.4-STABLE-RELEASE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=true' >> "$GITHUB_ENV"
           else
             src=android-app/app/build/outputs/apk/debug/app-debug.apk
-            dest=dist/ZL-Control-v1.2.3-DEBUG-ONLY-NOT-UPGRADEABLE.apk
-            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.3-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
+            dest=dist/ZL-Control-v1.2.4-DEBUG-ONLY-NOT-UPGRADEABLE.apk
+            echo 'ZL_ARTIFACT_NAME=ZL-Control-v1.2.4-DEBUG-ONLY-NOT-UPGRADEABLE' >> "$GITHUB_ENV"
             echo 'ZL_RELEASE_UPGRADE_CAPABLE=false' >> "$GITHUB_ENV"
           fi
           cp "$src" "$dest"

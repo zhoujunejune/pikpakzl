@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  statuses: write
 concurrency:
   group: zl-control-android-apk
   cancel-in-progress: false
@@ -208,4 +209,9 @@ jobs:
           else
             gh release create "$tag" "$file" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes "$notes" "${prerelease[@]}"
           fi
-          echo "APK_DOWNLOAD_RELEASE=https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+          release_url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+          echo "APK_DOWNLOAD_RELEASE=$release_url"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success -f context=zl-android-apk-release \
+            -f target_url="$release_url" \
+            -f description="Verified APK published to GitHub Releases" >/dev/null

@@ -210,6 +210,14 @@ function openSignalLedger(file,sessionHistory) {
       .sort((a,b)=>b.openedAt-a.openedAt||b.id.localeCompare(a.id));
     const settled=ordered.filter(x=>typeof x.proxyHit==="boolean");
     const hits=settled.filter(x=>x.proxyHit===true).length;
+    const byTier={};
+    for(const tier of ['STRICT_RESEARCH','STANDARD_RESEARCH']){
+      const rows=ordered.filter(x=>x.signalQuality===tier);
+      const done=rows.filter(x=>typeof x.proxyHit==='boolean');
+      const wins=done.filter(x=>x.proxyHit===true).length;
+      byTier[tier]={total:rows.length,settled:done.length,hits:wins,misses:done.length-wins,
+        accuracyPct:done.length?round(wins*100/done.length,2):null};
+    }
     const percentage=n=>n.length?round(n.filter(x=>x.proxyHit===true).length*100/n.length,2):null;
     return {ok:true,version:RULE_VERSION,
       total:ordered.length,limit:take,offset:skip,records:ordered.slice(skip,skip+take),
@@ -217,7 +225,7 @@ function openSignalLedger(file,sessionHistory) {
         proxySettled:settled.length,proxyHits:hits,proxyMisses:settled.length-hits,
         proxyAccuracyPct:settled.length?round(hits*100/settled.length,2):null,
         last5Pct:percentage(settled.slice(0,5)),
-        last10Pct:percentage(settled.slice(0,10))},
+        last10Pct:percentage(settled.slice(0,10)),byTier},
       officialEventContractResultsAvailable:false,autoTradingEnabled:false};
   }
   return {all,add,settle,list};
@@ -251,8 +259,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"FREQUENCY_V10_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_FREQUENCY_V10",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"TIERED_V11_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_TIERED_V11",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
@@ -262,7 +270,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:0,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,
-      enrichmentVersion:"EVENT10_FREQUENCY_V10",
+      enrichmentVersion:"EVENT10_TIERED_V11",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -342,7 +350,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
           (h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION)
             ?h.openedAt+MIN_SIGNAL_GAP_MS:h.expiresAt));
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-        rule.quality="COOLDOWN";rule.eventTag="V10_MIN_SIGNAL_GAP";
+        rule.quality="COOLDOWN";rule.eventTag="V11_MIN_SIGNAL_GAP";
         rule.conditions=null;
         rule.reason="上一次有效信号未达到4分钟最短间隔；每条方向仍独立按10分钟核验，无自动交易。";
         rule.evidence.quality="COOLDOWN";
@@ -355,9 +363,9 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       if(rule.direction&&recent.length===3&&recent.every(h=>h.proxyHit===false)&&
         decisionAt-recent[0].closeObservedAt<15*60000){
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-        rule.quality="NO_SIGNAL";rule.eventTag="V10_LOSS_STREAK_PAUSE";
+        rule.quality="NO_SIGNAL";rule.eventTag="V11_LOSS_STREAK_PAUSE";
         rule.conditions=null;rule.reason="最近三条已结算方向均错误，暂停15分钟信号；研究规则不保证胜率。";
-        rule.evidence.reviewTag="V9_LOSS_STREAK_PAUSE";
+        rule.evidence.reviewTag="V11_LOSS_STREAK_PAUSE";
       }
       const signalExpiry=decisionAt+HORIZON_MS; // each accepted signal gets its own full 600s
       const openingIndex=null;
@@ -388,7 +396,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_FREQUENCY_V10",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_TIERED_V11",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -448,6 +456,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_FREQUENCY_V10_20261104"||
         h.decisionReviewVersion==="EVENT10_TARGETED_MOMENTUM_V9_20261104"||
         h.decisionReviewVersion==="EVENT10_BALANCED_SIGNAL_V8_20261103"||
         h.decisionReviewVersion==="EVENT10_REVERSAL_GUARD_V7_20261103"||
@@ -478,7 +487,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

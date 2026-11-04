@@ -55,6 +55,7 @@ V10保留V9的六项方向筛选及高RSI/弱下跌保护；每4分钟可产生�
  <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
  <p class="sub">V10保留V9防追涨、弱趋势防追空，延迟K线可在本分钟内重试。连续3次错误有时限暂停；方向信号可能互相重叠，不能当作独立交易样本。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
+<p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
 </div>
 <p class="sub">自动每分钟扫描；有效方向之间最少间隔4分钟（含手动、自动）。允许同时存在多条未结算的10分钟预测；每条分别锁定指数代理价并在600秒后核验。</p>
 </section>
@@ -240,6 +241,20 @@ const isCurrentStrategyRecord=s=>!!s&&(
  s.decisionReviewVersion===SIGNAL_VERSION||
  s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
 function display(d){
+  // Display verified scan freshness; direction is minute-scanned, not per tick.
+  const verifiedAt=d.lastSuccessfulScanAt;
+  const audit=d.lastCheck||{};
+  const ev=audit.evidence||{};
+  const age=typeof verifiedAt==="number"?Date.now()-verifiedAt:Infinity;
+  const bar1=Number.isFinite(ev.lastClosed1mAt)?ev.lastClosed1mAt+60000:null;
+  const bar5=Number.isFinite(ev.lastClosed5mAt)?ev.lastClosed5mAt+300000:null;
+  const indexAge=Number.isFinite(audit.openAgeMs)?audit.openAgeMs:null;
+  const fresh=age>=0&&age<=90000&&bar1!==null&&bar5!==null&&indexAge!==null&&audit.status!=="DATA_ERROR";
+  $("feedFreshness").textContent=audit.status==="DATA_ERROR"?
+    "行情异常："+(audit.error||"K线/指数校验未通过")+"；不采用过期数据，不给方向。":
+    fresh?"最近有效行情校验："+when(verifiedAt)+" ｜ 1分钟K线收盘："+when(bar1)+" ｜ 5分钟K线收盘："+when(bar5)+" ｜ 当轮指数报价延迟："+indexAge+"毫秒；行情持续更新，方向每分钟扫描。":
+    "最新行情校验状态待确认："+(Number.isFinite(verifiedAt)?"距上次通过约"+Math.max(0,Math.round(age/1000))+"秒":"尚无有效扫描")+"；未确认时不声明数据实时。";
+  $("feedFreshness").className="sub "+(fresh?"good":"yellow");
  const recent=isCurrentStrategyRecord(d.lastCheck)?d.lastCheck:null;
  const old=isCurrentStrategyRecord(d.lastSession)?d.lastSession:null;
  const currentActive=isCurrentStrategyRecord(d.active)?d.active:null;
@@ -337,7 +352,7 @@ async function refresh(){
     d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查完成：当前没有符合策略的方向优势。":
-    "每分钟检查，最新K线有效且无重叠10分钟信号时，才可能出方向。";
+    "每分钟检查；最新K线和指数校验通过、V10方向条件及4分钟最短信号间隔满足时，才可能出方向。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";

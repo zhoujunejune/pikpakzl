@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";import os from "node:os";import path from "node:path";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
-import {createEngine,scoreProxy} from "./manual-engine.mjs";
+import {createEngine,scoreProxy,MIN_SIGNAL_GAP_MS} from "./manual-engine.mjs";
 const START=Date.parse("2026-11-02T00:00:00Z");
 function feed(at=START,side=1,flat=false){
  const candles={};
@@ -45,7 +45,7 @@ test("V9 long RSI threshold stays below 63 and down requires 15m persistence",()
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_TARGETED_MOMENTUM_V9_20261104");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_FREQUENCY_V10_20261104");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -95,7 +95,7 @@ test("abnormally large volume and momentum spikes must not be chased",()=>{
    assert.equal(evaluate(at,"AUTO",runaway).direction,null);
  }
 });
-test("no overlapping 600-second signals, across manual, auto and process restart",async()=>{
+test("V10 4m gap permits independent overlapping 10m observations across restart",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
@@ -111,19 +111,27 @@ test("no overlapping 600-second signals, across manual, auto and process restart
  const blocked=await engine.start(id());
  assert.equal(blocked.status,"NO_SIGNAL");
  assert.equal(blocked.quality,"COOLDOWN");
- assert.match(blocked.reason,/重叠/);
+ assert.match(blocked.reason,/4分钟/);
  assert.equal(engine.signals().total,1);
  engine=createEngine(opts);
  now=START+120000+1000;
  const manual=await engine.start("manually-triggered-001");
  assert.equal(manual.status,"NO_SIGNAL");
  assert.equal(engine.signals().total,1);
+ now=START+MIN_SIGNAL_GAP_MS+1000;
+ const overlap=await engine.start(id());
+ assert.equal(overlap.direction,"UP");
+ assert.equal(overlap.expiresAt-overlap.openedAt,600000);
+ assert.equal(overlap.openedAt-first.openedAt,MIN_SIGNAL_GAP_MS);
+ assert.equal(engine.status().activeSignalCount,2);
+ assert.equal(engine.status().minSignalGapMs,MIN_SIGNAL_GAP_MS);
+ assert.equal(engine.signals().total,2);
  now=first.expiresAt+1000;
  const next=await engine.start(id());
  assert.equal(next.direction,"UP");
- assert.equal(engine.signals().total,2);
+ assert.equal(engine.signals().total,3);
 });
-test("V9 retains NO_SIGNAL protection for risky momentum",()=>{
+test("V10 retains V9 NO_SIGNAL protection for risky momentum",()=>{
  const at=START+60000;
  const f=feed(at,-1),last=f.candles["1m"].at(-1);
  last.close-=3;last.low=Math.min(last.low,last.close-0.1);
@@ -137,6 +145,25 @@ test("missing data and stale index abstain instead of inventing a direction",()=
  assert.throws(()=>evaluatePureSignal({feed:feed(at),reference:{observedAt:at},
   indexSnapshot:{price:70000,observedAt:at-9000},trigger:"AUTO"}),/REALTIME_BINANCE_INDEX_REQUIRED/);
 });
+test("V10 retries stale completed candles later in the same minute",async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-retry-"));
+ const file=path.join(dir,"state.json");
+ let now=START+1000;
+ const fetcher=async url=>url.includes("shadow-market-data")?{
+   ok:true,json:async()=>feed(now-START<25000?now-60000:now)
+ }:url.includes("premiumIndex")?{
+   ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:"70000",time:now-100})
+ }:Promise.reject(Error("UNEXPECTED_URL"));
+ const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
+ const flush=async()=>{await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));};
+ await engine.tick();await flush();
+ assert.equal(engine.signals().total,0);
+ now=START+16000;await engine.tick();await flush();
+ assert.equal(engine.signals().total,0);
+ now=START+31000;await engine.tick();await flush();
+ assert.equal(engine.signals().total,1);
+ assert.equal(engine.status().lastSession.direction,"UP");
+});
 test("engine saves version, 600-second index result, no order and persistent records",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-hybrid-"));const file=path.join(dir,"state.json");
  let now=START+1000,price=70000;
@@ -149,6 +176,7 @@ test("engine saves version, 600-second index result, no order and persistent rec
  assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"FILTERED_RESEARCH");
  assert.equal(signal.expiresAt-signal.openedAt,600000);assert.equal(signal.realOrderPlaced,false);
  assert.equal(engine.status().autoTradingEnabled,false);assert.equal(engine.status().autoIntervalMs,60000);
+ assert.equal(engine.status().minSignalGapMs,240000);
  now=signal.expiresAt+1000;price=70001;await engine.tick();
  assert.equal(engine.signals().stats.proxySettled,1);
  assert.equal(createEngine(opts).signals().total,1);

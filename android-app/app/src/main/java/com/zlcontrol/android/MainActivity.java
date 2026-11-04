@@ -325,7 +325,9 @@ public final class MainActivity extends Activity {
             case "RING_STARTED":return "已启动系统铃声";
             case "SOUND_FAILED_NOTICE_ONLY":return "通知已发出，但系统铃声播放失败";
             case "BEFORE_ENABLED":return "信号发生在本次开启提醒之前（历史信号）";
-            case "MISSED_EXPIRED":return "后台恢复时信号已经过期，未补响";
+            case "MISSED_EXPIRED":return "后台恢复时信号过期或太晚，已记录但未补响";
+            case "DELAYED_ALERT":return "新信号发现延迟超过15秒";
+            case "SIGNAL_TOO_LATE":return "信号产生超过120秒，不再当新信号提醒";
             case "SIGNAL_EXPIRED":return "发现信号时已超过到期时间";
             case "NO_NOTIFICATION_PERMISSION":return "没有系统通知权限";
             case "ALARM_CHANNEL_DISABLED":return "信号提醒通知渠道已被关闭";
@@ -360,8 +362,23 @@ public final class MainActivity extends Activity {
         if(pm!=null&&Build.VERSION.SDK_INT>=23)
             batteryUnrestricted=pm.isIgnoringBatteryOptimizations(getPackageName());
         StringBuilder log=new StringBuilder();
+        int recentRings=0,lateRings=0,missedSignals=0,requestFailures=0;
+        long largestDelayMs=0L;
         try{
             JSONArray audit=new JSONArray(p.getString(SignalAlertService.PREF_AUDIT_TRAIL,"[]"));
+            for(int i=0;i<audit.length();i++){
+                JSONObject e=audit.optJSONObject(i);if(e==null)continue;
+                String action=e.optString("action","");
+                if("RING_STARTED".equals(action)||"SOUND_FAILED_NOTICE_ONLY".equals(action)){
+                    recentRings++;
+                    long t=e.optLong("time",0L),opened=e.optLong("openedAt",0L);
+                    if(t>opened&&opened>0L){long delay=t-opened;
+                        largestDelayMs=Math.max(largestDelayMs,delay);
+                        if(delay>15_000L)lateRings++;}
+                }
+                if("MISSED_EXPIRED".equals(action))missedSignals++;
+                if("POLL_ERROR".equals(action))requestFailures++;
+            }
             for(int i=audit.length()-1;i>=Math.max(0,audit.length()-7);i--){
                 JSONObject e=audit.optJSONObject(i);
                 if(e==null)continue;
@@ -379,6 +396,8 @@ public final class MainActivity extends Activity {
             "\n后台最后成功："+timeOf(lastSuccess)+
             "\n最近接口耗时："+p.getLong(SignalAlertService.PREF_LAST_API_LATENCY_MS,0L)+"毫秒"+
             "\n最近信号通知延迟："+(lastAlarm>0?p.getLong(SignalAlertService.PREF_LAST_ALARM_DELAY_MS,0L)+"毫秒":"无记录")+
+            "\n本机近期已发提醒："+recentRings+"次（发现延迟>15秒："+lateRings+"次，最长："+largestDelayMs+"毫秒）"+
+            "\n本机近期漏提醒/过晚："+missedSignals+"次，接口失败审计："+requestFailures+"次"+
             "\n最近信号："+timeOf(lastSignal)+
             "\n最近信号ID："+p.getString(SignalAlertService.PREF_LAST_SEEN,"无")+
             "\n上次闹铃："+timeOf(lastAlarm)+

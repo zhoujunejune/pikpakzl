@@ -115,6 +115,19 @@ test("finger scrolling replaces static next-page buttons and keeps newest signal
  assert.ok(!html.includes("下一页</button>"));
 });
 
+test("V11 shows tier-specific win rates and short rejection audit without inventing official settlement",()=>{
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ for(const id of ["eStrictPct","eStandardPct","eStrictCount","eStandardCount","eScanAudit","eScanGates","eFreshness"])assert.ok(html.includes('id="'+id+'"'),id);
+ for(const key of ["STRICT_RESEARCH","STANDARD_RESEARCH","scanDiagnostics","lastSuccessfulScanAt","eventTier"])assert.ok(src.includes(key),key);
+ assert.ok(src.includes("指数代理"),"official event contract settlement must never be claimed");
+});
+test("Event10 fast foreground refresh is independent of slow Guardian networking",()=>{
+ assert.ok(src.includes("async function refreshEvent10Only(){"));
+ assert.ok(src.includes('api("/event10/api/status",3500)'));
+ assert.ok(src.includes('api("/guardian/api/status",7500)'));
+ assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
+ assert.ok(src.includes("void refreshEvent10Only();"),"start event update before other bots finish");
+});
 test("app discovers current strategy from matching status and ledger without hardcoding",()=>{
  assert.ok(src.includes("let EVENT10_FREQ_OPTIMIZED_VERSION=null;"));
  assert.ok(src.includes("ledger?.version===currentVersion"));

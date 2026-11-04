@@ -1,7 +1,7 @@
 // BTC ten-minute V7: live signal-only, no exchange orders or guaranteed accuracy.
 // V8 uses the existing six-gate filter without V7 secondary veto.
 // Signals require aligned 1m/5m trend, moderate momentum, candle structure, volume AND RSI.
-export const RULE_VERSION="EVENT10_BALANCED_SIGNAL_V8_20261103";
+export const RULE_VERSION="EVENT10_TARGETED_MOMENTUM_V9_20261104";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -75,6 +75,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   const prev5Fast=ema(p5.slice(0,-3),9);
   const rsi14=rsi(p1);
   const change3mPct=(last.c/p1.at(-4)-1)*100;
+  const change15mPct=(last.c/p1.at(-16)-1)*100;
   const volumeBase=one.slice(-21,-1).reduce((sum,x)=>sum+x.v,0)/20;
   const volumeRatio=volumeBase>0?last.v/volumeBase:0;
   const bullish=one.slice(-3).filter(x=>x.c>x.o).length;
@@ -86,7 +87,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     momentum:change3mPct>=0.030&&change3mPct<=0.18,
     structure:bullish>=2&&last.c>last.o,
     volume:volumeRatio>=0.80&&volumeRatio<=2.50,
-    rsi:rsi14>=45&&rsi14<=65
+    rsi:rsi14>=45&&rsi14<63
   };
   const downChecks={
     trend5m:ema5Fast<ema5Slow&&ema5Fast<prev5Fast,
@@ -94,30 +95,39 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     momentum:change3mPct<=-0.030&&change3mPct>=-0.18,
     structure:bearish>=2&&last.c<last.o,
     volume:volumeRatio>=0.80&&volumeRatio<=2.50,
-    rsi:rsi14>=35&&rsi14<=55
+    rsi:rsi14>=35&&rsi14<=55,
+    persistence15m:change15mPct<=-0.05
   };
   // There are no fixed signal quotas. RSI extremes never trigger reversal by themselves.
   // Avoid high-volume capitulation and momentum spikes; 10m de-dup happens in engine.
   // All six conditions are required; avoid late entries after an extended 3m impulse.
   const core=checks=>checks.trend5m&&checks.trend1m&&checks.momentum;
-  const confirmed=checks=>core(checks)&&checks.structure&&checks.volume&&checks.rsi;
+  const confirmed=checks=>core(checks)&&checks.structure&&checks.volume&&checks.rsi&&checks.persistence15m!==false;
   const passUp=confirmed(upChecks),passDown=confirmed(downChecks);
   let direction=null,quality="NO_SIGNAL",eventTag="FILTERED_NO_EDGE";
   let reason="本分钟未通过数据时效、趋势共振、适度动量、K线结构、正常成交量及RSI的全部要求；不强制猜方向。";
+  if(!passUp&&upChecks.trend5m&&upChecks.trend1m&&upChecks.momentum&&upChecks.structure&&upChecks.volume&&rsi14>=63){
+    eventTag="V9_UP_RSI_EXHAUSTION";
+    reason="看涨基础条件基本满足，但RSI达到63，避免高位追涨；本轮无方向。";
+  }
+  if(!passDown&&downChecks.trend5m&&downChecks.trend1m&&downChecks.momentum&&downChecks.structure&&downChecks.volume&&downChecks.rsi&&change15mPct>-0.05){
+    eventTag="V9_DOWN_WEAK_15M";
+    reason="短线看跌，但15分钟累计跌幅不足0.05%，易遇到反弹；本轮无方向。";
+  }
   if(passUp!==passDown){
     direction=passUp?"UP":"DOWN";
     quality="FILTERED_RESEARCH";
     eventTag=direction==="UP"?"CONFIRMED_TREND_HIGHER":"CONFIRMED_TREND_LOWER";
-    reason="增强过滤方向：已收盘K线新鲜、趋势共振、适度动量、正常成交量、K线结构与RSI确认；仍可能误判。";
+    reason="V9定向过滤：多周期趋势和动量一致，UP限制RSI低于63，DOWN额外确认15分钟累计跌幅不少于0.05%；结果仍可能出错。";
   }
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",eventTag,reason,quality,confidence:null,
-    change3mPct:round(change3mPct),snapshotAt:at,
+    change3mPct:round(change3mPct),change15mPct:round(change15mPct),snapshotAt:at,
     cycleStartAt:Math.floor(at/cycleMs)*cycleMs,
     conditions:quality==="FILTERED_RESEARCH"?(direction==="UP"?upChecks:downChecks):null,
     upChecks,downChecks,
     referenceBasis:"SIGNAL_CAPTURED_INDEX_PRICE_TPLUS600_NOT_EVENT_CONTRACT_STRIKE",
-    evidence:{change3mPct:round(change3mPct),volumeRatio:round(volumeRatio,3),
+    evidence:{change3mPct:round(change3mPct),change15mPct:round(change15mPct),volumeRatio:round(volumeRatio,3),
       rsi14:round(rsi14,2),quality,trigger,ordinary:false,highWindow:true,ema1Fast:round(ema1Fast,3),ema1Slow:round(ema1Slow,3),
       ema5Fast:round(ema5Fast,3),ema5Slow:round(ema5Slow,3),
       bullishLast3:bullish,bearishLast3:bearish,
@@ -142,7 +152,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V8信号：六项趋势确认、风险适度过滤、实时指数参考价；每分钟扫描，600秒内不重复，有效信号不保证胜率。",
+    caveats:["V9信号：保留V8趋势确认，UP增加RSI<63保护，DOWN增加15分钟跌幅≥0.05%确认；每分钟扫描，不强制方向，600秒内去重。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

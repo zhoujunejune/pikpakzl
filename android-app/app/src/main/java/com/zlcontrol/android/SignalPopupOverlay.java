@@ -61,7 +61,7 @@ final class SignalPopupOverlay {
         return v;
     }
 
-    void show(String signalId,String direction,long openedAt,long expiresAt,int noticeId){
+    void show(String signalId,String direction,String tier,long openedAt,long expiresAt,int noticeId){
         main.post(()->{
             // The normal system notification is the fallback when overlay access
             // is unavailable, e.g. Android denies it on the lock screen.
@@ -78,7 +78,7 @@ final class SignalPopupOverlay {
                 layout.setBackground(background(Color.rgb(18,33,53),accent));
                 layout.setElevation(dp(16));
 
-                TextView headline=line("BTC · 10分钟新信号",18,Color.WHITE,true);
+                TextView headline=line("BTC · 10分钟新信号 · "+tier,18,Color.WHITE,true);
                 layout.addView(headline,new LinearLayout.LayoutParams(-1,dp(40)));
                 TextView arrow=line(up?"↑  HIGHER · 看涨":"↓  LOWER · 看跌",
                     27,accent,true);

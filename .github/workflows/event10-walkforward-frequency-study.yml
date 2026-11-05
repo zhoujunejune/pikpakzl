@@ -1,3 +1,4 @@
+# 2026-11-05: verify actual deployed standard-tier implementation versus previous historical candidates.
 name: EVENT10 readonly walkforward frequency study
 on:
   push:

@@ -144,7 +144,10 @@ jobs:
           fi
           echo "ANDROID_APKSIGNER_VERIFY_OK=true"
           sed -n '1,15p' "$RUNNER_TEMP/verify.txt"
-          cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/verify.txt" | head -n1)"
+          cert="$(sed -n \
+            -e 's/^V2 Signer: certificate SHA-256 digest: //p' \
+            -e 's/^Signer #1 certificate SHA-256 digest: //p' \
+            "$RUNNER_TEMP/verify.txt" | head -n1)"
           test -n "$cert"
           if [[ -n "$EXPECTED_CERT_SHA256" && "${cert,,}" != "${EXPECTED_CERT_SHA256,,}" ]]; then
             echo "Release signer differs from expected certificate"; exit 1

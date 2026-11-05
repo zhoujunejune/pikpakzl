@@ -22,7 +22,7 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
-test("V13 strict retains six core gates without the old wide secondary veto",()=>{
+test("V14 strict retains six core gates without the old wide secondary veto",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
  const last=bullish.candles["1m"].at(-1);
@@ -31,7 +31,7 @@ test("V13 strict retains six core gates without the old wide secondary veto",()=
  assert.equal(out.direction,"UP");
  assert.equal(out.strategyVersion,RULE_VERSION);
 });
-test("V13 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
+test("V14 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
  const at=START+60000;
  const up=feed(at,1);
  const q=up.candles["1m"].at(-1);
@@ -45,7 +45,7 @@ test("V13 long RSI threshold stays below 63 and down requires 15m persistence",(
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_QUALITY_FILTER_V13_20261105");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_FAST_MOMENTUM_V14_20261105");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -59,61 +59,30 @@ test("aligned moderate trends may signal on any minute or manually",()=>{
  }
  assert.equal(evaluate(START+3*60000,"MANUAL").direction,"UP");
 });
-test("EMA conflict, low volume, and 3m pump must suppress signals",()=>{
+test("V14 prioritizes frequency even if 5m trend, volume and RSI disagree",()=>{
  const at=START+60000;
- const conflicting=feed(at);conflicting.candles["5m"]=feed(at,-1).candles["5m"];
- assert.equal(evaluate(at,"AUTO",conflicting).direction,null);
- assert.equal(evaluate(at,"AUTO",feed(at,-1)).direction,"DOWN");
- const weakVolume=feed(at);weakVolume.candles["1m"].at(-1).volume=20;
- assert.equal(evaluate(at,"AUTO",weakVolume).direction,null);
- const spike=feed(at),bar=spike.candles["1m"].at(-1);
- bar.close+=60;bar.high=bar.close+0.1;
- assert.equal(evaluate(at,"AUTO",spike).direction,null);
- const lowRsiDown=feed(at,-1),lowLast=lowRsiDown.candles["1m"].at(-1);
- lowLast.close-=80;lowLast.low=lowLast.close-0.1;
- assert.notEqual(evaluate(at,"AUTO",lowRsiDown).direction,"UP");
+ const f=feed(at,1);
+ f.candles["5m"]=feed(at,-1).candles["5m"]; // 5m conflict not a hard veto
+ f.candles["1m"].at(-1).volume=10; // no volume veto
+ const r=evaluate(at,"AUTO",f);
+ assert.equal(r.direction,"UP");assert.equal(r.quality,"STANDARD_RESEARCH");
+ assert.equal(r.conditions.trend5m,false);
+ assert.equal(r.conditions.volume,false);
+ const down=evaluate(at,"AUTO",feed(at,-1));
+ assert.equal(down.direction,"DOWN");
 });
-test("V13 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
- const at=START+60000;
- const moderate=feed(at,1);moderate.candles["1m"].at(-1).volume=75;
- const r=evaluate(at,"AUTO",moderate);
- assert.equal(r.direction,"UP");
- assert.equal(r.quality,"STANDARD_RESEARCH");
- assert.equal(r.conditions.volume,true);
- assert.equal(r.upChecks.volume,false);
- const mismatch=feed(at,1);mismatch.candles["1m"].at(-1).volume=75;
- mismatch.candles["5m"]=feed(at,-1).candles["5m"];
- assert.equal(evaluate(at,"AUTO",mismatch).direction,null);
+test("V14 momentum vote gives a transparent direction without a 5m hard gate",()=>{
+ const at=START+60000;const f=feed(at,1);
+ const high=feed(at,-1);
+ f.candles["5m"]=high.candles["5m"];
+ const res=evaluate(at,"AUTO",f);
+ assert.equal(res.direction,"UP");assert.ok(res.voteScore>0);
+ assert.equal(res.confidence,null);
 });
-test("V13 stricter standard rejects weak volume and preserves direction alignment",()=>{
- const at=START+60000;
- const moderate=feed(at,1);
- moderate.candles["1m"].at(-1).volume=75; // 0.75x: strict fails, tighter momentum tier accepts
- const good=evaluate(at,"AUTO",moderate);
- assert.equal(good.direction,"UP");
- assert.equal(good.quality,"STANDARD_RESEARCH");
- assert.equal(good.upChecks.volume,false);
- assert.equal(good.standardUpChecks.volume,true);
- assert.equal(good.standardUpChecks.trend5m,true);
- assert.equal(good.standardUpChecks.trend1m,true);
- const rejectedWeak=feed(at,1);rejectedWeak.candles["1m"].at(-1).volume=55;
- assert.equal(evaluate(at,"AUTO",rejectedWeak).direction,null);
- const stale=feed(at,1);stale.candles["1m"].at(-1).volume=20;
- assert.equal(evaluate(at,"AUTO",stale).direction,null);
- const conflict=feed(at,1);conflict.candles["1m"].at(-1).volume=75;
- conflict.candles["5m"]=feed(at,-1).candles["5m"];
- assert.equal(evaluate(at,"AUTO",conflict).direction,null);
-});
-test("V13 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
- const at=START+60000;
- const falling=feed(at,-1),last=falling.candles["1m"].at(-1);
- const base=evaluate(at,"AUTO",falling);
- assert.equal(base.direction,"DOWN");
- last.low=last.close-10;
- const result=evaluate(at,"AUTO",falling);
- assert.equal(result.direction,null);
- assert.equal(result.downChecks.bounceGuard,false);
- assert.equal(result.eventTag,"V13_DOWN_REBOUND_RISK");
+test("V14 supplies a direction on large but verified moves instead of hiding it",()=>{
+ const at=START+60000;const f=feed(at,1);
+ const q=f.candles["1m"].at(-1);q.close+=10;q.high=q.close+0.1;
+ assert.equal(evaluate(at,"AUTO",f).direction,"UP");
 });
 test("real production-size 62 closed 1m candles work, insufficient 59 still fail closed",()=>{
  const at=START+60000;
@@ -135,20 +104,14 @@ test("one-minute and five-minute closed candles must be current, never replay ol
  stale5.candles["5m"]=feed(at-300000).candles["5m"];
  assert.throws(()=>evaluate(at,"AUTO",stale5),/STALE_5m_LAST_CLOSED_CANDLE/);
 });
-test("abnormally large volume and momentum spikes must not be chased",()=>{
+test("V14 produces high-frequency direction even under abnormal volume",()=>{
  const at=START+60000;
  for(const side of [1,-1]){
-   const highVolume=feed(at,side);
-   highVolume.candles["1m"].at(-1).volume=500;
-   assert.equal(evaluate(at,"AUTO",highVolume).direction,null);
-   const runaway=feed(at,side);
-   const bar=runaway.candles["1m"].at(-1);
-   bar.close+=side*10;bar.high=Math.max(bar.open,bar.close)+0.1;
-   bar.low=Math.min(bar.open,bar.close)-0.1;
-   assert.equal(evaluate(at,"AUTO",runaway).direction,null);
+  const f=feed(at,side);f.candles["1m"].at(-1).volume=500;
+  assert.equal(evaluate(at,"AUTO",f).direction,side>0?"UP":"DOWN");
  }
 });
-test("V13 2m gap permits independent overlapping 10m observations across restart",async()=>{
+test("V14 45-second gap permits independent overlapping 10m observations across restart",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
@@ -160,36 +123,36 @@ test("V13 2m gap permits independent overlapping 10m observations across restart
  let engine=createEngine(opts);
  const first=await engine.start(id());
  assert.equal(first.direction,"UP");
- now=START+60000+1000;
- const blocked=await engine.start(id());
+ now=START+30000+1000;
+ const blocked=await engine.start('auto-1m-early-slot-1');
  assert.equal(blocked.status,"NO_SIGNAL");
  assert.equal(blocked.quality,"COOLDOWN");
- assert.match(blocked.reason,/2分钟/);
+ assert.match(blocked.reason,/45秒/);
  assert.equal(engine.signals().total,1);
  engine=createEngine(opts);
  now=START+90000+1000;
  const manual=await engine.start("manually-triggered-001");
  assert.equal(manual.status,"NO_SIGNAL");
  assert.equal(engine.signals().total,1);
- now=START+MIN_SIGNAL_GAP_MS+1000;
+ now=START+60000+1000;
  const overlap=await engine.start(id());
  assert.equal(overlap.direction,"UP");
  assert.equal(overlap.expiresAt-overlap.openedAt,600000);
- assert.equal(overlap.openedAt-first.openedAt,MIN_SIGNAL_GAP_MS);
+ assert.equal(overlap.openedAt-first.openedAt,60000);
  assert.equal(engine.status().activeSignalCount,2);
- assert.equal(engine.status().minSignalGapMs,MIN_SIGNAL_GAP_MS);
+ assert.equal(engine.status().minSignalGapMs,45000);
  assert.equal(engine.signals().total,2);
  now=first.expiresAt+1000;
  const next=await engine.start(id());
  assert.equal(next.direction,"UP");
  assert.equal(engine.signals().total,3);
 });
-test("V13 retains V9 NO_SIGNAL protection for risky momentum",()=>{
+test("V14 still reports genuine direction when momentum is large",()=>{
  const at=START+60000;
  const f=feed(at,-1),last=f.candles["1m"].at(-1);
  last.close-=3;last.low=Math.min(last.low,last.close-0.1);
  const r=evaluate(at,"AUTO",f);
- assert.notEqual(r.direction,"UP");
+ assert.equal(r.direction,"DOWN");
  assert.equal(r.confidence,null);
 });
 test("transient stale 1m data recovers and clears current error without erasing audit",async()=>{
@@ -253,7 +216,7 @@ test("engine saves version, 600-second index result, no order and persistent rec
  assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"STRICT_RESEARCH");
  assert.equal(signal.expiresAt-signal.openedAt,600000);assert.equal(signal.realOrderPlaced,false);
  assert.equal(engine.status().autoTradingEnabled,false);assert.equal(engine.status().autoIntervalMs,60000);
- assert.equal(engine.status().minSignalGapMs,120000);
+ assert.equal(engine.status().minSignalGapMs,45000);
  assert.equal(engine.signals().stats.byTier.STRICT_RESEARCH.total,1);
  assert.equal(engine.signals().stats.byTier.STANDARD_RESEARCH.total,0);
  assert.equal(engine.status().scanDiagnostics.lastHour.strictSignals,1);
@@ -291,7 +254,7 @@ test("only V4 records are returned to public history and status, even with legac
 });
 
 
-test("V13 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
+test("V14 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v12-isolated-"));
  const file=path.join(dir,"state.json"),ledger=path.join(dir,"rule-signals-v1.ndjson");
  const oldVersion="EVENT10_TIERED_V11_20261105";

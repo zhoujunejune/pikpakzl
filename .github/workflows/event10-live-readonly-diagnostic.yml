@@ -62,6 +62,9 @@ jobs:
           print('DIAG_AUTO_LAST_CHECK',s.get('lastAutoCheckAt'),flush=True)
           print('DIAG_LEDGER',json.dumps({'ok':l.get('ok'),'version':l.get('version'),
               'total':l.get('total'),'stats':l.get('stats')},ensure_ascii=False),flush=True)
+          print('DIAG_RECENT_SIGNAL_ROWS',json.dumps([
+              {k:item.get(k) for k in ('id','strategyVersion','direction','signalQuality','openedAt','expiresAt','openPrice','closePrice','proxyHit','proxyOutcome','change3mPct','volumeRatio','rsi14','eventTag','checks','settlementStatus')}
+              for item in l.get('records',[])[:15]],ensure_ascii=False),flush=True)
           print('DIAG_FEED_OK',f.get('ok'),flush=True)
           print('DIAG_FEED_CONNECTED',(f.get('latest') or {}).get('marketFeedConnected'),flush=True)
           print('DIAG_FEED_ERROR',str(f.get('errors') or f.get('diagnosticError') or '')[:220],flush=True)

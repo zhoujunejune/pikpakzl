@@ -43,7 +43,7 @@ jobs:
               except Exception as e:
                   return {'ok':False,'diagnosticError':type(e).__name__+':'+str(e)[:100]}
           s=read('http://127.0.0.1:13020/api/status')
-          l=read('http://127.0.0.1:13020/api/signals?limit=8&offset=0')
+          l=read('http://127.0.0.1:13020/api/signals?limit=50&offset=0')
           f=read('http://127.0.0.1:13003/api/shadow-market-data')
           print('DIAG_STATUS_OK',s.get('ok'),flush=True)
           print('DIAG_STRATEGY',s.get('decisionReviewVersion'),flush=True)
@@ -59,13 +59,15 @@ jobs:
           },ensure_ascii=False),flush=True)
           print('DIAG_MIN_SIGNAL_GAP_MS',s.get('minSignalGapMs'),flush=True)
           print('DIAG_SCAN_SUMMARY',json.dumps((s.get('scanDiagnostics') or {}).get('lastHour') or {},ensure_ascii=False),flush=True)
+          print('DIAG_SCAN_24H',json.dumps((s.get('scanDiagnostics') or {}).get('last24Hours') or {},ensure_ascii=False),flush=True)
+          print('DIAG_NOW_MS',int(time.time()*1000),flush=True)
           print('DIAG_AUTO_INTERVAL_MS',s.get('autoIntervalMs'),flush=True)
           print('DIAG_AUTO_LAST_CHECK',s.get('lastAutoCheckAt'),flush=True)
           print('DIAG_LEDGER',json.dumps({'ok':l.get('ok'),'version':l.get('version'),
               'total':l.get('total'),'stats':l.get('stats')},ensure_ascii=False),flush=True)
           print('DIAG_RECENT_SIGNAL_ROWS',json.dumps([
               {k:item.get(k) for k in ('id','strategyVersion','direction','signalQuality','openedAt','expiresAt','openPrice','closePrice','proxyHit','proxyOutcome','change3mPct','volumeRatio','rsi14','eventTag','checks','settlementStatus')}
-              for item in l.get('records',[])[:15]],ensure_ascii=False),flush=True)
+              for item in l.get('records',[])[:25]],ensure_ascii=False),flush=True)
           print('DIAG_FEED_OK',f.get('ok'),flush=True)
           print('DIAG_FEED_CONNECTED',(f.get('latest') or {}).get('marketFeedConnected'),flush=True)
           print('DIAG_FEED_ERROR',str(f.get('errors') or f.get('diagnosticError') or '')[:220],flush=True)

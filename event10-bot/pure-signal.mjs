@@ -1,8 +1,8 @@
-// BTC ten-minute V12: strict + standard research tiers, separate scorecards, no trade API.
+// BTC ten-minute V13: strict tier unchanged; research-backed tightened standard for quality, no trade API.
 // Feed provides 62 closed 1m candles in production; require 60 contiguous candles, never 65.
 // V8 uses the existing six-gate filter without V7 secondary veto.
 // Signals require aligned 1m/5m trend, moderate momentum, candle structure, volume AND RSI.
-export const RULE_VERSION="EVENT10_DUAL_EMA_FREQUENCY_V12_20261105";
+export const RULE_VERSION="EVENT10_QUALITY_FILTER_V13_20261105";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -109,47 +109,48 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   // The STRICT tier keeps V10 gates; DOWN also avoids exhaustion rebounds.
   const confirmed=checks=>Object.values(checks).every(Boolean);
   const highUp=confirmed(upChecks),highDown=confirmed(downChecks);
-  // STANDARD: research-tested 3m momentum continuation with BOTH 1m and 5m
+  // STANDARD: tighter 72h retrospective 3m momentum continuation with BOTH 1m and 5m
   // EMA directions aligned; fresh closed candles, a directional final candle,
-  // bounded momentum/volume and down-side rebound protection remain mandatory.
+  // bounded momentum/volume and down-side 15m persistence plus rebound protection remain mandatory.
   // We do not force directions in flat or conflicting regimes. No real orders.
   const standardUp={
     trend5m:ema5Fast>ema5Slow,
-    trend1m:ema1Fast>ema1Slow,
-    momentum:change3mPct>=0.020&&change3mPct<=0.22,
-    structure:last.c>last.o,
-    volume:volumeRatio>=0.50&&volumeRatio<=2.80,
-    rsi:rsi14>=34&&rsi14<=68
+    trend1m:ema1Fast>ema1Slow&&last.c>ema1Fast,
+    momentum:change3mPct>=0.035&&change3mPct<=0.18,
+    structure:bullish>=2&&last.c>last.o,
+    volume:volumeRatio>=0.70&&volumeRatio<=2.40,
+    rsi:rsi14>=42&&rsi14<=61
   };
   const standardDown={
     trend5m:ema5Fast<ema5Slow,
-    trend1m:ema1Fast<ema1Slow,
-    momentum:change3mPct<=-0.020&&change3mPct>=-0.22,
-    structure:last.c<last.o,
-    volume:volumeRatio>=0.50&&volumeRatio<=2.80,
-    rsi:rsi14>=34&&rsi14<=68,
+    trend1m:ema1Fast<ema1Slow&&last.c<ema1Fast,
+    momentum:change3mPct<=-0.040&&change3mPct>=-0.18,
+    structure:bearish>=2&&last.c<last.o,
+    volume:volumeRatio>=0.75&&volumeRatio<=2.40,
+    rsi:rsi14>=38&&rsi14<=55,
+    persistence15m:change15mPct<=-0.045,
     bounceGuard:!downBounceRisk
   };
   let direction=null,quality="NO_SIGNAL",eventTag="FILTERED_NO_EDGE";
   let reason="多周期趋势、动量、形态、成交量、RSI及反弹风险尚未同时满足；不会强制给方向。";
   if(highUp!==highDown&&(highUp||highDown)){
     direction=highUp?"UP":"DOWN";quality="STRICT_RESEARCH";
-    eventTag=direction==="UP"?"V12_STRICT_HIGHER":"V12_STRICT_LOWER";
+    eventTag=direction==="UP"?"V13_STRICT_HIGHER":"V13_STRICT_LOWER";
     reason="高标准研究信号：通过V10趋势、动量、量价、RSI全部检查，看跌额外排除反弹风险。";
   }else{
     const normalUp=confirmed(standardUp),normalDown=confirmed(standardDown);
     if(normalUp!==normalDown&&(normalUp||normalDown)){
       direction=normalUp?"UP":"DOWN";quality="STANDARD_RESEARCH";
-      eventTag=direction==="UP"?"V12_STANDARD_HIGHER":"V12_STANDARD_LOWER";
-      reason="普通研究信号：3分钟动量与1分钟、5分钟EMA方向一致，方向K线、量能、RSI和看跌反弹过滤通过；与高标准独立统计。";
+      eventTag=direction==="UP"?"V13_STANDARD_HIGHER":"V13_STANDARD_LOWER";
+      reason="普通研究信号：3分钟动量与双周期EMA同向、近期至少2根同向K线，量能和RSI符合收紧规则；看跌需要15分钟持续下行；与高标准独立统计。";
     }
   }
   if(!direction&&downChecks.trend5m&&downChecks.trend1m&&downBounceRisk){
-    eventTag="V12_DOWN_REBOUND_RISK";
+    eventTag="V13_DOWN_REBOUND_RISK";
     reason="短周期偏空，但出现下跌衰竭、长下影或RSI快速回升，避免追空遇反弹。";
   }
   if(!direction&&rsi14>=63&&upChecks.trend5m&&upChecks.trend1m){
-    eventTag="V12_UP_RSI_EXHAUSTION";
+    eventTag="V13_UP_RSI_EXHAUSTION";
     reason="上升趋势中RSI达到63以上，避免高位追涨。";
   }
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
@@ -184,7 +185,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V12信号：高标准与普通信号独立分级，每分钟扫描；有效信号至少相隔2分钟，每条独立观察10分钟；不保证命中率。",
+    caveats:["V13信号：高标准与普通信号独立分级，每分钟扫描；有效信号至少相隔2分钟，每条独立观察10分钟；不保证命中率。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

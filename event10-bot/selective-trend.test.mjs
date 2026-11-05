@@ -22,7 +22,7 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
-test("V12 strict retains six core gates without the old wide secondary veto",()=>{
+test("V13 strict retains six core gates without the old wide secondary veto",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
  const last=bullish.candles["1m"].at(-1);
@@ -31,7 +31,7 @@ test("V12 strict retains six core gates without the old wide secondary veto",()=
  assert.equal(out.direction,"UP");
  assert.equal(out.strategyVersion,RULE_VERSION);
 });
-test("V12 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
+test("V13 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
  const at=START+60000;
  const up=feed(at,1);
  const q=up.candles["1m"].at(-1);
@@ -45,7 +45,7 @@ test("V12 long RSI threshold stays below 63 and down requires 15m persistence",(
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_DUAL_EMA_FREQUENCY_V12_20261105");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_QUALITY_FILTER_V13_20261105");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -73,7 +73,7 @@ test("EMA conflict, low volume, and 3m pump must suppress signals",()=>{
  lowLast.close-=80;lowLast.low=lowLast.close-0.1;
  assert.notEqual(evaluate(at,"AUTO",lowRsiDown).direction,"UP");
 });
-test("V12 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
+test("V13 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
  const at=START+60000;
  const moderate=feed(at,1);moderate.candles["1m"].at(-1).volume=75;
  const r=evaluate(at,"AUTO",moderate);
@@ -85,10 +85,10 @@ test("V12 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
  mismatch.candles["5m"]=feed(at,-1).candles["5m"];
  assert.equal(evaluate(at,"AUTO",mismatch).direction,null);
 });
-test("V12 research-backed dual-EMA momentum fallback retains trend agreement and bounded volume",()=>{
+test("V13 stricter standard rejects weak volume and preserves direction alignment",()=>{
  const at=START+60000;
  const moderate=feed(at,1);
- moderate.candles["1m"].at(-1).volume=55; // 0.55x: strict fails, momentum tier accepts
+ moderate.candles["1m"].at(-1).volume=75; // 0.75x: strict fails, tighter momentum tier accepts
  const good=evaluate(at,"AUTO",moderate);
  assert.equal(good.direction,"UP");
  assert.equal(good.quality,"STANDARD_RESEARCH");
@@ -96,13 +96,15 @@ test("V12 research-backed dual-EMA momentum fallback retains trend agreement and
  assert.equal(good.standardUpChecks.volume,true);
  assert.equal(good.standardUpChecks.trend5m,true);
  assert.equal(good.standardUpChecks.trend1m,true);
+ const rejectedWeak=feed(at,1);rejectedWeak.candles["1m"].at(-1).volume=55;
+ assert.equal(evaluate(at,"AUTO",rejectedWeak).direction,null);
  const stale=feed(at,1);stale.candles["1m"].at(-1).volume=20;
  assert.equal(evaluate(at,"AUTO",stale).direction,null);
- const conflict=feed(at,1);conflict.candles["1m"].at(-1).volume=55;
+ const conflict=feed(at,1);conflict.candles["1m"].at(-1).volume=75;
  conflict.candles["5m"]=feed(at,-1).candles["5m"];
  assert.equal(evaluate(at,"AUTO",conflict).direction,null);
 });
-test("V12 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
+test("V13 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
  const at=START+60000;
  const falling=feed(at,-1),last=falling.candles["1m"].at(-1);
  const base=evaluate(at,"AUTO",falling);
@@ -111,7 +113,7 @@ test("V12 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
  const result=evaluate(at,"AUTO",falling);
  assert.equal(result.direction,null);
  assert.equal(result.downChecks.bounceGuard,false);
- assert.equal(result.eventTag,"V12_DOWN_REBOUND_RISK");
+ assert.equal(result.eventTag,"V13_DOWN_REBOUND_RISK");
 });
 test("real production-size 62 closed 1m candles work, insufficient 59 still fail closed",()=>{
  const at=START+60000;
@@ -146,7 +148,7 @@ test("abnormally large volume and momentum spikes must not be chased",()=>{
    assert.equal(evaluate(at,"AUTO",runaway).direction,null);
  }
 });
-test("V12 2m gap permits independent overlapping 10m observations across restart",async()=>{
+test("V13 2m gap permits independent overlapping 10m observations across restart",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
@@ -182,7 +184,7 @@ test("V12 2m gap permits independent overlapping 10m observations across restart
  assert.equal(next.direction,"UP");
  assert.equal(engine.signals().total,3);
 });
-test("V12 retains V9 NO_SIGNAL protection for risky momentum",()=>{
+test("V13 retains V9 NO_SIGNAL protection for risky momentum",()=>{
  const at=START+60000;
  const f=feed(at,-1),last=f.candles["1m"].at(-1);
  last.close-=3;last.low=Math.min(last.low,last.close-0.1);
@@ -289,7 +291,7 @@ test("only V4 records are returned to public history and status, even with legac
 });
 
 
-test("V12 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
+test("V13 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v12-isolated-"));
  const file=path.join(dir,"state.json"),ledger=path.join(dir,"rule-signals-v1.ndjson");
  const oldVersion="EVENT10_TIERED_V11_20261105";

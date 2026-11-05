@@ -1,3 +1,4 @@
+# 2026-11-05 V14 post-deploy signal frequency + separated ledger verification, read only
 # Current V13 post-release read-only production signal audit
 # Recheck V12 warmup and 1m feed volume after reset
 # Confirm V12 ledger reset and version-only app API after deploy 2026-11-05

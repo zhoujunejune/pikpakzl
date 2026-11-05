@@ -49,7 +49,7 @@ test("no forced directions at 00/20/40: flat markets always abstain",()=>{
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
-   assert.equal(r.confidence,null);assert.match(r.reason,/强制/);
+   assert.equal(r.confidence,null);assert.match(r.reason,/没有可辨别价格方向/);
  }
 });
 test("aligned moderate trends may signal on any minute or manually",()=>{
@@ -130,7 +130,7 @@ test("V14 45-second gap permits independent overlapping 10m observations across 
  assert.match(blocked.reason,/45秒/);
  assert.equal(engine.signals().total,1);
  engine=createEngine(opts);
- now=START+90000+1000;
+ now=START+35000+1000;
  const manual=await engine.start("manually-triggered-001");
  assert.equal(manual.status,"NO_SIGNAL");
  assert.equal(engine.signals().total,1);

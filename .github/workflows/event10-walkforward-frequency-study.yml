@@ -1,0 +1,119 @@
+name: EVENT10 readonly walkforward frequency study
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-walkforward-frequency-study.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Readonly comparison of live and predeclared momentum candidates on archived closed candles
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID');sk=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          if not ak or not sk:raise RuntimeError('MISSING_ALIYUN_CREDS')
+          script=r"""#!/bin/bash
+          set -eu
+          cd /opt/zl-event10
+          /opt/zl-prediction-node/bin/node --input-type=module <<'NODE'
+          import {evaluatePureSignal} from './pure-signal.mjs';
+          const r=await fetch('http://127.0.0.1:13003/api/shadow-market-data',{signal:AbortSignal.timeout(8000)});
+          if(!r.ok)throw Error('FEED_HTTP_'+r.status);
+          const f=await r.json();
+          if(!f.ok)throw Error('FEED_BAD');
+          const rows=k=>(Array.isArray(f.candles?.[k])?f.candles[k]:f.candles?.[k]?.rows||[]).filter(x=>x?.closed===true).sort((x,y)=>x.startMs-y.startMs);
+          const one=rows('1m'),five=rows('5m');
+          const EMA=(p,n)=>{let v=p.slice(0,n).reduce((s,x)=>s+x,0)/n;for(const x of p.slice(n))v+=(2/(n+1))*(x-v);return v};
+          const RSI=p=>{let up=0,down=0;for(let i=p.length-14;i<p.length;i++){const x=p[i]-p[i-1];up+=Math.max(0,x);down+=Math.max(0,-x)}return down===0?100:100-100/(1+up/down)};
+          const start=Math.max(one[60]?.startMs+60000,five[40]?.startMs+300000);
+          const end=one.at(-12)?.startMs+60000;
+          if(!Number.isFinite(start)||!Number.isFinite(end)||end-start<5*3600000)throw Error('INSUFFICIENT_WINDOW');
+          const split=start+(end-start)*0.5;
+          const candidates=['live_v11','momentum02_ema1','momentum035_ema1','momentum02_dualtrend','momentum035_dualtrend'];
+          const stats=Object.fromEntries(candidates.map(k=>[k,{n:0,hits:0,early:{n:0,hits:0},late:{n:0,hits:0},lastAcceptedAt:-Infinity,hour:{}}]));
+          const pct=(x,y)=>y?Number((100*x/y).toFixed(2)):null;
+          let slots=0,fail=0;
+          for(let at=Math.ceil(start/60000)*60000+5000;at<end;at+=60000){
+            const a=one.filter(x=>x.startMs+60000<=at).slice(-60);
+            const b=five.filter(x=>x.startMs+300000<=at).slice(-40);
+            const future=one.filter(x=>x.startMs+60000<=at+600000).at(-1);
+            if(a.length<60||b.length<40||!future)continue;
+            const cur=a.at(-1),p=a.map(x=>Number(x.close)),q=b.map(x=>Number(x.close));
+            const change3=100*(p.at(-1)/p.at(-4)-1);
+            const rsi=RSI(p), e1=EMA(p,9)-EMA(p,21),e5=EMA(q,9)-EMA(q,21);
+            const volBase=a.slice(-21,-1).reduce((s,x)=>s+Number(x.volume),0)/20;
+            const volRatio=volBase>0?Number(cur.volume)/volBase:0;
+            const mag=Math.abs(change3),side=change3>0?'UP':'DOWN';
+            const openDir=(Number(future.close)>Number(cur.close))?'UP':(Number(future.close)<Number(cur.close))?'DOWN':null;
+            let live=null;
+            try{live=evaluatePureSignal({feed:f,reference:{observedAt:at},indexSnapshot:{price:Number(cur.close),observedAt:at-100}}).direction}
+            catch{fail++;continue}
+            slots++;
+            const eligible=(lo,requireDual)=>mag>=lo&&mag<=0.22&&rsi>=34&&rsi<=68&&
+              volRatio>=0.5&&volRatio<=2.8&&
+              ((change3>0&&e1>0&&Number(cur.close)>Number(cur.open))||
+               (change3<0&&e1<0&&Number(cur.close)<Number(cur.open)))&&
+              (!requireDual||((change3>0&&e5>0)||(change3<0&&e5<0)));
+            const choices={
+              live_v11:live,
+              momentum02_ema1:eligible(0.02,false)?side:null,
+              momentum035_ema1:eligible(0.035,false)?side:null,
+              momentum02_dualtrend:eligible(0.02,true)?side:null,
+              momentum035_dualtrend:eligible(0.035,true)?side:null
+            };
+            for(const [key,dir] of Object.entries(choices)){
+              if(!dir)continue;
+              const s=stats[key];
+              if(at-s.lastAcceptedAt<120000)continue;
+              s.lastAcceptedAt=at;s.n++;
+              const hit=dir===openDir?1:0;
+              s.hits+=hit;
+              const seg=at<split?s.early:s.late;seg.n++;seg.hits+=hit;
+              const hour=new Date(at).toISOString().slice(0,13);
+              s.hour[hour]=(s.hour[hour]||0)+1;
+            }
+          }
+          const report=Object.fromEntries(Object.entries(stats).map(([k,v])=>{
+            const h=Object.values(v.hour);
+            return [k,{signals:v.n,hits:v.hits,pct:pct(v.hits,v.n),
+              early:{n:v.early.n,pct:pct(v.early.hits,v.early.n)},
+              late:{n:v.late.n,pct:pct(v.late.hits,v.late.n)},
+              hours:h.length,perHour:Number((v.n/((end-start)/3600000)).toFixed(2)),
+              minActiveHour:h.length?Math.min(...h):0}]}));
+          console.log('EVENT10_WALKFORWARD',JSON.stringify({sample:'CLOSED_SPOT_1M_5M_TPLUS600_PROXY_NOT_OFFICIAL_INDEX',
+            start,end,slots,fail,earlyLateSplitAt:split,candidates:report,
+            limitations:'15h single regime, historical spot proxy, multiple candidate comparisons may overfit; no guaranteed event-contract edge'}));
+          NODE
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          resp=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='event10-walkforward-proxy-study',
+            type='RunShellScript',working_user='root',command_content=script,timeout=160))
+          id=resp.body.invoke_id
+          if not id:raise RuntimeError('NO_INVOKE_ID')
+          for _ in range(90):
+              time.sleep(2)
+              result=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+                  instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=id)).body.invocation_result
+              if not result:continue
+              status=str(result.invocation_status)
+              if status not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+              output=base64.b64decode(result.output or '').decode('utf-8','replace')
+              for line in output.splitlines():
+                  if line.startswith('EVENT10_WALKFORWARD'):print(line,flush=True)
+              if status!='Success' or int(result.exit_code)!=0:raise RuntimeError('RESEARCH_FAILED_'+status+':'+output[-400:])
+              break
+          else:raise RuntimeError('RESEARCH_TIMEOUT')
+          PY

@@ -53,6 +53,8 @@ jobs:
               'up':c.get('upChecks'), 'down':c.get('downChecks'),
               'change3mPct':c.get('change3mPct')
           },ensure_ascii=False),flush=True)
+          print('DIAG_MIN_SIGNAL_GAP_MS',s.get('minSignalGapMs'),flush=True)
+          print('DIAG_SCAN_SUMMARY',json.dumps((s.get('scanDiagnostics') or {}).get('lastHour') or {},ensure_ascii=False),flush=True)
           print('DIAG_AUTO_INTERVAL_MS',s.get('autoIntervalMs'),flush=True)
           print('DIAG_AUTO_LAST_CHECK',s.get('lastAutoCheckAt'),flush=True)
           print('DIAG_LEDGER',json.dumps({'ok':l.get('ok'),'version':l.get('version'),

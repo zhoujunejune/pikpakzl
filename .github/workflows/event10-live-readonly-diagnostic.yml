@@ -1,3 +1,4 @@
+# Verify V15 10-minute pacing and loss-streak pause on read-only live status/ledger
 # V14 followup production read-only sustained signal frequency check
 # 2026-11-05 V14 post-deploy signal frequency + separated ledger verification, read only
 # Current V13 post-release read-only production signal audit

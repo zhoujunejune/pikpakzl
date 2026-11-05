@@ -43,7 +43,7 @@ def validate_state(s,version):
         expiry=active.get("expiresAt")
         # The new engine explicitly settles old V3 index-proxy sessions.
         # Keep the active session; never cut over near its 600s deadline.
-        if (active.get("decisionReviewVersion") not in LEGACY_VERSIONS or
+        if (active.get("decisionReviewVersion") not in (LEGACY_VERSIONS | {TARGET}) or
             not isinstance(expiry,(int,float)) or
             expiry-time.time()*1000 < 25000):
             return False
@@ -76,7 +76,7 @@ def main():
     if not all((ROOT/f).is_file() for f in ("server.mjs","manual-engine.mjs","pure-signal.mjs","panel.html")):
         raise RuntimeError("EVENT10_REQUIRED_LIVE_FILES_MISSING")
     before=status()
-    if not any(validate_state(before,version) for version in LEGACY_VERSIONS):
+    if not any(validate_state(before,version) for version in (LEGACY_VERSIONS | {TARGET})):
         raise RuntimeError("EVENT10_LIVE_VERSION_UNEXPECTED_OR_ACTIVE_SIGNAL_ABORT")
     history=json.loads(fetch_local("/api/history"))
     if not history.get("ok") or not isinstance(history.get("records"),list):

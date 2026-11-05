@@ -96,6 +96,17 @@ test("V11 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
  assert.equal(result.downChecks.bounceGuard,false);
  assert.equal(result.eventTag,"V11_DOWN_REBOUND_RISK");
 });
+test("real production-size 62 closed 1m candles work, insufficient 59 still fail closed",()=>{
+ const at=START+60000;
+ const enough=feed(at,1);
+ enough.candles["1m"]=enough.candles["1m"].slice(-62);
+ const accepted=evaluate(at,"AUTO",enough);
+ assert.notEqual(accepted.status,"DATA_ERROR");
+ assert.equal(accepted.evidence.closedBars1m,60);
+ const missing=feed(at,1);
+ missing.candles["1m"]=missing.candles["1m"].slice(-59);
+ assert.throws(()=>evaluate(at,"AUTO",missing),/INSUFFICIENT_1m_CLOSED_CANDLES/);
+});
 test("one-minute and five-minute closed candles must be current, never replay old bars",()=>{
  const at=START+300000+1000;
  const stale1=feed(at);
@@ -118,7 +129,7 @@ test("abnormally large volume and momentum spikes must not be chased",()=>{
    assert.equal(evaluate(at,"AUTO",runaway).direction,null);
  }
 });
-test("V11 4m gap permits independent overlapping 10m observations across restart",async()=>{
+test("V11 2m gap permits independent overlapping 10m observations across restart",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
@@ -134,10 +145,10 @@ test("V11 4m gap permits independent overlapping 10m observations across restart
  const blocked=await engine.start(id());
  assert.equal(blocked.status,"NO_SIGNAL");
  assert.equal(blocked.quality,"COOLDOWN");
- assert.match(blocked.reason,/4分钟/);
+ assert.match(blocked.reason,/2分钟/);
  assert.equal(engine.signals().total,1);
  engine=createEngine(opts);
- now=START+120000+1000;
+ now=START+90000+1000;
  const manual=await engine.start("manually-triggered-001");
  assert.equal(manual.status,"NO_SIGNAL");
  assert.equal(engine.signals().total,1);
@@ -223,7 +234,7 @@ test("engine saves version, 600-second index result, no order and persistent rec
  assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"STRICT_RESEARCH");
  assert.equal(signal.expiresAt-signal.openedAt,600000);assert.equal(signal.realOrderPlaced,false);
  assert.equal(engine.status().autoTradingEnabled,false);assert.equal(engine.status().autoIntervalMs,60000);
- assert.equal(engine.status().minSignalGapMs,240000);
+ assert.equal(engine.status().minSignalGapMs,120000);
  assert.equal(engine.signals().stats.byTier.STRICT_RESEARCH.total,1);
  assert.equal(engine.signals().stats.byTier.STANDARD_RESEARCH.total,0);
  assert.equal(engine.status().scanDiagnostics.lastHour.strictSignals,1);

@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · 65根已收盘1分钟K线 + 40根已收盘5分钟K线 · V11高标准/普通两档研究信号 · 每分钟扫描 · 最短信号间隔4分钟</p>
+<p class="sub">BTCUSDT · 60根已收盘1分钟K线 + 40根已收盘5分钟K线 · V11高标准/普通两档研究信号 · 每分钟扫描 · 最短信号间隔2分钟</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V11采用高标准与普通两档，继续要求1分钟、5分钟趋势一致，增加看跌反弹风险过滤。每条信号独立锁价并在600秒后核验，最短信号间隔4分钟，只提供研究方向、不自动下单。</div>
+V11采用高标准与普通两档，继续要求1分钟、5分钟趋势一致，增加看跌反弹风险过滤。每条信号独立锁价并在600秒后核验，最短信号间隔2分钟，只提供研究方向、不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -52,12 +52,12 @@ V11采用高标准与普通两档，继续要求1分钟、5分钟趋势一致，
   <strong id="quickConfidence" class="signal-price">规则类型：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
- <div id="quickReason" class="signal-reason">需要65根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">V11保留高位防追涨，增加看跌衰竭、下影线和RSI反弹过滤；延迟K线可以本分钟重试。连续3次错误有时限暂停；方向信号可能互相重叠，不能当作独立交易样本。指数代理价不等于真实事件合约Strike。</p>
+ <div id="quickReason" class="signal-reason">需要60根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
+ <p class="sub">V11保留高位防追涨，增加看跌衰竭、下影线和RSI反弹过滤；延迟K线可以本分钟重试。最近至少12条已核验信号中若连续3次失误，会短时暂停；方向信号可能互相重叠，不能当作独立交易样本。指数代理价不等于真实事件合约Strike。</p>
  <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
 <p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
 </div>
-<p class="sub">自动每分钟扫描；有效方向之间最少间隔4分钟（含手动、自动）。允许同时存在多条未结算的10分钟预测；每条分别锁定指数代理价并在600秒后核验。</p>
+<p class="sub">自动每分钟扫描；有效方向之间最少间隔2分钟（含手动、自动）。允许同时存在多条未结算的10分钟预测；每条分别锁定指数代理价并在600秒后核验。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -257,7 +257,7 @@ const isCurrentStrategyRecord=s=>!!s&&(
  s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
 function display(d){
  const audit=d.scanDiagnostics?.lastHour;
- const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V11_MIN_SIGNAL_GAP:"4分钟间隔",DATA_ERROR:"数据过期"};
+ const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V11_MIN_SIGNAL_GAP:"2分钟间隔",DATA_ERROR:"数据过期"};
  $("scanAudit").textContent=audit?"最近1小时检查 "+audit.checks+" 次，高标准 "+audit.strictSignals+" 条，普通 "+audit.standardSignals+" 条，无信号 "+audit.noSignal+" 次，数据异常 "+audit.dataErrors+" 次。":"扫描审计暂未就绪";
  $("gateStats").textContent=audit&&Object.keys(audit.byReason||{}).length?"未通过条件："+Object.entries(audit.byReason).sort((a,b)=>b[1]-a[1]).map(([k,v])=>(names[k]||k)+" "+v+"次").join("、")+"。":"本小时暂未累计拒绝原因。";
   // Display verified scan freshness; direction is minute-scanned, not per tick.
@@ -328,7 +328,7 @@ function display(d){
     $(id).textContent="—";
   }
   $("reason").textContent="新策略尚无信号，旧数据不参与统计。";
-  $("dataQuality").textContent="新策略使用65根连续已收盘1分钟K线、40根连续已收盘5分钟K线和实时指数报价。";
+  $("dataQuality").textContent="新策略使用60根连续已收盘1分钟K线、40根连续已收盘5分钟K线和实时指数报价。";
   $("analysisDetail").replaceChildren();$("phase").textContent="等待多周期趋势检测";
  }
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
@@ -371,7 +371,7 @@ async function refresh(){
     d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查完成：当前没有符合策略的方向优势。":
-    "每分钟检查；最新K线和指数校验通过、V10方向条件及4分钟最短信号间隔满足时，才可能出方向。";
+    "每分钟检查；最新K线和指数校验通过、V10方向条件及2分钟最短信号间隔满足时，才可能出方向。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";

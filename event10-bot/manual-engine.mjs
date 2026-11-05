@@ -5,7 +5,7 @@ import {tenMinuteWindow} from "./market-enrichment.mjs";
 import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
 import {confirmedPriceStructure} from "./price-structure.mjs";
 export const HORIZON_MS = 600_000;
-export const MIN_SIGNAL_GAP_MS = 240_000; // 4-minute spacing, each signal still settles after 10 minutes.
+export const MIN_SIGNAL_GAP_MS = 120_000; // 2-minute spacing; correlated overlapping 10-minute observations are possible.
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
 const round = (v,n=5)=>Number(v.toFixed(n));
@@ -372,7 +372,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // Clear stale-feed error after BOTH latest closed bars and the index
       // quote have passed the fresh-data validation in evaluatePureSignal.
       lastSuccessfulScanAt=clock();lastError=null;
-      // V11 and legacy V10 require 4 minutes between accepted research signals;
+      // V11 requires 2 minutes between accepted research signals;
       // each accepted prediction keeps its OWN T+600 settlement timestamp.
       // Older versions retain their previous 10-minute overlap protection.
       const blocking=Array.from(signalLedger.all.values()).filter(h=>
@@ -389,15 +389,16 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
         rule.quality="COOLDOWN";rule.eventTag="V11_MIN_SIGNAL_GAP";
         rule.conditions=null;
-        rule.reason="上一次有效信号未达到4分钟最短间隔；每条方向仍独立按10分钟核验，无自动交易。";
+        rule.reason="上一次有效信号未达到2分钟最短间隔；每条方向仍独立按10分钟核验，无自动交易。";
         rule.evidence.quality="COOLDOWN";
         rule.evidence.cooldownUntil=cooldownEndsAt;
       }
       // A bounded pause follows three settled misses, without preventing a
       // freshly deployed version from ever emitting its first signal.
-      const recent=signalLedger.list(25,0).records.filter(h=>
-        typeof h.proxyHit==="boolean"&&Number.isFinite(h.closeObservedAt)).slice(0,3);
-      if(rule.direction&&recent.length===3&&recent.every(h=>h.proxyHit===false)&&
+      const recentSettled=signalLedger.list(25,0).records.filter(h=>
+        typeof h.proxyHit==="boolean"&&Number.isFinite(h.closeObservedAt));
+      const recent=recentSettled.slice(0,3);
+      if(rule.direction&&recentSettled.length>=12&&recent.length===3&&recent.every(h=>h.proxyHit===false)&&
         decisionAt-recent[0].closeObservedAt<15*60000){
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
         rule.quality="NO_SIGNAL";rule.eventTag="V11_LOSS_STREAK_PAUSE";

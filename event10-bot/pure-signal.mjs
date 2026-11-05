@@ -1,4 +1,5 @@
 // BTC ten-minute V11: strict + standard research tiers, separate scorecards, no trade API.
+// Feed provides 62 closed 1m candles in production; require 60 contiguous candles, never 65.
 // V8 uses the existing six-gate filter without V7 secondary veto.
 // Signals require aligned 1m/5m trend, moderate momentum, candle structure, volume AND RSI.
 export const RULE_VERSION="EVENT10_TIERED_V11_20261105";
@@ -66,7 +67,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     !Number.isSafeInteger(indexSnapshot.observedAt)||
     indexSnapshot.observedAt>at||at-indexSnapshot.observedAt>5000)
     throw Error("REALTIME_BINANCE_INDEX_REQUIRED");
-  const one=verifiedClosedCandles(feed,"1m",at,65);
+  const one=verifiedClosedCandles(feed,"1m",at,60);
   const five=verifiedClosedCandles(feed,"5m",at,40);
   const p1=one.map(x=>x.c),p5=five.map(x=>x.c);
   const last=one.at(-1);
@@ -111,15 +112,15 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   // STANDARD only loosens modest momentum/volume thresholds, never the
   // multi-timeframe direction, directional close or rebound safeguards.
   const standardUp={
-    ...upChecks,momentum:change3mPct>=0.018&&change3mPct<=0.14,
-    volume:volumeRatio>=0.72&&volumeRatio<=2.30,
-    rsi:rsi14>=45&&rsi14<61
+    ...upChecks,momentum:change3mPct>=0.012&&change3mPct<=0.16,
+    volume:volumeRatio>=0.60&&volumeRatio<=2.30,
+    rsi:rsi14>=43&&rsi14<66
   };
   const standardDown={
-    ...downChecks,momentum:change3mPct<=-0.018&&change3mPct>=-0.12,
-    volume:volumeRatio>=0.78&&volumeRatio<=2.30,
-    rsi:rsi14>=40&&rsi14<=53,
-    persistence15m:change15mPct<=-0.045
+    ...downChecks,momentum:change3mPct<=-0.012&&change3mPct>=-0.16,
+    volume:volumeRatio>=0.65&&volumeRatio<=2.30,
+    rsi:rsi14>=37&&rsi14<=57,
+    persistence15m:change15mPct<=-0.025
   };
   let direction=null,quality="NO_SIGNAL",eventTag="FILTERED_NO_EDGE";
   let reason="多周期趋势、动量、形态、成交量、RSI及反弹风险尚未同时满足；不会强制给方向。";
@@ -132,7 +133,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     if(normalUp!==normalDown&&(normalUp||normalDown)){
       direction=normalUp?"UP":"DOWN";quality="STANDARD_RESEARCH";
       eventTag=direction==="UP"?"V11_STANDARD_HIGHER":"V11_STANDARD_LOWER";
-      reason="普通研究信号：温和放宽动量和成交量门槛，仍要求双周期同向、K线结构和反转防护；与高标准独立统计。";
+      reason="普通研究信号：适度放宽动量、成交量及RSI门槛，仍要求双周期同向、方向K线和反转防护；与高标准独立统计。";
     }
   }
   if(!direction&&downChecks.trend5m&&downChecks.trend1m&&downBounceRisk){
@@ -175,7 +176,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V11信号：高标准与普通信号独立分级，每分钟扫描；有效信号至少相隔4分钟，每条独立观察10分钟；不保证命中率。",
+    caveats:["V11信号：高标准与普通信号独立分级，每分钟扫描；有效信号至少相隔2分钟，每条独立观察10分钟；不保证命中率。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

@@ -137,7 +137,13 @@ jobs:
           set -euo pipefail
           apk=android-app/app/build/outputs/apk/release/app-release.apk
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort | tail -1)"
-          "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/verify.txt"
+          if ! "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/verify.txt" 2>&1; then
+            echo "ANDROID_APKSIGNER_VERIFY_FAILED=true"
+            sed -n '1,35p' "$RUNNER_TEMP/verify.txt"
+            exit 1
+          fi
+          echo "ANDROID_APKSIGNER_VERIFY_OK=true"
+          sed -n '1,15p' "$RUNNER_TEMP/verify.txt"
           cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/verify.txt" | head -n1)"
           test -n "$cert"
           if [[ -n "$EXPECTED_CERT_SHA256" && "${cert,,}" != "${EXPECTED_CERT_SHA256,,}" ]]; then

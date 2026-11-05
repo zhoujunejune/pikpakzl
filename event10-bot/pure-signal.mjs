@@ -109,18 +109,26 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   // The STRICT tier keeps V10 gates; DOWN also avoids exhaustion rebounds.
   const confirmed=checks=>Object.values(checks).every(Boolean);
   const highUp=confirmed(upChecks),highDown=confirmed(downChecks);
-  // STANDARD only loosens modest momentum/volume thresholds, never the
-  // multi-timeframe direction, directional close or rebound safeguards.
+  // STANDARD: research-tested 3m momentum continuation with BOTH 1m and 5m
+  // EMA directions aligned; fresh closed candles, a directional final candle,
+  // bounded momentum/volume and down-side rebound protection remain mandatory.
+  // We do not force directions in flat or conflicting regimes. No real orders.
   const standardUp={
-    ...upChecks,momentum:change3mPct>=0.012&&change3mPct<=0.16,
-    volume:volumeRatio>=0.60&&volumeRatio<=2.30,
-    rsi:rsi14>=43&&rsi14<66
+    trend5m:ema5Fast>ema5Slow,
+    trend1m:ema1Fast>ema1Slow,
+    momentum:change3mPct>=0.020&&change3mPct<=0.22,
+    structure:last.c>last.o,
+    volume:volumeRatio>=0.50&&volumeRatio<=2.80,
+    rsi:rsi14>=34&&rsi14<=68
   };
   const standardDown={
-    ...downChecks,momentum:change3mPct<=-0.012&&change3mPct>=-0.16,
-    volume:volumeRatio>=0.65&&volumeRatio<=2.30,
-    rsi:rsi14>=37&&rsi14<=57,
-    persistence15m:change15mPct<=-0.025
+    trend5m:ema5Fast<ema5Slow,
+    trend1m:ema1Fast<ema1Slow,
+    momentum:change3mPct<=-0.020&&change3mPct>=-0.22,
+    structure:last.c<last.o,
+    volume:volumeRatio>=0.50&&volumeRatio<=2.80,
+    rsi:rsi14>=34&&rsi14<=68,
+    bounceGuard:!downBounceRisk
   };
   let direction=null,quality="NO_SIGNAL",eventTag="FILTERED_NO_EDGE";
   let reason="多周期趋势、动量、形态、成交量、RSI及反弹风险尚未同时满足；不会强制给方向。";
@@ -133,7 +141,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
     if(normalUp!==normalDown&&(normalUp||normalDown)){
       direction=normalUp?"UP":"DOWN";quality="STANDARD_RESEARCH";
       eventTag=direction==="UP"?"V11_STANDARD_HIGHER":"V11_STANDARD_LOWER";
-      reason="普通研究信号：适度放宽动量、成交量及RSI门槛，仍要求双周期同向、方向K线和反转防护；与高标准独立统计。";
+      reason="普通研究信号：3分钟动量与1分钟、5分钟EMA方向一致，方向K线、量能、RSI和看跌反弹过滤通过；与高标准独立统计。";
     }
   }
   if(!direction&&downChecks.trend5m&&downChecks.trend1m&&downBounceRisk){

@@ -85,6 +85,23 @@ test("V11 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
  mismatch.candles["5m"]=feed(at,-1).candles["5m"];
  assert.equal(evaluate(at,"AUTO",mismatch).direction,null);
 });
+test("V11 research-backed dual-EMA momentum fallback retains trend agreement and bounded volume",()=>{
+ const at=START+60000;
+ const moderate=feed(at,1);
+ moderate.candles["1m"].at(-1).volume=55; // 0.55x: strict fails, momentum tier accepts
+ const good=evaluate(at,"AUTO",moderate);
+ assert.equal(good.direction,"UP");
+ assert.equal(good.quality,"STANDARD_RESEARCH");
+ assert.equal(good.upChecks.volume,false);
+ assert.equal(good.standardUpChecks.volume,true);
+ assert.equal(good.standardUpChecks.trend5m,true);
+ assert.equal(good.standardUpChecks.trend1m,true);
+ const stale=feed(at,1);stale.candles["1m"].at(-1).volume=20;
+ assert.equal(evaluate(at,"AUTO",stale).direction,null);
+ const conflict=feed(at,1);conflict.candles["1m"].at(-1).volume=55;
+ conflict.candles["5m"]=feed(at,-1).candles["5m"];
+ assert.equal(evaluate(at,"AUTO",conflict).direction,null);
+});
 test("V11 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
  const at=START+60000;
  const falling=feed(at,-1),last=falling.candles["1m"].at(-1);

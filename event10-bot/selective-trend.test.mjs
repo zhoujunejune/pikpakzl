@@ -22,7 +22,7 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
-test("V11 strict retains six core gates without the old wide secondary veto",()=>{
+test("V12 strict retains six core gates without the old wide secondary veto",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
  const last=bullish.candles["1m"].at(-1);
@@ -31,7 +31,7 @@ test("V11 strict retains six core gates without the old wide secondary veto",()=
  assert.equal(out.direction,"UP");
  assert.equal(out.strategyVersion,RULE_VERSION);
 });
-test("V11 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
+test("V12 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
  const at=START+60000;
  const up=feed(at,1);
  const q=up.candles["1m"].at(-1);
@@ -45,7 +45,7 @@ test("V11 long RSI threshold stays below 63 and down requires 15m persistence",(
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_TIERED_V11_20261105");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_DUAL_EMA_FREQUENCY_V12_20261105");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -73,7 +73,7 @@ test("EMA conflict, low volume, and 3m pump must suppress signals",()=>{
  lowLast.close-=80;lowLast.low=lowLast.close-0.1;
  assert.notEqual(evaluate(at,"AUTO",lowRsiDown).direction,"UP");
 });
-test("V11 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
+test("V12 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
  const at=START+60000;
  const moderate=feed(at,1);moderate.candles["1m"].at(-1).volume=75;
  const r=evaluate(at,"AUTO",moderate);
@@ -85,7 +85,7 @@ test("V11 moderate tier increases coverage only with aligned 1m/5m trend",()=>{
  mismatch.candles["5m"]=feed(at,-1).candles["5m"];
  assert.equal(evaluate(at,"AUTO",mismatch).direction,null);
 });
-test("V11 research-backed dual-EMA momentum fallback retains trend agreement and bounded volume",()=>{
+test("V12 research-backed dual-EMA momentum fallback retains trend agreement and bounded volume",()=>{
  const at=START+60000;
  const moderate=feed(at,1);
  moderate.candles["1m"].at(-1).volume=55; // 0.55x: strict fails, momentum tier accepts
@@ -102,7 +102,7 @@ test("V11 research-backed dual-EMA momentum fallback retains trend agreement and
  conflict.candles["5m"]=feed(at,-1).candles["5m"];
  assert.equal(evaluate(at,"AUTO",conflict).direction,null);
 });
-test("V11 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
+test("V12 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
  const at=START+60000;
  const falling=feed(at,-1),last=falling.candles["1m"].at(-1);
  const base=evaluate(at,"AUTO",falling);
@@ -111,7 +111,7 @@ test("V11 falling-candle rebound wick rejects an otherwise valid DOWN",()=>{
  const result=evaluate(at,"AUTO",falling);
  assert.equal(result.direction,null);
  assert.equal(result.downChecks.bounceGuard,false);
- assert.equal(result.eventTag,"V11_DOWN_REBOUND_RISK");
+ assert.equal(result.eventTag,"V12_DOWN_REBOUND_RISK");
 });
 test("real production-size 62 closed 1m candles work, insufficient 59 still fail closed",()=>{
  const at=START+60000;
@@ -146,7 +146,7 @@ test("abnormally large volume and momentum spikes must not be chased",()=>{
    assert.equal(evaluate(at,"AUTO",runaway).direction,null);
  }
 });
-test("V11 2m gap permits independent overlapping 10m observations across restart",async()=>{
+test("V12 2m gap permits independent overlapping 10m observations across restart",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
@@ -182,7 +182,7 @@ test("V11 2m gap permits independent overlapping 10m observations across restart
  assert.equal(next.direction,"UP");
  assert.equal(engine.signals().total,3);
 });
-test("V11 retains V9 NO_SIGNAL protection for risky momentum",()=>{
+test("V12 retains V9 NO_SIGNAL protection for risky momentum",()=>{
  const at=START+60000;
  const f=feed(at,-1),last=f.candles["1m"].at(-1);
  last.close-=3;last.low=Math.min(last.low,last.close-0.1);
@@ -286,6 +286,29 @@ test("only V4 records are returned to public history and status, even with legac
  assert.equal(engine.signals().stats.proxyHits,1);
  const persisted=JSON.parse(fs.readFileSync(file,"utf8"));
  assert.equal(persisted.length,2); // Old immutable audit data isn't physically destroyed.
+});
+
+
+test("V12 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v12-isolated-"));
+ const file=path.join(dir,"state.json"),ledger=path.join(dir,"rule-signals-v1.ndjson");
+ const oldVersion="EVENT10_TIERED_V11_20261105";
+ const oldRows=Array.from({length:6},(_,i)=>({
+  id:"previous-v11-"+i,openedAt:START-3600000+i*1000,expiresAt:START-3000000+i*1000,
+  strategyVersion:oldVersion,decisionReviewVersion:oldVersion,
+  direction:i%2?"UP":"DOWN",status:"COMPLETE",openPrice:70000,proxyHit:i%2===0
+ }));
+ fs.writeFileSync(file,JSON.stringify(oldRows));
+ fs.writeFileSync(ledger,oldRows.map(s=>JSON.stringify({kind:"SIGNAL",signal:{...s,strategyVersion:oldVersion}})).join("\n")+"\n");
+ const engine=createEngine({env:{EVENT10_STATE_FILE:file,EVENT10_SIGNAL_LOG_FILE:ledger},clock:()=>START});
+ assert.equal(engine.signals().version,RULE_VERSION);
+ assert.equal(engine.signals().total,0);
+ assert.equal(engine.signals().stats.proxySettled,0);
+ assert.equal(engine.history().length,0);
+ assert.equal(engine.status().lastSession,null);
+ assert.equal(JSON.parse(fs.readFileSync(file,"utf8")).length,6);
+ const stored=fs.readFileSync(ledger,"utf8");
+ assert.match(stored,/previous-v11-0/); // historical audit preserved, not shown
 });
 
 test("explicit reset: 15 previous V4 signals must yield zero visible new-version results",()=>{

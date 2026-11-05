@@ -1,8 +1,8 @@
-// BTC ten-minute V11: strict + standard research tiers, separate scorecards, no trade API.
+// BTC ten-minute V12: strict + standard research tiers, separate scorecards, no trade API.
 // Feed provides 62 closed 1m candles in production; require 60 contiguous candles, never 65.
 // V8 uses the existing six-gate filter without V7 secondary veto.
 // Signals require aligned 1m/5m trend, moderate momentum, candle structure, volume AND RSI.
-export const RULE_VERSION="EVENT10_TIERED_V11_20261105";
+export const RULE_VERSION="EVENT10_DUAL_EMA_FREQUENCY_V12_20261105";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -134,22 +134,22 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   let reason="多周期趋势、动量、形态、成交量、RSI及反弹风险尚未同时满足；不会强制给方向。";
   if(highUp!==highDown&&(highUp||highDown)){
     direction=highUp?"UP":"DOWN";quality="STRICT_RESEARCH";
-    eventTag=direction==="UP"?"V11_STRICT_HIGHER":"V11_STRICT_LOWER";
+    eventTag=direction==="UP"?"V12_STRICT_HIGHER":"V12_STRICT_LOWER";
     reason="高标准研究信号：通过V10趋势、动量、量价、RSI全部检查，看跌额外排除反弹风险。";
   }else{
     const normalUp=confirmed(standardUp),normalDown=confirmed(standardDown);
     if(normalUp!==normalDown&&(normalUp||normalDown)){
       direction=normalUp?"UP":"DOWN";quality="STANDARD_RESEARCH";
-      eventTag=direction==="UP"?"V11_STANDARD_HIGHER":"V11_STANDARD_LOWER";
+      eventTag=direction==="UP"?"V12_STANDARD_HIGHER":"V12_STANDARD_LOWER";
       reason="普通研究信号：3分钟动量与1分钟、5分钟EMA方向一致，方向K线、量能、RSI和看跌反弹过滤通过；与高标准独立统计。";
     }
   }
   if(!direction&&downChecks.trend5m&&downChecks.trend1m&&downBounceRisk){
-    eventTag="V11_DOWN_REBOUND_RISK";
+    eventTag="V12_DOWN_REBOUND_RISK";
     reason="短周期偏空，但出现下跌衰竭、长下影或RSI快速回升，避免追空遇反弹。";
   }
   if(!direction&&rsi14>=63&&upChecks.trend5m&&upChecks.trend1m){
-    eventTag="V11_UP_RSI_EXHAUSTION";
+    eventTag="V12_UP_RSI_EXHAUSTION";
     reason="上升趋势中RSI达到63以上，避免高位追涨。";
   }
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
@@ -184,7 +184,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V11信号：高标准与普通信号独立分级，每分钟扫描；有效信号至少相隔2分钟，每条独立观察10分钟；不保证命中率。",
+    caveats:["V12信号：高标准与普通信号独立分级，每分钟扫描；有效信号至少相隔2分钟，每条独立观察10分钟；不保证命中率。",
       "数据异常不出方向，本服务只产生研究信号，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

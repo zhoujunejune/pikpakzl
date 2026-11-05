@@ -1,3 +1,4 @@
+# Latest 2026-11-05 readonly study: frequency/accuracy tradeoffs, predeclared reversal alternatives. Never trades.
 # 2026-11-05: verify actual deployed standard-tier implementation versus previous historical candidates.
 name: EVENT10 readonly walkforward frequency study
 on:
@@ -43,7 +44,7 @@ jobs:
           const end=one.at(-12)?.startMs+60000;
           if(!Number.isFinite(start)||!Number.isFinite(end)||end-start<5*3600000)throw Error('INSUFFICIENT_WINDOW');
           const split=start+(end-start)*0.5;
-          const candidates=['live_v11','momentum02_ema1','momentum035_ema1','momentum02_dualtrend','momentum035_dualtrend','dualtrend02_guarded','strict_plus_guarded_dual'];
+          const candidates=['live_v11','momentum02_ema1','momentum035_ema1','momentum02_dualtrend','momentum035_dualtrend','dualtrend02_guarded','strict_plus_guarded_dual','range_reversion','trend_reversal','volume_breakout'];
           const stats=Object.fromEntries(candidates.map(k=>[k,{n:0,hits:0,early:{n:0,hits:0},late:{n:0,hits:0},lastAcceptedAt:-Infinity,hour:{}}]));
           const pct=(x,y)=>y?Number((100*x/y).toFixed(2)):null;
           let slots=0,fail=0;
@@ -79,7 +80,10 @@ jobs:
               momentum02_dualtrend:eligible(0.02,true)?side:null,
               momentum035_dualtrend:eligible(0.035,true)?side:null,
               dualtrend02_guarded:eligible(0.02,true)&&(side==='UP'||!downBounceRisk)?side:null,
-              strict_plus_guarded_dual:live||(eligible(0.02,true)&&(side==='UP'||!downBounceRisk)?side:null)
+              strict_plus_guarded_dual:live||(eligible(0.02,true)&&(side==='UP'||!downBounceRisk)?side:null),
+              range_reversion:mag>=0.045&&mag<=0.22&&Math.abs(e5/q.at(-1)*100)<0.015&&volRatio>=0.5&&volRatio<=2.5&&((side==='UP'&&rsi>=60)||(side==='DOWN'&&rsi<=40))?(side==='UP'?'DOWN':'UP'):null,
+              trend_reversal:mag>=0.045&&mag<=0.22&&volRatio>=0.5&&volRatio<=1.5&&((side==='UP'&&e1>0&&e5>0)||(side==='DOWN'&&e1<0&&e5<0))?(side==='UP'?'DOWN':'UP'):null,
+              volume_breakout:eligible(0.035,true)&&volRatio>=1.1?side:null
             };
             for(const [key,dir] of Object.entries(choices)){
               if(!dir)continue;

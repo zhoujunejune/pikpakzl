@@ -1,3 +1,4 @@
+# Confirm V12 ledger reset and version-only app API after deploy 2026-11-05
 # 2026-11-05 verify post dual EMA deployment, read only
 # Signal frequency audit request 2026-11-05. Read only: no orders, no strategy modifications.
 name: EVENT10 live read-only signal diagnosis

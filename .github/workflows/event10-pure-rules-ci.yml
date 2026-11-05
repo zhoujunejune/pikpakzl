@@ -45,7 +45,7 @@ jobs:
           assert 'openPrice:liveIndex' in s
           assert 'INDEX_SIGNAL_TPLUS10_PROXY_ONLY' in s
           assert 'autoTradingEnabled:false' in s
-          assert 'verifiedClosedCandles' in rule and 'FILTERED_NO_EDGE' in rule
+          assert 'verifiedClosedCandles' in rule and 'FLAT_NO_EDGE' in rule
           assert 'verifiedClosedCandles(feed,"1m",at,60)' in rule
           assert 'expectedLastClose' in rule and 'STALE_' in rule
           assert 'MIN_SIGNAL_GAP_MS = 45_000' in s and 'V14_MIN_SIGNAL_GAP' in s

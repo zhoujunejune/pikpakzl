@@ -156,8 +156,19 @@ jobs:
           mkdir -p dist
           cp "$apk" dist/ZL-Control-v1.2.4-STABLE-RELEASE.apk
           sha256sum dist/*.apk
-          gh release create zl-control-v1.2.4-stable-20261105 dist/ZL-Control-v1.2.4-STABLE-RELEASE.apk \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "ZL Control v1.2.4 - Official Stable Android" \
-            --notes "BTC 10-minute EVENT10 native alerts. Permanently signed Release APK, never debug. Migration: an existing debug-signed app cannot be overwritten and uninstalling it erases app-local data. Future releases must reuse the same stable key stored securely on Alibaba."
-          echo "ANDROID_STABLE_RELEASE_PUBLISHED=true"
+          if gh release view zl-control-v1.2.4-stable-20261105 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ANDROID_STABLE_RELEASE_ALREADY_PUBLISHED=true"
+          else
+            gh release create zl-control-v1.2.4-stable-20261105 dist/ZL-Control-v1.2.4-STABLE-RELEASE.apk \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "ZL Control v1.2.4 - Official Stable Android" \
+              --notes "BTC 10-minute EVENT10 native alerts. Signed release APK. If the old app was debug-signed, the first migration requires uninstall and loses app-local settings. Future releases reuse the private key on Alibaba."
+            echo "ANDROID_STABLE_RELEASE_PUBLISHED=true"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZL-Control-v1.2.4-STABLE-RELEASE
+          path: dist/ZL-Control-v1.2.4-STABLE-RELEASE.apk
+          if-no-files-found: error
+          retention-days: 90

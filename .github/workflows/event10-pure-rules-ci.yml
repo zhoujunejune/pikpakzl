@@ -45,14 +45,14 @@ jobs:
           assert 'openPrice:liveIndex' in s
           assert 'INDEX_SIGNAL_TPLUS10_PROXY_ONLY' in s
           assert 'autoTradingEnabled:false' in s
-          assert 'verifiedClosedCandles' in rule and 'FLAT_NO_EDGE' in rule
+          assert 'verifiedClosedCandles' in rule and 'V15_CONFLICT_OR_LOW_MOMENTUM' in rule
           assert 'verifiedClosedCandles(feed,"1m",at,60)' in rule
           assert 'expectedLastClose' in rule and 'STALE_' in rule
-          assert 'MIN_SIGNAL_GAP_MS = 45_000' in s and 'V14_MIN_SIGNAL_GAP' in s
+          assert 'MIN_SIGNAL_GAP_MS = 600_000' in s and 'V15_MIN_SIGNAL_GAP' in s
           assert 'const signalExpiry=decisionAt+HORIZON_MS' in s
           assert 'h.expiresAt>decisionAt' in s  # legacy cutover still waits 10m
           assert 'nowMs-previous.lastAt>=14000' in s
-          assert 'V14_STRICT_HIGHER' in rule
-          assert 'V14_STRICT_LOWER' in rule
+          assert 'V15_STRICT_HIGHER' in rule
+          assert 'V15_STRICT_LOWER' in rule
           print('EVENT10_PURE_SIGNAL_NO_AI_OR_TRADE_GATE=true')
           PY

@@ -5,7 +5,7 @@ import {tenMinuteWindow} from "./market-enrichment.mjs";
 import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
 import {confirmedPriceStructure} from "./price-structure.mjs";
 export const HORIZON_MS = 600_000;
-export const MIN_SIGNAL_GAP_MS = 45_000; // Allow a new signal on each fresh 1m close; 10m outcomes overlap heavily.
+export const MIN_SIGNAL_GAP_MS = 600_000; // At most one actionable signal per 10m; prevent overlapping observations.
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
 const round = (v,n=5)=>Number(v.toFixed(n));
@@ -238,7 +238,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const persistedSessions=load(file);
   const ledgerFile=String(env.EVENT10_SIGNAL_LOG_FILE||path.join(path.dirname(file),"rule-signals-v1.ndjson"));
   const signalLedger=openSignalLedger(ledgerFile,persistedSessions);
-  const auditFile=String(env.EVENT10_SCAN_AUDIT_FILE||path.join(path.dirname(file),"rule-scan-audit-v14.json"));
+  const auditFile=String(env.EVENT10_SCAN_AUDIT_FILE||path.join(path.dirname(file),"rule-scan-audit-v15.json"));
   let scanAudit=[];
   try{const rows=JSON.parse(fs.readFileSync(auditFile,"utf8"));
     if(Array.isArray(rows))scanAudit=rows.filter(x=>Number.isFinite(x?.at)&&typeof x?.id==="string").slice(-3000);
@@ -294,8 +294,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"FAST_V14_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_FAST_V14",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"PACED_V15_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_PACED_V15",configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
@@ -305,7 +305,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:0,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
-      enrichmentVersion:"EVENT10_FAST_V14",
+      enrichmentVersion:"EVENT10_PACED_V15",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -372,30 +372,35 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // Clear stale-feed error after BOTH latest closed bars and the index
       // quote have passed the fresh-data validation in evaluatePureSignal.
       lastSuccessfulScanAt=clock();lastError=null;
-      // V11 requires 2 minutes between accepted research signals;
-      // each accepted prediction keeps its OWN T+600 settlement timestamp.
-      // Older versions retain their previous 10-minute overlap protection.
-      const blocking=Array.from(signalLedger.all.values()).filter(h=>
+      // One operator-actionable signal per ten minutes, across manual/auto
+      // triggers and process restarts. Legacy V14 directions also enforce
+      // their original full 10m window during this version cutover.
+      const existingSignals=Array.from(signalLedger.all.values()).filter(h=>
         ["UP","DOWN"].includes(h.direction)&&Number.isFinite(h.openedAt)&&
-        Number.isFinite(h.expiresAt)&&h.openedAt<=decisionAt&&
-        ((h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION||
-          (h.decisionReviewVersion==="EVENT10_QUALITY_FILTER_V13_20261105"||h.decisionReviewVersion==="EVENT10_DUAL_EMA_FREQUENCY_V12_20261105"||h.decisionReviewVersion==="EVENT10_TIERED_V11_20261105"||h.decisionReviewVersion==="EVENT10_FREQUENCY_V10_20261104"))
-          ?h.openedAt+MIN_SIGNAL_GAP_MS>decisionAt:h.expiresAt>decisionAt));
-      if(rule.direction&&blocking.length){
-        const cooldownEndsAt=Math.max(...blocking.map(h=>
-          (h.decisionReviewVersion===RULE_VERSION||h.strategyVersion===RULE_VERSION||
-          (h.decisionReviewVersion==="EVENT10_TIERED_V11_20261105"||h.decisionReviewVersion==="EVENT10_FREQUENCY_V10_20261104"))
-            ?h.openedAt+MIN_SIGNAL_GAP_MS:h.expiresAt));
+        h.openedAt<=decisionAt&&h.openedAt+MIN_SIGNAL_GAP_MS>decisionAt);
+      if(rule.direction&&existingSignals.length){
+        const cooldownUntil=Math.max(...existingSignals.map(h=>h.openedAt+MIN_SIGNAL_GAP_MS));
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-        rule.quality="COOLDOWN";rule.eventTag="V14_MIN_SIGNAL_GAP";
+        rule.quality="COOLDOWN";rule.eventTag="V15_MIN_SIGNAL_GAP";
         rule.conditions=null;
-        rule.reason="距离上一条信号不足45秒，同一根分钟K线不重复造新信号；每条仍独立按10分钟核验。";
-        rule.evidence.quality="COOLDOWN";
-        rule.evidence.cooldownUntil=cooldownEndsAt;
+        rule.reason="距离上次有效信号不足10分钟；避免同一观察期重复通知和连续追单。";
+        rule.evidence.quality="COOLDOWN";rule.evidence.cooldownUntil=cooldownUntil;
       }
-      // V14 frequency-first: no loss-streak throttling.
-      // Proxy losses are tracked in the independent ledger, not used to
-      // suppress subsequent signals (the user explicitly prioritizes count).
+      // After two consecutive settled proxy misses, pause new directions
+      // for 20 minutes from the latest result. Use current-version data only.
+      // No blind reversal, and no permanent block after the pause expires.
+      const recentSettled=signalLedger.list(25,0).records.filter(h=>
+        typeof h.proxyHit==="boolean"&&Number.isFinite(h.closeObservedAt));
+      const lastTwo=recentSettled.slice(0,2);
+      if(rule.direction&&lastTwo.length===2&&lastTwo.every(h=>h.proxyHit===false)&&
+        decisionAt-lastTwo[0].closeObservedAt<20*60000){
+        rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
+        rule.quality="LOSS_PAUSE";rule.eventTag="V15_RECENT_LOSSES_PAUSE";
+        rule.conditions=null;
+        rule.reason="最近两条已核验方向连续未命中，暂停20分钟，避免同一行情继续追错。";
+        rule.evidence.quality="LOSS_PAUSE";
+        rule.evidence.cooldownUntil=lastTwo[0].closeObservedAt+20*60000;
+      }
       const signalExpiry=decisionAt+HORIZON_MS; // each accepted signal gets its own full 600s
       const openingIndex=null;
       const liveIndex=rule.evidence.liveIndexPrice;
@@ -425,7 +430,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_FAST_V14",attempts:0,confidence:null,reason:rule.reason,
+        model:"PURE_SIGNAL_PACED_V15",attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -485,6 +490,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_FAST_MOMENTUM_V14_20261105"||
         h.decisionReviewVersion==="EVENT10_QUALITY_FILTER_V13_20261105"||
         h.decisionReviewVersion==="EVENT10_DUAL_EMA_FREQUENCY_V12_20261105"||
         h.decisionReviewVersion==="EVENT10_DUAL_EMA_FREQUENCY_V12_20261105"||
@@ -520,7 +526,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

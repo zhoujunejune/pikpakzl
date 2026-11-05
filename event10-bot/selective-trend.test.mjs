@@ -22,7 +22,7 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
-test("V14 strict retains six core gates without the old wide secondary veto",()=>{
+test("V15 strict retains six core gates without the old wide secondary veto",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
  const last=bullish.candles["1m"].at(-1);
@@ -31,7 +31,7 @@ test("V14 strict retains six core gates without the old wide secondary veto",()=
  assert.equal(out.direction,"UP");
  assert.equal(out.strategyVersion,RULE_VERSION);
 });
-test("V14 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
+test("V15 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
  const at=START+60000;
  const up=feed(at,1);
  const q=up.candles["1m"].at(-1);
@@ -45,11 +45,11 @@ test("V14 long RSI threshold stays below 63 and down requires 15m persistence",(
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_FAST_MOMENTUM_V14_20261105");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_PACED_MOMENTUM_V15_20261106");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
-   assert.equal(r.confidence,null);assert.match(r.reason,/没有可辨别价格方向/);
+   assert.equal(r.confidence,null);assert.match(r.reason,/动量|不一致/);
  }
 });
 test("aligned moderate trends may signal on any minute or manually",()=>{
@@ -59,30 +59,30 @@ test("aligned moderate trends may signal on any minute or manually",()=>{
  }
  assert.equal(evaluate(START+3*60000,"MANUAL").direction,"UP");
 });
-test("V14 prioritizes frequency even if 5m trend, volume and RSI disagree",()=>{
+test("V15 requires 1m/3m momentum plus EMA, not blindly voting",()=>{
  const at=START+60000;
- const f=feed(at,1);
- f.candles["5m"]=feed(at,-1).candles["5m"]; // 5m conflict not a hard veto
- f.candles["1m"].at(-1).volume=10; // no volume veto
- const r=evaluate(at,"AUTO",f);
- assert.equal(r.direction,"UP");assert.equal(r.quality,"STANDARD_RESEARCH");
- assert.equal(r.conditions.trend5m,false);
- assert.equal(r.conditions.volume,false);
- const down=evaluate(at,"AUTO",feed(at,-1));
- assert.equal(down.direction,"DOWN");
+ const bullish=feed(at,1);
+ const r=evaluate(at,"AUTO",bullish);
+ assert.equal(r.direction,"UP");
+ assert.equal(r.quality,"STRICT_RESEARCH");
+ const mismatch=feed(at,1);
+ mismatch.candles["5m"]=feed(at,-1).candles["5m"];
+ const standard=evaluate(at,"AUTO",mismatch);
+ assert.equal(standard.direction,"UP");
+ assert.equal(standard.quality,"STANDARD_RESEARCH");
+ assert.equal(standard.conditions.trend5m,false);
 });
-test("V14 momentum vote gives a transparent direction without a 5m hard gate",()=>{
- const at=START+60000;const f=feed(at,1);
- const high=feed(at,-1);
- f.candles["5m"]=high.candles["5m"];
- const res=evaluate(at,"AUTO",f);
- assert.equal(res.direction,"UP");assert.ok(res.voteScore>0);
- assert.equal(res.confidence,null);
+test("V15 never gives a direction if trend is weak, flat or unverified",()=>{
+ const at=START+60000;
+ assert.equal(evaluate(at,"AUTO",feed(at,1,true)).direction,null);
+ const huge=feed(at,1);const q=huge.candles["1m"].at(-1);
+ q.close+=40;q.high=q.close+0.1;
+ assert.equal(evaluate(at,"AUTO",huge).direction,null);
 });
-test("V14 supplies a direction on large but verified moves instead of hiding it",()=>{
- const at=START+60000;const f=feed(at,1);
- const q=f.candles["1m"].at(-1);q.close+=10;q.high=q.close+0.1;
- assert.equal(evaluate(at,"AUTO",f).direction,"UP");
+test("V15 ignores poor volume and momentum disagreement",()=>{
+ const at=START+60000;
+ const f=feed(at,1);f.candles["1m"].at(-1).volume=5;
+ assert.equal(evaluate(at,"AUTO",f).direction,null);
 });
 test("real production-size 62 closed 1m candles work, insufficient 59 still fail closed",()=>{
  const at=START+60000;
@@ -104,56 +104,58 @@ test("one-minute and five-minute closed candles must be current, never replay ol
  stale5.candles["5m"]=feed(at-300000).candles["5m"];
  assert.throws(()=>evaluate(at,"AUTO",stale5),/STALE_5m_LAST_CLOSED_CANDLE/);
 });
-test("V14 produces high-frequency direction even under abnormal volume",()=>{
- const at=START+60000;
- for(const side of [1,-1]){
-  const f=feed(at,side);f.candles["1m"].at(-1).volume=500;
-  assert.equal(evaluate(at,"AUTO",f).direction,side>0?"UP":"DOWN");
- }
-});
-test("V14 45-second gap permits independent overlapping 10m observations across restart",async()=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-nonoverlap-"));
+test("V15 ten-minute cooldown applies across restart and manual/auto",async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-paced-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
  const fetcher=async url=>url.includes("shadow-market-data")?{ok:true,json:async()=>feed(now)}:
   url.includes("premiumIndex")?{ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:String(price),time:now-100})}:
   Promise.reject(Error("UNEXPECTED_URL"));
  const opts={env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher};
- const id=()=> "auto-1m-"+(Math.floor(now/60000)*60000);
- let engine=createEngine(opts);
- const first=await engine.start(id());
+ const engine=createEngine(opts);
+ const first=await engine.start("manual-first-0001");
  assert.equal(first.direction,"UP");
- now=START+30000+1000;
- const blocked=await engine.start('auto-1m-early-slot-1');
- assert.equal(blocked.status,"NO_SIGNAL");
- assert.equal(blocked.quality,"COOLDOWN");
- assert.match(blocked.reason,/45秒/);
- assert.equal(engine.signals().total,1);
- engine=createEngine(opts);
- now=START+35000+1000;
- const manual=await engine.start("manually-triggered-001");
- assert.equal(manual.status,"NO_SIGNAL");
- assert.equal(engine.signals().total,1);
  now=START+60000+1000;
- const overlap=await engine.start(id());
- assert.equal(overlap.direction,"UP");
- assert.equal(overlap.expiresAt-overlap.openedAt,600000);
- assert.equal(overlap.openedAt-first.openedAt,60000);
- assert.equal(engine.status().activeSignalCount,2);
- assert.equal(engine.status().minSignalGapMs,45000);
- assert.equal(engine.signals().total,2);
- now=first.expiresAt+1000;
- const next=await engine.start(id());
+ const blocked=await engine.start("auto-1m-next-0002");
+ assert.equal(blocked.direction,null);
+ assert.equal(blocked.eventTag,"V15_MIN_SIGNAL_GAP");
+ assert.equal(engine.signals().total,1);
+ const rebooted=createEngine(opts);
+ now=START+540000+1000;
+ const still=await rebooted.start("manual-next-0003");
+ assert.equal(still.direction,null);
+ assert.equal(rebooted.signals().total,1);
+ now=START+660000+1000;
+ const next=await rebooted.start("manual-next-0004");
  assert.equal(next.direction,"UP");
- assert.equal(engine.signals().total,3);
+ assert.equal(next.expiresAt-next.openedAt,600000);
+ assert.equal(rebooted.signals().total,2);
+ assert.equal(rebooted.status().minSignalGapMs,MIN_SIGNAL_GAP_MS);
+ assert.equal(MIN_SIGNAL_GAP_MS,600000);
 });
-test("V14 still reports genuine direction when momentum is large",()=>{
- const at=START+60000;
- const f=feed(at,-1),last=f.candles["1m"].at(-1);
- last.close-=3;last.low=Math.min(last.low,last.close-0.1);
- const r=evaluate(at,"AUTO",f);
- assert.equal(r.direction,"DOWN");
- assert.equal(r.confidence,null);
+test("V15 pauses for 20m after two consecutive current-version proxy misses",async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-pause-"));
+ const file=path.join(dir,"sessions.json");
+ let now=START+60000;
+ const misses=[23,12].map((age,i)=>({
+  id:"past-miss-"+i,decisionReviewVersion:RULE_VERSION,strategyVersion:RULE_VERSION,
+  openedAt:now-age*60000,expiresAt:now-(age-10)*60000,
+  closeObservedAt:now-(age-10)*60000+1000,
+  direction:"DOWN",status:"COMPLETE",proxyHit:false,proxyOutcome:"UP",openPrice:70000,
+  closePrice:70001,settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"
+ }));
+ fs.writeFileSync(file,JSON.stringify(misses));
+ const fetcher=async url=>url.includes("shadow-market-data")?{ok:true,json:async()=>feed(now)}:
+  url.includes("premiumIndex")?{ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:"70000",time:now-100})}:
+  Promise.reject(Error("UNEXPECTED_URL"));
+ const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
+ const blocked=await engine.start("manual-retry-pause-0001");
+ assert.equal(blocked.direction,null);
+ assert.equal(blocked.eventTag,"V15_RECENT_LOSSES_PAUSE");
+ assert.match(blocked.reason,/连续未命中/);
+ now+=20*60000;
+ const available=await engine.start("manual-post-pause-0002");
+ assert.equal(available.direction,"UP");
 });
 test("transient stale 1m data recovers and clears current error without erasing audit",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-fresh-"));
@@ -216,7 +218,7 @@ test("engine saves version, 600-second index result, no order and persistent rec
  assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"STRICT_RESEARCH");
  assert.equal(signal.expiresAt-signal.openedAt,600000);assert.equal(signal.realOrderPlaced,false);
  assert.equal(engine.status().autoTradingEnabled,false);assert.equal(engine.status().autoIntervalMs,60000);
- assert.equal(engine.status().minSignalGapMs,45000);
+ assert.equal(engine.status().minSignalGapMs,600000);
  assert.equal(engine.signals().stats.byTier.STRICT_RESEARCH.total,1);
  assert.equal(engine.signals().stats.byTier.STANDARD_RESEARCH.total,0);
  assert.equal(engine.status().scanDiagnostics.lastHour.strictSignals,1);
@@ -254,7 +256,7 @@ test("only V4 records are returned to public history and status, even with legac
 });
 
 
-test("V14 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
+test("V15 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v12-isolated-"));
  const file=path.join(dir,"state.json"),ledger=path.join(dir,"rule-signals-v1.ndjson");
  const oldVersion="EVENT10_TIERED_V11_20261105";

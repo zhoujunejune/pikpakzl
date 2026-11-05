@@ -1,9 +1,5 @@
-// BTC ten-minute V14: signal-count-first 1m directional momentum. No trade API.
-// Every *fresh closed 1-minute bar* permits a new independent 10-minute research signal.
-// Direction is a transparent vote of 1m move, 3m momentum and 1m EMA9/21;
-// five-minute trend, RSI and volume are displayed but NOT hard vetoes.
-// Authenticity, freshness and T+600 proxy settlement checks remain mandatory.
-export const RULE_VERSION="EVENT10_FAST_MOMENTUM_V14_20261105";
+// V15: paced non-overlapping 10-minute directional observations, no trade API.
+export const RULE_VERSION="EVENT10_PACED_MOMENTUM_V15_20261106";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -110,57 +106,51 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   // The STRICT tier keeps V10 gates; DOWN also avoids exhaustion rebounds.
   const confirmed=checks=>Object.values(checks).every(Boolean);
   const highUp=confirmed(upChecks),highDown=confirmed(downChecks);
-  // Frequency-first policy: a new verified 1-minute close supplies the decision.
-  // The short-term signs get 1/3/3 voting weights so weak EMA lag cannot block
-  // a fresh directional move. Ties are resolved by 3m momentum, then 1m close,
-  // then EMA. Truly flat observations remain NO_SIGNAL.
+  // Quality-and-usability compromise: no forced sign on conflicting 1m / 3m
+  // momentum. 1m EMA9/21 is mandatory, 5m trend is informational for STANDARD.
+  // The engine (not this pure rule) caps accepted directions at 1 per 10m.
   const change1mPct=(last.c/p1.at(-2)-1)*100;
-  const sign=x=>x>0?1:x<0?-1:0;
-  const emaBias=sign(ema1Fast-ema1Slow);
-  const momentumBias=sign(change3mPct);
-  const candleBias=sign(change1mPct);
-  const vote=3*momentumBias+3*candleBias+emaBias;
-  const bias=sign(vote)||momentumBias||candleBias||emaBias;
-  const fastUp=bias>0,fastDown=bias<0;
-  // Retain machine-readable audit checks, but do not pretend the secondary
-  // trend/volume/RSI gates passed; they are informational in V14.
   const standardUp={
-    trend5m:ema5Fast>ema5Slow,
+    trend5m:ema5Fast>ema5Slow, // advisory, not a veto
     trend1m:ema1Fast>ema1Slow,
-    momentum:change3mPct>0,
-    structure:change1mPct>0,
-    volume:volumeRatio>=0.5&&volumeRatio<=2.8,
-    rsi:rsi14>=34&&rsi14<=68
+    momentum:change3mPct>=0.020&&change3mPct<=0.22,
+    structure:change1mPct>0&&last.c>last.o,
+    volume:volumeRatio>=0.40&&volumeRatio<=3.0,
+    rsi:rsi14>=32&&rsi14<=70
   };
   const standardDown={
-    trend5m:ema5Fast<ema5Slow,
+    trend5m:ema5Fast<ema5Slow, // advisory, not a veto
     trend1m:ema1Fast<ema1Slow,
-    momentum:change3mPct<0,
-    structure:change1mPct<0,
-    volume:volumeRatio>=0.5&&volumeRatio<=2.8,
-    rsi:rsi14>=34&&rsi14<=68,
-    persistence15m:change15mPct<0,
+    momentum:change3mPct<=-0.020&&change3mPct>=-0.22,
+    structure:change1mPct<0&&last.c<last.o,
+    volume:volumeRatio>=0.40&&volumeRatio<=3.0,
+    rsi:rsi14>=30&&rsi14<=68,
     bounceGuard:!downBounceRisk
   };
-  let direction=null,quality="NO_SIGNAL",eventTag="FLAT_NO_EDGE";
-  let reason="最近已收盘K线完全没有可辨别价格方向，本轮不生成重复信号。";
-  if(highUp!==highDown&&(highUp||highDown)&&sign(bias)===(highUp?1:-1)){
+  const standardReady=checks=>Object.entries(checks)
+    .filter(([name])=>name!=="trend5m").every(([,ok])=>ok);
+  let direction=null,quality="NO_SIGNAL",eventTag="V15_CONFLICT_OR_LOW_MOMENTUM";
+  let reason="1分钟、3分钟动量、EMA或量价不一致，本轮无可操作信号。";
+  if(highUp!==highDown&&(highUp||highDown)){
     direction=highUp?"UP":"DOWN";quality="STRICT_RESEARCH";
-    eventTag=direction==="UP"?"V14_STRICT_HIGHER":"V14_STRICT_LOWER";
-    reason="高标准与一分钟动量投票同向：快速给出10分钟研究信号。";
-  }else if(fastUp||fastDown){
-    direction=fastUp?"UP":"DOWN";quality="STANDARD_RESEARCH";
-    eventTag=direction==="UP"?"V14_FAST_HIGHER":"V14_FAST_LOWER";
-    reason="高频研究信号：按最近1分钟价格变化、3分钟动量及EMA9/21投票给方向；不再要求5分钟趋势、RSI及成交量全部同向。";
+    eventTag=direction==="UP"?"V15_STRICT_HIGHER":"V15_STRICT_LOWER";
+    reason="高标准多周期趋势与动量一致；10分钟独立观察。";
+  }else {
+    const up=standardReady(standardUp),down=standardReady(standardDown);
+    if(up!==down&&(up||down)){
+      direction=up?"UP":"DOWN";quality="STANDARD_RESEARCH";
+      eventTag=direction==="UP"?"V15_STANDARD_HIGHER":"V15_STANDARD_LOWER";
+      reason="1分钟与3分钟动量同向，EMA9/21确认，成交量与RSI不过度偏离；10分钟内最多一条新信号。";
+    }
   }
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",eventTag,reason,quality,confidence:null,
-    change3mPct:round(change3mPct),change1mPct:round(change1mPct),voteScore:vote,change15mPct:round(change15mPct),snapshotAt:at,
+    change3mPct:round(change3mPct),change1mPct:round(change1mPct),change15mPct:round(change15mPct),snapshotAt:at,
     cycleStartAt:Math.floor(at/cycleMs)*cycleMs,
     conditions:direction?(quality==="STRICT_RESEARCH"?(direction==="UP"?upChecks:downChecks):(direction==="UP"?standardUp:standardDown)):null,
     upChecks,downChecks,standardUpChecks:standardUp,standardDownChecks:standardDown,
     referenceBasis:"SIGNAL_CAPTURED_INDEX_PRICE_TPLUS600_NOT_EVENT_CONTRACT_STRIKE",
-    evidence:{change1mPct:round(change1mPct),voteScore:vote,change3mPct:round(change3mPct),change15mPct:round(change15mPct),volumeRatio:round(volumeRatio,3),rsiRise3,downBounceRisk,lastClosePosition:round(lastClosePosition,3),
+    evidence:{change1mPct:round(change1mPct),change3mPct:round(change3mPct),change15mPct:round(change15mPct),volumeRatio:round(volumeRatio,3),rsiRise3,downBounceRisk,lastClosePosition:round(lastClosePosition,3),
       rsi14:round(rsi14,2),quality,trigger,ordinary:false,highWindow:true,ema1Fast:round(ema1Fast,3),ema1Slow:round(ema1Slow,3),
       ema5Fast:round(ema5Fast,3),ema5Slow:round(ema5Slow,3),
       bullishLast3:bullish,bearishLast3:bearish,
@@ -185,7 +175,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V14高频信号：每根新收盘1分钟K线判断一次，最多约60条/小时；有效信号最短间隔45秒，每条独立核验10分钟。",
-      "数据异常或全平盘不出方向；高频信号之间高度相关，数量多不代表高命中率或可盈利；不执行真实订单。",
+    caveats:["V15控制节奏：每分钟检查行情，信号至少相隔10分钟，最多约6条/小时；每条独立核验10分钟。",
+      "数据异常、动量冲突或全平盘不出方向；连续失误后暂停信号，数量和历史命中率都不保证收益；不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

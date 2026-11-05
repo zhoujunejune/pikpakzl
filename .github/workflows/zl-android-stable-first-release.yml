@@ -121,7 +121,7 @@ jobs:
                           ('ZL_SIGNING_STORE_PASSWORD',password),
                           ('ZL_SIGNING_KEY_ALIAS','zlcontrol'),
                           ('ZL_SIGNING_KEY_PASSWORD',password)]:
-                  env.write(k+'='+v+'\\n')
+                  env.write(k+'='+v+'\n')
           print('ANDROID_STABLE_KEY_READY=true')
           PY
       - name: Build release APK (never debug)

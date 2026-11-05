@@ -42,7 +42,7 @@ jobs:
           const end=one.at(-12)?.startMs+60000;
           if(!Number.isFinite(start)||!Number.isFinite(end)||end-start<5*3600000)throw Error('INSUFFICIENT_WINDOW');
           const split=start+(end-start)*0.5;
-          const candidates=['live_v11','momentum02_ema1','momentum035_ema1','momentum02_dualtrend','momentum035_dualtrend'];
+          const candidates=['live_v11','momentum02_ema1','momentum035_ema1','momentum02_dualtrend','momentum035_dualtrend','dualtrend02_guarded','strict_plus_guarded_dual'];
           const stats=Object.fromEntries(candidates.map(k=>[k,{n:0,hits:0,early:{n:0,hits:0},late:{n:0,hits:0},lastAcceptedAt:-Infinity,hour:{}}]));
           const pct=(x,y)=>y?Number((100*x/y).toFixed(2)):null;
           let slots=0,fail=0;
@@ -57,6 +57,10 @@ jobs:
             const volBase=a.slice(-21,-1).reduce((s,x)=>s+Number(x.volume),0)/20;
             const volRatio=volBase>0?Number(cur.volume)/volBase:0;
             const mag=Math.abs(change3),side=change3>0?'UP':'DOWN';
+            const rsiEarlier=RSI(p.slice(0,-3));
+            const lastRange=Math.max(0.000001,Number(cur.high)-Number(cur.low));
+            const pos=(Number(cur.close)-Number(cur.low))/lastRange;
+            const downBounceRisk=(change3<=-0.10&&volRatio<1.0)||rsi-rsiEarlier>3.5||(pos>0.72&&Number(cur.close)<Number(cur.open));
             const openDir=(Number(future.close)>Number(cur.close))?'UP':(Number(future.close)<Number(cur.close))?'DOWN':null;
             let live=null;
             try{live=evaluatePureSignal({feed:f,reference:{observedAt:at},indexSnapshot:{price:Number(cur.close),observedAt:at-100}}).direction}
@@ -72,7 +76,9 @@ jobs:
               momentum02_ema1:eligible(0.02,false)?side:null,
               momentum035_ema1:eligible(0.035,false)?side:null,
               momentum02_dualtrend:eligible(0.02,true)?side:null,
-              momentum035_dualtrend:eligible(0.035,true)?side:null
+              momentum035_dualtrend:eligible(0.035,true)?side:null,
+              dualtrend02_guarded:eligible(0.02,true)&&(side==='UP'||!downBounceRisk)?side:null,
+              strict_plus_guarded_dual:live||(eligible(0.02,true)&&(side==='UP'||!downBounceRisk)?side:null)
             };
             for(const [key,dir] of Object.entries(choices)){
               if(!dir)continue;

@@ -1,3 +1,4 @@
+# Post V17 deployment: verify retired Guardian units remain stopped.
 # Live V17 independent candle source and AI review production confirmation.
 # AI/Feed preflight after Guardian5 retirement (no secrets disclosed); repeat.
 # V16 postdeploy production readonly version+frequency+direction ledger audit
@@ -69,6 +70,12 @@ jobs:
                       content=p.read_text(errors='replace')
                       print('DIAG_AI_CONFIG_SOURCE',cfg,'has_key_name',bool(re.search(r'(DEEPSEEK_API_KEY|EVENT10_AI_API_KEY)',content)),'has_envfile',bool(re.search(r'^EnvironmentFile=',content,re.M)),flush=True)
           except Exception as ex:print('DIAG_AI_PREFLIGHT_ERROR',type(ex).__name__,flush=True)
+          for svc in ('zl-prediction-trade','zl-prediction-v2','zl-prediction-v3',
+              'zl-prediction-guardian-analysis','zl-prediction-fast5','zl-prediction-fast5-stats',
+              'zl-prediction-ui-visibility','zl-prediction-risk-exits','zl-prediction-redis',
+              'zl-prediction-official-reference','zl-event10-deepseek','zl-event10-trade-stream'):
+              run=subprocess.run(['systemctl','is-active',svc],capture_output=True,text=True,timeout=4)
+              print('DIAG_UNIT',svc,run.stdout.strip(),flush=True)
           print('DIAG_STATUS_OK',s.get('ok'),flush=True)
           print('DIAG_STRATEGY',s.get('decisionReviewVersion'),flush=True)
           print('DIAG_AI_CONFIGURED',s.get('aiReviewConfigured'),flush=True)

@@ -230,13 +230,13 @@ function event(e,ledger){
  put("eAiReview","AI 方向复核："+(
    e?.aiInProgress?"AI高强度分析正在进行，等待完整结果，请勿重复点击":
    review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"完整分析已通过校验（高强度思考）":
-   review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"未完成，当前仅为规则应急方向（非AI结论）":
-   review?.status==="NO_KEY_OR_DISABLED"?"未运行，当前仅为规则方向":
+   review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"AI分析未完成，本轮无信号（不计胜率）":
+   review?.status==="NO_KEY_OR_DISABLED"?"AI未运行，本轮无信号":
    e?.aiInProgress?"高强度思考进行中，暂未给出完整AI结论":
    e?.aiReviewConfigured?"已就绪，等待符合条件的信号":"尚未启用")+
    " · "+(e?.aiReviewModel||"—")+
    " · 成功 "+(outcomes.reviewed||0)+" / "+(outcomes.calls||0)+" 次"+
-   " · 已结算失误用于下次经验提示，非模型参数训练");
+   " · 已结算失败 "+(e?.aiLearningProfile?.lossCount||0)+" 条 / 参考 "+(e?.aiLearningProfile?.settledSamples||0)+" 条，供下次经验复盘（非模型权重训练）");
  put("eReason",s?.direction?(s?.reason||"方向已确认；10分钟后核验。"):
    (s?.reason||"当前没有符合规则的方向信号。"));
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
@@ -361,7 +361,7 @@ $("manualCheck").addEventListener("click",async()=>{
   }finally{clearTimeout(timer);}
   const data=await res.json();
   if(!res.ok||data.ok!==true)throw Error(data.error||"HTTP "+res.status);
-  result.textContent=data.session?.aiReview?.analysisCompleted===true?"AI高强度分析已完成并通过校验；请查看本轮方向。":"检测已结束；AI未完成的结果只标记为规则应急方向，绝不冒充AI结论。";
+  result.textContent=data.session?.aiReview?.analysisCompleted===true?"AI高强度分析已完成并通过校验；请查看本轮方向。":"检查已结束；AI未完成时本轮无信号，不显示UP/DOWN，不会触发信号提醒。";
   await refreshEvent10Only();
  }catch(err){
   result.textContent="检测未确认："+String(err).slice(0,180)+"。请先核实当前状态，避免重复点击。";

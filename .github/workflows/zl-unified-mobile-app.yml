@@ -60,7 +60,7 @@ jobs:
           assert 'class="logo">ZL' not in html
           for size in (192,512):
             raw=(root/f'icon-{size}.png').read_bytes()
-            assert len(raw)>3000 and raw[:8]==b'\\x89PNG\\r\\n\\x1a\\n'
+            assert len(raw)>3000 and raw[:8]==b'\x89PNG\r\n\x1a\n'
             import struct
             assert struct.unpack('>II',raw[16:24])==(size,size)
           assert 'data:image/png;base64,' in (root/'icon.svg').read_text()

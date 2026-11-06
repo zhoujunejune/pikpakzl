@@ -65,6 +65,8 @@ jobs:
             assert key in remote
           assert 'systemctl restart zl-prediction-trade' not in remote
           assert 'systemctl restart zl-event10-deepseek' not in remote
+          assert 'MOBILE_APP_GUARDIAN_REMAINS_STOPPED=true' in remote
+          assert 'MOBILE_APP_RETIRED_GUARDIAN_UNEXPECTEDLY_RUNNING=true' in remote
           print('MOBILE_APP_CI_TESTS_PASS')
           PY
   deploy-static:

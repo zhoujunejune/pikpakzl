@@ -1,0 +1,56 @@
+name: EVENT10 app/API public connectivity and live status audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-app-connection-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Read authenticated public event10 and app endpoints, no mutation
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import urllib.request,urllib.error,json,base64,os,time
+          pw=os.environ.get('ZL_PANEL_PASSWORD')
+          assert pw,'NO_PANEL_AUTH'
+          base='https://prediction.47-237-188-69.sslip.io'
+          basic=base64.b64encode(('zl:'+pw).encode()).decode()
+          paths=['/app/','/app/app.js','/app/version.json',
+                 '/event10/api/status','/event10/api/signals?limit=25&offset=0',
+                 '/event10/api/signals?limit=1&offset=0','/event10/healthz']
+          for path in paths:
+            start=time.monotonic()
+            try:
+              rq=urllib.request.Request(base+path,headers={'Authorization':'Basic '+basic,'Cache-Control':'no-cache','Accept':'application/json,text/html'})
+              with urllib.request.urlopen(rq,timeout=18) as r:
+                raw=r.read(1000000)
+                code=r.status
+                data=json.loads(raw) if path.startswith('/event10/api/') else {}
+              print('APP_DIAG',path,'HTTP',code,'elapsed_ms',round((time.monotonic()-start)*1000),
+                    'bytes',len(raw),flush=True)
+              if path.endswith('/status'):
+                s=data
+                print('APP_STATUS',json.dumps({key:s.get(key) for key in
+                  ('ok','decisionReviewVersion','aiReviewConfigured','aiMandatory',
+                   'aiReviewModel','busyStart','lastError','lastSuccessfulScanAt','lastCheckAt')},
+                  ensure_ascii=False),flush=True)
+                c=s.get('lastCheck') or {}
+                print('APP_LAST_CHECK',json.dumps({key:c.get(key) for key in
+                   ('id','status','direction','eventTag','reason','checkedAt')},ensure_ascii=False)[:500],flush=True)
+                print('APP_AI_STATS',json.dumps(s.get('aiReviewStats') or {},ensure_ascii=False),flush=True)
+                print('APP_SCAN_HOUR',json.dumps((s.get('scanDiagnostics') or {}).get('lastHour') or {},ensure_ascii=False),flush=True)
+              if '/signals?' in path:
+                print('APP_LEDGER',json.dumps({key:data.get(key) for key in
+                  ('ok','version','total','stats')},ensure_ascii=False)[:900],flush=True)
+            except urllib.error.HTTPError as e:
+              print('APP_DIAG',path,'HTTP',e.code,'elapsed_ms',round((time.monotonic()-start)*1000),flush=True)
+            except Exception as e:
+              print('APP_DIAG',path,'ERROR',type(e).__name__,str(e)[:140],
+                    'elapsed_ms',round((time.monotonic()-start)*1000),flush=True)
+          PY

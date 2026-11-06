@@ -11,7 +11,7 @@ export function feedbackExamples(records,asOf,limit=18){
    typeof x.proxyHit==="boolean"&&validDirection(x.proxyOutcome)&&
    Number.isFinite(x.openedAt)&&Number.isFinite(x.closeObservedAt)&&
    x.closeObservedAt<asOf&&x.openedAt<asOf-600000);
- const selected=source.sort((a,b)=>b.openedAt-a.openedAt).slice(0,Math.min(30,limit));
+ const selected=source.sort((a,b)=>b.openedAt-a.openedAt).slice(0,Math.min(60,limit));
  return selected.map(x=>({
   ageMin:Math.round((asOf-x.openedAt)/60000),
   pastDirection:x.direction,actual10mDirection:x.proxyOutcome,

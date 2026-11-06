@@ -135,6 +135,10 @@ function slimSignal(h) {
     aiModel:h.aiReview?.model??null,aiConfidence:h.aiReview?.confidence??null,
     aiReason:h.aiReview?.reason??null,aiLatencyMs:h.aiReview?.latencyMs??null,
     aiLessonsCount:h.aiReview?.lessonsCount??0,
+    aiAnalysisCompleted:h.aiReview?.analysisCompleted===true,
+    aiAttempts:h.aiReview?.attempts??0,
+    aiReasoningEffort:h.aiReview?.reasoningEffort??null,
+    aiReasoningObserved:h.aiReview?.reasoningObserved??false,
     openedAt:h.openedAt,expiresAt:h.expiresAt,
     referencePriceObservedAt:h.referencePriceObservedAt??null,
     referenceBasis:h.referenceBasis??null,
@@ -289,6 +293,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,lastError=null;
   const aiStats={calls:0,reviewed:0,fallbacks:0,lastStatus:"NOT_REQUESTED",lastAt:null};
+  let aiInProgress=null;
   const aiConfigured=Boolean(env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY)&&
     env.EVENT10_AI_ENABLED!=="0"&&env.EVENT10_AI_ENABLED!=="false";
   const aiModel=String(env.EVENT10_AI_MODEL||"deepseek-v4-pro");
@@ -309,7 +314,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     return {ok:true,bot:"EVENT10",mode:"PACED_V17_AI_DIRECTION_TPLUS600_PROXY_ONLY",
       providerModel:aiConfigured?"DEEPSEEK_V4_DIRECTION_REVIEW_WITH_RULE_FALLBACK":"PURE_RULE_FALLBACK_AI_UNCONFIGURED",
       aiReviewConfigured:aiConfigured,aiReviewModel:aiModel,aiLearningMode:"RETRIEVAL_FROM_SETTLED_SIGNALS_NOT_WEIGHT_TRAINING",
-      aiReviewStats:{...aiStats},configured:true,autoSignalEnabled:true,
+      aiReviewStats:{...aiStats},aiInProgress,configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
@@ -410,11 +415,14 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       // Never suppress a valid rule signal because AI is late or unavailable.
       let aiReview=null;
       if(rule.direction){
-        aiReview=await reviewAiDirection({
-          rule:rule.direction,evidence:rule.evidence,
-          records:Array.from(signalLedger.all.values()),at:decisionAt,
-          fetcher,env,timeoutMs:2500
-        });
+        aiInProgress={id,startedAt:clock(),baseDirection:rule.direction,status:"ANALYZING"};
+        try{
+          aiReview=await reviewAiDirection({
+            rule:rule.direction,evidence:rule.evidence,
+            records:Array.from(signalLedger.all.values()),at:decisionAt,
+            fetcher,env,timeoutMs:22000
+          });
+        }finally{aiInProgress=null;}
         if(aiConfigured){
           aiStats.calls++;
           if(aiReview.status==="AI_REVIEWED")aiStats.reviewed++;
@@ -428,9 +436,11 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             aiReview.lessonsCount+"条（非自动训练）。";
         }else{
           rule.eventTag="V17_RULE_FALLBACK_"+rule.direction;
-          rule.reason="规则方向继续有效，AI复核未完成；不减少信号数量。";
+          rule.reason="AI分析未完成，当前仅为规则应急方向，不能视为AI预测；不减少原有信号数量。";
         }
         rule.evidence.aiReviewStatus=aiReview.status;
+        rule.evidence.aiAnalysisCompleted=aiReview.analysisCompleted===true;
+        rule.evidence.aiReasoningEffort=aiReview.reasoningEffort;
       }
       // Two past misses cannot remove a future qualified signal.
       const signalExpiry=decisionAt+HORIZON_MS; // each accepted signal gets its own full 600s
@@ -463,10 +473,11 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
         model:aiReview?.status==="AI_REVIEWED"?aiModel:"PURE_RULE_FALLBACK_V17",
-        aiReview,attempts:aiConfigured?1:0,confidence:aiReview?.confidence??null,reason:rule.reason,
+        aiReview,attempts:aiReview?.attempts??0,confidence:aiReview?.confidence??null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
-        thinkingRequested:false,reasoningEffort:null,
-        reasoningObserved:null,reasoningTokenCount:null,
+        thinkingRequested:aiConfigured,reasoningEffort:aiReview?.reasoningEffort??null,
+        reasoningObserved:aiReview?.reasoningObserved??false,
+        reasoningTokenCount:aiReview?.reasoningTokenCount??null,
         closePrice:null,closeObservedAt:null,expirySampleLagMs:null,
         proxyOutcome:null,proxyHit:null,returnPct:null,
         officialEventOutcome:null,officialEventHit:null,

@@ -1,8 +1,8 @@
 {
   "id": "/app/",
-  "name": "ZL BTC十分钟事件合约信号",
-  "short_name": "ZL EVENT10",
-  "description": "币安 BTC 十分钟事件合约方向信号、到期指数代理核验、胜率和历史记录。",
+  "name": "海派事件合约",
+  "short_name": "海派事件合约",
+  "description": "海派事件合约：BTC 十分钟方向信号、历史记录与到期核验。",
   "start_url": "/app/",
   "scope": "/app/",
   "display": "standalone",

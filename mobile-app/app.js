@@ -225,7 +225,18 @@ function event(e,ledger){
  const lastScan=e.lastSuccessfulScanAt,elapsed=Number.isFinite(lastScan)?Math.round((Date.now()-lastScan)/1000):null;
  put("eFreshness",elapsed!==null&&elapsed>=0&&elapsed<=90?"最近有效行情扫描 "+elapsed+"秒前 · "+stamp(lastScan):"行情扫描新鲜度未确认；请检查后台连接");
 
- put("eReason",s?.direction?"方向已确认；按锁定指数价等待10分钟后核验。":(s?.reason||"当前没有符合规则的方向信号。"));
+ const review=s?.aiReview||e?.lastCheck?.aiReview||null;
+ const outcomes=e?.aiReviewStats||{};
+ put("eAiReview","AI 方向复核："+(
+   review?.status==="AI_REVIEWED"?"已参与本轮判断":
+   review?.status==="AI_FALLBACK"?"调用异常，沿用规则方向":
+   review?.status==="NO_KEY_OR_DISABLED"?"未启用，规则兜底":
+   e?.aiReviewConfigured?"已接入，等待下一条有效方向信号":"尚未启用")+
+   " · "+(e?.aiReviewModel||"—")+
+   " · 成功 "+(outcomes.reviewed||0)+" / "+(outcomes.calls||0)+" 次"+
+   " · 已结算失误用于下次经验提示，非模型参数训练");
+ put("eReason",s?.direction?(s?.reason||"方向已确认；10分钟后核验。"):
+   (s?.reason||"当前没有符合规则的方向信号。"));
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
  if(currentLedger){
   updateEventHistory(ledger);
@@ -243,7 +254,7 @@ function eventError(error){
  state.eventHistoryError="状态读取失败，已加载记录仍然保留";
  drawEventHistory();
  pill("eStatus","bad","暂不可用");
- for(const id of ["eSignal","ePhase","eCounts","eProxyAccuracy","eScanAudit","eScanGates","eFreshness"])put(id,"不可用");
+ for(const id of ["eSignal","ePhase","eCounts","eProxyAccuracy","eScanAudit","eScanGates","eFreshness","eAiReview"])put(id,"不可用");
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
  if(!state.eventRecords.length){
   put("eTotal","记录接口暂时不可用");

@@ -296,7 +296,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   let aiInProgress=null;
   const aiConfigured=Boolean(env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY)&&
     env.EVENT10_AI_ENABLED!=="0"&&env.EVENT10_AI_ENABLED!=="false";
-  const aiModel=String(env.EVENT10_AI_MODEL||"deepseek-v4-pro");
+  const aiModel=String(env.EVENT10_AI_MODEL||"deepseek-flash");
   let lastDataError=null,lastDataErrorAt=null,lastSuccessfulScanAt=null;
   let lastCheck=null,inFlightStart=null;
   let lastCheckAt=0,lastAutoCheckAt=null;
@@ -328,7 +328,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
-      thinkingMode:"disabled",reasoningEffort:null,
+      thinkingMode:aiConfigured?"enabled":"unavailable",reasoningEffort:aiConfigured?"high":null,
       lastReasoningObserved:null,lastReasoningTokenCount:null,
       lastFeatureCoverage:lastCheck?.featureAvailability||h?.featureAvailability||null,lastDataProbe,lastCheck,
       active:h&&["ANALYZING","PREDICTED"].includes(h.status)&&clock()<h.expiresAt?h:null,

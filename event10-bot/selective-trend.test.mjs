@@ -20,6 +20,20 @@ function feed(at=START,side=1,flat=false){
  }
  return {ok:true,readOnly:true,symbol:"BTCUSDT",latest:{marketFeedConnected:true},candles};
 }
+const goodAiResponse=(direction="UP")=>({choices:[{finish_reason:"stop",message:{
+ content:JSON.stringify({direction,confidence:0.62,
+ reason:"短周期EMA持续向上同时动量确认了上涨趋势",
+ upCase:"短期的正动量与EMA金叉表示上涨的可能性",
+ downCase:"RSI处于较高区域可能发生快速回落反转",
+ decisiveEvidence:"一分和五分钟EMA共振且三分钟动量为正",
+ risk:"历史案例有限可能出现急速反转导致误判"}),
+ reasoning_content:"test validated high-reasoning evidence"}}]});
+const fixtureEngine=(options={})=>{
+ const provided=options.fetcher||fetch;
+ return fixtureEngine({...options,env:{...options.env,DEEPSEEK_API_KEY:"fixture-key"},
+  fetcher:async(url,args)=>url.includes("chat/completions")?
+   {ok:true,json:async()=>goodAiResponse(JSON.parse(args.body).messages?.[1]?.content?.includes(\'"ruleDirection":"DOWN"\')?"DOWN":"UP")}:provided(url,args)});
+};
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
 test("V17 strict retains six core gates without the old wide secondary veto",()=>{
@@ -115,7 +129,7 @@ test("V17 ten-minute cooldown applies across restart and manual/auto",async()=>{
   url.includes("premiumIndex")?{ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:String(price),time:now-100})}:
   Promise.reject(Error("UNEXPECTED_URL"));
  const opts={env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher};
- const engine=createEngine(opts);
+ const engine=fixtureEngine(opts);
  const first=await engine.start("manual-first-0001");
  assert.equal(first.direction,"UP");
  now=START+60000+1000;
@@ -123,7 +137,7 @@ test("V17 ten-minute cooldown applies across restart and manual/auto",async()=>{
  assert.equal(blocked.direction,null);
  assert.equal(blocked.eventTag,"V17_MIN_SIGNAL_GAP");
  assert.equal(engine.signals().total,1);
- const rebooted=createEngine(opts);
+ const rebooted=fixtureEngine(opts);
  now=START+540000+1000;
  const still=await rebooted.start("manual-next-0003");
  assert.equal(still.direction,null);
@@ -151,7 +165,7 @@ test("V17 does not suppress otherwise valid directions after two recent misses",
  const fetcher=async url=>url.includes("shadow-market-data")?{ok:true,json:async()=>feed(now)}:
   url.includes("premiumIndex")?{ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:"70000",time:now-100})}:
   Promise.reject(Error("UNEXPECTED_URL"));
- const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
+ const engine=fixtureEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
  const available=await engine.start("manual-retry-pause-0001");
  assert.equal(available.direction,"UP");
  assert.equal(engine.signals().total,3); // Two settled misses remain in the immutable audit ledger.
@@ -165,7 +179,7 @@ test("transient stale 1m data recovers and clears current error without erasing 
  }:url.includes("premiumIndex")?{
    ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:"70000",time:now-100})
  }:Promise.reject(Error("UNEXPECTED_URL"));
- const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
+ const engine=fixtureEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
  const bad=await engine.start("test-stale-scan-0001");
  assert.equal(bad.status,"DATA_ERROR");
  assert.match(engine.status().lastError,/STALE_1m/);
@@ -195,7 +209,7 @@ test("V10 retries stale completed candles later in the same minute",async()=>{
  }:url.includes("premiumIndex")?{
    ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:"70000",time:now-100})
  }:Promise.reject(Error("UNEXPECTED_URL"));
- const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
+ const engine=fixtureEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
  const flush=async()=>{await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));};
  await engine.tick();await flush();
  assert.equal(engine.signals().total,0);
@@ -212,7 +226,7 @@ test("engine saves version, 600-second index result, no order and persistent rec
   url.includes("premiumIndex")?{ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:String(price),time:now-100})}:
   Promise.reject(Error("UNEXPECTED_URL"));
  const opts={env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher};
- const engine=createEngine(opts);await engine.tick();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));
+ const engine=fixtureEngine(opts);await engine.tick();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));
  const signal=engine.signals().records[0];
  assert.equal(signal.strategyVersion,RULE_VERSION);assert.equal(signal.signalQuality,"STRICT_RESEARCH");
  assert.equal(signal.expiresAt-signal.openedAt,600000);assert.equal(signal.realOrderPlaced,false);
@@ -223,7 +237,7 @@ test("engine saves version, 600-second index result, no order and persistent rec
  assert.equal(engine.status().scanDiagnostics.lastHour.strictSignals,1);
  now=signal.expiresAt+1000;price=70001;await engine.tick();
  assert.equal(engine.signals().stats.proxySettled,1);
- assert.equal(createEngine(opts).signals().total,1);
+ assert.equal(fixtureEngine(opts).signals().total,1);
 });
 test("older versions excluded and flat comparison never a win",()=>{
  assert.equal(scoreProxy(100,100,"UP").proxyHit,null);
@@ -231,7 +245,7 @@ test("older versions excluded and flat comparison never a win",()=>{
  fs.writeFileSync(file,JSON.stringify([{id:"old",openedAt:START-900000,expiresAt:START-300000,
   decisionReviewVersion:"EVENT10_FREQ_2M_TREND_V3_20261102",status:"PREDICTED",direction:"UP",
   openPrice:100,proxyHit:true}]));
- const x=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>START});
+ const x=fixtureEngine({env:{EVENT10_STATE_FILE:file},clock:()=>START});
  assert.equal(x.history().length,0);assert.equal(x.status().lastSession,null);
  assert.equal(x.signals().total,0);
 });
@@ -244,7 +258,7 @@ test("only V4 records are returned to public history and status, even with legac
  const now={id:"current-v4",openedAt:START-600000,expiresAt:START,
    strategyVersion:RULE_VERSION,decisionReviewVersion:RULE_VERSION,status:"COMPLETE",direction:"UP",openPrice:70000,proxyHit:true};
  fs.writeFileSync(file,JSON.stringify([now,old]));
- const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>START+60000});
+ const engine=fixtureEngine({env:{EVENT10_STATE_FILE:file},clock:()=>START+60000});
  assert.equal(engine.history().length,1);
  assert.equal(engine.history()[0].id,"current-v4");
  assert.equal(engine.status().lastSession.id,"current-v4");
@@ -266,7 +280,7 @@ test("V17 initial view starts at zero despite V11 legacy ledger and session entr
  }));
  fs.writeFileSync(file,JSON.stringify(oldRows));
  fs.writeFileSync(ledger,oldRows.map(s=>JSON.stringify({kind:"SIGNAL",signal:{...s,strategyVersion:oldVersion}})).join("\n")+"\n");
- const engine=createEngine({env:{EVENT10_STATE_FILE:file,EVENT10_SIGNAL_LOG_FILE:ledger},clock:()=>START});
+ const engine=fixtureEngine({env:{EVENT10_STATE_FILE:file,EVENT10_SIGNAL_LOG_FILE:ledger},clock:()=>START});
  assert.equal(engine.signals().version,RULE_VERSION);
  assert.equal(engine.signals().total,0);
  assert.equal(engine.signals().stats.proxySettled,0);
@@ -288,7 +302,7 @@ test("explicit reset: 15 previous V4 signals must yield zero visible new-version
  }));
  fs.writeFileSync(file,JSON.stringify(oldRows));
  fs.writeFileSync(ledger,oldRows.map(s=>JSON.stringify({kind:"SIGNAL",signal:{...s,strategyVersion:oldVersion}})).join("\n")+"\n");
- const engine=createEngine({env:{EVENT10_STATE_FILE:file,EVENT10_SIGNAL_LOG_FILE:ledger},clock:()=>START});
+ const engine=fixtureEngine({env:{EVENT10_STATE_FILE:file,EVENT10_SIGNAL_LOG_FILE:ledger},clock:()=>START});
  assert.equal(engine.history().length,0);
  assert.equal(engine.signals().total,0);
  assert.equal(engine.signals().stats.proxySettled,0);

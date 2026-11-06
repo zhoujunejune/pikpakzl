@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/app/manifest.webmanifest">
 <link rel="icon" href="/app/icon.svg" type="image/svg+xml">
-<title>ZL 控制台 · 双机器人管理</title>
+<title>ZL · BTC十分钟事件信号</title>
 <style>
 :root{color-scheme:dark;--bg:#0a1220;--card:#111e2f;--card2:#15253b;--line:#2a3e56;--text:#eef5ff;--sub:#90a6c1;--accent:#5bafff;--green:#4dd7a3;--red:#ff8896;--amber:#ffc66f}
 *{box-sizing:border-box}
@@ -81,7 +81,7 @@ a{color:inherit;text-decoration:none}
 .section-panel{display:none}
 .section-panel.active{display:block}
 .tabs{position:fixed;bottom:0;left:0;right:0;background:#0b1625f2;backdrop-filter:blur(16px);border-top:1px solid #25374c;padding:9px 12px calc(9px + env(safe-area-inset-bottom));z-index:10}
-.tabs-inner{max-width:760px;margin:auto;display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.tabs-inner{max-width:760px;margin:auto;display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
 .tab{border:0;border-radius:12px;background:transparent;color:var(--sub);padding:9px 3px;display:flex;flex-direction:column;gap:3px;align-items:center;font-size:11px;font-weight:640}
 .tab svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .tab.selected{background:#172b43;color:#b8dbff}
@@ -92,54 +92,15 @@ a{color:inherit;text-decoration:none}
 <body>
 <div class="shell">
 <header class="top">
-<div class="brand"><div class="logo">ZL</div><div><b>ZL CONTROL</b><small>双机器人 · 统一管理</small></div></div>
+<div class="brand"><div class="logo">ZL</div><div><b>ZL EVENT10</b><small>BTC 10分钟事件信号 · 专用版</small></div></div>
 <div class="light"><span class="dot" id="healthDot"></span><span id="healthText">连接中</span></div>
 </header>
 <div id="hotUpdateBanner" class="message" hidden role="status" aria-live="polite">
   <div id="hotUpdateText">发现新的网页版本</div>
   <button class="btn primary full" type="button" id="hotUpdateButton" style="margin-top:10px">刷新应用最新版（不需要重新安装）</button>
 </div>
-<section id="panel-overview" class="section-panel active" aria-label="机器人总览">
-<h1 class="hi">交易控制台</h1><p class="desc">BTC · 阿里云生产环境 · 所有时间均为北京时间</p>
-<div class="sect-head"><h2>机器人状态</h2><small id="updatedAt">尚未同步</small></div>
-<div class="card">
-<div class="card-top"><div><div class="card-title">01 / 5分钟预测</div><div class="card-sub">GUARDIAN · 自动信号 / 交易管理</div></div><span class="pill" id="gBadge">读取中</span></div>
-<div class="stat-row">
-<div class="stat"><span class="k">当前方向</span><span class="v" id="gDirection">—</span></div>
-<div class="stat"><span class="k">自动跟随</span><span class="v small" id="gFollow">—</span></div>
-<div class="stat"><span class="k">方向命中率</span><span class="v" id="gAccuracy">—</span></div>
-<div class="stat"><span class="k">最新订单</span><span class="v small" id="gOrder">—</span></div>
-</div>
-<div class="actions"><button class="btn" type="button" data-go="guardian">查看信号和订单</button><a class="btn primary" href="/" rel="noopener">进入原交易控制台</a></div>
-</div>
-<div class="card">
-<div class="card-top"><div><div class="card-title">02 / 10分钟事件</div><div class="card-sub">EVENT10 · 规则信号 / 手动检测</div></div><span class="pill" id="eBadge">读取中</span></div>
-<div class="stat-row">
-<div class="stat"><span class="k">最近信号</span><span class="v" id="eDirection">—</span></div>
-<div class="stat"><span class="k">有效信号数</span><span class="v" id="eCount">—</span></div>
-<div class="stat"><span class="k">代理方向命中率</span><span class="v" id="eAccuracy">—</span></div>
-<div class="stat"><span class="k">当前运行</span><span class="v small" id="eActive">—</span></div>
-</div>
-<div class="actions"><button class="btn" type="button" data-go="event10">查看信号和记录</button><a class="btn primary" href="/event10/" rel="noopener">进入原信号控制台</a></div>
-</div>
-<p class="mini">方向胜率不是实际下单盈利率。10分钟数据只按公开行情代理核对，不代表币安事件合约官方结算。</p>
-</section>
-<section id="panel-guardian" class="section-panel" aria-label="5分钟机器人">
-<h1 class="hi">5分钟预测</h1><p class="desc">GUARDIAN · 实盘控制仍由原交易页面负责</p>
-<div class="card"><div class="card-top"><div class="card-title">生产运行状态</div><span class="pill" id="gStatus">读取中</span></div>
-<div class="kvline"><span class="label">当前轮次</span><span class="value" id="gRound">—</span></div>
-<div class="kvline"><span class="label">最新信号</span><span class="value" id="gSignal">—</span></div>
-<div class="kvline"><span class="label">自动跟随</span><span class="value" id="gFollowLong">—</span></div>
-<div class="kvline"><span class="label">信号累计 / 有效结算</span><span class="value" id="gCounts">—</span></div>
-<div class="kvline"><span class="label">最新订单状态</span><span class="value" id="gOrderFull">—</span></div>
-<div class="kvline"><span class="label">最近失败或阻断原因</span><span class="value" id="gError">—</span></div>
-<div class="message" id="gReason">同步 GUARDIAN 运行状态中…</div>
-<div class="actions"><a href="/" class="btn primary full" rel="noopener">打开5分钟交易设置和跟随开关</a></div>
-</div>
-<div class="section"><div class="sect-head"><h2>最新已保存信号</h2><small>并非每一轮都必然产生信号</small></div><div class="records" id="gRecords"><div class="mini">读取中…</div></div></div>
-</section>
-<section id="panel-event10" class="section-panel" aria-label="10分钟机器人">
-<h1 class="hi">10分钟事件</h1><p class="desc">BTC · 公开指数参考信号，不提交真实事件合约订单</p>
+<section id="panel-event10" class="section-panel active" aria-label="10分钟机器人">
+<h1 class="hi">BTC 10分钟事件合约</h1><p class="desc">BTC · 公开指数参考信号，不提交真实事件合约订单</p>
 <div class="card"><div class="card-top"><div class="card-title">当前信号</div><span class="pill" id="eStatus">读取中</span></div>
 <div class="kvline"><span class="label">方向</span><span class="value" id="eSignal">—</span></div>
 <div class="kvline"><span class="label">分析状态</span><span class="value" id="ePhase">—</span></div>
@@ -161,26 +122,24 @@ a{color:inherit;text-decoration:none}
 <div id="eRecordStatus" class="mini event-record-footer" role="status" aria-live="polite">同步记录中…</div></div>
 </section>
 <section id="panel-more" class="section-panel" aria-label="应用设置">
-<h1 class="hi">应用与安全</h1><p class="desc">一个登录入口，两个独立服务</p>
+<h1 class="hi">应用与安全</h1><p class="desc">专注十分钟信号 · 简洁可靠</p>
 <div class="card">
 <div class="kvline"><span class="label">数据服务</span><span class="value">阿里云 HTTPS，同源接口</span></div>
 <div class="kvline"><span class="label">网页热更新</span><span class="value" id="appUpdateState">检查中</span></div>
 <div class="kvline"><span class="label">网页版本</span><span class="value" id="appBuildVersion">—</span></div>
 <div class="kvline"><span class="label">登录保护</span><span class="value">沿用 Caddy Basic Auth</span></div>
-<div class="kvline"><span class="label">自动刷新</span><span class="value">10分钟页面约3秒独立刷新；其他页面约10秒；安卓原生提醒每2秒单独轮询</span></div>
+<div class="kvline"><span class="label">自动刷新</span><span class="value">信号页面约3秒刷新；安卓原生提醒每2秒单独轮询</span></div>
 <div class="kvline"><span class="label">交易 API 密钥</span><span class="value">不存储在本 App</span></div>
-<div class="kvline"><span class="label">交易策略与止盈止损</span><span class="value">由原系统独立管理，不作修改</span></div>
-<div class="message">如需修改跟随开关、交易金额、止损或资金账户，请进入5分钟机器人原控制台。关闭本 App 不会关闭服务器机器人；本 App 也不会擅自提交订单。</div>
+<div class="kvline"><span class="label">自动下单</span><span class="value">本 App 不自动下单，仅提供 BTC 十分钟方向信号</span></div>
+<div class="message">五分钟机器人已从本 App 移除。此次更新仅调整手机端界面与读取逻辑，不卸载或关闭阿里云其他后台服务；十分钟信号不自动下单。</div>
 <div class="actions"><button class="btn primary full" type="button" id="refresh">立即刷新数据</button></div>
 </div>
-<div class="card"><div class="card-title">安装到安卓桌面</div><p class="mini">用 Chrome 打开当前 /app/ 页面，点右上角「⋮」→「安装应用」或「添加到主屏幕」。以后点 ZL 图标就可进入统一控制台。</p><p class="mini">登录态由浏览器及服务器负责；不要在公共设备保存密码。</p></div>
+<div class="card"><div class="card-title">安装到安卓桌面</div><p class="mini">用 Chrome 打开当前 /app/ 页面，点右上角「⋮」→「安装应用」或「添加到主屏幕」。以后点 ZL 图标直接进入十分钟事件信号页面。</p><p class="mini">登录态由浏览器及服务器负责；不要在公共设备保存密码。</p></div>
 </section>
 </div>
 <nav class="tabs" aria-label="底部导航"><div class="tabs-inner">
-<button class="tab selected" data-go="overview" type="button" aria-label="总览"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>总览</button>
-<button class="tab" data-go="guardian" type="button" aria-label="5分钟"><svg viewBox="0 0 24 24"><path d="M3 17l6-7 5 4 7-9"/><path d="M16 5h5v5"/></svg>5分钟</button>
-<button class="tab" data-go="event10" type="button" aria-label="10分钟"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>10分钟</button>
-<button class="tab" data-go="more" type="button" aria-label="设置"><svg viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.7 5.7l2.2 2.2m8.2 8.2 2.2 2.2M5.7 18.3l2.2-2.2m8.2-8.2 2.2-2.2"/><circle cx="12" cy="12" r="4"/></svg>设置</button>
+<button class="tab selected" data-go="event10" type="button" aria-label="十分钟信号"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>十分钟信号</button>
+<button class="tab" data-go="more" type="button" aria-label="设置"><svg viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.7 5.7l2.2 2.2m8.2 8.2 2.2 2.2M5.7 18.3l-2.2-2.2m8.2-8.2 2.2-2.2"/><circle cx="12" cy="12" r="4"/></svg>设置</button>
 </div></nav>
 <script src="/app/app.js" defer></script>
 </body></html>

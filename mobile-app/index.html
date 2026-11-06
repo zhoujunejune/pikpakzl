@@ -144,11 +144,7 @@ a{color:inherit;text-decoration:none}
 <div class="kvline"><span class="label">方向</span><span class="value" id="eSignal">—</span></div>
 <div class="kvline"><span class="label">分析状态</span><span class="value" id="ePhase">—</span></div>
 <div class="kvline"><span class="label">新版有效方向 / 已核对</span><span class="value" id="eCounts">—</span></div>
-<div class="kvline"><span class="label">新版独立代理命中率</span><span class="value" id="eProxyAccuracy">—</span></div>
-<div class="stat-row">
-<div class="stat"><span class="k">高标准代理命中率</span><span class="v" id="eStrictPct">—</span><span class="mini" id="eStrictCount">0条</span></div>
-<div class="stat"><span class="k">普通信号代理命中率</span><span class="v" id="eStandardPct">—</span><span class="mini" id="eStandardCount">0条</span></div>
-</div>
+<div class="kvline"><span class="label">当前策略代理命中率</span><span class="value" id="eProxyAccuracy">—</span></div>
 <div class="message" id="eScanAudit" aria-live="polite">正在读取最近一小时信号筛选情况…</div>
 <div class="mini" id="eScanGates">尚无拒绝原因统计。</div>
 <div class="mini" id="eFreshness" style="margin-top:9px">正在核实最近一次行情扫描时间…</div>
@@ -159,7 +155,7 @@ a{color:inherit;text-decoration:none}
 <div class="actions"><a class="btn" href="/event10/" rel="noopener">打开10分钟完整控制页面</a></div>
 </div>
 <div class="section"><div class="sect-head"><h2>当前策略信号记录</h2><small id="eTotal">读取中</small></div>
-<p class="mini">在记录框内上下滑动加载更早信号。每条记录标明高标准/普通、出信号时间和结果。信号依据现货K线判断、用币安合约指数价格做十分钟代理核验，并非事件合约的官方开仓价或官方结算。</p>
+<p class="mini">在记录框内上下滑动加载更早信号。每条记录只显示看涨或看跌方向、出信号时间、锁定与到期指数价及核验结果。信号依据现货K线判断、用币安合约指数价格做十分钟代理核验，并非事件合约的官方开仓价或官方结算。</p>
 <div id="eRecordScroll" class="event-record-viewport" role="region" aria-label="十分钟信号记录，滑动加载更多" tabindex="0">
 <div class="records" id="eRecords"><div class="mini">读取中…</div></div></div>
 <div id="eRecordStatus" class="mini event-record-footer" role="status" aria-live="polite">同步记录中…</div></div>

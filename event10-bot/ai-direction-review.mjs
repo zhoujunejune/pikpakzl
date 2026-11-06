@@ -70,7 +70,7 @@ function parseCompleteReview(body){
   reasoningTokenCount:Number.isFinite(tokens)?tokens:null};
 }
 export async function reviewAiDirection({rule,evidence,records=[],at,fetcher=fetch,
-  env=process.env,timeoutMs=22000}={}){
+  env=process.env,timeoutMs=40000}={}){
  if(!validDirection(rule))throw Error("AI_REVIEW_RULE_DIRECTION_REQUIRED");
  const key=env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY;
  const model=env.EVENT10_AI_MODEL||"deepseek-v4-pro";
@@ -80,10 +80,15 @@ export async function reviewAiDirection({rule,evidence,records=[],at,fetcher=fet
  if(!key||env.EVENT10_AI_ENABLED==="0"||env.EVENT10_AI_ENABLED==="false")
   return {...basic,status:"NO_KEY_OR_DISABLED",latencyMs:0,confidence:null,
    reason:"AI未运行，规则方向应急输出；不得视为AI分析完成。"};
- const started=Date.now(),perAttemptMs=Math.max(2500,Math.min(25000,timeoutMs));
+ const started=Date.now();
+ // Real DeepSeek-V4-Pro high-thinking smoke completed after 25.23 seconds.
+ // First call gets up to 40s; one retry gets up to 20s so the total
+ // remains bounded near 60s without treating a 25s analysis as a failure.
  let lastError="UNKNOWN";
  for(let attempt=1;attempt<=AI_REVIEW_ATTEMPTS;attempt++){
   try{
+   const perAttemptMs=attempt===1?Math.max(2500,Math.min(40000,timeoutMs)):
+     Math.max(2500,Math.min(20000,timeoutMs));
    const response=await fetcher("https://api.deepseek.com/chat/completions",{
     method:"POST",headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
     signal:AbortSignal.timeout(perAttemptMs),

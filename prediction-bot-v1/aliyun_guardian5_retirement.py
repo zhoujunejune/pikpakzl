@@ -10,19 +10,22 @@ from alibabacloud_tea_openapi import models as api
 
 REGION="ap-southeast-1"
 INSTANCE="b67374069bb3457ba6a3a2ede9305d3f"
-SERVICES=("zl-prediction-trade","zl-prediction-risk-exits","zl-prediction-guardian-analysis")
+SERVICES=("zl-prediction-trade","zl-prediction-v2","zl-prediction-v3","zl-prediction-risk-exits","zl-prediction-guardian-analysis","zl-prediction-fast5","zl-prediction-fast5-stats","zl-prediction-ui-visibility","zl-prediction-official-reference","zl-prediction-redis")
 SCRIPT=r'''#!/usr/bin/env bash
 set -Eeuo pipefail
 MODE="__MODE__"
-units=(zl-prediction-trade zl-prediction-risk-exits zl-prediction-guardian-analysis)
-safe=(zl-event10-deepseek caddy)
+units=(zl-prediction-trade zl-prediction-v2 zl-prediction-v3 zl-prediction-guardian-analysis zl-prediction-fast5 zl-prediction-fast5-stats zl-prediction-ui-visibility zl-prediction-official-reference zl-prediction-risk-exits)
+redis=zl-prediction-redis
+safe=(zl-event10-deepseek zl-event10-frontend-nav zl-event10-trade-stream caddy)
 echo "GUARDIAN_RETIRE_MODE=$MODE"
 echo "GUARDIAN_RETIRE_TIME_UTC=$(date -u +%FT%TZ)"
 echo "GUARDIAN_RELEVANT_SERVICES:"
 systemctl list-units --all --type=service --plain --no-pager | grep -E 'zl-(prediction|guardian|event10)|caddy|redis' | cut -c1-155 || true
+echo "GUARDIAN_REDIS_REVERSE_DEPENDENCIES:"
+systemctl list-dependencies --reverse --plain zl-prediction-redis.service | cut -c1-155 | head -35 || true
 echo "GUARDIAN_RELEVANT_TIMERS:"
 systemctl list-timers --all --no-pager | grep -E 'zl-(prediction|guardian|event10)' | cut -c1-155 || true
-for svc in "${units[@]}" "${safe[@]}"; do
+for svc in "${units[@]}" "$redis" "${safe[@]}"; do
  echo "SERVICE_STATE_BEGIN=$svc"
  for prop in LoadState ActiveState SubState UnitFileState MainPID Restart FragmentPath PartOf Requires; do
   val=$(systemctl show "$svc" -p "$prop" --value 2>/dev/null | head -c 230)
@@ -38,8 +41,22 @@ for port,path,name in [(13001,'/api/status','trade'),(13049,'/api/status','guard
    val=json.load(r)
   safe={key:val.get(key) for key in ('ok','model','configured','decisionReviewVersion','enabled','active') if key in val}
   if isinstance(safe.get('active'),dict):safe['active']=bool(safe['active'])
+  if name=='trade':
+   pending=val.get('pendingAction') if isinstance(val.get('pendingAction'),dict) else {}
+   last=val.get('lastOrder') if isinstance(val.get('lastOrder'),dict) else {}
+   safe.update({'pendingState':pending.get('state'),'lastOrderState':last.get('state'),'lastOrderRound':last.get('round'),'pendingRound':pending.get('round'),'pendingOrderUncertain':val.get('pendingOrderUncertain'),'liveEnabled':val.get('enabled')})
   print('LOCAL_ENDPOINT',name,r.status,json.dumps(safe,ensure_ascii=False))
  except Exception as e:print('LOCAL_ENDPOINT',name,type(e).__name__)
+PY
+python3 - <<'PY'
+import pathlib,json
+root=pathlib.Path('/var/lib/zl-prediction/rounds')
+for name in ('risk-worker-health.json','risk-runtime-status.json'):
+ try:
+  data=json.loads((root/name).read_text())
+  fields={k:data.get(k) for k in ('positionsSeen','lastSuccessfulPositionsAt','workerRunning','enabled','at','transitioning','configApplied')}
+  print('GUARDIAN_RISK_HEALTH',name,json.dumps(fields,ensure_ascii=False))
+ except Exception as e:print('GUARDIAN_RISK_HEALTH_UNREADABLE',name,type(e).__name__)
 PY
 if [[ "$MODE" == audit ]];then
  echo "GUARDIAN_RETIRE_AUDIT_COMPLETE=true"

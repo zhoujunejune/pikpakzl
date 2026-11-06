@@ -129,17 +129,17 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
   };
   const standardReady=checks=>Object.entries(checks)
     .filter(([name])=>name!=="trend5m").every(([,ok])=>ok);
-  let direction=null,quality="NO_SIGNAL",eventTag="V15_CONFLICT_OR_LOW_MOMENTUM";
+  let direction=null,quality="NO_SIGNAL",eventTag="V16_CONFLICT_OR_LOW_MOMENTUM";
   let reason="1分钟、3分钟动量、EMA或量价不一致，本轮无可操作信号。";
   if(highUp!==highDown&&(highUp||highDown)){
     direction=highUp?"UP":"DOWN";quality="STRICT_RESEARCH";
-    eventTag=direction==="UP"?"V15_STRICT_HIGHER":"V15_STRICT_LOWER";
+    eventTag=direction==="UP"?"V16_STRICT_HIGHER":"V16_STRICT_LOWER";
     reason="高标准多周期趋势与动量一致；10分钟独立观察。";
   }else {
     const up=standardReady(standardUp),down=standardReady(standardDown);
     if(up!==down&&(up||down)){
       direction=up?"UP":"DOWN";quality="STANDARD_RESEARCH";
-      eventTag=direction==="UP"?"V15_STANDARD_HIGHER":"V15_STANDARD_LOWER";
+      eventTag=direction==="UP"?"V16_STANDARD_HIGHER":"V16_STANDARD_LOWER";
       reason="1分钟与3分钟动量同向，EMA9/21确认，成交量与RSI不过度偏离；10分钟内最多一条新信号。";
     }
   }

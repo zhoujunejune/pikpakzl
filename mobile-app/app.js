@@ -3,7 +3,7 @@
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const APP_VERSION="1.3.1"; // Ten-minute-signal-only UI release.
 const $=id=>document.getElementById(id);
-const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false};
+const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
@@ -202,10 +202,11 @@ function event(e,ledger){
  if(e?.decisionReviewVersion!==EVENT10_FREQ_OPTIMIZED_VERSION)
   throw Error("十分钟服务尚未确认运行最新版信号策略，旧版统计不会显示");
  const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION&&Array.isArray(ledger.records);
- if(!currentLedger)throw Error("新策略历史接口未就绪，旧版记录不予回填");
+ // Live direction and AI state must NEVER be blocked by optional signal-history paging.
+ // A missing/mismatched ledger is NOT a service outage; it must not repopulate old rows.
  const s=currentEventRecord(e);
  // The status fallback is safe only after verifying the server's strategy version.
- const stats=ledger.stats||{};
+ const stats=(currentLedger?ledger?.stats:e?.stats)||{};
  const records=currentLedger?mergeEventRecords(ledger):[];
  const active=!!e.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION;
  put("eSignal",dir(s?.direction||null));
@@ -239,7 +240,7 @@ function event(e,ledger){
    " · 已结算失败 "+(e?.aiLearningProfile?.lossCount||0)+" 条 / 参考 "+(e?.aiLearningProfile?.settledSamples||0)+" 条，供下次经验复盘（非模型权重训练）");
  put("eReason",s?.direction?(s?.reason||"方向已确认；10分钟后核验。"):
    (s?.reason||"当前没有符合规则的方向信号。"));
- pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
+ pill("eStatus",e.configured===true?"good":"bad",active?"信号待核对":e.configured===true?(currentLedger?"已连接":"已连接·记录同步中"):"服务未就绪");
  if(currentLedger){
   updateEventHistory(ledger);
  }else if(state.eventRecords.length){
@@ -268,32 +269,68 @@ function eventError(error){
 // Only EVENT10 status contributes to the App connection indicator.
 function refreshConnectionBadge(){
  $("healthDot").className="dot "+(state.eventOnline?"up":"down");
- put("healthText",state.eventOnline?"信号服务已连接":"信号服务连接异常");
+ put("healthText",state.eventOnline?
+   (state.eventLedgerOnline?"信号服务已连接":"信号已连接 · 记录同步中"):
+   "信号服务连接异常");
+ const live=$("eConnectionDetail");
+ if(live){
+  const t=state.eventLastStatusAt;
+  live.textContent=state.eventOnline?
+   ("实时信号接口正常 · 最近成功 "+stamp(t)+(state.eventLedgerOnline?"":" · 历史接口稍后重试")):
+   ("无法读取最新信号"+(state.eventLastError?"："+state.eventLastError:"")+"；不会将连接故障误判为无信号");
+ }
 }
 async function refreshEvent10Only(){
  if(state.eventRefreshBusy||document.hidden)return;
  state.eventRefreshBusy=true;
+ let service=null,serviceError=null;
  try{
-  const [er,lr]=await Promise.allSettled([
-   api("/event10/api/status",3500),
-   api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",4500)
-  ]);
-  const e=er.status==="fulfilled"?er.value:null;
-  const ledger=lr.status==="fulfilled"?lr.value:null;
-  // Adopt a new strategy only after status and ledger agree on the same version.
-  const currentVersion=e?.decisionReviewVersion;
-  if(typeof currentVersion==="string"&&/^EVENT10_[A-Z0-9_]{8,100}$/.test(currentVersion)&&
-     ledger?.version===currentVersion&&Array.isArray(ledger.records)&&
-     currentVersion!==EVENT10_FREQ_OPTIMIZED_VERSION){
-    EVENT10_FREQ_OPTIMIZED_VERSION=currentVersion;
+  // Prioritize the small, critical live status request. Do not wait for the
+  // much larger 25-row history response to show the actual latest signal.
+  try{
+   service=await api("/event10/api/status",9000);
+   const version=service?.decisionReviewVersion;
+   if(typeof version!=="string"||!/^EVENT10_[A-Z0-9_]{8,100}$/.test(version))
+     throw Error("服务返回的策略版本无效");
+   if(version!==EVENT10_FREQ_OPTIMIZED_VERSION){
+    EVENT10_FREQ_OPTIMIZED_VERSION=version;
     state.eventRecords=[];state.lastEvent=[];state.eventTotal=0;
     state.eventHistorySignature="";state.eventHistoryError=null;
+    state.eventLedgerOnline=false;
+   }
+   state.eventOnline=true;state.eventLastError=null;
+   state.eventLastStatus=service;state.eventLastStatusAt=Date.now();
+   // The status itself is authoritative for the current signal/AI progress.
+   event(service,null);
+   refreshConnectionBadge();
+  }catch(error){
+   service=null;serviceError=String(error?.message||error).slice(0,105);
+   state.eventOnline=false;state.eventLedgerOnline=false;
+   state.eventLastError=serviceError;
+   if(state.eventLastStatus?.decisionReviewVersion===EVENT10_FREQ_OPTIMIZED_VERSION){
+    // Preserve, but explicitly mark as stale, last valid live state.
+    event(state.eventLastStatus,null);
+    put("eReason","最新信号刷新失败："+serviceError+"；显示上次成功读取的状态，并非当前实时结论。");
+    pill("eStatus","bad","连接中断·历史快照");
+   }else eventError(serviceError);
+   refreshConnectionBadge();
   }
-  try{if(e)event(e,ledger);else throw er.reason||Error("无数据");}
-  catch(err){eventError(err);}
-  const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION;
-  const currentService=e?.decisionReviewVersion===EVENT10_FREQ_OPTIMIZED_VERSION;
-  state.eventOnline=Boolean(e&&currentLedger&&currentService);
+  // History is an independent best-effort endpoint, not a condition for
+  // showing current direction. Never mix results across strategy versions.
+  if(!service)return;
+  try{
+   const ledger=await api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000);
+   if(ledger?.version!==EVENT10_FREQ_OPTIMIZED_VERSION||!Array.isArray(ledger.records))
+    throw Error("历史接口策略版本不一致");
+   state.eventLedgerOnline=true;
+   state.eventHistoryError=null;
+   event(service,ledger);
+  }catch(error){
+   state.eventLedgerOnline=false;
+   state.eventHistoryError="历史记录暂未同步："+String(error?.message||error).slice(0,100);
+   // Leave the working status signal and loaded history untouched.
+   drawEventHistory();
+  }
   refreshConnectionBadge();
  }finally{state.eventRefreshBusy=false;}
 }

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0c1421"><title>EVENT10 · BTC 10分钟纯信号</title>
+<meta name="theme-color" content="#0c1421"><title>海派事件合约 · BTC 10分钟 AI 复核</title>
 <style>
 :root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC",sans-serif}
 *{box-sizing:border-box}
@@ -33,16 +33,14 @@ th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #31445d}
 th{color:#a9c6e7}
 @media(max-width:700px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}button.primary{width:100%}}
 </style></head><body><main>
-<nav aria-label="机器人切换">
-<a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
-</nav>
-<h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · V16方向优化 · 原V15信号频率不变 · 5分钟EMA修正方向 · 10分钟内最多1条</p>
+<nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
+<h1>海派事件合约 · BTC 十分钟 AI 辅助判断</h1>
+<p class="sub">BTCUSDT · V17 AI 方向复核 · 完全保留 V16 出信号条件与节奏 · 最多每10分钟1条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V16沿用既有方向触发条件，每条信号独立锁定指数参考价并在10分钟后核验。连续失误不再自动停发信号；不自动下单。</div>
+V17保留V16全部出信号条件，AI只复核UP/DOWN方向，不会拦截有效规则信号；AI故障走规则兜底。每次已结算结果作为下一次的历史案例，不是模型权重训练。不自动下单。</div>
 <section class="card">
-<div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
+<div class="row"><h2>手动立即检测方向（AI辅助复核）</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
 <div id="message" class="sub" role="status" aria-live="polite" style="margin-top:10px">正在读取实时信号状态…</div>
 <div class="signal-panel" id="immediatePrediction" aria-live="polite" aria-atomic="false">
@@ -54,7 +52,7 @@ V16沿用既有方向触发条件，每条信号独立锁定指数参考价并�
  </div>
  <div id="quickReason" class="signal-reason">需要60根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
  <p class="sub">后台每分钟检查；满足信号条件且距离上条信号至少10分钟才记录。连续失误不会触发20分钟停发。真实行情检验与600秒核验保持不变，不能保证高胜率。</p>
- <p class="sub" id="quickTimestamp">纯规则方向仅作10分钟公开行情预测，不代表事件合约已成交。</p>
+ <p class="sub" id="quickTimestamp">AI方向与规则兜底均仅作十分钟公开指数代理研究，不代表事件合约已成交。</p>
 <p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
 </div>
 <p class="sub">自动每分钟扫描；有效方向之间最少间隔10分钟（含手动、自动）。每条信号单独锁定指数代理价并在600秒后核验。</p>
@@ -63,18 +61,19 @@ V16沿用既有方向触发条件，每条信号独立锁定指数参考价并�
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
 <div class="metric"><small>信号锁定指数价（非订单Strike）</small><strong id="openPrice">—</strong></div>
-<div class="metric"><small>规则判断方向</small><strong id="direction">—</strong></div>
+<div class="metric"><small>最终方向（AI/规则兜底）</small><strong id="direction">—</strong></div>
 <div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
 <div class="metric"><small>信号后10分钟指数价</small><strong id="closePrice">—</strong></div>
 </div>
 <div class="grid" style="margin-top:10px">
 <div class="metric"><small>行情采样时间</small><strong id="openedAt" style="font-size:14px">—</strong></div>
 <div class="metric"><small>信号后600秒核对时间</small><strong id="expiresAt" style="font-size:14px">—</strong></div>
-<div class="metric"><small>规则检查耗时</small><strong id="latency">—</strong></div>
+<div class="metric"><small>规则和AI检查耗时</small><strong id="latency">—</strong></div>
 <div class="metric"><small>最终方向</small><strong id="confidence">—</strong></div>
 <div class="metric"><small>公开行情验证结果</small><strong id="result">—</strong></div>
 </div>
 <p class="sub" id="reason">等待行情检查。</p>
+<p class="sub" id="aiStatus" aria-live="polite">正在确认 AI 复核状态…</p>
 <div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
 <p id="featureSummary" class="sub">基于已收盘1分钟和5分钟K线、实时指数报价生成高频趋势研究信号；缺数据不会强制猜方向。</p>
@@ -124,7 +123,7 @@ V16沿用既有方向触发条件，每条信号独立锁定指数参考价并�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_EMA5_DIRECTION_V16_20261106";
+const SIGNAL_VERSION="EVENT10_AI_FEEDBACK_V17_20261106";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -247,7 +246,7 @@ const isCurrentStrategyRecord=s=>!!s&&(
  s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
 function display(d){
  const audit=d.scanDiagnostics?.lastHour;
- const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V16_MIN_SIGNAL_GAP:"10分钟间隔",V16_RECENT_LOSSES_PAUSE:"连续失误暂停",DATA_ERROR:"数据过期"};
+ const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V17_MIN_SIGNAL_GAP:"10分钟间隔",V16_RECENT_LOSSES_PAUSE:"连续失误暂停",DATA_ERROR:"数据过期"};
  $("scanAudit").textContent=audit?"最近1小时检查 "+audit.checks+" 次，产生方向 "+((audit.strictSignals||0)+(audit.standardSignals||0))+" 条，无信号 "+audit.noSignal+" 次，数据异常 "+audit.dataErrors+" 次。":"扫描审计暂未就绪";
  $("gateStats").textContent=audit&&Object.keys(audit.byReason||{}).length?"未通过条件："+Object.entries(audit.byReason).sort((a,b)=>b[1]-a[1]).map(([k,v])=>(names[k]||k)+" "+v+"次").join("、")+"。":"本小时暂未累计拒绝原因。";
   // Display verified scan freshness; direction is minute-scanned, not per tick.
@@ -274,6 +273,11 @@ function display(d){
  $("engine").textContent=d.configured?"方向分析已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
+ const review=(s?.aiReview||d.lastCheck?.aiReview);
+ const tally=d.aiReviewStats||{};
+ $("aiStatus").textContent="AI复核："+(review?.status==="AI_REVIEWED"?"已参与方向判断":review?.status==="AI_FALLBACK"?"调用失败，规则方向兜底":review?.status==="NO_KEY_OR_DISABLED"?"未启用，规则方向兜底":d.aiReviewConfigured?"已配置，等待有效信号":"尚未配置")+
+   " · 模型 "+(d.aiReviewModel||"—")+
+   " · 调用 "+(tally.calls||0)+" 次，成功 "+(tally.reviewed||0)+" 次，兜底 "+(tally.fallbacks||0)+" 次；历史失败用于上下文复盘，不代表已重新训练模型。";
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";
   $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);
@@ -282,7 +286,7 @@ function display(d){
   $("quickDirection").className="signal-direction "+(s.direction==="UP"?"good":s.direction==="DOWN"?"bad":"yellow");
   $("quickConfidence").textContent="当前方向："+displayConfidence(s);
   $("quickOpen").textContent="参考价："+price(s.openPrice)+" USDT";
-  $("quickReason").textContent=s.direction?"预测方向："+displayConfidence(s)+"；指数价锁定后10分钟核对。":(s.reason||"当前没有可用方向信号。");
+  $("quickReason").textContent=s.direction?(s.reason||"方向已给出，10分钟后核对。"):(s.reason||"当前没有可用方向信号。");
   $("quickTimestamp").textContent="采样："+when(s.openedAt)+" ｜ "+
     "下次自动检查："+when(d.nextAutoCheckAt)+" · 上次检查："+when(d.lastAutoCheckAt)+
     " ｜ 信号后完整600秒才核对，非事件合约官方交易记录。";
@@ -298,7 +302,7 @@ function display(d){
     (s.proxyHit?"代理命中":"代理未命中"):
     s.proxyOutcome==="FLAT"?"持平（不计命中率）":s.settlementStatus?"无法核验":"待验证";
   $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
-  $("reason").textContent=s.direction?"当前方向："+displayConfidence(s)+"；参考结果以10分钟后指数价格核验为准。":(s.reason||s.error||"等待条件检查");
+  $("reason").textContent=s.reason||s.error||"等待条件检查";
   const detail=$("analysisDetail");detail.replaceChildren();
   const rule=s.ruleChecks||s;
    const desc=document.createElement("p");

@@ -16,7 +16,7 @@
       android:fullBackupContent="false"
       android:usesCleartextTraffic="false"
       android:label="海派事件合约"
-      android:icon="@drawable/launcher_icon"
+      android:icon="@drawable/sea_friends_icon"
       android:theme="@style/Theme.ZLControl"
       android:supportsRtl="true">
     <activity android:name=".MainActivity" android:exported="true">

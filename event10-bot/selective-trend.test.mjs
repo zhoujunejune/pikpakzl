@@ -22,7 +22,7 @@ function feed(at=START,side=1,flat=false){
 }
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
-test("V15 strict retains six core gates without the old wide secondary veto",()=>{
+test("V16 strict retains six core gates without the old wide secondary veto",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
  const last=bullish.candles["1m"].at(-1);
@@ -31,7 +31,7 @@ test("V15 strict retains six core gates without the old wide secondary veto",()=
  assert.equal(out.direction,"UP");
  assert.equal(out.strategyVersion,RULE_VERSION);
 });
-test("V15 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
+test("V16 long RSI threshold stays below 63 and down requires 15m persistence",()=>{
  const at=START+60000;
  const up=feed(at,1);
  const q=up.candles["1m"].at(-1);
@@ -45,7 +45,7 @@ test("V15 long RSI threshold stays below 63 and down requires 15m persistence",(
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_PACED_MOMENTUM_V15_20261106");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_EMA5_DIRECTION_V16_20261106");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");
@@ -59,7 +59,7 @@ test("aligned moderate trends may signal on any minute or manually",()=>{
  }
  assert.equal(evaluate(START+3*60000,"MANUAL").direction,"UP");
 });
-test("V15 requires 1m/3m momentum plus EMA, not blindly voting",()=>{
+test("V16 preserves V15 eligibility but aligns final direction with 5m EMA",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
  const r=evaluate(at,"AUTO",bullish);
@@ -68,18 +68,21 @@ test("V15 requires 1m/3m momentum plus EMA, not blindly voting",()=>{
  const mismatch=feed(at,1);
  mismatch.candles["5m"]=feed(at,-1).candles["5m"];
  const standard=evaluate(at,"AUTO",mismatch);
- assert.equal(standard.direction,"UP");
+ assert.equal(standard.direction,"DOWN");
  assert.equal(standard.quality,"STANDARD_RESEARCH");
+ assert.equal(standard.evidence.originalEligibleDirection,"UP");
+ assert.equal(standard.evidence.ema5Direction,"DOWN");
+ assert.equal(standard.evidence.directionCorrected,true);
  assert.equal(standard.conditions.trend5m,false);
 });
-test("V15 never gives a direction if trend is weak, flat or unverified",()=>{
+test("V16 never gives a direction if trend is weak, flat or unverified",()=>{
  const at=START+60000;
  assert.equal(evaluate(at,"AUTO",feed(at,1,true)).direction,null);
  const huge=feed(at,1);const q=huge.candles["1m"].at(-1);
  q.close+=40;q.high=q.close+0.1;
  assert.equal(evaluate(at,"AUTO",huge).direction,null);
 });
-test("V15 ignores poor volume and momentum disagreement",()=>{
+test("V16 does not invent signals when original conditions fail",()=>{
  const at=START+60000;
  const f=feed(at,1);f.candles["1m"].at(-1).volume=5;
  assert.equal(evaluate(at,"AUTO",f).direction,null);
@@ -104,7 +107,7 @@ test("one-minute and five-minute closed candles must be current, never replay ol
  stale5.candles["5m"]=feed(at-300000).candles["5m"];
  assert.throws(()=>evaluate(at,"AUTO",stale5),/STALE_5m_LAST_CLOSED_CANDLE/);
 });
-test("V15 ten-minute cooldown applies across restart and manual/auto",async()=>{
+test("V16 ten-minute cooldown applies across restart and manual/auto",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-paced-"));
  const file=path.join(dir,"sessions.json");
  let now=START+1000,price=70000;
@@ -118,7 +121,7 @@ test("V15 ten-minute cooldown applies across restart and manual/auto",async()=>{
  now=START+60000+1000;
  const blocked=await engine.start("auto-1m-next-0002");
  assert.equal(blocked.direction,null);
- assert.equal(blocked.eventTag,"V15_MIN_SIGNAL_GAP");
+ assert.equal(blocked.eventTag,"V16_MIN_SIGNAL_GAP");
  assert.equal(engine.signals().total,1);
  const rebooted=createEngine(opts);
  now=START+540000+1000;
@@ -133,7 +136,7 @@ test("V15 ten-minute cooldown applies across restart and manual/auto",async()=>{
  assert.equal(rebooted.status().minSignalGapMs,MIN_SIGNAL_GAP_MS);
  assert.equal(MIN_SIGNAL_GAP_MS,600000);
 });
-test("V15 pauses for 20m after two consecutive current-version proxy misses",async()=>{
+test("V16 pauses for 20m after two consecutive current-version proxy misses",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-pause-"));
  const file=path.join(dir,"sessions.json");
  let now=START+60000;
@@ -151,7 +154,7 @@ test("V15 pauses for 20m after two consecutive current-version proxy misses",asy
  const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
  const blocked=await engine.start("manual-retry-pause-0001");
  assert.equal(blocked.direction,null);
- assert.equal(blocked.eventTag,"V15_RECENT_LOSSES_PAUSE");
+ assert.equal(blocked.eventTag,"V16_RECENT_LOSSES_PAUSE");
  assert.match(blocked.reason,/连续未命中/);
  now+=20*60000;
  const available=await engine.start("manual-post-pause-0002");
@@ -256,7 +259,7 @@ test("only V4 records are returned to public history and status, even with legac
 });
 
 
-test("V15 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
+test("V16 initial view starts at zero despite V11 legacy ledger and session entries",()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v12-isolated-"));
  const file=path.join(dir,"state.json"),ledger=path.join(dir,"rule-signals-v1.ndjson");
  const oldVersion="EVENT10_TIERED_V11_20261105";

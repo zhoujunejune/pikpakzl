@@ -1,5 +1,5 @@
-// V15: paced non-overlapping 10-minute directional observations, no trade API.
-export const RULE_VERSION="EVENT10_PACED_MOMENTUM_V15_20261106";
+// V16: same V15 eligibility and frequency; correct direction to 5m EMA9/21. No trade API.
+export const RULE_VERSION="EVENT10_EMA5_DIRECTION_V16_20261106";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -143,14 +143,29 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
       reason="1分钟与3分钟动量同向，EMA9/21确认，成交量与RSI不过度偏离；10分钟内最多一条新信号。";
     }
   }
+  // Evidence from 30 previously settled V15 signal timestamps: 5m EMA
+  // direction correction changed 8 directions and improved proxy hits 15->19.
+  // This is only historical evidence, NOT a guaranteed live accuracy lift.
+  // Never add/remove a qualifying signal: correct the sign only.
+  const eligibleDirection=direction;
+  const ema5Direction=ema5Fast>ema5Slow?"UP":ema5Fast<ema5Slow?"DOWN":null;
+  const directionCorrected=!!(eligibleDirection&&ema5Direction&&eligibleDirection!==ema5Direction);
+  if(directionCorrected){
+    direction=ema5Direction;
+    eventTag=direction==="UP"?"V16_EMA5_CORRECTED_HIGHER":"V16_EMA5_CORRECTED_LOWER";
+    reason="方向校正：原V15条件已触发信号，5分钟EMA9/21方向相反，按5分钟趋势改为"+(direction==="UP"?"看涨":"看跌")+"。保留原有触发时间和10分钟限频。";
+  }else if(direction){
+    eventTag=direction==="UP"?"V16_EMA5_CONFIRMED_HIGHER":"V16_EMA5_CONFIRMED_LOWER";
+    reason="方向确认：V15触发条件与5分钟EMA9/21同向；保持原有10分钟节奏。";
+  }
   return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",eventTag,reason,quality,confidence:null,
     change3mPct:round(change3mPct),change1mPct:round(change1mPct),change15mPct:round(change15mPct),snapshotAt:at,
     cycleStartAt:Math.floor(at/cycleMs)*cycleMs,
-    conditions:direction?(quality==="STRICT_RESEARCH"?(direction==="UP"?upChecks:downChecks):(direction==="UP"?standardUp:standardDown)):null,
+    conditions:eligibleDirection?(quality==="STRICT_RESEARCH"?(eligibleDirection==="UP"?upChecks:downChecks):(eligibleDirection==="UP"?standardUp:standardDown)):null,
     upChecks,downChecks,standardUpChecks:standardUp,standardDownChecks:standardDown,
     referenceBasis:"SIGNAL_CAPTURED_INDEX_PRICE_TPLUS600_NOT_EVENT_CONTRACT_STRIKE",
-    evidence:{change1mPct:round(change1mPct),change3mPct:round(change3mPct),change15mPct:round(change15mPct),volumeRatio:round(volumeRatio,3),rsiRise3,downBounceRisk,lastClosePosition:round(lastClosePosition,3),
+    evidence:{originalEligibleDirection:eligibleDirection,ema5Direction,directionCorrected,change1mPct:round(change1mPct),change3mPct:round(change3mPct),change15mPct:round(change15mPct),volumeRatio:round(volumeRatio,3),rsiRise3,downBounceRisk,lastClosePosition:round(lastClosePosition,3),
       rsi14:round(rsi14,2),quality,trigger,ordinary:false,highWindow:true,ema1Fast:round(ema1Fast,3),ema1Slow:round(ema1Slow,3),
       ema5Fast:round(ema5Fast,3),ema5Slow:round(ema5Slow,3),
       bullishLast3:bullish,bearishLast3:bearish,
@@ -175,7 +190,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V15控制节奏：每分钟检查行情，信号至少相隔10分钟，最多约6条/小时；每条独立核验10分钟。",
-      "数据异常、动量冲突或全平盘不出方向；连续失误后暂停信号，数量和历史命中率都不保证收益；不执行真实订单。",
+    caveats:["V16沿用V15的信号触发与10分钟间隔，仅按5分钟EMA趋势修正方向；最多约6条/小时。",
+      "数据异常、动量冲突或全平盘不出方向；保留连续失误暂停。5分钟EMA方向校正仍可能误判，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

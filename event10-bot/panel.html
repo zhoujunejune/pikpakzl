@@ -37,10 +37,10 @@ th{color:#a9c6e7}
 <a href="/">5分钟预测机器人</a><a href="/event10/" class="active" aria-current="page">10分钟事件合约</a>
 </nav>
 <h1>BTC 10分钟事件合约 · 纯信号</h1>
-<p class="sub">BTCUSDT · V15稳频策略 · 每分钟扫描行情 · 10分钟内最多1条信号 · 连续失误暂停20分钟</p>
+<p class="sub">BTCUSDT · V16方向优化 · 原V15信号频率不变 · 5分钟EMA修正方向 · 10分钟内最多1条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V15以可操作性为先：1分钟与3分钟动量同向、短期EMA确认后才出信号；至少间隔10分钟，不再每分钟连续提醒。最近两条已核验信号连续失误时暂停20分钟，不自动下单。</div>
+V16沿用V15全部信号触发条件、最短10分钟间隔和连续失误保护；仅在5分钟EMA9/21与原方向相反时校正涨跌方向，不新增过滤、不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -130,7 +130,7 @@ V15以可操作性为先：1分钟与3分钟动量同向、短期EMA确认后才
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_PACED_MOMENTUM_V15_20261106";
+const SIGNAL_VERSION="EVENT10_EMA5_DIRECTION_V16_20261106";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -257,7 +257,7 @@ const isCurrentStrategyRecord=s=>!!s&&(
  s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
 function display(d){
  const audit=d.scanDiagnostics?.lastHour;
- const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V15_MIN_SIGNAL_GAP:"10分钟间隔",V15_RECENT_LOSSES_PAUSE:"连续失误暂停",DATA_ERROR:"数据过期"};
+ const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V16_MIN_SIGNAL_GAP:"10分钟间隔",V16_RECENT_LOSSES_PAUSE:"连续失误暂停",DATA_ERROR:"数据过期"};
  $("scanAudit").textContent=audit?"最近1小时检查 "+audit.checks+" 次，高标准 "+audit.strictSignals+" 条，普通 "+audit.standardSignals+" 条，无信号 "+audit.noSignal+" 次，数据异常 "+audit.dataErrors+" 次。":"扫描审计暂未就绪";
  $("gateStats").textContent=audit&&Object.keys(audit.byReason||{}).length?"未通过条件："+Object.entries(audit.byReason).sort((a,b)=>b[1]-a[1]).map(([k,v])=>(names[k]||k)+" "+v+"次").join("、")+"。":"本小时暂未累计拒绝原因。";
   // Display verified scan freshness; direction is minute-scanned, not per tick.

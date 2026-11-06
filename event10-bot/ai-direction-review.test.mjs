@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";import os from "node:os";import path from "node:path";
-import {reviewAiDirection,feedbackExamples} from "./ai-direction-review.mjs";
+import {reviewAiDirection,feedbackExamples,buildLearningProfile} from "./ai-direction-review.mjs";
 import {checkedKlines,collectIndependentSpotCandles} from "./readonly-candles.mjs";
 import {createEngine} from "./manual-engine.mjs";
 import {RULE_VERSION} from "./pure-signal.mjs";
@@ -30,6 +30,11 @@ test("feedback excludes unknown, unresolved and future outcomes",()=>{
  assert.equal(list.length,2);
  assert.equal(list.filter(x=>!x.correct).length,1);
  assert.equal(list[0].correct,true);
+ const profile=buildLearningProfile(examples,AT);
+ assert.equal(profile.settledSamples,2);
+ assert.equal(profile.lossCount,1);
+ assert.equal(profile.winCount,1);
+ assert.equal(profile.recentLossCases[0].predicted,"UP");
 });
 test("AI is a direction-only reviewer and never vetoes eligible rule signal",async()=>{
  const calls=[];
@@ -51,6 +56,9 @@ test("AI is a direction-only reviewer and never vetoes eligible rule signal",asy
   fetcher,env:{EVENT10_AI_API_KEY:"fake-test-key"},timeoutMs:1000});
  assert.equal(r.status,"AI_REVIEWED");assert.equal(r.direction,"DOWN");
  assert.equal(r.lessonsCount,2);
+ assert.equal(r.learningLosses,1);
+ assert.equal(r.learningSamples,2);
+ assert.match(JSON.stringify(calls[0].body.messages),/rollingLearningProfile/);
  assert.equal(calls.length,1);
  assert.equal(calls[0].body.response_format.type,"json_object");
  assert.equal(calls[0].body.model,"deepseek-flash");
@@ -85,7 +93,7 @@ test("independent public Binance closed candles are verified, not synthetic",asy
  const malformed=candles(AT,"1m");malformed.at(-1)[6]+=60000;
  assert.throws(()=>checkedKlines(malformed,"1m",AT),/BINANCE_CANDLE_INVALID/);
 });
-test("real engine still accepts unchanged V16 frequency after 13003 fails, AI selects direction",async()=>{
+test("V18 signals require complete AI; incomplete API never publishes or pollutes ledger",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-v17-ai-"));
  const file=path.join(dir,"session.json");
  let now=AT+1000;
@@ -124,9 +132,14 @@ test("real engine still accepts unchanged V16 frequency after 13003 fails, AI se
  assert.equal(blocked.direction,null);assert.equal(engine.status().modelCalls,1);
  now+=600000;aiAvailable=false;
  const second=await engine.start("event10-ai-test-0003");
- assert.equal(second.direction,"UP");assert.equal(second.aiReview.status,"AI_INCOMPLETE_FALLBACK");
+ assert.equal(second.direction,null);assert.equal(second.signal,"NO_SIGNAL");
+ assert.equal(second.eventTag,"V18_AI_REQUIRED_INCOMPLETE");
+ assert.equal(second.aiReview.status,"AI_INCOMPLETE_FALLBACK");
  assert.equal(second.aiReview.analysisCompleted,false);
- assert.equal(engine.signals().total,2);assert.equal(engine.status().modelCalls,2);
+ assert.equal(engine.signals().total,1);assert.equal(engine.status().modelCalls,2);
+ assert.equal(engine.status().aiMandatory,true);
+ assert.equal(engine.status().aiReviewStats.rejected,1);
+ assert.equal(engine.status().lastCheck.direction,null);
  assert.equal(engine.status().minSignalGapMs,600000);
 });
 

@@ -385,7 +385,7 @@ public final class SignalAlertService extends Service {
         PendingIntent binance=openBinanceIntent(signalId);
         Notification notice=new Notification.Builder(this,ALARM_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("新信号："+tier+" · "+name+" · 请核对价格")
+            .setContentTitle("新信号："+name+" · 请核对价格")
             .setContentText(content)
             .setStyle(new Notification.BigTextStyle().bigText(detail))
             .setAutoCancel(true)
@@ -413,7 +413,7 @@ public final class SignalAlertService extends Service {
         boolean started=sound.play(this,25);
         // Display only after the notification has been posted successfully.
         // Overlay permission is opt-in, and notification is always the fallback.
-        if(signalPopup!=null)signalPopup.show(signalId,direction,tier,opened,signal.optLong("expiresAt",0L),notificationId);
+        if(signalPopup!=null)signalPopup.show(signalId,direction,opened,signal.optLong("expiresAt",0L),notificationId);
         status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name);
         return started;
     }

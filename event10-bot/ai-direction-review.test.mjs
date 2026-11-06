@@ -35,8 +35,17 @@ test("AI is a direction-only reviewer and never vetoes eligible rule signal",asy
  const calls=[];
  const fetcher=async (url,args)=>{
   calls.push({url,body:JSON.parse(args.body)});
-  return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({
-   direction:"DOWN",confidence:0.62,reason:"过去相似动量结构容易冲高回落",upCase:"一分及五分EMA仍向上，趋势有惯性",downCase:"RSI偏高且前次相似信号发生回落",decisiveEvidence:"对照已结算的冲高回落案例更偏下跌",risk:"历史案例不多，强上涨可能再次延续"})}},finish_reason:"stop",reasoning_content:"completed mock high reasoning"}]})};
+  return {ok:true,json:async()=>({choices:[{
+   finish_reason:"stop",
+   message:{
+    content:JSON.stringify({direction:"DOWN",confidence:0.62,
+     reason:"过去相似动量结构容易冲高回落",upCase:"一分及五分EMA仍向上，趋势有惯性",
+     downCase:"RSI偏高且前次相似信号发生回落",
+     decisiveEvidence:"对照已结算的冲高回落案例更偏下跌",
+     risk:"历史案例不多，强上涨可能再次延续"}),
+    reasoning_content:"mock high reasoning tokens"
+   }
+  }]})};
  };
  const r=await reviewAiDirection({rule:"UP",evidence,records:examples,at:AT,
   fetcher,env:{EVENT10_AI_API_KEY:"fake-test-key"},timeoutMs:1000});

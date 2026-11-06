@@ -420,7 +420,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
           aiReview=await reviewAiDirection({
             rule:rule.direction,evidence:rule.evidence,
             records:Array.from(signalLedger.all.values()),at:decisionAt,
-            fetcher,env,timeoutMs:22000
+            fetcher,env,timeoutMs:40000
           });
         }finally{aiInProgress=null;}
         if(aiConfigured){

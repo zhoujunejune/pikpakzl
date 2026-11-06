@@ -117,7 +117,7 @@ test("finger scrolling replaces static next-page buttons and keeps newest signal
 
 test("V16 shows unified accuracy and rejection audit without confusing signal tiers",()=>{
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
- for(const id of ["eStrictPct","eStandardPct","eStrictCount","eStandardCount","eScanAudit","eScanGates","eFreshness"])assert.ok(html.includes('id="'+id+'"'),id);
+ for(const id of ["eProxyAccuracy","eScanAudit","eScanGates","eFreshness"])assert.ok(html.includes('id="'+id+'"'),id);
  for(const key of ["scanDiagnostics","lastSuccessfulScanAt","eScanAudit"])assert.ok(src.includes(key),key);
  assert.ok(src.includes("指数代理"),"official event contract settlement must never be claimed");
 });

@@ -1,4 +1,4 @@
-name: ZL EVENT10 v1.3.0 stable Android release
+name: 海派事件合约 Android v1.3.1 signed stable release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -132,8 +132,8 @@ jobs:
           m=Path('android-app/app/src/main/AndroidManifest.xml').read_text()
           t=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java').read_text()
           assert "applicationId 'com.zlcontrol.android'" in g
-          assert 'versionCode 12' in g and "versionName '1.3.0'" in g
-          assert 'android:label="ZL EVENT10"' in m
+          assert 'versionCode 13' in g and "versionName '1.3.1'" in g
+          assert 'android:label="海派事件合约"' in m
           assert 'String name=direction.equals("UP")?"看涨":"看跌";' in t
           assert 'STRICT_RESEARCH' not in t and 'STANDARD_RESEARCH' not in t
           assert '/event10/api/signals?limit=50&offset=0' in t
@@ -143,7 +143,14 @@ jobs:
           assert 'void show(String signalId,String direction,long openedAt' in p
           assert 'String tier' not in t and '+tier' not in p
           assert '↑  看涨' in p and '↓  看跌' in p
-          print('ANDROID_EVENT10_V130_STATIC_VALIDATED=true')
+          import struct
+          icon=Path('android-app/app/src/main/res/drawable-nodpi/sea_friends_icon.png')
+          data=icon.read_bytes()
+          assert len(data)>3000 and data[:8]==b'\\x89PNG\\r\\n\\x1a\\n'
+          assert struct.unpack('>II',data[16:24])==(512,512)
+          assert 'android:icon="@drawable/sea_friends_icon"' in m
+          assert 'android:label="海派事件合约"' in m
+          print('HAIPAI_EVENT10_V131_STATIC_VALIDATED=true')
           PY
       - name: Build release APK (never debug)
         working-directory: android-app
@@ -175,21 +182,21 @@ jobs:
           fi
           echo "ANDROID_RELEASE_CERT_SHA256=$cert"
           mkdir -p dist
-          cp "$apk" dist/ZL-EVENT10-v1.3.0-STABLE-RELEASE.apk
+          cp "$apk" dist/Haipai-Event10-v1.3.1-STABLE-RELEASE.apk
           sha256sum dist/*.apk
-          if gh release view zl-event10-v1.3.0-stable-20261106 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view haipai-event10-v1.3.1-stable-20261106 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "ANDROID_STABLE_RELEASE_ALREADY_PUBLISHED=true"
           else
-            gh release create zl-event10-v1.3.0-stable-20261106 dist/ZL-EVENT10-v1.3.0-STABLE-RELEASE.apk \
+            gh release create haipai-event10-v1.3.1-stable-20261106 dist/Haipai-Event10-v1.3.1-STABLE-RELEASE.apk \
               --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "ZL EVENT10 v1.3.0 - Official Stable Android" \
-              --notes "EVENT10-only v1.3.0 Android app: opens 10-minute BTC signal screen and delivers native alerts without tier labels. Same application ID and persistent official signer as v1.2.4; in-place install supported when current app has matching release signature. Old debug-signed installations require manual migration. No trading strategies or server order permissions changed."
+              --title "海派事件合约 v1.3.1 - Official Stable Android" \
+              --notes "海派事件合约 v1.3.1: renamed app and user-provided underwater friends launcher icon, ten-minute BTC signal-only screen, native alert retained. Same package ID and release signing certificate as v1.3.0, in-place upgrade supported for same-signed installs. No live trading engine changes."
             echo "ANDROID_STABLE_RELEASE_PUBLISHED=true"
           fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ZL-EVENT10-v1.3.0-STABLE-RELEASE
-          path: dist/ZL-EVENT10-v1.3.0-STABLE-RELEASE.apk
+          name: Haipai-Event10-v1.3.1-STABLE-RELEASE
+          path: dist/Haipai-Event10-v1.3.1-STABLE-RELEASE.apk
           if-no-files-found: error
           retention-days: 90

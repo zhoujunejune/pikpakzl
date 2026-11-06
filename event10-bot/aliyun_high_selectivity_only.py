@@ -18,11 +18,11 @@ from datetime import datetime, timezone
 ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
-LEGACY_VERSIONS={"EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
-TARGET="EVENT10_EMA5_DIRECTION_V16_20261106"
+LEGACY_VERSIONS={"EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
+TARGET="EVENT10_AI_FEEDBACK_V17_20261106"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
-FILES=("pure-signal.mjs","manual-engine.mjs","v7-reversal-review.mjs","panel.html","selective-trend.test.mjs","v7-reversal-review.test.mjs")
-OTHER_UNITS=("zl-prediction-trade","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
+FILES=("pure-signal.mjs","manual-engine.mjs","v7-reversal-review.mjs","panel.html","selective-trend.test.mjs","v7-reversal-review.test.mjs","ai-direction-review.mjs","ai-direction-review.test.mjs","readonly-candles.mjs")
+OTHER_UNITS=("zl-prediction-trade","zl-prediction-v2","zl-prediction-v3","zl-prediction-guardian-analysis","zl-prediction-fast5","zl-prediction-fast5-stats","zl-prediction-risk-exits","zl-prediction-redis","zl-prediction-official-reference","zl-prediction-ui-visibility","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
 
 def cmd(*args, timeout=75):
     return subprocess.run(args,check=True,capture_output=True,text=True,timeout=timeout).stdout.strip()
@@ -102,9 +102,9 @@ def main():
         if TARGET not in data["pure-signal.mjs"].decode() or \
            TARGET not in data["panel.html"].decode():
             raise RuntimeError("PINNED_ARTIFACT_VERSION_MISMATCH")
-        for name in ("server.mjs","manual-engine.mjs","pure-signal.mjs"):
+        for name in ("server.mjs","manual-engine.mjs","pure-signal.mjs","ai-direction-review.mjs","readonly-candles.mjs"):
             cmd(NODE,"--check",str(folder/name))
-        cmd(NODE,"--test",str(folder/"selective-trend.test.mjs"),timeout=110)
+        cmd(NODE,"--test",str(folder/"selective-trend.test.mjs"),str(folder/"ai-direction-review.test.mjs"),timeout=110)
         print("EVENT10_HS_TESTS_PASSED=true",flush=True)
         if not validate_state(status(),before.get("decisionReviewVersion")):
             raise RuntimeError("EVENT10_PREDEPLOY_STATE_CHANGED")
@@ -134,7 +134,8 @@ def main():
                 try:
                     snap=status()
                     if snap.get("decisionReviewVersion")==TARGET and \
-                       snap.get("providerModel")=="PURE_SIGNAL_PACED_V16" and \
+                       snap.get("aiReviewConfigured") is True and \
+                       snap.get("aiReviewModel")=="deepseek-v4-pro" and \
                        snap.get("autoTradingEnabled") is False and \
                        snap.get("executionAvailable") is False:
                         ready=True
@@ -159,6 +160,8 @@ def main():
                 raise RuntimeError("NON_EVENT10_SERVICE_RESTARTED")
             print("EVENT10_HS_DEPLOY_SUCCEEDED=true",flush=True)
             print("EVENT10_HS_STRATEGY_VERSION="+TARGET,flush=True)
+            print("EVENT10_HS_AI_KEY_CONFIGURED="+str(status().get("aiReviewConfigured")),flush=True)
+            print("EVENT10_HS_AI_MODEL="+str(status().get("aiReviewModel")),flush=True)
             print("EVENT10_HS_HISTORY_PRESERVED="+str(len(after["records"])),flush=True)
             print("EVENT10_HS_NO_REAL_ORDER_API=true",flush=True)
             print("EVENT10_HS_OTHER_SERVICE_PIDS_UNCHANGED=true",flush=True)

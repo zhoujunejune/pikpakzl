@@ -15,7 +15,7 @@
       android:allowBackup="false"
       android:fullBackupContent="false"
       android:usesCleartextTraffic="false"
-      android:label="ZL Control"
+      android:label="ZL EVENT10"
       android:icon="@drawable/launcher_icon"
       android:theme="@style/Theme.ZLControl"
       android:supportsRtl="true">

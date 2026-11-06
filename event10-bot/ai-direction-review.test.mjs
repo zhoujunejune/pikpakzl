@@ -36,7 +36,7 @@ test("AI is a direction-only reviewer and never vetoes eligible rule signal",asy
  const fetcher=async (url,args)=>{
   calls.push({url,body:JSON.parse(args.body)});
   return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({
-   direction:"DOWN",confidence:0.62,reason:"历史冲高回落风险"})}}]})};
+   direction:"DOWN",confidence:0.62,reason:"过去相似动量结构容易冲高回落",upCase:"一分及五分EMA仍向上，趋势有惯性",downCase:"RSI偏高且前次相似信号发生回落",decisiveEvidence:"对照已结算的冲高回落案例更偏下跌",risk:"历史案例不多，强上涨可能再次延续"})}},finish_reason:"stop",reasoning_content:"completed mock high reasoning"}]})};
  };
  const r=await reviewAiDirection({rule:"UP",evidence,records:examples,at:AT,
   fetcher,env:{EVENT10_AI_API_KEY:"fake-test-key"},timeoutMs:1000});
@@ -44,6 +44,12 @@ test("AI is a direction-only reviewer and never vetoes eligible rule signal",asy
  assert.equal(r.lessonsCount,2);
  assert.equal(calls.length,1);
  assert.equal(calls[0].body.response_format.type,"json_object");
+ assert.equal(calls[0].body.reasoning_effort,"high");
+ assert.equal(calls[0].body.thinking.type,"enabled");
+ assert.equal(calls[0].body.max_tokens,8192);
+ assert.equal(r.analysisCompleted,true);
+ assert.equal(r.reasoningObserved,true);
+ assert.equal(r.attempts,1);
  assert.match(JSON.stringify(calls[0].body.messages),/历史/);
  assert.ok(!JSON.stringify(calls[0].body.messages).includes("fake-test-key"));
 });
@@ -51,7 +57,8 @@ test("AI API errors and missing key retain the original direction",async()=>{
  const failure=await reviewAiDirection({rule:"UP",evidence,records:examples,at:AT,
   fetcher:async()=>{throw Error("API_DOWN")},
   env:{EVENT10_AI_API_KEY:"fake-test-key"}});
- assert.equal(failure.direction,"UP");assert.equal(failure.status,"AI_FALLBACK");
+ assert.equal(failure.direction,"UP");assert.equal(failure.status,"AI_INCOMPLETE_FALLBACK");
+ assert.equal(failure.analysisCompleted,false);assert.equal(failure.attempts,2);
  const noKey=await reviewAiDirection({rule:"DOWN",evidence,at:AT,
   env:{}});
  assert.equal(noKey.direction,"DOWN");assert.equal(noKey.status,"NO_KEY_OR_DISABLED");
@@ -83,7 +90,14 @@ test("real engine still accepts unchanged V16 frequency after 13003 fails, AI se
   }
   if(url.includes("chat/completions")){
    if(!aiAvailable)throw Error("AI_OFFLINE");
-   return {ok:true,json:async()=>({choices:[{message:{content:'{"direction":"DOWN","confidence":0.6,"reason":"趋势背离"}'}}]})};
+   return {ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{
+    content:JSON.stringify({direction:"DOWN",confidence:0.6,
+      reason:"短周期动量仍上升但历史相似信号常回落",
+      upCase:"原先EMA与成交量同向显示一定上行潜力",
+      downCase:"历史相似失误表明短期动量出现过度拉升",
+      decisiveEvidence:"当前RSI与动量组合类似以往上涨误判",
+      risk:"行情如果突破近期高点则下跌判断可能出错"}),
+    reasoning_content:"mock simulated high thinking"}}]})};
   }
   throw Error("UNKNOWN_TEST_ENDPOINT");
  };
@@ -100,7 +114,24 @@ test("real engine still accepts unchanged V16 frequency after 13003 fails, AI se
  assert.equal(blocked.direction,null);assert.equal(engine.status().modelCalls,1);
  now+=600000;aiAvailable=false;
  const second=await engine.start("event10-ai-test-0003");
- assert.equal(second.direction,"UP");assert.equal(second.aiReview.status,"AI_FALLBACK");
+ assert.equal(second.direction,"UP");assert.equal(second.aiReview.status,"AI_INCOMPLETE_FALLBACK");
+ assert.equal(second.aiReview.analysisCompleted,false);
  assert.equal(engine.signals().total,2);assert.equal(engine.status().modelCalls,2);
  assert.equal(engine.status().minSignalGapMs,600000);
+});
+
+test("unfinished or unreasoned model output is never labelled AI complete",async()=>{
+ let attempts=0;
+ const r=await reviewAiDirection({rule:"UP",evidence,at:AT,
+  env:{DEEPSEEK_API_KEY:"fake"},timeoutMs:2500,fetcher:async()=>{
+   attempts++;
+   return {ok:true,json:async()=>({choices:[{finish_reason:"length",message:{
+    content:JSON.stringify({direction:"UP",confidence:0.9,reason:"没有完整分析"})
+   }}]})};
+  }});
+ assert.equal(attempts,2);
+ assert.equal(r.status,"AI_INCOMPLETE_FALLBACK");
+ assert.equal(r.analysisCompleted,false);
+ assert.equal(r.direction,"UP");
+ assert.match(r.error,/AI_NOT_FINISHED/);
 });

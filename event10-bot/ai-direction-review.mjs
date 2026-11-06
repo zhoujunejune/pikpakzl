@@ -61,6 +61,7 @@ function parseCompleteReview(body){
  const tokens=body?.usage?.completion_tokens_details?.reasoning_tokens;
  const reasoningObserved=(Number.isFinite(tokens)&&tokens>0)||
   (typeof choice?.message?.reasoning_content==="string"&&choice.message.reasoning_content.length>0);
+ if(!reasoningObserved)throw Error("AI_THINKING_NOT_VERIFIED");
  return {direction:data.direction,confidence:rounded(confidence,3),
   reason:clampText(data.reason,160),upCase:clampText(data.upCase,160),
   downCase:clampText(data.downCase,160),

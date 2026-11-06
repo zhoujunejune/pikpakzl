@@ -34,11 +34,11 @@ th{color:#a9c6e7}
 @media(max-width:700px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}button.primary{width:100%}}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
-<h1>海派事件合约 · BTC 十分钟 AI 辅助判断</h1>
-<p class="sub">BTCUSDT · V17 AI 方向复核 · 完全保留 V16 出信号条件与节奏 · 最多每10分钟1条</p>
+<h1>海派事件合约 · BTC 十分钟 AI 完整判断</h1>
+<p class="sub">BTCUSDT · V18 DeepSeek Flash 高强度思考 · AI 完成才出方向 · 每10分钟最多1条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V17保留V16全部出信号条件，AI只复核UP/DOWN方向，不会拦截有效规则信号；AI故障走规则兜底。每次已结算结果作为下一次的历史案例，不是模型权重训练。不自动下单。</div>
+V18 保留原有行情规则作为候选筛选，只有 DeepSeek Flash 完成高强度思考、完整回答且校验通过才发布方向；AI超时、错误或回答不完整，本轮无信号。已结算失败案例进入下次复盘，并不代表模型已自行训练权重。不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测方向（AI辅助复核）</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -52,7 +52,7 @@ V17保留V16全部出信号条件，AI只复核UP/DOWN方向，不会拦截有�
  </div>
  <div id="quickReason" class="signal-reason">需要60根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
  <p class="sub">后台每分钟检查；满足信号条件且距离上条信号至少10分钟才记录。连续失误不会触发20分钟停发。真实行情检验与600秒核验保持不变，不能保证高胜率。</p>
- <p class="sub" id="quickTimestamp">仅AI完整分析通过后才标注AI判断；外部接口超时或内容不完整将明确标注规则应急方向（非AI分析完成），不自动下单。</p>
+ <p class="sub" id="quickTimestamp">必须 AI 完整判断才有 UP/DOWN；超时和错误只记录失败检查，不发方向、不提醒、不计入胜率。</p>
 <p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
 </div>
 <p class="sub">自动每分钟扫描；有效方向之间最少间隔10分钟（含手动、自动）。每条信号单独锁定指数代理价并在600秒后核验。</p>
@@ -61,7 +61,7 @@ V17保留V16全部出信号条件，AI只复核UP/DOWN方向，不会拦截有�
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
 <div class="grid">
 <div class="metric"><small>信号锁定指数价（非订单Strike）</small><strong id="openPrice">—</strong></div>
-<div class="metric"><small>最终方向（AI/规则兜底）</small><strong id="direction">—</strong></div>
+<div class="metric"><small>最终方向（仅 AI 完成）</small><strong id="direction">—</strong></div>
 <div class="metric"><small>距参考期限</small><strong id="remaining">—</strong></div>
 <div class="metric"><small>信号后10分钟指数价</small><strong id="closePrice">—</strong></div>
 </div>
@@ -123,7 +123,7 @@ V17保留V16全部出信号条件，AI只复核UP/DOWN方向，不会拦截有�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_AI_FEEDBACK_V17_20261106";
+const SIGNAL_VERSION="EVENT10_AI_REQUIRED_LEARNING_V18_20261106";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -246,7 +246,7 @@ const isCurrentStrategyRecord=s=>!!s&&(
  s.ruleChecks?.strategyVersion===SIGNAL_VERSION);
 function display(d){
  const audit=d.scanDiagnostics?.lastHour;
- const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V17_MIN_SIGNAL_GAP:"10分钟间隔",V16_RECENT_LOSSES_PAUSE:"连续失误暂停",DATA_ERROR:"数据过期"};
+ const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V18_MIN_SIGNAL_GAP:"10分钟间隔",V16_RECENT_LOSSES_PAUSE:"连续失误暂停",DATA_ERROR:"数据过期"};
  $("scanAudit").textContent=audit?"最近1小时检查 "+audit.checks+" 次，产生方向 "+((audit.strictSignals||0)+(audit.standardSignals||0))+" 条，无信号 "+audit.noSignal+" 次，数据异常 "+audit.dataErrors+" 次。":"扫描审计暂未就绪";
  $("gateStats").textContent=audit&&Object.keys(audit.byReason||{}).length?"未通过条件："+Object.entries(audit.byReason).sort((a,b)=>b[1]-a[1]).map(([k,v])=>(names[k]||k)+" "+v+"次").join("、")+"。":"本小时暂未累计拒绝原因。";
   // Display verified scan freshness; direction is minute-scanned, not per tick.
@@ -275,9 +275,9 @@ function display(d){
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
  const review=(s?.aiReview||d.lastCheck?.aiReview);
  const tally=d.aiReviewStats||{};
- $("aiStatus").textContent="AI复核："+(d.aiInProgress?"高强度AI分析进行中，等待完整输出":review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"已通过完整分析校验":review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"AI未完成，仅为规则应急方向":review?.status==="NO_KEY_OR_DISABLED"?"未运行，仅为规则方向":d.aiInProgress?"高强度思考中，尚未完成":d.aiReviewConfigured?"已配置，等待有效信号":"尚未配置")+
+ $("aiStatus").textContent="AI复核："+(d.aiInProgress?"高强度AI分析进行中，等待完整输出":review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"已通过完整分析校验":review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"AI未完成，本轮无信号":review?.status==="NO_KEY_OR_DISABLED"?"未运行，仅为规则方向":d.aiInProgress?"高强度思考中，尚未完成":d.aiReviewConfigured?"已配置，等待有效信号":"尚未配置")+
    " · 模型 "+(d.aiReviewModel||"—")+
-   " · 调用 "+(tally.calls||0)+" 次，成功 "+(tally.reviewed||0)+" 次，兜底 "+(tally.fallbacks||0)+" 次；历史失败用于上下文复盘，不代表已重新训练模型。";
+   " · 调用 "+(tally.calls||0)+" 次，成功 "+(tally.reviewed||0)+" 次，兜底 "+(tally.fallbacks||0)+" 次；已结算失败 "+(d.aiLearningProfile?.lossCount||0)+" 条/案例 "+(d.aiLearningProfile?.settledSamples||0)+" 条，供下次AI复盘；不是权重训练。";
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";
   $("phase").textContent=s.settlementStatus?statusText(s.settlementStatus):(phaseText[s.status]||s.status);

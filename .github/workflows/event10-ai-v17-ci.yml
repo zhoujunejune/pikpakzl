@@ -1,4 +1,4 @@
-name: EVENT10 V17 AI direction and independent market feed tests
+name: EVENT10 V18 AI required with continual settled-loss feedback tests
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -30,7 +30,8 @@ jobs:
           node --check event10-bot/pure-signal.mjs
           node --test event10-bot/selective-trend.test.mjs event10-bot/ai-direction-review.test.mjs
           grep -F 'MIN_SIGNAL_GAP_MS = 600_000' event10-bot/manual-engine.mjs
-          grep -F 'EVENT10_AI_FEEDBACK_V17_20261106' event10-bot/pure-signal.mjs
+          grep -F 'V18_AI_REQUIRED_INCOMPLETE' event10-bot/manual-engine.mjs
+          grep -F 'EVENT10_AI_REQUIRED_LEARNING_V18_20261106' event10-bot/pure-signal.mjs
   report:
     if: always()
     needs: [check]

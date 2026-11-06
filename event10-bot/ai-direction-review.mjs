@@ -21,6 +21,14 @@ export function feedbackExamples(records,asOf,limit=18){
   quality:x.signalQuality||null
  }));
 }
+// Do not call a terse JSON response "deep analysis". Require comparison of
+// both directions, decisive evidence, risk, a proper finish, and a usable answer.
+// DeepSeek V4-Pro thinking mode is explicitly HIGH (not 'none').
+export const AI_REVIEW_EFFORT="high";
+export const AI_REVIEW_MAX_TOKENS=8192;
+export const AI_REVIEW_ATTEMPTS=2;
+const minText=(v,n=8)=>typeof v==="string"&&v.trim().length>=n;
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export function reviewPrompt({rule,evidence,lessons,at}){
  const compact={
   asOf:at,ruleDirection:rule,
@@ -34,41 +42,65 @@ export function reviewPrompt({rule,evidence,lessons,at}){
   recentSettledExamples:lessons
  };
  return [
-  {role:"system",content:"你是BTC十分钟公开指数代理方向研究复核助手。只允许在UP和DOWN二选一；不能决定是否发信号，不得根据历史错误取消下一条有效规则信号。没有足够证据也必须选择相对更可能的方向，不能声称确定盈利。仅考虑截止 asOf 前可知的市场指标和已结算历史例子，绝不使用未来数据。历史错误用于提醒失误场景，不代表修改了模型权重。请输出紧凑JSON对象，字段 direction (UP或DOWN),confidence (0到1),reason (中文不超过100字)。"},
-  {role:"user",content:"请以规则模型的方向为基线，结合以下最新行情和过去已经结算的正确及错误案例，复核未来600秒的方向。注意必须输出JSON：\n"+JSON.stringify(compact)}
+  {role:"system",content:"你是BTC十分钟公开指数代理方向的严谨研究复核助手。必须分别评估上涨、下跌依据，分析与历史失败案例相似之处、可能失效的条件以及反向风险，然后选出相对更可能的方向UP或DOWN。不能决定是否发信号，不能利用决策时间后的数据，不能承诺盈利，也不能把历史经验检索称为模型训练。仅返回合法JSON对象，必须含direction、confidence、reason、upCase、downCase、decisiveEvidence、risk，每项中文解释充分且具体（每段至少8个字），confidence为0至1之间的有限数字。解释应引用真实给定指标，不得虚构盘口、清算或事件合约官方结算。"},
+  {role:"user",content:"请完整复核未来600秒的方向。规则模型基线及已结算历史经验如下（仅决策时刻前数据）：\n"+JSON.stringify(compact)}
  ];
 }
+function parseCompleteReview(body){
+ const choice=body?.choices?.[0];
+ if(choice?.finish_reason!=="stop")throw Error("AI_NOT_FINISHED_"+clampText(choice?.finish_reason||"UNKNOWN",28));
+ const message=choice?.message?.content;
+ if(typeof message!=="string"||message.length>7000)throw Error("AI_CONTENT_INVALID");
+ let data;try{data=JSON.parse(message);}catch{throw Error("AI_JSON_INVALID");}
+ if(!validDirection(data?.direction))throw Error("AI_DIRECTION_INVALID");
+ if(!["reason","upCase","downCase","decisiveEvidence","risk"].every(k=>minText(data[k],8)))
+  throw Error("AI_ANALYSIS_INCOMPLETE");
+ const confidence=data.confidence;
+ if(typeof confidence!=="number"||!Number.isFinite(confidence)||confidence<0||confidence>1)
+  throw Error("AI_CONFIDENCE_INVALID");
+ const tokens=body?.usage?.completion_tokens_details?.reasoning_tokens;
+ const reasoningObserved=(Number.isFinite(tokens)&&tokens>0)||
+  (typeof choice?.message?.reasoning_content==="string"&&choice.message.reasoning_content.length>0);
+ return {direction:data.direction,confidence:rounded(confidence,3),
+  reason:clampText(data.reason,160),upCase:clampText(data.upCase,160),
+  downCase:clampText(data.downCase,160),
+  decisiveEvidence:clampText(data.decisiveEvidence,160),
+  risk:clampText(data.risk,160),reasoningObserved,
+  reasoningTokenCount:Number.isFinite(tokens)?tokens:null};
+}
 export async function reviewAiDirection({rule,evidence,records=[],at,fetcher=fetch,
-  env=process.env,timeoutMs=2500}={}){
+  env=process.env,timeoutMs=22000}={}){
  if(!validDirection(rule))throw Error("AI_REVIEW_RULE_DIRECTION_REQUIRED");
  const key=env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY;
  const model=env.EVENT10_AI_MODEL||"deepseek-v4-pro";
  const lessons=feedbackExamples(records,at,18);
- const basic={direction:rule,baseDirection:rule,model,lessonsCount:lessons.length};
+ const basic={direction:rule,baseDirection:rule,model,lessonsCount:lessons.length,
+  reasoningEffort:AI_REVIEW_EFFORT,analysisCompleted:false,attempts:0};
  if(!key||env.EVENT10_AI_ENABLED==="0"||env.EVENT10_AI_ENABLED==="false")
-  return {...basic,status:"NO_KEY_OR_DISABLED",latencyMs:0,confidence:null,reason:"规则方向兜底；大模型未启用。"};
- const started=Date.now();
- try{
-  const response=await fetcher("https://api.deepseek.com/chat/completions",{
-   method:"POST",headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
-   signal:AbortSignal.timeout(Math.max(700,Math.min(3500,timeoutMs))),
-   body:JSON.stringify({model,messages:reviewPrompt({rule,evidence,lessons,at}),
-    temperature:0.1,reasoning_effort:"none",response_format:{type:"json_object"},max_tokens:180})
-  });
-  if(!response.ok)throw Error("AI_HTTP_"+response.status);
-  const body=await response.json();
-  const message=body?.choices?.[0]?.message?.content;
-  if(typeof message!=="string"||message.length>2500)throw Error("AI_RESPONSE_INVALID");
-  let data;try{data=JSON.parse(message);}catch{throw Error("AI_JSON_INVALID");}
-  if(!validDirection(data?.direction))throw Error("AI_DIRECTION_INVALID");
-  const confidence=Number(data.confidence);
-  return {...basic,direction:data.direction,status:"AI_REVIEWED",
-   latencyMs:Date.now()-started,
-   confidence:Number.isFinite(confidence)&&confidence>=0&&confidence<=1?rounded(confidence,3):null,
-   reason:clampText(data.reason,130)};
- }catch(error){
-  return {...basic,status:"AI_FALLBACK",latencyMs:Date.now()-started,
-   confidence:null,reason:"AI超时或失败，使用规则方向。",
-   error:clampText(error?.name==="TimeoutError"?"TIMEOUT":error?.message,70)};
+  return {...basic,status:"NO_KEY_OR_DISABLED",latencyMs:0,confidence:null,
+   reason:"AI未运行，规则方向应急输出；不得视为AI分析完成。"};
+ const started=Date.now(),perAttemptMs=Math.max(2500,Math.min(25000,timeoutMs));
+ let lastError="UNKNOWN";
+ for(let attempt=1;attempt<=AI_REVIEW_ATTEMPTS;attempt++){
+  try{
+   const response=await fetcher("https://api.deepseek.com/chat/completions",{
+    method:"POST",headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
+    signal:AbortSignal.timeout(perAttemptMs),
+    body:JSON.stringify({model,messages:reviewPrompt({rule,evidence,lessons,at}),
+     reasoning_effort:AI_REVIEW_EFFORT,thinking:{type:"enabled"},
+     response_format:{type:"json_object"},max_tokens:AI_REVIEW_MAX_TOKENS})
+   });
+   if(!response.ok)throw Error("AI_HTTP_"+response.status);
+   const validated=parseCompleteReview(await response.json());
+   return {...basic,...validated,status:"AI_REVIEWED",analysisCompleted:true,
+    attempts:attempt,latencyMs:Date.now()-started,completedAt:Date.now()};
+  }catch(error){
+   lastError=clampText(error?.name==="TimeoutError"?"TIMEOUT":error?.message,70);
+   if(attempt<AI_REVIEW_ATTEMPTS)await wait(350);
+  }
  }
+ return {...basic,status:"AI_INCOMPLETE_FALLBACK",attempts:AI_REVIEW_ATTEMPTS,
+  latencyMs:Date.now()-started,confidence:null,
+  reason:"AI没有按要求完成全部分析；以下仅为规则应急方向，不是AI判断。",
+  error:lastError};
 }

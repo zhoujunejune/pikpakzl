@@ -60,7 +60,6 @@ function eventPriceComparison(r){
  if(r.proxyHit===false)return {ready:true,outcome:"指数代理未命中",change,tone:"downtext"};
  return {ready:false,outcome:"核验结果尚未确认",change,tone:"warning"};
 }
-function eventTier(r){return r?.signalQuality==="STRICT_RESEARCH"?"高标准":r?.signalQuality==="STANDARD_RESEARCH"?"普通":"旧等级";}
 function renderRecords(id,items,kind){
  const root=$(id);root.replaceChildren();
  if(!items.length){
@@ -71,7 +70,7 @@ function renderRecords(id,items,kind){
   const d=kind==="guardian"?r.predictedDirection:r.direction;
   const wrap=node("div","record"),head=node("div","record-head");
   if(kind==="event10")wrap.dataset.eventId=String(r.id);
-  const title=node("div","record-title",kind==="event10"?dir(d)+" · "+eventTier(r):dir(d));
+  const title=node("div","record-title",dir(d));
   if(d==="UP")title.classList.add("uptext");
   if(d==="DOWN")title.classList.add("downtext");
   const when=kind==="guardian"?(r.at||r.round):(r.openedAt||r.checkedAt);
@@ -105,7 +104,7 @@ function renderRecords(id,items,kind){
    const motion=typeof r.change3mPct==="number"?r.change3mPct.toFixed(5)+"%":"—";
    const trigger=r.trigger==="AUTO"?"自动":"手动";
 
-   wrap.append(node("div","record-note",trigger+" · "+eventTier(r)+" · "+(r.eventTag||"—")+" · 3分钟净涨跌 "+motion));
+   wrap.append(node("div","record-note",trigger+" · 3分钟净涨跌 "+motion));
    wrap.append(node("div","record-note","信号时间 "+stamp(r.openedAt)+" · 非事件合约真实下单价格"));
    wrap.append(node("div","record-note","预定核验 "+planned+
       " · 实际采样 "+sampled+" · 仅币安指数代理对比，非事件合约官方结算"));
@@ -278,20 +277,16 @@ function event(e,ledger){
  const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
  const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（新版暂无已核对样本）");
  put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
- const strict=stats.byTier?.STRICT_RESEARCH,standard=stats.byTier?.STANDARD_RESEARCH;
- put("eStrictPct",strict?.accuracyPct!=null?strict.accuracyPct.toFixed(2)+"%":"—");
- put("eStandardPct",standard?.accuracyPct!=null?standard.accuracyPct.toFixed(2)+"%":"—");
- put("eStrictCount",(strict?.total??0)+"条 · 已核验 "+(strict?.settled??0)+"条");
- put("eStandardCount",(standard?.total??0)+"条 · 已核验 "+(standard?.settled??0)+"条");
  const audit=e.scanDiagnostics?.lastHour;
- put("eScanAudit",audit?"最近1小时检查 "+audit.checks+"次：高标准 "+audit.strictSignals+"条、普通 "+audit.standardSignals+"条、无信号 "+audit.noSignal+"次、数据异常 "+audit.dataErrors+"次。":"当前暂无扫描统计。");
+ const produced=(audit?.strictSignals||0)+(audit?.standardSignals||0);
+ put("eScanAudit",audit?"最近1小时检查 "+audit.checks+"次，产生方向信号 "+produced+"条，无信号 "+audit.noSignal+"次，数据异常 "+audit.dataErrors+"次。":"当前暂无扫描统计。");
  const reasons={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"动量",structure:"K线结构",volume:"成交量",rsi:"RSI",persistence15m:"15分钟趋势",bounceGuard:"看跌反弹风险",V11_MIN_SIGNAL_GAP:"4分钟信号间隔"};
  const reasonList=Object.entries(audit?.byReason||{}).sort((a,b)=>b[1]-a[1]).slice(0,6);
  put("eScanGates",reasonList.length?"未通过的主要条件："+reasonList.map(([k,v])=>(reasons[k]||k)+" "+v+"次").join("、")+"（一次检测可有多项不通过）":"本小时暂无拒绝原因。");
  const lastScan=e.lastSuccessfulScanAt,elapsed=Number.isFinite(lastScan)?Math.round((Date.now()-lastScan)/1000):null;
  put("eFreshness",elapsed!==null&&elapsed>=0&&elapsed<=90?"最近有效行情扫描 "+elapsed+"秒前 · "+stamp(lastScan):"行情扫描新鲜度未确认；请检查后台连接");
 
- put("eReason",s?.reason||"显示当前版本信号，未满足过滤条件时不会输出方向。");
+ put("eReason",s?.direction?"方向已确认；按锁定指数价等待10分钟后核验。":(s?.reason||"当前没有符合规则的方向信号。"));
  pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 当前信号策略":"数据不可用");
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
  if(currentLedger){
@@ -310,7 +305,7 @@ function eventError(error){
  state.eventHistoryError="状态读取失败，已加载记录仍然保留";
  drawEventHistory();
  pill("eBadge","bad","连接异常");pill("eStatus","bad","暂不可用");
- for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy","eStrictPct","eStandardPct","eStrictCount","eStandardCount","eScanAudit","eScanGates","eFreshness"])put(id,"不可用");
+ for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy","eScanAudit","eScanGates","eFreshness"])put(id,"不可用");
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
  if(!state.eventRecords.length){
   put("eTotal","记录接口暂时不可用");

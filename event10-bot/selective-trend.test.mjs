@@ -154,7 +154,7 @@ test("V16 does not suppress otherwise valid directions after two recent misses",
  const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
  const available=await engine.start("manual-retry-pause-0001");
  assert.equal(available.direction,"UP");
- assert.equal(engine.signals().total,1);
+ assert.equal(engine.signals().total,3); // Two settled misses remain in the immutable audit ledger.
 });
 test("transient stale 1m data recovers and clears current error without erasing audit",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-fresh-"));

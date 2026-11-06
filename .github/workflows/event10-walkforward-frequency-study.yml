@@ -1,4 +1,4 @@
-# 2026-11-06 fixed V15 signal timestamps. Direction alternatives only. Strictly read-only.
+# 2026-11-06 fixed V16 signal timestamps. Direction alternatives only. Strictly read-only.
 # Latest 2026-11-05 readonly study: frequency/accuracy tradeoffs, predeclared reversal alternatives. Never trades.
 # 2026-11-05: verify actual deployed standard-tier implementation versus previous historical candidates.
 name: EVENT10 same-frequency direction outcome research
@@ -7,7 +7,9 @@ on:
     branches: [feature/zl-futures-bot-v1]
     paths: ['.github/workflows/event10-walkforward-frequency-study.yml']
   workflow_dispatch:
-permissions: {contents: read}
+permissions:
+  contents: read
+  statuses: write
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -32,15 +34,15 @@ jobs:
           set -eu
           cd /opt/zl-event10
           /opt/zl-prediction-node/bin/node --input-type=module <<'NODE'
-          // The existing operator sees V15 signal TIMES. Change only direction and
+          // The existing operator sees V16 signal TIMES. Change only direction and
           // never suppress/increase signals: fixed count, no notification change.
           const get=async url=>{const q=await fetch(url,{signal:AbortSignal.timeout(8000)});if(!q.ok)throw Error("FETCH_"+q.status);return q.json()};
           const [feed,ledger]=await Promise.all([
             get('http://127.0.0.1:13003/api/shadow-market-data'),
             get('http://127.0.0.1:13020/api/signals?limit=100&offset=0')
           ]);
-          if(!feed.ok||!ledger.ok||ledger.version!=="EVENT10_PACED_MOMENTUM_V15_20261106")
-            throw Error('V15_LIVE_LEDGER_OR_FEED_UNVERIFIED');
+          if(!feed.ok||!ledger.ok||ledger.version!=="EVENT10_EMA5_DIRECTION_V16_20261106")
+            throw Error('V16_LIVE_LEDGER_OR_FEED_UNVERIFIED');
           const rows=k=>(Array.isArray(feed.candles?.[k])?feed.candles[k]:feed.candles?.[k]?.rows||[])
             .filter(x=>x&&x.closed===true).sort((a,b)=>a.startMs-b.startMs);
           const one=rows('1m'),five=rows('5m');
@@ -86,7 +88,7 @@ jobs:
           const split=Math.floor(results.length*0.6);
           const measures=Object.fromEntries(names.map(k=>[k,{train:summary(results.slice(0,split),k),
              test:summary(results.slice(split),k),all:summary(results,k)}]));
-          console.log('EVENT10_DIRECTION_STUDY',JSON.stringify({source:'V15_OFFICIAL_SIGNAL_TIMES_AND_PROXY_RESULTS_WITH_CLOSED_SPOT_FEATURES',
+          console.log('EVENT10_DIRECTION_STUDY',JSON.stringify({source:'V16_OBSERVED_SIGNAL_TIMES_AND_PROXY_RESULTS_WITH_CLOSED_SPOT_FEATURES',
             version:ledger.version,feed1m:one.length,feed5m:five.length,settled: settled.length,
             analyzed:results.length,skipped:skipped.length,
             trainRange:[results[0]?.t,results[split-1]?.t],testRange:[results[split]?.t,results.at(-1)?.t],
@@ -117,3 +119,22 @@ jobs:
               break
           else:raise RuntimeError('RESEARCH_TIMEOUT')
           PY
+
+  report:
+    if: always()
+    needs: [analyze]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Report V16 direction-only comparative diagnostic
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.analyze.result }}
+        run: |
+          state=failure
+          if [ "$RESULT" = success ]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context="event10-v16-direction-readonly-study" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="V16 read-only direction comparison: $RESULT" >/dev/null
+          echo "V16_READONLY_STUDY=$state"

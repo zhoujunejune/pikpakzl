@@ -30,9 +30,9 @@ const goodAiResponse=(direction="UP")=>({choices:[{finish_reason:"stop",message:
  reasoning_content:"test validated high-reasoning evidence"}}]});
 const fixtureEngine=(options={})=>{
  const provided=options.fetcher||fetch;
- return fixtureEngine({...options,env:{...options.env,DEEPSEEK_API_KEY:"fixture-key"},
+ return createEngine({...options,env:{...options.env,DEEPSEEK_API_KEY:"fixture-key"},
   fetcher:async(url,args)=>url.includes("chat/completions")?
-   {ok:true,json:async()=>goodAiResponse(JSON.parse(args.body).messages?.[1]?.content?.includes(\'"ruleDirection":"DOWN"\')?"DOWN":"UP")}:provided(url,args)});
+   {ok:true,json:async()=>goodAiResponse(JSON.parse(args.body).messages?.[1]?.content?.includes('"ruleDirection":"DOWN"')?"DOWN":"UP")}:provided(url,args)});
 };
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});

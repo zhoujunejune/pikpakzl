@@ -54,7 +54,16 @@ jobs:
           assert 'data-go="guardian"' not in html and 'data-go="overview"' not in html
           assert '/guardian/api/status' not in js and 'guardianOnline' not in js
           assert 'APP_VERSION="1.3.1"' in js
-          assert '十分钟' in m['name']
+          assert m['name']=='海派事件合约' and m['short_name']=='海派事件合约'
+          assert '<title>海派事件合约</title>' in html
+          assert 'src="/app/icon-192.png"' in html
+          assert 'class="logo">ZL' not in html
+          for size in (192,512):
+            raw=(root/f'icon-{size}.png').read_bytes()
+            assert len(raw)>3000 and raw[:8]==b'\\x89PNG\\r\\n\\x1a\\n'
+            import struct
+            assert struct.unpack('>II',raw[16:24])==(size,size)
+          assert 'data:image/png;base64,' in (root/'icon.svg').read_text()
           tree=ast.parse((root/'aliyun_deploy.py').read_text())
           remote=next(n.value.value for n in tree.body if isinstance(n,ast.Assign) and
                       any(getattr(t,'id',None)=='REMOTE' for t in n.targets))
@@ -98,6 +107,7 @@ jobs:
           base='https://prediction.47-237-188-69.sslip.io'
           for path,needle in (('/app/','海派事件合约'),('/app/app.js','/event10/api/status'),
                               ('/app/manifest.webmanifest','"standalone"'),
+                              ('/app/icon.svg','data:image/png;base64,'),
                               ('/app/version.json','"updateType":"web"'),
                               ('/app/sw.js','fetch(event.request)')):
               req=urllib.request.Request(base+path,headers={'Authorization':'Basic '+basic,'Cache-Control':'no-cache'})

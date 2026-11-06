@@ -1,4 +1,4 @@
-name: EVENT10 V17 full verified AI high-thinking Alibaba release
+name: EVENT10 verified AI deep-thinking measured-time budget Alibaba release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -40,7 +40,8 @@ jobs:
           assert 'AI_THINKING_NOT_VERIFIED' in ai
           assert 'AI_INCOMPLETE_FALLBACK' in ai
           assert 'aiInProgress' in engine
-          assert 'timeoutMs:22000' in engine
+          assert 'timeoutMs:40000' in engine
+          assert 'attempt===1?' in ai and 'Math.min(20000,timeoutMs)' in ai
           assert 'NO_EVENT_CONTRACT_ORDER_API' in Path('event10-bot/server.mjs').read_text()
           assert 'EVENT10_AI_FEEDBACK_V17_20261106' in Path('event10-bot/aliyun_high_selectivity_only.py').read_text()
           print('V17_AI_FREQ_AND_NO_ORDER_CHECK_PASS=true')

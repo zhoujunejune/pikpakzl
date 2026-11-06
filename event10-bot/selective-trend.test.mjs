@@ -45,7 +45,7 @@ test("V17 long RSI threshold stays below 63 and down requires 15m persistence",(
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_AI_FEEDBACK_V17_20261106");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_AI_REQUIRED_LEARNING_V18_20261106");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");

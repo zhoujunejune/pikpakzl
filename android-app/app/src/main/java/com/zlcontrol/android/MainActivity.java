@@ -430,7 +430,7 @@ public final class MainActivity extends Activity {
         }catch(Exception e){
             try{startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:"+getPackageName())));}
-            catch(Exception ignored){toast("请在手机设置中允许 ZL Control 显示在其他应用上层");}
+            catch(Exception ignored){toast("请在手机设置中允许 ZL EVENT10 显示在其他应用上层");}
         }
     }
     private void showOverlayPermissionAdvice(){
@@ -438,7 +438,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
             .setTitle("开启信号居中弹窗")
             .setMessage("你已开启信号提醒。要让新 Higher / Lower 信号出现在其他应用的屏幕中央，"
-                +"还需要允许 ZL Control“显示在其他应用上层”。"
+                +"还需要允许 ZL EVENT10“显示在其他应用上层”。"
                 +"\n\n未授权时会继续使用普通系统通知和铃声；锁屏及部分系统场景可能限制弹窗。"
                 +"\n\n点击弹窗“确认并打开币安”后，本次响铃和弹窗都会结束，不会自动下单。")
             .setPositiveButton("去授权悬浮窗",(dialog,which)->openOverlayPermissionSettings())
@@ -451,7 +451,7 @@ public final class MainActivity extends Activity {
         }catch(Exception e){
             try{startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:"+getPackageName())));}
-            catch(Exception ignored){toast("请到手机设置 → 应用 → ZL Control → 电池 设置允许后台运行");}
+            catch(Exception ignored){toast("请到手机设置 → 应用 → ZL EVENT10 → 电池 设置允许后台运行");}
         }
     }
     private void showBackgroundPermissionAdvice(){
@@ -460,7 +460,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
             .setTitle("请允许后台运行，避免漏掉新信号")
             .setMessage("你的手机此前显示未忽略电池优化。系统可能在锁屏时暂停每2秒检查一次的监听。"
-                +"\n\n建议在系统电池设置里为 ZL Control 开启“无限制 / 允许后台运行”，"
+                +"\n\n建议在系统电池设置里为 ZL EVENT10 开启“无限制 / 允许后台运行”，"
                 +"并允许开机自启动（手机提供时）。否则无法保证及时提醒。")
             .setPositiveButton("去设置",(dialog,which)->openBackgroundSettings())
             .setNegativeButton("稍后",null)
@@ -538,7 +538,7 @@ public final class MainActivity extends Activity {
         layout.addView(password);
         password.requestFocus();
         new AlertDialog.Builder(this)
-            .setTitle("登录 ZL Control")
+            .setTitle("登录 ZL EVENT10")
             .setMessage("为支持关屏后的信号提醒，App 使用安卓 Keystore 加密保管登录凭证；不保存交易 API 密钥。")
             .setView(layout).setCancelable(false)
             .setNegativeButton("取消",(dialog,which)->{

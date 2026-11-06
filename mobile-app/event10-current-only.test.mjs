@@ -132,17 +132,33 @@ test("海派事件合约 v1.3.1 retains only EVENT10 with no Guardian API or nav
  assert.ok(!src.includes('/guardian/api/status')&&!src.includes('api("/api/status",7500)'));
  assert.ok(!src.includes('function guardian(')&&!src.includes('guardianError('));
  assert.ok(src.includes('async function refreshEvent10Only(){'));
- assert.ok(src.includes('api("/event10/api/status",3500)'));
+ assert.ok(src.includes('api("/event10/api/status",9000)'));
  assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
  assert.ok(src.includes('navigate(["event10","more"].includes(initial)?initial:"event10")'));
  assert.ok(src.includes('APP_VERSION="1.3.1"'));
  assert.equal(manifest.name,"海派事件合约");
 });
-test("app discovers current strategy from matching status and ledger without hardcoding",()=>{
+test("app independently discovers current strategy from live status, verifies ledger only when available",()=>{
  assert.ok(src.includes("let EVENT10_FREQ_OPTIMIZED_VERSION=null;"));
- assert.ok(src.includes("ledger?.version===currentVersion"));
- assert.ok(src.includes("currentVersion!==EVENT10_FREQ_OPTIMIZED_VERSION"));
- assert.ok(src.includes("EVENT10_FREQ_OPTIMIZED_VERSION=currentVersion"));
+ assert.ok(src.includes("ledger?.version!==EVENT10_FREQ_OPTIMIZED_VERSION"));
+ assert.ok(src.includes("event(service,null)"));
+ assert.ok(src.includes("state.eventOnline=true"));
+ assert.ok(src.includes("state.eventLedgerOnline=false"));
+ assert.ok(src.includes("Live direction and AI state must NEVER be blocked"));
+ assert.ok(src.includes('api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000)'));
+ assert.ok(src.includes("version!==EVENT10_FREQ_OPTIMIZED_VERSION"));
+ assert.ok(src.includes("EVENT10_FREQ_OPTIMIZED_VERSION=version"));
  assert.ok(src.includes("state.eventRecords=[]"));
  assert.ok(!src.includes('const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"'));
+});
+
+test("a slow signal-history endpoint must not hide currently available live AI signal",()=>{
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ assert.ok(html.includes('id="eConnectionDetail"'));
+ assert.ok(src.includes('const stats=(currentLedger?ledger?.stats:e?.stats)||{};'));
+ assert.ok(src.includes('state.eventOnline=true;state.eventLastError=null;'));
+ assert.ok(src.includes('state.eventLastStatus=service'));
+ assert.ok(src.includes('event(state.eventLastStatus,null)'));
+ assert.ok(src.includes('信号已连接 · 记录同步中'));
+ assert.ok(!src.includes('if(!currentLedger)throw Error("新策略历史接口未就绪'));
 });

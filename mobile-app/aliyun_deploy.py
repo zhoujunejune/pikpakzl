@@ -48,7 +48,8 @@ finish(){
 trap finish EXIT
 systemctl is-active --quiet caddy
 test -r "$CADDY"
-test "$trade_before" != 0
+# The five-minute Guardian service is intentionally retired, not a deployment dependency.
+test "$trade_before" = 0 || { echo "MOBILE_APP_RETIRED_GUARDIAN_UNEXPECTEDLY_RUNNING=true"; exit 44; }
 test "$event_before" != 0
 for file in index.html app.js manifest.webmanifest sw.js icon.svg;do
   curl -fsSL --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/mobile-app/$file" -o "$STAGE/$file"
@@ -203,6 +204,7 @@ echo MOBILE_AUTH_CHECKS_PASS=true
 checkpoint=PID_INVARIANT
 # Live trading and event strategy processes must not be touched by PWA deployment.
 test "$trade_before" = "$(systemctl show zl-prediction-trade -p MainPID --value)"
+echo MOBILE_APP_GUARDIAN_REMAINS_STOPPED=true
 test "$event_before" = "$(systemctl show zl-event10-deepseek -p MainPID --value)"
 systemctl is-active --quiet caddy
 checkpoint=COMPLETE

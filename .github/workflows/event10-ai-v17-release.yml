@@ -1,4 +1,4 @@
-name: EVENT10 deploy deepseek-flash high-thinking to Alibaba
+name: EVENT10 V18 strict AI completed signals and settled-loss feedback Alibaba deployment
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -29,8 +29,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('event10-bot/pure-signal.mjs').read_text()
-          assert 'EVENT10_AI_FEEDBACK_V17_20261106' in s
-          assert 'EVENT10_AI_FEEDBACK_V17_20261106' in Path('event10-bot/panel.html').read_text()
+          assert 'EVENT10_AI_REQUIRED_LEARNING_V18_20261106' in s
+          assert 'EVENT10_AI_REQUIRED_LEARNING_V18_20261106' in Path('event10-bot/panel.html').read_text()
           assert 'MIN_SIGNAL_GAP_MS = 600_000' in Path('event10-bot/manual-engine.mjs').read_text()
           ai=Path('event10-bot/ai-direction-review.mjs').read_text()
           engine=Path('event10-bot/manual-engine.mjs').read_text()
@@ -38,6 +38,10 @@ jobs:
           assert 'env.EVENT10_AI_MODEL||"deepseek-flash"' in ai
           assert 'env.EVENT10_AI_MODEL||"deepseek-flash"' in engine
           assert 'thinkingMode:aiConfigured?"enabled"' in engine
+          assert 'V18_AI_REQUIRED_INCOMPLETE' in engine
+          assert 'aiMandatory:true' in engine
+          assert 'buildLearningProfile' in engine
+          assert 'publishAt=clock()' in engine
           assert 'AI_REVIEW_MAX_TOKENS=8192' in ai
           assert 'thinking:{type:"enabled"}' in ai
           assert 'AI_THINKING_NOT_VERIFIED' in ai
@@ -46,7 +50,7 @@ jobs:
           assert 'timeoutMs:40000' in engine
           assert 'attempt===1?' in ai and 'Math.min(20000,timeoutMs)' in ai
           assert 'NO_EVENT_CONTRACT_ORDER_API' in Path('event10-bot/server.mjs').read_text()
-          assert 'EVENT10_AI_FEEDBACK_V17_20261106' in Path('event10-bot/aliyun_high_selectivity_only.py').read_text()
+          assert 'EVENT10_AI_REQUIRED_LEARNING_V18_20261106' in Path('event10-bot/aliyun_high_selectivity_only.py').read_text()
           print('V17_AI_FREQ_AND_NO_ORDER_CHECK_PASS=true')
           PY
   deploy:
@@ -117,8 +121,9 @@ jobs:
               with urllib.request.urlopen(req,timeout=15) as r:return json.loads(r.read(750000))
           status=get('/event10/api/status')
           history=get('/event10/api/signals?limit=5&offset=0')
-          assert status.get('decisionReviewVersion')=='EVENT10_AI_FEEDBACK_V17_20261106'
+          assert status.get('decisionReviewVersion')=='EVENT10_AI_REQUIRED_LEARNING_V18_20261106'
           assert status.get('aiReviewConfigured') is True
+          assert status.get('aiMandatory') is True
           assert status.get('aiReviewModel')=='deepseek-flash'
           assert status.get('thinkingMode')=='enabled'
           assert status.get('reasoningEffort')=='high'

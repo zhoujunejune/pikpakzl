@@ -1,18 +1,8 @@
 # retry after preserving intentionally stopped unrelated services
 # Deploy request: EVENT10 isolated late-index strategy production rollout (2026-10-30)
 name: EVENT10 V16 ema5-direction research isolated release
+# Archived V16 deployment: manual only. V17 has independent isolated release process.
 on:
-  push:
-    branches: [feature/zl-futures-bot-v1]
-    paths:
-      - ".github/workflows/event10-high-selectivity-release.yml"
-      - "event10-bot/pure-signal.mjs"
-      - "event10-bot/manual-engine.mjs"
-      - "event10-bot/v7-reversal-review.mjs"
-      - "event10-bot/v7-reversal-review.test.mjs"
-      - "event10-bot/panel.html"
-      - "event10-bot/selective-trend.test.mjs"
-      - "event10-bot/aliyun_high_selectivity_only.py"
   workflow_dispatch:
 permissions:
   contents: read

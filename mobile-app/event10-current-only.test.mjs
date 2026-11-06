@@ -135,7 +135,7 @@ test("v1.3.0 shows only EVENT10, with no Guardian API or navigation",()=>{
  assert.ok(src.includes('api("/event10/api/status",3500)'));
  assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
  assert.ok(src.includes('navigate(["event10","more"].includes(initial)?initial:"event10")'));
- assert.ok(src.includes('APP_VERSION="1.3.0"'));
+ assert.ok(src.includes('APP_VERSION="1.3.1"'));
  assert.match(manifest.name,/十分钟/);
 });
 test("app discovers current strategy from matching status and ledger without hardcoding",()=>{

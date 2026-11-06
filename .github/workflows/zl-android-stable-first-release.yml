@@ -137,6 +137,12 @@ jobs:
           assert 'String name=direction.equals("UP")?"看涨":"看跌";' in t
           assert 'STRICT_RESEARCH' not in t and 'STANDARD_RESEARCH' not in t
           assert '/event10/api/signals?limit=50&offset=0' in t
+          p=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalPopupOverlay.java').read_text()
+          assert 'signalPopup.show(signalId,direction,opened,' in t
+          assert 'setContentTitle("新信号："+name+' in t
+          assert 'void show(String signalId,String direction,long openedAt' in p
+          assert 'String tier' not in t and '+tier' not in p
+          assert '↑  看涨' in p and '↓  看跌' in p
           print('ANDROID_EVENT10_V130_STATIC_VALIDATED=true')
           PY
       - name: Build release APK (never debug)

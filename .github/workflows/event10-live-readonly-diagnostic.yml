@@ -1,3 +1,4 @@
+# V18 AI-completion-required read-only production audit; no trades, never expose API keys.
 # Post V17 deployment: verify retired Guardian units remain stopped.
 # Live V17 independent candle source and AI review production confirmation.
 # AI/Feed preflight after Guardian5 retirement (no secrets disclosed); repeat.
@@ -79,6 +80,12 @@ jobs:
           print('DIAG_STATUS_OK',s.get('ok'),flush=True)
           print('DIAG_STRATEGY',s.get('decisionReviewVersion'),flush=True)
           print('DIAG_AI_CONFIGURED',s.get('aiReviewConfigured'),flush=True)
+          print('DIAG_AI_MANDATORY',s.get('aiMandatory'),flush=True)
+          learning=s.get('aiLearningProfile') or {}
+          print('DIAG_LEARNING_PROFILE',json.dumps({k:learning.get(k) for k in ('settledSamples','winCount','lossCount','observedProxyAccuracyPct')},ensure_ascii=False),flush=True)
+          rows=(l.get('records') or [])
+          print('DIAG_UNREVIEWED_PUBLISHED',sum(1 for x in rows if x.get('aiAnalysisCompleted') is not True),flush=True)
+          print('DIAG_V18_VALID_SIGNALS',len(rows),flush=True)
           print('DIAG_AI_MODEL',s.get('aiReviewModel'),flush=True)
           print('DIAG_AI_ACTUAL_STATS',json.dumps(s.get('aiReviewStats') or {},ensure_ascii=False),flush=True)
           print('DIAG_LAST_VALID_SCAN',s.get('lastSuccessfulScanAt'),flush=True)

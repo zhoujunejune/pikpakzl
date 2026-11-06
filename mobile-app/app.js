@@ -1,6 +1,7 @@
 /* ZL EVENT10-only app — browser-only client; no exchange credentials or order calls. */
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
+const APP_VERSION="1.3.0"; // Ten-minute-signal-only UI release.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
@@ -305,7 +306,7 @@ async function checkHotUpdate(onReturn=false){
   if(!response.ok)throw Error("HTTP "+response.status);
   const meta=await response.json();
   if(!meta||typeof meta.commit!=="string"||!/^[a-f0-9]{40}$/.test(meta.commit))throw Error("INVALID_VERSION");
-  put("appBuildVersion",APP_DEPLOY_SHA.slice(0,8));
+  put("appBuildVersion","v"+APP_VERSION+" · "+APP_DEPLOY_SHA.slice(0,8));
   if(meta.commit===APP_DEPLOY_SHA){
    $("hotUpdateBanner").hidden=true;
    put("appUpdateState","已经是最新网页版本 · 无须更新APK");

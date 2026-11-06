@@ -136,7 +136,7 @@ test("V16 ten-minute cooldown applies across restart and manual/auto",async()=>{
  assert.equal(rebooted.status().minSignalGapMs,MIN_SIGNAL_GAP_MS);
  assert.equal(MIN_SIGNAL_GAP_MS,600000);
 });
-test("V16 pauses for 20m after two consecutive current-version proxy misses",async()=>{
+test("V16 does not suppress otherwise valid directions after two recent misses",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-pause-"));
  const file=path.join(dir,"sessions.json");
  let now=START+60000;
@@ -152,13 +152,9 @@ test("V16 pauses for 20m after two consecutive current-version proxy misses",asy
   url.includes("premiumIndex")?{ok:true,json:async()=>({symbol:"BTCUSDT",indexPrice:"70000",time:now-100})}:
   Promise.reject(Error("UNEXPECTED_URL"));
  const engine=createEngine({env:{EVENT10_STATE_FILE:file},clock:()=>now,fetcher});
- const blocked=await engine.start("manual-retry-pause-0001");
- assert.equal(blocked.direction,null);
- assert.equal(blocked.eventTag,"V16_RECENT_LOSSES_PAUSE");
- assert.match(blocked.reason,/连续未命中/);
- now+=20*60000;
- const available=await engine.start("manual-post-pause-0002");
+ const available=await engine.start("manual-retry-pause-0001");
  assert.equal(available.direction,"UP");
+ assert.equal(engine.signals().total,1);
 });
 test("transient stale 1m data recovers and clears current error without erasing audit",async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-fresh-"));

@@ -4,6 +4,8 @@ import path from "node:path";
 import {tenMinuteWindow} from "./market-enrichment.mjs";
 import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
 import {confirmedPriceStructure} from "./price-structure.mjs";
+import {collectIndependentSpotCandles} from "./readonly-candles.mjs";
+import {reviewAiDirection} from "./ai-direction-review.mjs";
 export const HORIZON_MS = 600_000;
 export const MIN_SIGNAL_GAP_MS = 600_000; // At most one actionable signal per 10m; prevent overlapping observations.
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
@@ -127,6 +129,12 @@ function slimSignal(h) {
   return {
     id:h.id,strategyVersion:h.decisionReviewVersion,model:h.model||"PURE_RULES_V1",
     trigger:String(h.id).startsWith("auto-")?"AUTO":"MANUAL",
+    aiDirection:h.aiReview?.status==="AI_REVIEWED"?h.aiReview.direction:null,
+    baseDirection:h.aiReview?.baseDirection??h.direction,
+    aiStatus:h.aiReview?.status??"NOT_REQUESTED",
+    aiModel:h.aiReview?.model??null,aiConfidence:h.aiReview?.confidence??null,
+    aiReason:h.aiReview?.reason??null,aiLatencyMs:h.aiReview?.latencyMs??null,
+    aiLessonsCount:h.aiReview?.lessonsCount??0,
     openedAt:h.openedAt,expiresAt:h.expiresAt,
     referencePriceObservedAt:h.referencePriceObservedAt??null,
     referenceBasis:h.referenceBasis??null,
@@ -279,7 +287,11 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     h.status="FAILED";h.error="INTERRUPTED_DURING_AI_ANALYSIS";h.direction=null;
   }
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
-  let busyStart=false,busySettle=false,modelCalls=0,lastError=null;
+  let busyStart=false,busySettle=false,lastError=null;
+  const aiStats={calls:0,reviewed:0,fallbacks:0,lastStatus:"NOT_REQUESTED",lastAt:null};
+  const aiConfigured=Boolean(env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY)&&
+    env.EVENT10_AI_ENABLED!=="0"&&env.EVENT10_AI_ENABLED!=="false";
+  const aiModel=String(env.EVENT10_AI_MODEL||"deepseek-v4-pro");
   let lastDataError=null,lastDataErrorAt=null,lastSuccessfulScanAt=null;
   let lastCheck=null,inFlightStart=null;
   let lastCheckAt=0,lastAutoCheckAt=null;
@@ -294,8 +306,10 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"PACED_V16_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_PACED_V16",configured:true,autoSignalEnabled:true,
+    return {ok:true,bot:"EVENT10",mode:"PACED_V17_AI_DIRECTION_TPLUS600_PROXY_ONLY",
+      providerModel:aiConfigured?"DEEPSEEK_V4_DIRECTION_REVIEW_WITH_RULE_FALLBACK":"PURE_RULE_FALLBACK_AI_UNCONFIGURED",
+      aiReviewConfigured:aiConfigured,aiReviewModel:aiModel,aiLearningMode:"RETRIEVAL_FROM_SETTLED_SIGNALS_NOT_WEIGHT_TRAINING",
+      aiReviewStats:{...aiStats},configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
@@ -303,9 +317,9 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
        overlappingObservationsAllowed:true,activeSignalCount:history.filter(x=>
          x.decisionReviewVersion===RULE_VERSION&&x.status==="PREDICTED"&&
          !x.settlementStatus&&clock()<x.expiresAt).length,
-       busyStart,busySettle,modelCalls:0,lastError,
+       busyStart,busySettle,modelCalls:aiStats.calls,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
-      enrichmentVersion:"EVENT10_PACED_V16",
+      enrichmentVersion:"EVENT10_PACED_V17_AI_DIRECTION",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -320,10 +334,17 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const all=(limit=50)=>history.filter(x=>x.decisionReviewVersion===RULE_VERSION)
     .slice(-Math.max(1,Math.min(Number(limit)||50,200))).reverse();
   const readFeed=async()=>{
-    const r=await fetcher(feedUrl,{signal:AbortSignal.timeout(2300),
-      headers:{Accept:"application/json"}});
-    if(!r.ok)throw Error("MARKET_SOURCE_HTTP_"+r.status);
-    return r.json();
+    // Preserve healthy sources, never depend on the retired Guardian5 process.
+    try{
+      const r=await fetcher(feedUrl,{signal:AbortSignal.timeout(500),
+        headers:{Accept:"application/json"}});
+      if(r.ok){
+        const value=await r.json();
+        if(value?.ok===true&&value?.readOnly===true&&value?.symbol==="BTCUSDT"&&
+          value?.latest?.marketFeedConnected!==false)return value;
+      }
+    }catch{}
+    return collectIndependentSpotCandles({fetcher,now:clock,timeoutMs:2400});
   };
   // One shared read-only market scan. A manual click during the scheduled
   // 12-second scan joins the very same result instead of returning a spurious
@@ -386,9 +407,32 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         rule.reason="距离上次有效信号不足10分钟；避免同一观察期重复通知和连续追单。";
         rule.evidence.quality="COOLDOWN";rule.evidence.cooldownUntil=cooldownUntil;
       }
-      // Directional mistakes are audited by the settled ledger, not used as
-      // an arbitrary time-based suppression. Two misses are not evidence
-      // that the next independent signal should be discarded.
+      // Never suppress a valid rule signal because AI is late or unavailable.
+      let aiReview=null;
+      if(rule.direction){
+        aiReview=await reviewAiDirection({
+          rule:rule.direction,evidence:rule.evidence,
+          records:Array.from(signalLedger.all.values()),at:decisionAt,
+          fetcher,env,timeoutMs:2500
+        });
+        if(aiConfigured){
+          aiStats.calls++;
+          if(aiReview.status==="AI_REVIEWED")aiStats.reviewed++;
+          else aiStats.fallbacks++;
+        }
+        aiStats.lastStatus=aiReview.status;aiStats.lastAt=clock();
+        if(aiReview.status==="AI_REVIEWED"){
+          rule.direction=aiReview.direction;rule.signal=aiReview.direction;
+          rule.eventTag="V17_AI_"+aiReview.direction;
+          rule.reason="AI方向复核："+aiReview.reason+"；历史已结算样本"+
+            aiReview.lessonsCount+"条（非自动训练）。";
+        }else{
+          rule.eventTag="V17_RULE_FALLBACK_"+rule.direction;
+          rule.reason="规则方向继续有效，AI复核未完成；不减少信号数量。";
+        }
+        rule.evidence.aiReviewStatus=aiReview.status;
+      }
+      // Two past misses cannot remove a future qualified signal.
       const signalExpiry=decisionAt+HORIZON_MS; // each accepted signal gets its own full 600s
       const openingIndex=null;
       const liveIndex=rule.evidence.liveIndexPrice;
@@ -397,7 +441,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         openAgeMs:filtered.indexQuote?decisionAt-filtered.indexQuote.observedAt:null,
         openPrice:liveIndex,cycleOpenIndexPrice:openingIndex,
         liveIndexPrice:liveIndex,expiresAt:signalExpiry,
-        ...rule,featureAvailability:availability};
+        ...rule,aiReview,featureAvailability:availability};
       lastDataProbe={checkedAt:clock(),available:Object.keys(filtered).length,
         total:market.total,availability};
       if(!rule.direction){registerScan(id,clock(),rule);return lastCheck;}
@@ -418,7 +462,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_PACED_V16",attempts:0,confidence:null,reason:rule.reason,
+        model:aiReview?.status==="AI_REVIEWED"?aiModel:"PURE_RULE_FALLBACK_V17",
+        aiReview,attempts:aiConfigured?1:0,confidence:aiReview?.confidence??null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
         reasoningObserved:null,reasoningTokenCount:null,
@@ -478,6 +523,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_EMA5_DIRECTION_V16_20261106"||
         h.decisionReviewVersion==="EVENT10_PACED_MOMENTUM_V15_20261106"||
         h.decisionReviewVersion==="EVENT10_FAST_MOMENTUM_V14_20261105"||
         h.decisionReviewVersion==="EVENT10_QUALITY_FILTER_V13_20261105"||
@@ -515,7 +561,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

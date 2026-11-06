@@ -228,6 +228,7 @@ function event(e,ledger){
  const review=s?.aiReview||e?.lastCheck?.aiReview||null;
  const outcomes=e?.aiReviewStats||{};
  put("eAiReview","AI 方向复核："+(
+   e?.aiInProgress?"AI高强度分析正在进行，等待完整结果，请勿重复点击":
    review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"完整分析已通过校验（高强度思考）":
    review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"未完成，当前仅为规则应急方向（非AI结论）":
    review?.status==="NO_KEY_OR_DISABLED"?"未运行，当前仅为规则方向":
@@ -351,7 +352,7 @@ $("manualCheck").addEventListener("click",async()=>{
  try{
   const requestId=crypto.randomUUID();
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),60000);
+  const timer=setTimeout(()=>controller.abort(),90000);
   let res;
   try{
    res=await fetch("/event10/api/start",{method:"POST",credentials:"same-origin",

@@ -1,5 +1,5 @@
-// V16: same V15 eligibility and frequency; correct direction to 5m EMA9/21. No trade API.
-export const RULE_VERSION="EVENT10_EMA5_DIRECTION_V16_20261106";
+// V17: preserve V16 trigger gates and cadence; optional bounded AI-only direction review after qualification. No trading.
+export const RULE_VERSION="EVENT10_AI_FEEDBACK_V17_20261106";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -172,7 +172,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,cycleMs=AUTO_SL
       firstClosed1mAt:one.at(-4).at,lastClosed1mAt:last.at,
       lastClosed5mAt:five.at(-1).at,closedBars1m:one.length,
       closedBars5m:five.length,
-      candleSource:"VERIFIED_CLOSED_BTCUSDT_SPOT_1M_5M",
+      candleSource:feed?.marketSource||"VERIFIED_CLOSED_BTCUSDT_SPOT_1M_5M",
       liveIndexPrice:indexSnapshot.price,
       referenceSource:indexSnapshot.source||"BINANCE_USDM_BTCUSDT_INDEX_PRICE",
       referenceIsActualEventContractStrike:false}};
@@ -190,7 +190,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V16沿用V15的信号触发与10分钟间隔，仅按5分钟EMA趋势修正方向；最多约6条/小时。",
-      "数据异常、动量冲突或全平盘不出方向；保留连续失误暂停。5分钟EMA方向校正仍可能误判，不执行真实订单。",
+    caveats:["V17完全保留V16的信号触发与10分钟间隔，AI仅复核方向，失败使用规则兜底。",
+      "数据异常、动量冲突或全平盘不出方向；连续失误不暂停信号。大模型和规则都可能误判，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

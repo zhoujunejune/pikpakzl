@@ -18,23 +18,21 @@ export function checkedKlines(payload,interval,asOf){
  if(values.length<need)throw Error("BINANCE_CANDLES_INSUFFICIENT_"+interval);
  return values.slice(-need);
 }
-export async function collectIndependentSpotCandles({fetcher=fetch,now=Date.now,timeoutMs=2500}={}){
- let lastError="PUBLIC_SPOT_CANDLE_UNAVAILABLE";
- for(const base of BASES){
-  try{
+export async function collectIndependentSpotCandles({fetcher=fetch,now=Date.now,timeoutMs=2400}={}){
+ const requests=BASES.map(async(base)=>{
    const receivedAt=now();
    const values=await Promise.all(Object.entries(LENGTHS).map(async([interval,limit])=>{
-    const response=await fetcher(base+"/api/v3/klines?symbol=BTCUSDT&interval="+interval+"&limit="+limit,
-      {headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeoutMs)});
-    if(!response.ok)throw Error("PUBLIC_CANDLE_HTTP_"+response.status);
-    return [interval,checkedKlines(await response.json(),interval,now())];
+     const response=await fetcher(base+"/api/v3/klines?symbol=BTCUSDT&interval="+interval+"&limit="+limit,
+       {headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeoutMs)});
+     if(!response.ok)throw Error("PUBLIC_CANDLE_HTTP_"+response.status);
+     return [interval,checkedKlines(await response.json(),interval,now())];
    }));
    const candles=Object.fromEntries(values);
    return {ok:true,readOnly:true,symbol:"BTCUSDT",
      marketSource:"BINANCE_SPOT_PUBLIC_REST",receivedAt,
      latest:{marketFeedConnected:true,eventMs:now(),lastPrice:candles["1m"].at(-1).close},
      candles};
-  }catch(e){lastError=String(e?.message||e).slice(0,100);}
- }
- throw Error("INDEPENDENT_FEED_"+lastError);
+ });
+ try{return await Promise.any(requests);}
+ catch{throw Error("INDEPENDENT_SPOT_CANDLES_UNAVAILABLE");}
 }

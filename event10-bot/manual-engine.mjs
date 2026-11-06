@@ -5,7 +5,7 @@ import {tenMinuteWindow} from "./market-enrichment.mjs";
 import {evaluatePureSignal,collectRuleFeatures,RULE_VERSION} from "./pure-signal.mjs";
 import {confirmedPriceStructure} from "./price-structure.mjs";
 import {collectIndependentSpotCandles} from "./readonly-candles.mjs";
-import {reviewAiDirection} from "./ai-direction-review.mjs";
+import {reviewAiDirection,buildLearningProfile} from "./ai-direction-review.mjs";
 export const HORIZON_MS = 600_000;
 export const MIN_SIGNAL_GAP_MS = 600_000; // At most one actionable signal per 10m; prevent overlapping observations.
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
@@ -292,7 +292,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   }
   if(history.some(h=>h.error==="INTERRUPTED_DURING_AI_ANALYSIS"))store(file,history);
   let busyStart=false,busySettle=false,lastError=null;
-  const aiStats={calls:0,reviewed:0,fallbacks:0,lastStatus:"NOT_REQUESTED",lastAt:null};
+  const aiStats={calls:0,reviewed:0,fallbacks:0,rejected:0,lastStatus:"NOT_REQUESTED",lastAt:null};
   let aiInProgress=null;
   const aiConfigured=Boolean(env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY)&&
     env.EVENT10_AI_ENABLED!=="0"&&env.EVENT10_AI_ENABLED!=="false";
@@ -311,10 +311,12 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10",mode:"PACED_V17_AI_DIRECTION_TPLUS600_PROXY_ONLY",
-      providerModel:aiConfigured?"DEEPSEEK_V4_DIRECTION_REVIEW_WITH_RULE_FALLBACK":"PURE_RULE_FALLBACK_AI_UNCONFIGURED",
+    return {ok:true,bot:"EVENT10",mode:"PACED_V18_AI_REQUIRED_TPLUS600_PROXY_ONLY",
+      providerModel:"DEEPSEEK_FLASH_AI_COMPLETION_REQUIRED",aiMandatory:true,
       aiReviewConfigured:aiConfigured,aiReviewModel:aiModel,aiLearningMode:"RETRIEVAL_FROM_SETTLED_SIGNALS_NOT_WEIGHT_TRAINING",
-      aiReviewStats:{...aiStats},aiInProgress,configured:true,autoSignalEnabled:true,
+      aiReviewStats:{...aiStats},aiInProgress,
+      aiLearningProfile:buildLearningProfile(Array.from(signalLedger.all.values()),clock()),
+      configured:true,autoSignalEnabled:true,
       manualStartEnabled:true,autoTradingEnabled:false,executionAvailable:false,
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
@@ -324,7 +326,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:aiStats.calls,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
-      enrichmentVersion:"EVENT10_PACED_V17_AI_DIRECTION",
+      enrichmentVersion:"EVENT10_PACED_V18_AI_REQUIRED",
        autoIntervalMs:60000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -412,8 +414,11 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         rule.reason="距离上次有效信号不足10分钟；避免同一观察期重复通知和连续追单。";
         rule.evidence.quality="COOLDOWN";rule.evidence.cooldownUntil=cooldownUntil;
       }
-      // Never suppress a valid rule signal because AI is late or unavailable.
+      // REQUIRE complete DeepSeek Flash high-thinking analysis before creating
+      // any UP/DOWN. A timeout, invalid answer or missing reasoning = NO_SIGNAL.
       let aiReview=null;
+      let publishAt=decisionAt;
+      let publishIndex=filtered.indexQuote;
       if(rule.direction){
         aiInProgress={id,startedAt:clock(),baseDirection:rule.direction,status:"ANALYZING"};
         try{
@@ -423,44 +428,70 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             fetcher,env,timeoutMs:40000
           });
         }finally{aiInProgress=null;}
-        if(aiConfigured){
-          aiStats.calls++;
-          if(aiReview.status==="AI_REVIEWED")aiStats.reviewed++;
-          else aiStats.fallbacks++;
-        }
+        aiStats.calls++;
         aiStats.lastStatus=aiReview.status;aiStats.lastAt=clock();
-        if(aiReview.status==="AI_REVIEWED"){
-          rule.direction=aiReview.direction;rule.signal=aiReview.direction;
-          rule.eventTag="V17_AI_"+aiReview.direction;
-          rule.reason="AI方向复核："+aiReview.reason+"；历史已结算样本"+
-            aiReview.lessonsCount+"条（非自动训练）。";
-        }else{
-          rule.eventTag="V17_RULE_FALLBACK_"+rule.direction;
-          rule.reason="AI分析未完成，当前仅为规则应急方向，不能视为AI预测；不减少原有信号数量。";
-        }
         rule.evidence.aiReviewStatus=aiReview.status;
         rule.evidence.aiAnalysisCompleted=aiReview.analysisCompleted===true;
         rule.evidence.aiReasoningEffort=aiReview.reasoningEffort;
+        rule.evidence.aiLearningSamples=aiReview.learningSamples||0;
+        if(aiReview.status!=="AI_REVIEWED"||aiReview.analysisCompleted!==true||
+           aiReview.reasoningObserved!==true||!["UP","DOWN"].includes(aiReview.direction)){
+          aiStats.rejected++;aiStats.fallbacks++;
+          rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
+          rule.quality="AI_INCOMPLETE";rule.eventTag="V18_AI_REQUIRED_INCOMPLETE";
+          rule.confidence=null;
+          rule.reason="DeepSeek Flash 未完成有效的高强度分析，本轮不发布UP/DOWN。原因："+String(aiReview.error||aiReview.status).slice(0,90);
+        }else{
+          aiStats.reviewed++;
+          // Prevent a stale 10m reference price. Model evidence is the frozen
+          // pre-call snapshot; actual signal lock starts only AFTER AI finishes.
+          const latestQuote=await collectRuleFeatures({fetcher,now:clock,timeoutMs:1800});
+          publishAt=clock();
+          publishIndex=latestQuote.features?.indexQuote;
+          if(!publishIndex||!Number.isFinite(publishIndex.price)||
+             publishIndex.price<=0||!Number.isSafeInteger(publishIndex.observedAt)||
+             publishIndex.observedAt>publishAt||
+             publishAt-publishIndex.observedAt>5000){
+            rule.direction=null;rule.signal="NO_SIGNAL";rule.status="DATA_ERROR";
+            rule.quality="POST_AI_PRICE_UNVERIFIED";
+            rule.eventTag="V18_POST_AI_PRICE_INVALID";
+            rule.reason="AI已分析，但无法校验分析结束时的最新指数价，不发布信号。";
+            aiStats.rejected++;
+          }else{
+            rule.direction=aiReview.direction;rule.signal=aiReview.direction;
+            rule.status="PREDICTED";rule.confidence=aiReview.confidence;
+            rule.eventTag="V18_AI_COMPLETE_"+aiReview.direction;
+            rule.reason="DeepSeek Flash 完成高强度方向判断："+aiReview.reason+
+              "；参考历史已结算案例"+aiReview.learningSamples+"条，其中失败"+
+              aiReview.learningLosses+"条（历史反馈，非模型权重训练）。";
+            rule.evidence.indicatorSnapshotAt=decisionAt;
+            rule.evidence.finalPublishedAt=publishAt;
+            rule.evidence.liveIndexPrice=publishIndex.price;
+            rule.evidence.referenceSource=publishIndex.source;
+          }
+        }
       }
-      // Two past misses cannot remove a future qualified signal.
-      const signalExpiry=decisionAt+HORIZON_MS; // each accepted signal gets its own full 600s
+      const signalExpiry=publishAt+HORIZON_MS; // full 600s AFTER validated AI and a fresh index lock
       const openingIndex=null;
-      const liveIndex=rule.evidence.liveIndexPrice;
+      const liveIndex=rule.direction?publishIndex?.price??null:filtered.indexQuote?.price??null;
       lastCheck={id,checkedAt:clock(),checkLatencyMs:clock()-clickReceivedAt,
-        openedAt:decisionAt,referencePriceObservedAt:filtered.indexQuote?.observedAt??null,
-        openAgeMs:filtered.indexQuote?decisionAt-filtered.indexQuote.observedAt:null,
-        openPrice:liveIndex,cycleOpenIndexPrice:openingIndex,
-        liveIndexPrice:liveIndex,expiresAt:signalExpiry,
+        openedAt:rule.direction?publishAt:null,
+        referencePriceObservedAt:(rule.direction?publishIndex:filtered.indexQuote)?.observedAt??null,
+        openAgeMs:(rule.direction?publishIndex:filtered.indexQuote)?.observedAt!=null?
+          publishAt-(rule.direction?publishIndex:filtered.indexQuote).observedAt:null,
+        openPrice:rule.direction?liveIndex:null,cycleOpenIndexPrice:openingIndex,
+        liveIndexPrice:liveIndex,expiresAt:rule.direction?signalExpiry:null,
         ...rule,aiReview,featureAvailability:availability};
       lastDataProbe={checkedAt:clock(),available:Object.keys(filtered).length,
         total:market.total,availability};
       if(!rule.direction){registerScan(id,clock(),rule);return lastCheck;}
-      const session={id,clickReceivedAt,openedAt:decisionAt,
+      const session={id,clickReceivedAt,openedAt:publishAt,
         clickToCaptureMs:clock()-clickReceivedAt,expiresAt:signalExpiry,
         openPrice:liveIndex,cycleOpenIndexPrice:openingIndex,liveIndexPrice:liveIndex,
         referenceBasis:"SIGNAL_CAPTURED_INDEX_PRICE_TPLUS600_NOT_EVENT_CONTRACT_STRIKE",
-        openAgeMs:filtered.indexQuote?decisionAt-filtered.indexQuote.observedAt:null,
-        referencePriceObservedAt:filtered.indexQuote?.observedAt??null,
+        openAgeMs:publishIndex?publishAt-publishIndex.observedAt:null,
+        referencePriceObservedAt:publishIndex?.observedAt??null,
+        modelInputAt:decisionAt,
         priceStructure:null,features:rule.evidence,
         rollingTenMinutes:null,
         enrichment:{source:market.source,features:filtered,
@@ -472,7 +503,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:aiReview?.status==="AI_REVIEWED"?aiModel:"PURE_RULE_FALLBACK_V17",
+        model:aiModel,
         aiReview,attempts:aiReview?.attempts??0,confidence:aiReview?.confidence??null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:aiConfigured,reasoningEffort:aiReview?.reasoningEffort??null,
@@ -534,6 +565,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+        h.decisionReviewVersion==="EVENT10_AI_FEEDBACK_V17_20261106"||
         h.decisionReviewVersion==="EVENT10_EMA5_DIRECTION_V16_20261106"||
         h.decisionReviewVersion==="EVENT10_PACED_MOMENTUM_V15_20261106"||
         h.decisionReviewVersion==="EVENT10_FAST_MOMENTUM_V14_20261105"||
@@ -572,7 +604,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

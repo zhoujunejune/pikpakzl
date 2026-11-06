@@ -1,3 +1,4 @@
+# Live V17 independent candle source and AI review production confirmation.
 # AI/Feed preflight after Guardian5 retirement (no secrets disclosed); repeat.
 # V16 postdeploy production readonly version+frequency+direction ledger audit
 # V15 latest production read-only diagnostics 2026-11-06, no strategy changes.
@@ -70,6 +71,12 @@ jobs:
           except Exception as ex:print('DIAG_AI_PREFLIGHT_ERROR',type(ex).__name__,flush=True)
           print('DIAG_STATUS_OK',s.get('ok'),flush=True)
           print('DIAG_STRATEGY',s.get('decisionReviewVersion'),flush=True)
+          print('DIAG_AI_CONFIGURED',s.get('aiReviewConfigured'),flush=True)
+          print('DIAG_AI_MODEL',s.get('aiReviewModel'),flush=True)
+          print('DIAG_AI_ACTUAL_STATS',json.dumps(s.get('aiReviewStats') or {},ensure_ascii=False),flush=True)
+          print('DIAG_LAST_VALID_SCAN',s.get('lastSuccessfulScanAt'),flush=True)
+          print('DIAG_LAST_SCAN_SOURCE',((s.get('lastCheck') or {}).get('evidence') or {}).get('candleSource'),flush=True)
+          print('DIAG_LAST_AI_REVIEW',json.dumps(((s.get('lastCheck') or {}).get('aiReview') or {}),ensure_ascii=False)[:450],flush=True)
           print('DIAG_MODE',s.get('mode'),flush=True)
           print('DIAG_LAST_ERROR',str(s.get('lastError') or '')[:160],flush=True)
           c=s.get('lastCheck') or {}

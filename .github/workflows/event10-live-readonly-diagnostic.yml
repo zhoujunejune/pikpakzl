@@ -1,3 +1,4 @@
+# V15 latest production read-only diagnostics 2026-11-06, no strategy changes.
 # Verify V15 10-minute pacing and loss-streak pause on read-only live status/ledger
 # V14 followup production read-only sustained signal frequency check
 # 2026-11-05 V14 post-deploy signal frequency + separated ledger verification, read only
@@ -66,6 +67,19 @@ jobs:
           print('DIAG_NOW_MS',int(time.time()*1000),flush=True)
           print('DIAG_AUTO_INTERVAL_MS',s.get('autoIntervalMs'),flush=True)
           print('DIAG_AUTO_LAST_CHECK',s.get('lastAutoCheckAt'),flush=True)
+          rows=l.get('records',[])
+          settled=[x for x in rows if isinstance(x.get('proxyHit'),bool)]
+          print('DIAG_READONLY_SAMPLE',json.dumps({
+            'firstRecordOpenedAt':min((x.get('openedAt') for x in rows if isinstance(x.get('openedAt'),(int,float))),default=None),
+            'lastRecordOpenedAt':max((x.get('openedAt') for x in rows if isinstance(x.get('openedAt'),(int,float))),default=None),
+            'recent25':{'total':len(rows[:25]),'settled':sum(isinstance(x.get('proxyHit'),bool) for x in rows[:25]),
+                        'hits':sum(x.get('proxyHit') is True for x in rows[:25])},
+            'directionHits':{d:{'settled':sum(x.get('direction')==d for x in settled),
+                                 'hits':sum(x.get('direction')==d and x.get('proxyHit') is True for x in settled)}
+                                for d in ('UP','DOWN')},
+            'consecutiveMissesNewest':next((i for i,x in enumerate(settled) if x.get('proxyHit') is True),len(settled)),
+            'last8': [{'t':x.get('openedAt'),'d':x.get('direction'),'hit':x.get('proxyHit')} for x in rows[:8]]
+          },ensure_ascii=False),flush=True)
           print('DIAG_LEDGER',json.dumps({'ok':l.get('ok'),'version':l.get('version'),
               'total':l.get('total'),'stats':l.get('stats')},ensure_ascii=False),flush=True)
           print('DIAG_RECENT_SIGNAL_ROWS',json.dumps([

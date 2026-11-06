@@ -53,6 +53,7 @@ test("AI is a direction-only reviewer and never vetoes eligible rule signal",asy
  assert.equal(r.lessonsCount,2);
  assert.equal(calls.length,1);
  assert.equal(calls[0].body.response_format.type,"json_object");
+ assert.equal(calls[0].body.model,"deepseek-flash");
  assert.equal(calls[0].body.reasoning_effort,"high");
  assert.equal(calls[0].body.thinking.type,"enabled");
  assert.equal(calls[0].body.max_tokens,8192);

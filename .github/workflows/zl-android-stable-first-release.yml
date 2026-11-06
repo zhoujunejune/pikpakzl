@@ -146,7 +146,7 @@ jobs:
           import struct
           icon=Path('android-app/app/src/main/res/drawable-nodpi/sea_friends_icon.png')
           data=icon.read_bytes()
-          assert len(data)>3000 and data[:8]==b'\\x89PNG\\r\\n\\x1a\\n'
+          assert len(data)>3000 and data[:8]==b'\x89PNG\r\n\x1a\n'
           assert struct.unpack('>II',data[16:24])==(512,512)
           assert 'android:icon="@drawable/sea_friends_icon"' in m
           assert 'android:label="海派事件合约"' in m

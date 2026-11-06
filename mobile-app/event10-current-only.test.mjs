@@ -121,7 +121,7 @@ test("V16 shows unified accuracy and rejection audit without confusing signal ti
  for(const key of ["scanDiagnostics","lastSuccessfulScanAt","eScanAudit"])assert.ok(src.includes(key),key);
  assert.ok(src.includes("指数代理"),"official event contract settlement must never be claimed");
 });
-test("v1.3.0 shows only EVENT10, with no Guardian API or navigation",()=>{
+test("海派事件合约 v1.3.1 retains only EVENT10 with no Guardian API or navigation",()=>{
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
  const manifest=JSON.parse(fs.readFileSync(new URL("./manifest.webmanifest",import.meta.url),"utf8"));
  assert.ok(html.includes('id="panel-event10"')&&html.includes('id="panel-more"'));
@@ -136,7 +136,7 @@ test("v1.3.0 shows only EVENT10, with no Guardian API or navigation",()=>{
  assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
  assert.ok(src.includes('navigate(["event10","more"].includes(initial)?initial:"event10")'));
  assert.ok(src.includes('APP_VERSION="1.3.1"'));
- assert.match(manifest.name,/十分钟/);
+ assert.equal(manifest.name,"海派事件合约");
 });
 test("app discovers current strategy from matching status and ledger without hardcoding",()=>{
  assert.ok(src.includes("let EVENT10_FREQ_OPTIMIZED_VERSION=null;"));

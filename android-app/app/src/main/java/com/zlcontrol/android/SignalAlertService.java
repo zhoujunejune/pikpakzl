@@ -361,18 +361,17 @@ public final class SignalAlertService extends Service {
         }
     }
     private boolean alert(String direction,JSONObject signal) {
-        String name=direction.equals("UP")?"Higher · 看涨":"Lower · 看跌";
+        String name=direction.equals("UP")?"看涨":"看跌";
         String trigger="AUTO".equals(signal.optString("trigger"))?"后台自动信号":"手动检测信号";
         String signalId=signal.optString("id","");
         int notificationId=(signalId.hashCode()&0x3fffffff)+2000;
         long opened=signal.optLong("openedAt",System.currentTimeMillis());
         String signalTime=new java.text.SimpleDateFormat("MM-dd HH:mm:ss",java.util.Locale.CHINA)
             .format(new java.util.Date(opened));
-        String tier="STRICT_RESEARCH".equals(signal.optString("signalQuality"))?"高标准":
-            "STANDARD_RESEARCH".equals(signal.optString("signalQuality"))?"普通":"等级待确认";
+        
         long ageSeconds=Math.max(0L,(System.currentTimeMillis()-opened)/1000L);
         String freshness=ageSeconds>15L?" · 发现延迟"+ageSeconds+"秒":" · 及时发现";
-        String content="BTC 10分钟 · "+tier+" · "+name+" · "+signalTime+" · "+trigger+freshness;
+        String content="BTC 10分钟 · "+name+" · "+signalTime+" · "+trigger+freshness;
         // Reference-cycle expiry is NOT the expiry of a new Binance order.
         String detail=content+"。金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
             +"确认方向、开仓指数价格和最终到期时间，再由你手动下单。没有自动成交。";

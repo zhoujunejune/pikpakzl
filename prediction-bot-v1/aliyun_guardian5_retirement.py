@@ -83,6 +83,22 @@ if state in unsafe or x.get('pendingOrderUncertain') is True:
  print('GUARDIAN_RETIRE_UNCERTAIN_ORDER_STATE',state);raise SystemExit(16)
 print('GUARDIAN_RETIRE_ORDER_PREFLIGHT_OK=true',state or 'NONE')
 PY
+# Do not decommission stop-loss monitoring unless the last exchange position
+# reconciliation says zero positions, with a fresh authenticated observation.
+python3 - <<'PY'
+import datetime,json,pathlib
+p=pathlib.Path('/var/lib/zl-prediction/rounds/risk-worker-health.json')
+try:
+ x=json.loads(p.read_text())
+ count=x.get('positionsSeen')
+ observed=datetime.datetime.fromisoformat(x['lastSuccessfulPositionsAt'].replace('Z','+00:00'))
+ age=(datetime.datetime.now(datetime.timezone.utc)-observed).total_seconds()
+ print('GUARDIAN_RETIRE_POSITIONS_PREFLIGHT',count,'age_seconds',round(age,2))
+ if count!=0 or age<0 or age>60:raise RuntimeError('POSITIONS_NOT_VERIFIED_FLAT_AND_FRESH')
+except Exception as exc:
+ print('GUARDIAN_RETIRE_POSITIONS_PREFLIGHT_BLOCKED',type(exc).__name__)
+ raise SystemExit(17)
+PY
 for svc in "${units[@]}";do
  state=$(systemctl show "$svc" -p LoadState --value 2>/dev/null || true)
  if [[ "$state" != loaded ]];then
@@ -96,6 +112,17 @@ for svc in "${units[@]}";do
  if systemctl is-active --quiet "$svc";then echo "GUARDIAN_RETIRE_STILL_RUNNING=$svc";exit 20;fi
  echo "GUARDIAN_RETIRE_INACTIVE=$svc"
  done
+# Redis serves only the four retired 5-minute units (confirmed during cloud audit).
+# Keep its persistent state on disk; stop daemon and boot start only.
+for dependent in zl-prediction-trade zl-prediction-risk-exits zl-prediction-v2 zl-prediction-v3;do
+ if systemctl is-active --quiet "$dependent";then
+  echo "GUARDIAN_RETIRE_REDIS_STOP_BLOCKED_ACTIVE=$dependent";exit 23
+ fi
+done
+systemctl disable --now "$redis" >/dev/null
+systemctl stop "$redis"
+if systemctl is-active --quiet "$redis";then echo "GUARDIAN_RETIRE_REDIS_STILL_RUNNING=true";exit 24;fi
+echo "GUARDIAN_RETIRE_INACTIVE=$redis"
 for svc in "${safe[@]}";do systemctl is-active --quiet "$svc" || { echo "GUARDIAN_RETIRE_SHARED_SERVICE_DAMAGED=$svc";exit 22;};done
 python3 - <<'PY'
 import json,urllib.request
@@ -108,6 +135,14 @@ for name,path in [('status','/api/status'),('signals','/api/signals?limit=1')]:
   print('EVENT10_POST_RETIRE_CHECK_FAILED',name,type(e).__name__)
   raise
 PY
+for svc in "${units[@]}" "$redis";do
+ active=$(systemctl is-active "$svc" 2>/dev/null || true)
+ enabled=$(systemctl is-enabled "$svc" 2>/dev/null || true)
+ pid=$(systemctl show "$svc" -p MainPID --value 2>/dev/null || true)
+ echo "GUARDIAN_RETIRE_FINAL_SERVICE=$svc active=$active enabled=$enabled pid=$pid"
+ if [[ "$active" == active || "$enabled" == enabled || "$pid" != 0 ]];then exit 25;fi
+done
+echo "GUARDIAN_RETIRE_CODE_AND_DATA_PRESERVED=true"
 echo "GUARDIAN_RETIRE_COMPLETE=true"
 '''
 def main():

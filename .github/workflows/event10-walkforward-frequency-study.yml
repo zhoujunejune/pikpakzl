@@ -1,6 +1,7 @@
+# 2026-11-06 fixed V15 signal timestamps. Direction alternatives only. Strictly read-only.
 # Latest 2026-11-05 readonly study: frequency/accuracy tradeoffs, predeclared reversal alternatives. Never trades.
 # 2026-11-05: verify actual deployed standard-tier implementation versus previous historical candidates.
-name: EVENT10 readonly walkforward frequency study
+name: EVENT10 same-frequency direction outcome research
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -31,82 +32,70 @@ jobs:
           set -eu
           cd /opt/zl-event10
           /opt/zl-prediction-node/bin/node --input-type=module <<'NODE'
-          import {evaluatePureSignal} from './pure-signal.mjs';
-          const r=await fetch('http://127.0.0.1:13003/api/shadow-market-data',{signal:AbortSignal.timeout(8000)});
-          if(!r.ok)throw Error('FEED_HTTP_'+r.status);
-          const f=await r.json();
-          if(!f.ok)throw Error('FEED_BAD');
-          const rows=k=>(Array.isArray(f.candles?.[k])?f.candles[k]:f.candles?.[k]?.rows||[]).filter(x=>x?.closed===true).sort((x,y)=>x.startMs-y.startMs);
+          // The existing operator sees V15 signal TIMES. Change only direction and
+          // never suppress/increase signals: fixed count, no notification change.
+          const get=async url=>{const q=await fetch(url,{signal:AbortSignal.timeout(8000)});if(!q.ok)throw Error("FETCH_"+q.status);return q.json()};
+          const [feed,ledger]=await Promise.all([
+            get('http://127.0.0.1:13003/api/shadow-market-data'),
+            get('http://127.0.0.1:13020/api/signals?limit=100&offset=0')
+          ]);
+          if(!feed.ok||!ledger.ok||ledger.version!=="EVENT10_PACED_MOMENTUM_V15_20261106")
+            throw Error('V15_LIVE_LEDGER_OR_FEED_UNVERIFIED');
+          const rows=k=>(Array.isArray(feed.candles?.[k])?feed.candles[k]:feed.candles?.[k]?.rows||[])
+            .filter(x=>x&&x.closed===true).sort((a,b)=>a.startMs-b.startMs);
           const one=rows('1m'),five=rows('5m');
-          const EMA=(p,n)=>{let v=p.slice(0,n).reduce((s,x)=>s+x,0)/n;for(const x of p.slice(n))v+=(2/(n+1))*(x-v);return v};
-          const RSI=p=>{let up=0,down=0;for(let i=p.length-14;i<p.length;i++){const x=p[i]-p[i-1];up+=Math.max(0,x);down+=Math.max(0,-x)}return down===0?100:100-100/(1+up/down)};
-          const start=Math.max(one[60]?.startMs+60000,five[40]?.startMs+300000);
-          const end=one.at(-12)?.startMs+60000;
-          if(!Number.isFinite(start)||!Number.isFinite(end)||end-start<5*3600000)throw Error('INSUFFICIENT_WINDOW');
-          const split=start+(end-start)*0.5;
-          const candidates=['live_v11','momentum02_ema1','momentum035_ema1','momentum02_dualtrend','momentum035_dualtrend','dualtrend02_guarded','strict_plus_guarded_dual','range_reversion','trend_reversal','volume_breakout'];
-          const stats=Object.fromEntries(candidates.map(k=>[k,{n:0,hits:0,early:{n:0,hits:0},late:{n:0,hits:0},lastAcceptedAt:-Infinity,hour:{}}]));
-          const pct=(x,y)=>y?Number((100*x/y).toFixed(2)):null;
-          let slots=0,fail=0;
-          for(let at=Math.ceil(start/60000)*60000+5000;at<end;at+=60000){
-            const a=one.filter(x=>x.startMs+60000<=at).slice(-60);
-            const b=five.filter(x=>x.startMs+300000<=at).slice(-40);
-            const future=one.filter(x=>x.startMs+60000<=at+600000).at(-1);
-            if(a.length<60||b.length<40||!future)continue;
-            const cur=a.at(-1),p=a.map(x=>Number(x.close)),q=b.map(x=>Number(x.close));
-            const change3=100*(p.at(-1)/p.at(-4)-1);
-            const rsi=RSI(p), e1=EMA(p,9)-EMA(p,21),e5=EMA(q,9)-EMA(q,21);
-            const volBase=a.slice(-21,-1).reduce((s,x)=>s+Number(x.volume),0)/20;
-            const volRatio=volBase>0?Number(cur.volume)/volBase:0;
-            const mag=Math.abs(change3),side=change3>0?'UP':'DOWN';
-            const rsiEarlier=RSI(p.slice(0,-3));
-            const lastRange=Math.max(0.000001,Number(cur.high)-Number(cur.low));
-            const pos=(Number(cur.close)-Number(cur.low))/lastRange;
-            const downBounceRisk=(change3<=-0.10&&volRatio<1.0)||rsi-rsiEarlier>3.5||(pos>0.72&&Number(cur.close)<Number(cur.open));
-            const openDir=(Number(future.close)>Number(cur.close))?'UP':(Number(future.close)<Number(cur.close))?'DOWN':null;
-            let live=null;
-            try{live=evaluatePureSignal({feed:f,reference:{observedAt:at},indexSnapshot:{price:Number(cur.close),observedAt:at-100}}).direction}
-            catch{fail++;continue}
-            slots++;
-            const eligible=(lo,requireDual)=>mag>=lo&&mag<=0.22&&rsi>=34&&rsi<=68&&
-              volRatio>=0.5&&volRatio<=2.8&&
-              ((change3>0&&e1>0&&Number(cur.close)>Number(cur.open))||
-               (change3<0&&e1<0&&Number(cur.close)<Number(cur.open)))&&
-              (!requireDual||((change3>0&&e5>0)||(change3<0&&e5<0)));
-            const choices={
-              live_v11:live,
-              momentum02_ema1:eligible(0.02,false)?side:null,
-              momentum035_ema1:eligible(0.035,false)?side:null,
-              momentum02_dualtrend:eligible(0.02,true)?side:null,
-              momentum035_dualtrend:eligible(0.035,true)?side:null,
-              dualtrend02_guarded:eligible(0.02,true)&&(side==='UP'||!downBounceRisk)?side:null,
-              strict_plus_guarded_dual:live||(eligible(0.02,true)&&(side==='UP'||!downBounceRisk)?side:null),
-              range_reversion:mag>=0.045&&mag<=0.22&&Math.abs(e5/q.at(-1)*100)<0.015&&volRatio>=0.5&&volRatio<=2.5&&((side==='UP'&&rsi>=60)||(side==='DOWN'&&rsi<=40))?(side==='UP'?'DOWN':'UP'):null,
-              trend_reversal:mag>=0.045&&mag<=0.22&&volRatio>=0.5&&volRatio<=1.5&&((side==='UP'&&e1>0&&e5>0)||(side==='DOWN'&&e1<0&&e5<0))?(side==='UP'?'DOWN':'UP'):null,
-              volume_breakout:eligible(0.035,true)&&volRatio>=1.1?side:null
+          const settled=ledger.records.filter(x=>typeof x.proxyHit==="boolean"&&
+              ['UP','DOWN'].includes(x.direction)&&Number.isFinite(x.openedAt))
+            .sort((a,b)=>a.openedAt-b.openedAt);
+          const e=(arr,n)=>{let x=arr.slice(0,n).reduce((a,b)=>a+b,0)/n;for(const q of arr.slice(n))x+=(2/(n+1))*(q-x);return x};
+          const rsi=p=>{let up=0,down=0;for(let i=p.length-14;i<p.length;i++){const x=p[i]-p[i-1];up+=Math.max(0,x);down+=Math.max(0,-x)}return down===0?100:100-100/(1+up/down)};
+          const sign=n=>n>0?'UP':n<0?'DOWN':null;
+          const opposite=d=>d==='UP'?'DOWN':'UP';
+          const pct=(a,b)=>100*(a/b-1);
+          const names=['baseline','opposite','ema5','ret10','ret15','ret30',
+            'ema5_ret15_vote','rsi65_35_flip','rsi60_40_flip',
+            'impulse_exhaustion','ret15_reversal','regime_flip'];
+          const results=[],skipped=[];
+          for(const s of settled){
+            const a=one.filter(x=>x.startMs+60000<=s.openedAt).slice(-65);
+            const b=five.filter(x=>x.startMs+300000<=s.openedAt).slice(-45);
+            if(a.length<60||b.length<40){skipped.push(s.id);continue}
+            const p=a.map(x=>Number(x.close)),q=b.map(x=>Number(x.close));
+            const rsi14=rsi(p),v3=pct(p.at(-1),p.at(-4)),v10=pct(p.at(-1),p.at(-11)),
+                  v15=pct(p.at(-1),p.at(-16)),v30=pct(p.at(-1),p.at(-31));
+            const ema5=e(q,9)-e(q,21),ema1=e(p,9)-e(p,21);
+            const d=s.direction;const truth=s.proxyHit?d:opposite(d);
+            const sign5=sign(ema5),s15=sign(v15),s10=sign(v10),s30=sign(v30);
+            const vote=[sign5,s15,s10].reduce((n,x)=>n+(x==='UP'?1:x==='DOWN'?-1:0),0);
+            const regime=Math.abs(v15)>=0.09&&Math.abs(v3)>=0.04;
+            const pred={
+              baseline:d,opposite:opposite(d),ema5:sign5||d,ret10:s10||d,ret15:s15||d,ret30:s30||d,
+              ema5_ret15_vote:sign(vote)||d,
+              rsi65_35_flip:(d==='UP'&&rsi14>=65)||(d==='DOWN'&&rsi14<=35)?opposite(d):d,
+              rsi60_40_flip:(d==='UP'&&rsi14>=60)||(d==='DOWN'&&rsi14<=40)?opposite(d):d,
+              impulse_exhaustion:(d==='UP'&&rsi14>=60&&v3>=0.09)||(d==='DOWN'&&rsi14<=40&&v3<=-0.09)?opposite(d):d,
+              ret15_reversal:((d==='UP'&&v15>=0.10)||(d==='DOWN'&&v15<=-0.10))?opposite(d):d,
+              regime_flip:regime&&s15===d?opposite(d):d
             };
-            for(const [key,dir] of Object.entries(choices)){
-              if(!dir)continue;
-              const s=stats[key];
-              if(at-s.lastAcceptedAt<120000)continue;
-              s.lastAcceptedAt=at;s.n++;
-              const hit=dir===openDir?1:0;
-              s.hits+=hit;
-              const seg=at<split?s.early:s.late;seg.n++;seg.hits+=hit;
-              const hour=new Date(at).toISOString().slice(0,13);
-              s.hour[hour]=(s.hour[hour]||0)+1;
-            }
+            results.push({t:s.openedAt,truth,original:d,tier:s.signalQuality,v3,v10,v15,v30,rsi14,
+               ema1,ema5,pred});
           }
-          const report=Object.fromEntries(Object.entries(stats).map(([k,v])=>{
-            const h=Object.values(v.hour);
-            return [k,{signals:v.n,hits:v.hits,pct:pct(v.hits,v.n),
-              early:{n:v.early.n,pct:pct(v.early.hits,v.early.n)},
-              late:{n:v.late.n,pct:pct(v.late.hits,v.late.n)},
-              hours:h.length,perHour:Number((v.n/((end-start)/3600000)).toFixed(2)),
-              minActiveHour:h.length?Math.min(...h):0}]}));
-          console.log('EVENT10_WALKFORWARD',JSON.stringify({sample:'CLOSED_SPOT_1M_5M_TPLUS600_PROXY_NOT_OFFICIAL_INDEX',
-            start,end,slots,fail,earlyLateSplitAt:split,candidates:report,
-            limitations:'15h single regime, historical spot proxy, multiple candidate comparisons may overfit; no guaranteed event-contract edge'}));
+          const summary=(subset,key)=>{let n=subset.length,good=0,up=0,down=0,reverse=0;
+             for(const s of subset){const dir=s.pred[key];if(dir===s.truth)good++;if(dir==='UP')up++;else down++;if(dir!==s.original)reverse++}
+             return {n,hit:good,pct:n?Number((100*good/n).toFixed(2)):null,flipped:reverse,up,down}};
+          const split=Math.floor(results.length*0.6);
+          const measures=Object.fromEntries(names.map(k=>[k,{train:summary(results.slice(0,split),k),
+             test:summary(results.slice(split),k),all:summary(results,k)}]));
+          console.log('EVENT10_DIRECTION_STUDY',JSON.stringify({source:'V15_OFFICIAL_SIGNAL_TIMES_AND_PROXY_RESULTS_WITH_CLOSED_SPOT_FEATURES',
+            version:ledger.version,feed1m:one.length,feed5m:five.length,settled: settled.length,
+            analyzed:results.length,skipped:skipped.length,
+            trainRange:[results[0]?.t,results[split-1]?.t],testRange:[results[split]?.t,results.at(-1)?.t],
+            candidates:measures,
+            note:'Same 10-minute signal timestamps and same count; past index proxy outcomes, not official event settlements; historical alternatives may overfit.'}));
+          console.log('EVENT10_DIRECTION_ROWS',JSON.stringify(results.map(x=>({
+            t:x.t,d:x.original,truth:x.truth,rsi:Number(x.rsi14.toFixed(1)),
+            v3:Number(x.v3.toFixed(3)),v15:Number(x.v15.toFixed(3)),v30:Number(x.v30.toFixed(3)),
+            ema1:Math.sign(x.ema1),ema5:Math.sign(x.ema5)}))));
           NODE
           """
           cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))

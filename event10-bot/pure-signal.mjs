@@ -1,5 +1,5 @@
-// V17: preserve V16 trigger gates and cadence; optional bounded AI-only direction review after qualification. No trading.
-export const RULE_VERSION="EVENT10_AI_FEEDBACK_V17_20261106";
+// V18: original candidate eligibility/cadence; DeepSeek must fully complete before any UP/DOWN is published. No trading.
+export const RULE_VERSION="EVENT10_AI_REQUIRED_LEARNING_V18_20261106";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;

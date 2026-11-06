@@ -402,7 +402,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       if(rule.direction&&existingSignals.length){
         const cooldownUntil=Math.max(...existingSignals.map(h=>h.openedAt+MIN_SIGNAL_GAP_MS));
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-        rule.quality="COOLDOWN";rule.eventTag="V16_MIN_SIGNAL_GAP";
+        rule.quality="COOLDOWN";rule.eventTag="V17_MIN_SIGNAL_GAP";
         rule.conditions=null;
         rule.reason="距离上次有效信号不足10分钟；避免同一观察期重复通知和连续追单。";
         rule.evidence.quality="COOLDOWN";rule.evidence.cooldownUntil=cooldownUntil;

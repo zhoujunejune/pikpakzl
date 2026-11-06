@@ -51,7 +51,7 @@ test -r "$CADDY"
 # The five-minute Guardian service is intentionally retired, not a deployment dependency.
 test "$trade_before" = 0 || { echo "MOBILE_APP_RETIRED_GUARDIAN_UNEXPECTEDLY_RUNNING=true"; exit 44; }
 test "$event_before" != 0
-for file in index.html app.js manifest.webmanifest sw.js icon.svg;do
+for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png;do
   curl -fsSL --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/mobile-app/$file" -o "$STAGE/$file"
 done
 test -s "$STAGE/index.html" && test -s "$STAGE/app.js"
@@ -91,34 +91,15 @@ assert 'APP_VERSION="1.3.1"' in js
 assert re.fullmatch(r'[a-f0-9]{40}',json.loads((p/'version.json').read_text())['commit'])
 assert '__ZL_APP_RELEASE_SHA__' not in js
 assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html
-def segment(x,y,ax,ay,bx,by):
-    dx,dy=bx-ax,by-ay
-    t=max(0.,min(1.,((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy)))
-    return math.hypot(x-ax-t*dx,y-ay-t*dy)
-def icon(n):
-    rows=[]
-    lines=[(.32,.39,.48,.39),(.48,.39,.32,.63),(.32,.63,.48,.63),
-           (.59,.39,.59,.63),(.59,.63,.73,.63)]
-    trail=[(.23,.30,.40,.19),(.40,.19,.56,.29),(.56,.29,.77,.15)]
-    for y in range(n):
-        b=bytearray([0])
-        fy=(y+.5)/n
-        for x in range(n):
-            fx=(x+.5)/n
-            bg=(int(9+10*fx),int(20+22*fx),int(34+32*fx))
-            if any(segment(fx,fy,*t)<.012 for t in trail):
-                bg=(85,180,255)
-            if any(segment(fx,fy,*t)<.021 for t in lines):
-                bg=(238,248,255)
-            b.extend((*bg,255))
-        rows.append(b)
-    raw=b''.join(rows)
-    def chunk(tag,payload):
-        return struct.pack('>I',len(payload))+tag+payload+struct.pack('>I',zlib.crc32(tag+payload)&0xffffffff)
-    result=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',n,n,8,6,0,0,0))
-    return result+chunk(b'IDAT',zlib.compress(raw,7))+chunk(b'IEND',b'')
+# Deploy the exact user-supplied artwork committed by the branding build.
+# Never regenerate the previous synthetic ZL chart icon.
 for size in (192,512):
-    (p/f'icon-{size}.png').write_bytes(icon(size))
+    raw=(p/f'icon-{size}.png').read_bytes()
+    assert len(raw)>3000,('ICON_EMPTY',size)
+    assert raw[:8]==b'\\x89PNG\\r\\n\\x1a\\n',('ICON_NOT_PNG',size)
+    assert struct.unpack('>II',raw[16:24])==(size,size),('ICON_BAD_DIMENSIONS',size)
+assert 'data:image/png;base64,' in (p/'icon.svg').read_text()
+print('HAIPAI_REAL_ARTWORK_ICONS_DEPLOYED=true')
 print('MOBILE_APP_STATIC_TESTS_OK=true')
 PNG
 cp -p "$CADDY" "$BACK/Caddyfile"

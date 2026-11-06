@@ -112,7 +112,7 @@ jobs:
               if status not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
               output=base64.b64decode(result.output or '').decode('utf-8','replace')
               for line in output.splitlines():
-                  if line.startswith('EVENT10_WALKFORWARD'):print(line,flush=True)
+                  if line.startswith(('EVENT10_WALKFORWARD','EVENT10_DIRECTION_')):print(line,flush=True)
               if status!='Success' or int(result.exit_code)!=0:raise RuntimeError('RESEARCH_FAILED_'+status+':'+output[-400:])
               break
           else:raise RuntimeError('RESEARCH_TIMEOUT')

@@ -16,6 +16,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  statuses: write
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -117,3 +118,22 @@ jobs:
               break
           else: raise RuntimeError('READONLY_REMOTE_DIAG_TIMED_OUT')
           PY
+
+  report:
+    if: always()
+    needs: [diagnose]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Report readonly diagnostic completion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_RESULT: ${{ needs.diagnose.result }}
+        run: |
+          state=failure
+          if [ "$AUDIT_RESULT" = success ]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context="event10-readonly-live-diagnostic" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="EVENT10 readonly live diagnostic result: $AUDIT_RESULT" >/dev/null
+          echo "EVENT10_READONLY_CI=$state"

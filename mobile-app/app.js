@@ -228,10 +228,11 @@ function event(e,ledger){
  const review=s?.aiReview||e?.lastCheck?.aiReview||null;
  const outcomes=e?.aiReviewStats||{};
  put("eAiReview","AI 方向复核："+(
-   review?.status==="AI_REVIEWED"?"已参与本轮判断":
-   review?.status==="AI_FALLBACK"?"调用异常，沿用规则方向":
-   review?.status==="NO_KEY_OR_DISABLED"?"未启用，规则兜底":
-   e?.aiReviewConfigured?"已接入，等待下一条有效方向信号":"尚未启用")+
+   review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"完整分析已通过校验（高强度思考）":
+   review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"未完成，当前仅为规则应急方向（非AI结论）":
+   review?.status==="NO_KEY_OR_DISABLED"?"未运行，当前仅为规则方向":
+   e?.aiInProgress?"高强度思考进行中，暂未给出完整AI结论":
+   e?.aiReviewConfigured?"已就绪，等待符合条件的信号":"尚未启用")+
    " · "+(e?.aiReviewModel||"—")+
    " · 成功 "+(outcomes.reviewed||0)+" / "+(outcomes.calls||0)+" 次"+
    " · 已结算失误用于下次经验提示，非模型参数训练");
@@ -346,11 +347,11 @@ $("manualCheck").addEventListener("click",async()=>{
  if(state.manualBusy)return;
  state.manualBusy=true;$("manualCheck").disabled=true;
  const result=$("manualResult");
- result.hidden=false;result.textContent="已发出检测请求，正在等待服务端确认…";
+ result.hidden=false;result.textContent="正在检测实时行情；符合信号条件时，AI会进行高强度思考及完整性校验，可能需要数十秒。未完成前不会标记AI分析成功…";
  try{
   const requestId=crypto.randomUUID();
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),15000);
+  const timer=setTimeout(()=>controller.abort(),60000);
   let res;
   try{
    res=await fetch("/event10/api/start",{method:"POST",credentials:"same-origin",
@@ -359,7 +360,7 @@ $("manualCheck").addEventListener("click",async()=>{
   }finally{clearTimeout(timer);}
   const data=await res.json();
   if(!res.ok||data.ok!==true)throw Error(data.error||"HTTP "+res.status);
-  result.textContent="服务端已接受手动检测请求；请查看下方状态。此操作不会提交交易订单。";
+  result.textContent=data.session?.aiReview?.analysisCompleted===true?"AI高强度分析已完成并通过校验；请查看本轮方向。":"检测已结束；AI未完成的结果只标记为规则应急方向，绝不冒充AI结论。";
   await refreshEvent10Only();
  }catch(err){
   result.textContent="检测未确认："+String(err).slice(0,180)+"。请先核实当前状态，避免重复点击。";

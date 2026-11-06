@@ -47,7 +47,7 @@ test("the app never requests legacy event history or mixes old stats",()=>{
 
 test("price comparison uses frozen index reference and exact settlement values",()=>{
  const first=src.indexOf("function eventIndexPrice(v){");
- const last=src.indexOf("function renderRecords(id,items,kind){",first);
+ const last=src.indexOf("function renderRecords(id,items){",first);
  assert.ok(first>=0&&last>first);
  const c=vm.runInNewContext(src.slice(first,last)+"\n({eventIndexPrice,eventPriceComparison})",{Date});
  assert.equal(c.eventIndexPrice(77579.24043478),"77,579.24043478");

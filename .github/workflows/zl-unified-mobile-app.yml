@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  statuses: write
 concurrency:
   group: zl-unified-mobile-static-release
   cancel-in-progress: false
@@ -47,6 +48,8 @@ jobs:
           assert 'hotUpdateBanner' in html and 'appUpdateState' in html
           assert '__ZL_APP_RELEASE_SHA__' in js and 'checkHotUpdate' in js
           assert 'version.json' in (root/'aliyun_deploy.py').read_text()
+          assert '高标准代理命中率' not in html and '普通信号代理命中率' not in html
+          assert 'eventTier(' not in js
           tree=ast.parse((root/'aliyun_deploy.py').read_text())
           remote=next(n.value.value for n in tree.body if isinstance(n,ast.Assign) and
                       any(getattr(t,'id',None)=='REMOTE' for t in n.targets))
@@ -97,3 +100,28 @@ jobs:
               print('MOBILE_APP_PUBLIC_ASSET_OK',path)
           print('MOBILE_APP_PUBLIC_AUTHENTICATED_TESTS_PASS')
           PY
+
+  report:
+    if: always()
+    needs: [static-verify, deploy-static]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Report app PWA verification and Alibaba deployment status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_RESULT: ${{ needs.static-verify.result }}
+          DEPLOY_RESULT: ${{ needs.deploy-static.result }}
+        run: |
+          if [ "$VERIFY_RESULT" = success ] && [ "$DEPLOY_RESULT" = success ]; then
+            state=success
+            description="Mobile PWA tests and Alibaba static deployment confirmed"
+          else
+            state=failure
+            description="Mobile PWA not confirmed: tests=$VERIFY_RESULT deploy=$DEPLOY_RESULT"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context="zl-unified-mobile-app-deploy" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="$description" >/dev/null
+          echo "MOBILE_APP_CI_RESULT=$state"

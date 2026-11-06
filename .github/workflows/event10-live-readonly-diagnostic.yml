@@ -1,3 +1,4 @@
+# AI/Feed preflight after Guardian5 retirement (no secrets disclosed).
 # V16 postdeploy production readonly version+frequency+direction ledger audit
 # V15 latest production read-only diagnostics 2026-11-06, no strategy changes.
 # Verify V15 10-minute pacing and loss-streak pause on read-only live status/ledger
@@ -51,6 +52,22 @@ jobs:
           s=read('http://127.0.0.1:13020/api/status')
           l=read('http://127.0.0.1:13020/api/signals?limit=50&offset=0')
           f=read('http://127.0.0.1:13003/api/shadow-market-data')
+          import os,subprocess,pathlib,re
+          try:
+              unit=subprocess.run(['systemctl','show','-p','MainPID','--value','zl-event10-deepseek'],capture_output=True,text=True,timeout=3).stdout.strip()
+              keys=[]
+              if unit.isdigit() and int(unit)>0:
+                  env_raw=pathlib.Path('/proc/'+unit+'/environ').read_bytes()
+                  keys=[x.split(b'=',1)[0].decode('ascii','ignore') for x in env_raw.split(b'\\0') if b'=' in x]
+              print('DIAG_AI_KEY_PRESENT',any(k in keys for k in ('DEEPSEEK_API_KEY','EVENT10_AI_API_KEY')),flush=True)
+              print('DIAG_AI_ENDPOINT_CONFIGURED',any(k in keys for k in ('DEEPSEEK_BASE_URL','EVENT10_AI_BASE_URL')),flush=True)
+              print('DIAG_AI_MODEL_CONFIGURED',any(k in keys for k in ('DEEPSEEK_MODEL','EVENT10_AI_MODEL')),flush=True)
+              for cfg in ('/etc/systemd/system/zl-event10-deepseek.service','/opt/zl-event10/.env'):
+                  p=pathlib.Path(cfg)
+                  if p.exists():
+                      content=p.read_text(errors='replace')
+                      print('DIAG_AI_CONFIG_SOURCE',cfg,'has_key_name',bool(re.search(r'(DEEPSEEK_API_KEY|EVENT10_AI_API_KEY)',content)),'has_envfile',bool(re.search(r'^EnvironmentFile=',content,re.M)),flush=True)
+          except Exception as ex:print('DIAG_AI_PREFLIGHT_ERROR',type(ex).__name__,flush=True)
           print('DIAG_STATUS_OK',s.get('ok'),flush=True)
           print('DIAG_STRATEGY',s.get('decisionReviewVersion'),flush=True)
           print('DIAG_MODE',s.get('mode'),flush=True)

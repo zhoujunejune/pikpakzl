@@ -52,7 +52,7 @@ V17保留V16全部出信号条件，AI只复核UP/DOWN方向，不会拦截有�
  </div>
  <div id="quickReason" class="signal-reason">需要60根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
  <p class="sub">后台每分钟检查；满足信号条件且距离上条信号至少10分钟才记录。连续失误不会触发20分钟停发。真实行情检验与600秒核验保持不变，不能保证高胜率。</p>
- <p class="sub" id="quickTimestamp">AI方向与规则兜底均仅作十分钟公开指数代理研究，不代表事件合约已成交。</p>
+ <p class="sub" id="quickTimestamp">仅AI完整分析通过后才标注AI判断；外部接口超时或内容不完整将明确标注规则应急方向（非AI分析完成），不自动下单。</p>
 <p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
 </div>
 <p class="sub">自动每分钟扫描；有效方向之间最少间隔10分钟（含手动、自动）。每条信号单独锁定指数代理价并在600秒后核验。</p>
@@ -275,7 +275,7 @@ function display(d){
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
  const review=(s?.aiReview||d.lastCheck?.aiReview);
  const tally=d.aiReviewStats||{};
- $("aiStatus").textContent="AI复核："+(review?.status==="AI_REVIEWED"?"已参与方向判断":review?.status==="AI_FALLBACK"?"调用失败，规则方向兜底":review?.status==="NO_KEY_OR_DISABLED"?"未启用，规则方向兜底":d.aiReviewConfigured?"已配置，等待有效信号":"尚未配置")+
+ $("aiStatus").textContent="AI复核："+(review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"已通过完整分析校验":review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"AI未完成，仅为规则应急方向":review?.status==="NO_KEY_OR_DISABLED"?"未运行，仅为规则方向":d.aiInProgress?"高强度思考中，尚未完成":d.aiReviewConfigured?"已配置，等待有效信号":"尚未配置")+
    " · 模型 "+(d.aiReviewModel||"—")+
    " · 调用 "+(tally.calls||0)+" 次，成功 "+(tally.reviewed||0)+" 次，兜底 "+(tally.fallbacks||0)+" 次；历史失败用于上下文复盘，不代表已重新训练模型。";
  if(s){
@@ -443,14 +443,14 @@ async function startClick(){
  $("quickDirection").textContent="正在检查趋势共振…";
  $("quickDirection").className="signal-direction yellow";
  $("quickConfidence").textContent="规则类型：—";
- $("quickReason").textContent="正在核对多周期趋势、动量、成交量与RSI；不足则无信号。";
+ $("quickReason").textContent="正在核对多周期行情；若规则符合，将进行高强度AI思考、双向证据校验，可能需要数十秒。";
  $("quickOpen").textContent="参考价：采集中";
  if(!pendingRequestId){
   const v=new Uint8Array(16);crypto.getRandomValues(v);
   pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
  }
  try{
-  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",signal:AbortSignal.timeout(9000),
+  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",signal:AbortSignal.timeout(60000),
     headers:{"X-Event10-Action":"manual-open","X-Event10-Request-ID":pendingRequestId}});
   const d=await r.json();
   if(!r.ok||!d.ok)throw Error(d.error||"启动失败");

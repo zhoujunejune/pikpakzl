@@ -1,8 +1,8 @@
-/* ZL unified phone app — browser-only client, never receives exchange credentials. */
+/* ZL EVENT10-only app — browser-only client; no exchange credentials or order calls. */
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const $=id=>document.getElementById(id);
-const state={busy:false,manualBusy:false,lastGuardian:[],lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,timer:null,eventRefreshBusy:false,eventOnline:false,guardianOnline:false};
+const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
@@ -22,11 +22,6 @@ function pill(id,tone,text){
  const el=$(id);if(!el)return;
  el.className="pill"+(tone==="good"?" good":tone==="bad"?" bad":"");
  el.textContent=text;
-}
-function setHeading(id,direction){
- const el=$(id);if(!el)return;
- el.textContent=dir(direction);
- el.className="v "+(direction==="UP"?"uptext":direction==="DOWN"?"downtext":"");
 }
 function node(tag,cls,t){
  const el=document.createElement(tag);
@@ -60,60 +55,40 @@ function eventPriceComparison(r){
  if(r.proxyHit===false)return {ready:true,outcome:"指数代理未命中",change,tone:"downtext"};
  return {ready:false,outcome:"核验结果尚未确认",change,tone:"warning"};
 }
-function renderRecords(id,items,kind){
+function renderRecords(id,items){
  const root=$(id);root.replaceChildren();
  if(!items.length){
-  root.append(node("div","mini",kind==="event10"?"新策略暂无已保存的有效方向信号。":"暂无可核实的已保存信号记录。"));
+  root.append(node("div","mini","当前策略暂无已保存的有效方向信号。"));
   return;
  }
- for(const r of (kind==="event10"?items:items.slice(0,12))){
-  const d=kind==="guardian"?r.predictedDirection:r.direction;
+ for(const r of items){
   const wrap=node("div","record"),head=node("div","record-head");
-  if(kind==="event10")wrap.dataset.eventId=String(r.id);
-  const title=node("div","record-title",dir(d));
-  if(d==="UP")title.classList.add("uptext");
-  if(d==="DOWN")title.classList.add("downtext");
-  const when=kind==="guardian"?(r.at||r.round):(r.openedAt||r.checkedAt);
-  head.append(title,node("span","mini",stamp(when)));
+  wrap.dataset.eventId=String(r.id);
+  const title=node("div","record-title",dir(r.direction));
+  if(r.direction==="UP")title.classList.add("uptext");
+  if(r.direction==="DOWN")title.classList.add("downtext");
+  head.append(title,node("span","mini",stamp(r.openedAt||r.checkedAt)));
   wrap.append(head);
-  let outcome="待10分钟核对";
-  if(kind==="guardian"&&r.status==="SETTLED")outcome=r.hit===true?"官方方向命中":r.hit===false?"官方方向未命中":"状态待核实";
-  if(kind==="event10"){
-   if(typeof r.proxyHit==="boolean")outcome=r.proxyHit?"指数代理命中":"指数代理未命中";
-   else if(r.settlementStatus==="UNVERIFIABLE_PRICE_NEAR_EXPIRY")outcome="到期数据不足，未核验";
-   else if(r.proxyOutcome==="FLAT")outcome="指数持平（不计命中率）";
+  const pricePair=node("div","record-signal-grid");
+  for(const [label,value] of [["信号锁定指数价",eventIndexPrice(r.openPrice)],
+    ["10分钟后指数价",eventIndexPrice(r.closePrice)]]){
+   const block=node("div","record-price-block");
+   block.append(node("div","record-price-label",label),node("div","record-price-value",value));
+   pricePair.append(block);
   }
-  if(kind==="event10"){
-   const pair=node("div","record-signal-grid");
-   const pricePair=[["信号锁定指数价",eventIndexPrice(r.openPrice)],
-     ["10分钟后指数价",eventIndexPrice(r.closePrice)]];
-   for(const [label,value] of pricePair){
-    const block=node("div","record-price-block");
-    block.append(node("div","record-price-label",label),
-                 node("div","record-price-value",value));
-    pair.append(block);
-   }
-   wrap.append(pair);
-   const info=eventPriceComparison(r);
-   const comparison=node("div","record-comparison");
-   comparison.append(node("span","record-change",info.change),
-                     node("span","record-outcome "+info.tone,info.outcome));
-   wrap.append(comparison);
-   const planned=Number.isFinite(r.expiresAt)?stamp(r.expiresAt):"—";
-   const sampled=Number.isFinite(r.closeObservedAt)?stamp(r.closeObservedAt):"—";
-   const motion=typeof r.change3mPct==="number"?r.change3mPct.toFixed(5)+"%":"—";
-   const trigger=r.trigger==="AUTO"?"自动":"手动";
-
-   wrap.append(node("div","record-note",trigger+" · 3分钟净涨跌 "+motion));
-   wrap.append(node("div","record-note","信号时间 "+stamp(r.openedAt)+" · 非事件合约真实下单价格"));
-   wrap.append(node("div","record-note","预定核验 "+planned+
-      " · 实际采样 "+sampled+" · 仅币安指数代理对比，非事件合约官方结算"));
-  }else{
-   const desc="轮次 "+stamp(r.round)+" · "+outcome+" · "+
-      (r.subjectiveConfidence==null?"置信度未提供":
-      "模型主观置信度 "+Math.round(100*Number(r.subjectiveConfidence))+"%");
-   wrap.append(node("div","record-note",desc));
-  }
+  wrap.append(pricePair);
+  const info=eventPriceComparison(r),comparison=node("div","record-comparison");
+  comparison.append(node("span","record-change",info.change),
+    node("span","record-outcome "+info.tone,info.outcome));
+  wrap.append(comparison);
+  const planned=Number.isFinite(r.expiresAt)?stamp(r.expiresAt):"—";
+  const sampled=Number.isFinite(r.closeObservedAt)?stamp(r.closeObservedAt):"—";
+  const motion=typeof r.change3mPct==="number"?r.change3mPct.toFixed(5)+"%":"—";
+  const trigger=r.trigger==="AUTO"?"自动":"手动";
+  wrap.append(node("div","record-note",trigger+" · 3分钟净涨跌 "+motion));
+  wrap.append(node("div","record-note","信号时间 "+stamp(r.openedAt)+" · 非事件合约真实下单价格"));
+  wrap.append(node("div","record-note","预定核验 "+planned+
+    " · 实际采样 "+sampled+" · 仅币安指数代理对比，非事件合约官方结算"));
   root.append(wrap);
  }
 }
@@ -128,40 +103,6 @@ async function api(url,timeout=6500){
   if(!value||value.ok!==true)throw Error("服务响应无效");
   return value;
  }finally{clearTimeout(timer);}
-}
-function guardian(g,t){
- if(!g||g.model!=="ZL_GUARDIAN_5M_V1")throw Error("GUARDIAN模型不匹配");
- const records=Array.isArray(g.records)?g.records:[],m=g.stats||{};
- const current=records.find(x=>Number(x.round)===Number(g.round));
- const direction=current?.predictedDirection||g.latest?.direction;
- setHeading("gDirection",direction);
- put("gSignal",dir(direction));
- put("gRound",stamp(g.round));
- put("gCounts",(m.shadowPredictions??"—")+" / "+(m.settled??"—"));
- put("gAccuracy",pct(m.correct,m.settled));
- put("gReason",(g.latest?.reason||"暂无分析说明")+(g.error?"；错误："+String(g.error).slice(0,120):""));
- state.lastGuardian=records;
- renderRecords("gRecords",records.slice().sort((a,b)=>Number(b.round)-Number(a.round)),"guardian");
- pill("gBadge","good","分析可用");
- pill("gStatus","good","已连接");
- if(!t||t.ok!==true){
-  put("gFollow","状态未知");put("gFollowLong","状态接口不可用");
-  put("gOrder","未获取");put("gOrderFull","—");put("gError","生产状态读取失败");
-  return;
- }
- const follow=t.enabled===true?"已开启":t.enabled===false?"已关闭":"未知";
- put("gFollow",follow);put("gFollowLong",follow);
- const order=t.pendingAction||t.lastOrder||null;
- const orderState=order?.state||"暂无可核实记录";
- put("gOrder",orderState);
- put("gOrderFull",order?(String(orderState)+(order.round?" · "+stamp(order.round):"")):"暂无可核实记录");
- put("gError",order?.blockReason||order?.error||t.lastError||"接口没有报告当前阻断原因");
-}
-function guardianError(error){
- pill("gBadge","bad","连接异常");pill("gStatus","bad","暂不可用");
- put("gReason","GUARDIAN数据读取失败："+String(error).slice(0,130)+"。请进入原交易控制台核实。");
- for(const id of ["gDirection","gSignal","gAccuracy","gFollow","gFollowLong","gOrder","gOrderFull","gError","gRound","gCounts"])put(id,"不可用");
- $("gRecords").replaceChildren(node("div","mini","当前未能读取信号数据，不能据此判断没有信号。"));
 }
 // The ten-minute app is a CURRENT-STRATEGY ONLY view.
 // Old signal files stay on the server for audit, but are never displayed or counted.
@@ -204,7 +145,7 @@ function drawEventHistory(){
   const first=scrolled?Array.from(root.children).find(el=>
    el.dataset?.eventId&&el.offsetTop+el.offsetHeight>oldTop):null;
   const id=first?.dataset?.eventId||null,gap=first?first.offsetTop-oldTop:0;
-  renderRecords("eRecords",state.eventRecords,"event10");
+  renderRecords("eRecords",state.eventRecords);
   if(scrolled){
    const after=id?Array.from(root.children).find(el=>el.dataset?.eventId===id):null;
    viewport.scrollTop=after?Math.max(0,after.offsetTop-gap):oldTop;
@@ -266,17 +207,14 @@ function event(e,ledger){
  const stats=ledger.stats||{};
  const records=currentLedger?mergeEventRecords(ledger):[];
  const active=!!e.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION;
- setHeading("eDirection",s?.direction||null);
  put("eSignal",dir(s?.direction||null));
  put("ePhase",s?.status||"暂无新版信号");
- put("eActive",active?"新版信号等待核对":"待机");
  const validDirections=stats.validDirections??stats.total??"—";
- put("eCount",validDirections);
  put("eCounts",validDirections+" / "+(stats.proxySettled??"—"));
  const accuracy=pct(stats.proxyHits,stats.proxySettled);
  const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
  const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（新版暂无已核对样本）");
- put("eAccuracy",proxyDisplay);put("eProxyAccuracy",proxyDisplay);
+ put("eProxyAccuracy",proxyDisplay);
  const audit=e.scanDiagnostics?.lastHour;
  const produced=(audit?.strictSignals||0)+(audit?.standardSignals||0);
  put("eScanAudit",audit?"最近1小时检查 "+audit.checks+"次，产生方向信号 "+produced+"条，无信号 "+audit.noSignal+"次，数据异常 "+audit.dataErrors+"次。":"当前暂无扫描统计。");
@@ -287,7 +225,6 @@ function event(e,ledger){
  put("eFreshness",elapsed!==null&&elapsed>=0&&elapsed<=90?"最近有效行情扫描 "+elapsed+"秒前 · "+stamp(lastScan):"行情扫描新鲜度未确认；请检查后台连接");
 
  put("eReason",s?.direction?"方向已确认；按锁定指数价等待10分钟后核验。":(s?.reason||"当前没有符合规则的方向信号。"));
- pill("eBadge",e.configured===true?"good":"bad",e.configured===true?"运行中 · 当前信号策略":"数据不可用");
  pill("eStatus",e.configured===true?"good":"bad",active?"新版信号待核对":e.configured===true?"就绪":"未就绪");
  if(currentLedger){
   updateEventHistory(ledger);
@@ -304,8 +241,8 @@ function event(e,ledger){
 function eventError(error){
  state.eventHistoryError="状态读取失败，已加载记录仍然保留";
  drawEventHistory();
- pill("eBadge","bad","连接异常");pill("eStatus","bad","暂不可用");
- for(const id of ["eDirection","eSignal","ePhase","eActive","eCount","eCounts","eAccuracy","eProxyAccuracy","eScanAudit","eScanGates","eFreshness"])put(id,"不可用");
+ pill("eStatus","bad","暂不可用");
+ for(const id of ["eSignal","ePhase","eCounts","eProxyAccuracy","eScanAudit","eScanGates","eFreshness"])put(id,"不可用");
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
  if(!state.eventRecords.length){
   put("eTotal","记录接口暂时不可用");
@@ -314,13 +251,10 @@ function eventError(error){
  }
  $("manualCheck").disabled=true;
 }
-// Event10 never waits for Guardian HTTP requests. A slow five-minute bot
-// cannot delay a newly accepted V11 signal on the visible ten-minute screen.
+// Only EVENT10 status contributes to the App connection indicator.
 function refreshConnectionBadge(){
- const count=Number(state.guardianOnline)+Number(state.eventOnline);
- $("healthDot").className="dot "+(count===2?"up":count===0?"down":"");
- put("healthText",count===2?"双服务已连接":count===0?"连接异常":"部分接口异常");
- put("updatedAt","刷新于 "+new Date().toLocaleTimeString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}));
+ $("healthDot").className="dot "+(state.eventOnline?"up":"down");
+ put("healthText",state.eventOnline?"信号服务已连接":"信号服务连接异常");
 }
 async function refreshEvent10Only(){
  if(state.eventRefreshBusy||document.hidden)return;
@@ -352,20 +286,8 @@ async function refreshEvent10Only(){
 async function refresh(){
  if(state.busy||document.hidden)return;
  state.busy=true;
- // Start Event10 independently before the slower Guardian two-endpoint read.
- void refreshEvent10Only();
- try{
-  const [gr,tr]=await Promise.allSettled([
-   api("/guardian/api/status",7500),
-   api("/api/status",7500)
-  ]);
-  const g=gr.status==="fulfilled"?gr.value:null;
-  const t=tr.status==="fulfilled"?tr.value:null;
-  try{if(g)guardian(g,t);else throw gr.reason||Error("无数据");}
-  catch(err){guardianError(err);}
-  state.guardianOnline=Boolean(g&&t);
-  refreshConnectionBadge();
- }finally{state.busy=false;}
+ try{await refreshEvent10Only();}
+ finally{state.busy=false;}
 }
 
 /**
@@ -438,7 +360,7 @@ document.addEventListener("visibilitychange",()=>{
  }
 });
 const initial=location.hash.replace("#","");
-navigate(["overview","guardian","event10","more"].includes(initial)?initial:"overview");
+navigate(["event10","more"].includes(initial)?initial:"event10");
 void refresh();
 void checkHotUpdate();
 setInterval(()=>void refresh(),10000);

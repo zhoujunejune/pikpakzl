@@ -1,6 +1,6 @@
 // Bounded DeepSeek directional review for already-qualified EVENT10 signals.
 // Reviews cannot create, suppress, delay a later slot, or place orders.
-// Feedback is retrieval of prior settled results: NOT training model weights.
+// Feedback = past verified losses/wins + recurring evidence patterns; NOT training model weights.
 const validDirection=x=>x==="UP"||x==="DOWN";
 const clampText=(value,n=150)=>String(value||"").slice(0,n);
 const rounded=(n,digits=4)=>Number.isFinite(n)?Number(n.toFixed(digits)):null;
@@ -21,6 +21,30 @@ export function feedbackExamples(records,asOf,limit=18){
   quality:x.signalQuality||null
  }));
 }
+// Builds an auditable, rolling lesson summary from prior *settled* outcomes.
+export function buildLearningProfile(records,asOf){
+ const valid=feedbackExamples(records,asOf,60);
+ const wins=valid.filter(x=>x.correct);
+ const losses=valid.filter(x=>!x.correct);
+ const summary=rows=>({
+  samples:rows.length,
+  up:rows.filter(x=>x.pastDirection==="UP").length,
+  down:rows.filter(x=>x.pastDirection==="DOWN").length,
+  highRsi:rows.filter(x=>Number.isFinite(x.rsi14)&&x.rsi14>=60).length,
+  lowRsi:rows.filter(x=>Number.isFinite(x.rsi14)&&x.rsi14<=40).length,
+  highVolume:rows.filter(x=>Number.isFinite(x.volumeRatio)&&x.volumeRatio>=1.5).length,
+  largeMomentum:rows.filter(x=>Number.isFinite(x.change3mPct)&&Math.abs(x.change3mPct)>=0.12).length
+ });
+ const lossCases=losses.slice(0,12).map(({ageMin,pastDirection,actual10mDirection,
+   change3mPct,volumeRatio,rsi14,quality})=>({
+    ageMin,predicted:pastDirection,observed:actual10mDirection,
+    change3mPct,volumeRatio,rsi14,quality
+   }));
+ return {settledSamples:valid.length,winCount:wins.length,lossCount:losses.length,
+  observedProxyAccuracyPct:valid.length?rounded(100*wins.length/valid.length,2):null,
+  lossPatterns:summary(losses),winPatterns:summary(wins),recentLossCases:lossCases,
+  caveat:"这些只是历史已结算的描述性统计，不能证明因果、不能预测下一轮，样本可能很少。"};
+}
 // Do not call a terse JSON response "deep analysis". Require comparison of
 // both directions, decisive evidence, risk, a proper finish, and a usable answer.
 // DeepSeek V4-Pro thinking mode is explicitly HIGH (not 'none').
@@ -29,7 +53,7 @@ export const AI_REVIEW_MAX_TOKENS=8192;
 export const AI_REVIEW_ATTEMPTS=2;
 const minText=(v,n=8)=>typeof v==="string"&&v.trim().length>=n;
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-export function reviewPrompt({rule,evidence,lessons,at}){
+export function reviewPrompt({rule,evidence,lessons,profile,at}){
  const compact={
   asOf:at,ruleDirection:rule,
   ema1Fast:evidence.ema1Fast,ema1Slow:evidence.ema1Slow,
@@ -39,10 +63,11 @@ export function reviewPrompt({rule,evidence,lessons,at}){
   rsi14:evidence.rsi14,rsiRise3:evidence.rsiRise3,
   bullishLast3:evidence.bullishLast3,bearishLast3:evidence.bearishLast3,
   downBounceRisk:evidence.downBounceRisk,
-  recentSettledExamples:lessons
+  recentSettledExamples:lessons,
+  rollingLearningProfile:profile
  };
  return [
-  {role:"system",content:"你是BTC十分钟公开指数代理方向的严谨研究复核助手。必须分别评估上涨、下跌依据，分析与历史失败案例相似之处、可能失效的条件以及反向风险，然后选出相对更可能的方向UP或DOWN。不能决定是否发信号，不能利用决策时间后的数据，不能承诺盈利，也不能把历史经验检索称为模型训练。仅返回合法JSON对象，必须含direction、confidence、reason、upCase、downCase、decisiveEvidence、risk，每项中文解释充分且具体（每段至少8个字），confidence为0至1之间的有限数字。解释应引用真实给定指标，不得虚构盘口、清算或事件合约官方结算。"},
+  {role:"system",content:"你是BTC十分钟公开指数代理方向的严谨研究复核助手。按历史已结算案例作经验复盘，但历史错误本身不能证明未来走势，严禁为迎合历史强行反向。必须分别评估上涨、下跌依据，明确从已结算失败中发现哪些失误特征与本次类似、哪些教训不适用、可能失效的条件以及反向风险，然后选出相对更可能的方向UP或DOWN。不能决定是否发信号，不能利用决策时间后的数据，不能承诺盈利，也不能把历史经验检索称为模型训练。仅返回合法JSON对象，必须含direction、confidence、reason、upCase、downCase、decisiveEvidence、risk，每项中文解释充分且具体（每段至少8个字），confidence为0至1之间的有限数字。解释应引用真实给定指标，不得虚构盘口、清算或事件合约官方结算。"},
   {role:"user",content:"请完整复核未来600秒的方向。规则模型基线及已结算历史经验如下（仅决策时刻前数据）：\n"+JSON.stringify(compact)}
  ];
 }
@@ -75,7 +100,9 @@ export async function reviewAiDirection({rule,evidence,records=[],at,fetcher=fet
  const key=env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY;
  const model=env.EVENT10_AI_MODEL||"deepseek-flash";
  const lessons=feedbackExamples(records,at,18);
+ const profile=buildLearningProfile(records,at);
  const basic={direction:rule,baseDirection:rule,model,lessonsCount:lessons.length,
+  learningSamples:profile.settledSamples,learningLosses:profile.lossCount,
   reasoningEffort:AI_REVIEW_EFFORT,analysisCompleted:false,attempts:0};
  if(!key||env.EVENT10_AI_ENABLED==="0"||env.EVENT10_AI_ENABLED==="false")
   return {...basic,status:"NO_KEY_OR_DISABLED",latencyMs:0,confidence:null,
@@ -92,7 +119,7 @@ export async function reviewAiDirection({rule,evidence,records=[],at,fetcher=fet
    const response=await fetcher("https://api.deepseek.com/chat/completions",{
     method:"POST",headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json"},
     signal:AbortSignal.timeout(perAttemptMs),
-    body:JSON.stringify({model,messages:reviewPrompt({rule,evidence,lessons,at}),
+    body:JSON.stringify({model,messages:reviewPrompt({rule,evidence,lessons,profile,at}),
      reasoning_effort:AI_REVIEW_EFFORT,thinking:{type:"enabled"},
      response_format:{type:"json_object"},max_tokens:AI_REVIEW_MAX_TOKENS})
    });

@@ -386,21 +386,9 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         rule.reason="距离上次有效信号不足10分钟；避免同一观察期重复通知和连续追单。";
         rule.evidence.quality="COOLDOWN";rule.evidence.cooldownUntil=cooldownUntil;
       }
-      // After two consecutive settled proxy misses, pause new directions
-      // for 20 minutes from the latest result. Use current-version data only.
-      // No blind reversal, and no permanent block after the pause expires.
-      const recentSettled=signalLedger.list(25,0).records.filter(h=>
-        typeof h.proxyHit==="boolean"&&Number.isFinite(h.closeObservedAt));
-      const lastTwo=recentSettled.slice(0,2);
-      if(rule.direction&&lastTwo.length===2&&lastTwo.every(h=>h.proxyHit===false)&&
-        decisionAt-lastTwo[0].closeObservedAt<20*60000){
-        rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-        rule.quality="LOSS_PAUSE";rule.eventTag="V16_RECENT_LOSSES_PAUSE";
-        rule.conditions=null;
-        rule.reason="最近两条已核验方向连续未命中，暂停20分钟，避免同一行情继续追错。";
-        rule.evidence.quality="LOSS_PAUSE";
-        rule.evidence.cooldownUntil=lastTwo[0].closeObservedAt+20*60000;
-      }
+      // Directional mistakes are audited by the settled ledger, not used as
+      // an arbitrary time-based suppression. Two misses are not evidence
+      // that the next independent signal should be discarded.
       const signalExpiry=decisionAt+HORIZON_MS; // each accepted signal gets its own full 600s
       const openingIndex=null;
       const liveIndex=rule.evidence.liveIndexPrice;

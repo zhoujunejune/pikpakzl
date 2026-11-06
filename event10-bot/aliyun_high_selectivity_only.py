@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 ROOT=pathlib.Path("/opt/zl-event10")
 UNIT="zl-event10-deepseek"
 NODE="/opt/zl-prediction-node/bin/node"
+# Persistent last-in-order systemd EnvironmentFile override. Never touch the API key file.
+MODEL_ENV=pathlib.Path("/etc/zl-event10/ai-model-flash.env")
+MODEL_DROPIN=pathlib.Path("/etc/systemd/system/zl-event10-deepseek.service.d/99-zl-ai-flash.conf")
 LEGACY_VERSIONS={"EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
 TARGET="EVENT10_AI_FEEDBACK_V17_20261106"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
@@ -114,6 +117,10 @@ def main():
         existing_files=[name for name in FILES if (ROOT/name).is_file()]
         for name in existing_files:shutil.copy2(ROOT/name,backup/name)
         changed=[]
+        # Rollback both code AND the isolated model override on any failed cutover.
+        override_backups={}
+        for name in (MODEL_ENV,MODEL_DROPIN):
+            override_backups[name]=(name.read_bytes(),name.stat().st_mode & 0o777) if name.exists() else None
         try:
             for name in FILES:
                 if (ROOT/name).is_file():
@@ -127,6 +134,15 @@ def main():
                     os.chown(ROOT/name,template.st_uid,template.st_gid)
                     os.chmod(ROOT/name,template.st_mode & 0o777)
                 changed.append(name)
+            # A trailing EnvironmentFile beats any earlier Environment or
+            # EnvironmentFile value without exposing or rewriting credentials.
+            MODEL_ENV.parent.mkdir(parents=True,exist_ok=True)
+            MODEL_DROPIN.parent.mkdir(parents=True,exist_ok=True)
+            MODEL_ENV.write_text("EVENT10_AI_MODEL=deepseek-flash\n",encoding="ascii")
+            MODEL_DROPIN.write_text("[Service]\nEnvironmentFile="+str(MODEL_ENV)+"\n",encoding="ascii")
+            os.chmod(MODEL_ENV,0o644)
+            os.chmod(MODEL_DROPIN,0o644)
+            cmd("systemctl","daemon-reload",timeout=40)
             cmd("systemctl","restart",UNIT,timeout=45)
             ready=False
             for _ in range(20):
@@ -135,7 +151,9 @@ def main():
                     snap=status()
                     if snap.get("decisionReviewVersion")==TARGET and \
                        snap.get("aiReviewConfigured") is True and \
-                       snap.get("aiReviewModel")=="deepseek-v4-pro" and \
+                       snap.get("aiReviewModel")=="deepseek-flash" and \
+                       snap.get("thinkingMode")=="enabled" and \
+                       snap.get("reasoningEffort")=="high" and \
                        snap.get("autoTradingEnabled") is False and \
                        snap.get("executionAvailable") is False:
                         ready=True
@@ -143,6 +161,13 @@ def main():
                 except Exception:
                     pass
             if not ready:raise RuntimeError("EVENT10_NEW_VERSION_NOT_SERVING")
+            live_pid=pid(UNIT)
+            if not live_pid.isdecimal() or int(live_pid)<=0:
+                raise RuntimeError("EVENT10_FLASH_PID_NOT_RUNNING")
+            current_environ=pathlib.Path("/proc/"+live_pid+"/environ").read_bytes().split(b"\0")
+            if b"EVENT10_AI_MODEL=deepseek-flash" not in current_environ:
+                raise RuntimeError("EVENT10_EFFECTIVE_MODEL_ENV_NOT_FLASH")
+            print("EVENT10_FLASH_PROCESS_ENV_CONFIRMED=true",flush=True)
             # Guarded hot cutover preserves existing active legacy signal IDs
             # and leaves their own T+600 proxy settlement with the new engine.
             if before.get("active") and before.get("decisionReviewVersion")==TARGET:
@@ -162,6 +187,8 @@ def main():
             print("EVENT10_HS_STRATEGY_VERSION="+TARGET,flush=True)
             print("EVENT10_HS_AI_KEY_CONFIGURED="+str(status().get("aiReviewConfigured")),flush=True)
             print("EVENT10_HS_AI_MODEL="+str(status().get("aiReviewModel")),flush=True)
+            print("EVENT10_HS_AI_THINKING_MODE="+str(status().get("thinkingMode")),flush=True)
+            print("EVENT10_HS_AI_REASONING_EFFORT="+str(status().get("reasoningEffort")),flush=True)
             print("EVENT10_HS_HISTORY_PRESERVED="+str(len(after["records"])),flush=True)
             print("EVENT10_HS_NO_REAL_ORDER_API=true",flush=True)
             print("EVENT10_HS_OTHER_SERVICE_PIDS_UNCHANGED=true",flush=True)
@@ -176,6 +203,14 @@ def main():
             except Exception as e:
                 print("EVENT10_HS_DATA_PROBE_UNVERIFIED="+type(e).__name__,flush=True)
         except BaseException:
+            for target,snapshot in override_backups.items():
+                if snapshot is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    contents,mode=snapshot
+                    target.write_bytes(contents)
+                    os.chmod(target,mode)
+            subprocess.run(["systemctl","daemon-reload"],capture_output=True,timeout=45)
             for name in changed:
                 if name in existing_files:
                     shutil.copy2(backup/name,ROOT/name)

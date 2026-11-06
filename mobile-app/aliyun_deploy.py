@@ -96,7 +96,7 @@ assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html
 for size in (192,512):
     raw=(p/f'icon-{size}.png').read_bytes()
     assert len(raw)>3000,('ICON_EMPTY',size)
-    assert raw[:8]==b'\\x89PNG\\r\\n\\x1a\\n',('ICON_NOT_PNG',size)
+    assert raw[:8]==b'\x89PNG\r\n\x1a\n',('ICON_NOT_PNG',size)
     assert struct.unpack('>II',raw[16:24])==(size,size),('ICON_BAD_DIMENSIONS',size)
 assert 'data:image/png;base64,' in (p/'icon.svg').read_text()
 print('HAIPAI_REAL_ARTWORK_ICONS_DEPLOYED=true')

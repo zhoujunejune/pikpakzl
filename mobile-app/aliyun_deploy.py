@@ -79,11 +79,14 @@ m=json.loads((p/'manifest.webmanifest').read_text())
 assert m['scope']=='/app/' and m['start_url']=='/app/' and m['display']=='standalone'
 html=(p/'index.html').read_text()
 js=(p/'app.js').read_text()
-for expected in ('/app/app.js','/app/manifest.webmanifest','panel-guardian','panel-event10'):
+for expected in ('/app/app.js','/app/manifest.webmanifest','panel-event10','panel-more'):
     assert expected in html, expected
-for expected in ('/guardian/api/status','/api/status','/event10/api/status','/event10/api/signals','/event10/api/start'):
+for expected in ('/event10/api/status','/event10/api/signals','/event10/api/start'):
     assert expected in js, expected
 assert 'localStorage' not in js and 'sessionStorage' not in js
+assert 'panel-guardian' not in html and 'panel-overview' not in html
+assert '/guardian/api/status' not in js and 'function guardian(' not in js
+assert 'APP_VERSION="1.3.0"' in js
 assert re.fullmatch(r'[a-f0-9]{40}',json.loads((p/'version.json').read_text())['commit'])
 assert '__ZL_APP_RELEASE_SHA__' not in js
 assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html
@@ -189,7 +192,7 @@ fi
 echo MOBILE_CADDY_RELOAD_COMPLETED=true
 checkpoint=AUTHENTICATION_CHECK
 # A compromised public route must never reveal the app or trading APIs without login.
-for route in /app/ /app/app.js /app/version.json /app/manifest.webmanifest /api/status /guardian/api/status /event10/api/status;do
+for route in /app/ /app/app.js /app/version.json /app/manifest.webmanifest /event10/api/status;do
   if ! status=$(curl -skS --max-time 9 --resolve "$HOST:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$HOST$route");then
     echo MOBILE_AUTH_CURL_FAILED_PATH=$route
     exit 42

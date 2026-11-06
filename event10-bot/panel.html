@@ -275,7 +275,7 @@ function display(d){
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
  const review=(s?.aiReview||d.lastCheck?.aiReview);
  const tally=d.aiReviewStats||{};
- $("aiStatus").textContent="AI复核："+(review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"已通过完整分析校验":review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"AI未完成，仅为规则应急方向":review?.status==="NO_KEY_OR_DISABLED"?"未运行，仅为规则方向":d.aiInProgress?"高强度思考中，尚未完成":d.aiReviewConfigured?"已配置，等待有效信号":"尚未配置")+
+ $("aiStatus").textContent="AI复核："+(d.aiInProgress?"高强度AI分析进行中，等待完整输出":review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"已通过完整分析校验":review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"AI未完成，仅为规则应急方向":review?.status==="NO_KEY_OR_DISABLED"?"未运行，仅为规则方向":d.aiInProgress?"高强度思考中，尚未完成":d.aiReviewConfigured?"已配置，等待有效信号":"尚未配置")+
    " · 模型 "+(d.aiReviewModel||"—")+
    " · 调用 "+(tally.calls||0)+" 次，成功 "+(tally.reviewed||0)+" 次，兜底 "+(tally.fallbacks||0)+" 次；历史失败用于上下文复盘，不代表已重新训练模型。";
  if(s){
@@ -450,7 +450,7 @@ async function startClick(){
   pendingRequestId=Array.from(v,x=>x.toString(16).padStart(2,"0")).join("");
  }
  try{
-  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",signal:AbortSignal.timeout(60000),
+  const r=await fetch("api/start",{method:"POST",credentials:"same-origin",signal:AbortSignal.timeout(90000),
     headers:{"X-Event10-Action":"manual-open","X-Event10-Request-ID":pendingRequestId}});
   const d=await r.json();
   if(!r.ok||!d.ok)throw Error(d.error||"启动失败");

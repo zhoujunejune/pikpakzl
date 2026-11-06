@@ -73,7 +73,7 @@ export async function reviewAiDirection({rule,evidence,records=[],at,fetcher=fet
   env=process.env,timeoutMs=40000}={}){
  if(!validDirection(rule))throw Error("AI_REVIEW_RULE_DIRECTION_REQUIRED");
  const key=env.EVENT10_AI_API_KEY||env.DEEPSEEK_API_KEY;
- const model=env.EVENT10_AI_MODEL||"deepseek-v4-pro";
+ const model=env.EVENT10_AI_MODEL||"deepseek-flash";
  const lessons=feedbackExamples(records,at,18);
  const basic={direction:rule,baseDirection:rule,model,lessonsCount:lessons.length,
   reasoningEffort:AI_REVIEW_EFFORT,analysisCompleted:false,attempts:0};

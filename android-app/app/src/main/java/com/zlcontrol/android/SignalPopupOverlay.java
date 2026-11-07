@@ -61,7 +61,7 @@ final class SignalPopupOverlay {
         return v;
     }
 
-    void show(String signalId,String direction,long openedAt,long expiresAt,int noticeId){
+    void show(String signalId,String direction,long openedAt,long expiresAt,int noticeId,boolean reversed){
         main.post(()->{
             // The normal system notification is the fallback when overlay access
             // is unavailable, e.g. Android denies it on the lock screen.
@@ -78,7 +78,7 @@ final class SignalPopupOverlay {
                 layout.setBackground(background(Color.rgb(18,33,53),accent));
                 layout.setElevation(dp(16));
 
-                TextView headline=line("BTC · 10分钟新信号",18,Color.WHITE,true);
+                TextView headline=line(reversed?"BTC · 10分钟反向提醒":"BTC · 10分钟新信号",18,Color.WHITE,true);
                 layout.addView(headline,new LinearLayout.LayoutParams(-1,dp(40)));
                 TextView arrow=line(up?"↑  看涨":"↓  看跌",
                     27,accent,true);
@@ -87,8 +87,11 @@ final class SignalPopupOverlay {
                     .format(new Date(openedAt));
                 TextView time=line("出信号时间："+date,13,Color.rgb(193,211,233),false);
                 layout.addView(time,new LinearLayout.LayoutParams(-1,dp(32)));
-                TextView hint=line("确认后关闭本次弹窗和铃声，并打开币安。\n"
-                    +"交易方向、价格与金额请自行核对。",13,
+                String originalLabel="UP".equals(direction)?"看跌":"看涨";
+                String hintText=reversed?
+                    "已按本机开关反向提醒（原模型："+originalLabel+"）。\n请自行核对交易方向、价格与金额。":
+                    "确认后关闭本次弹窗和铃声，并打开币安。\n交易方向、价格与金额请自行核对。";
+                TextView hint=line(hintText,13,
                     Color.rgb(199,214,232),false);
                 LinearLayout.LayoutParams hintLp=new LinearLayout.LayoutParams(-1,dp(70));
                 hintLp.topMargin=dp(6);

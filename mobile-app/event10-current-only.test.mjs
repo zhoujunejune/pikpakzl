@@ -132,7 +132,7 @@ test("海派事件合约 v1.3.4 retains only EVENT10 with no Guardian API or nav
  assert.ok(!src.includes('/guardian/api/status')&&!src.includes('api("/api/status",7500)'));
  assert.ok(!src.includes('function guardian(')&&!src.includes('guardianError('));
  assert.ok(src.includes('async function refreshEvent10Only(){'));
- assert.ok(src.includes('api("/event10/api/status",9000)'));
+ assert.ok(src.includes('api("/event10/api/status",9000,controller.signal)'));
  assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
  assert.ok(src.includes('navigate(["event10","more"].includes(initial)?initial:"event10")'));
  assert.ok(src.includes('APP_VERSION="1.3.4"'));
@@ -145,7 +145,7 @@ test("app independently discovers current strategy from live status, verifies le
  assert.ok(src.includes("state.eventOnline=true"));
  assert.ok(src.includes("state.eventLedgerOnline=false"));
  assert.ok(src.includes("Live rule direction must NEVER be blocked"));
- assert.ok(src.includes('api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000)'));
+ assert.ok(src.includes('api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000,controller.signal)'));
  assert.ok(src.includes("version!==EVENT10_FREQ_OPTIMIZED_VERSION"));
  assert.ok(src.includes("EVENT10_FREQ_OPTIMIZED_VERSION=version"));
  assert.ok(src.includes("state.eventRecords=[]"));

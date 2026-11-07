@@ -3,7 +3,7 @@
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const APP_VERSION="1.3.3"; // Ten-minute-signal-only UI release.
 const $=id=>document.getElementById(id);
-const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null};
+const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null,eventEpoch:0,eventFetchController:null,eventRetryTimer:null,eventRetryDelayMs:1200,eventLastResumeAt:0,eventLifecycle:"foreground"};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
@@ -93,9 +93,23 @@ function renderRecords(id,items){
   root.append(wrap);
  }
 }
-async function api(url,timeout=6500){
+// A WebView may abort an in-flight fetch when switching to another app.
+// Distinguish that expected lifecycle cancellation from an actual server error.
+function isExpectedCancellation(error){
+ const text=String(error?.message||error||"").toLowerCase();
+ return error?.name==="AbortError"||error?.name==="TimeoutError"||
+   text.includes("aborted")||text.includes("aborterror")||
+   text.includes("cancelled")||text.includes("canceled");
+}
+async function api(url,timeout=6500,lifecycleSignal=null){
  const controller=new AbortController();
- const timer=setTimeout(()=>controller.abort(),timeout);
+ const cancel=()=>controller.abort();
+ if(lifecycleSignal?.aborted){
+  const error=new Error("PAGE_BACKGROUNDED");error.name="AbortError";throw error;
+ }
+ if(lifecycleSignal)lifecycleSignal.addEventListener("abort",cancel,{once:true});
+ let timedOut=false;
+ const timer=setTimeout(()=>{timedOut=true;controller.abort();},timeout);
  try{
   const res=await fetch(url,{cache:"no-store",credentials:"same-origin",signal:controller.signal,
    headers:{"Accept":"application/json"}});
@@ -103,7 +117,18 @@ async function api(url,timeout=6500){
   const value=await res.json();
   if(!value||value.ok!==true)throw Error("服务响应无效");
   return value;
- }finally{clearTimeout(timer);}
+ }catch(error){
+  // Don't show Android WebView's misleading "signal is aborted without reason".
+  if(lifecycleSignal?.aborted){
+   const expected=new Error("PAGE_BACKGROUNDED");expected.name="AbortError";throw expected;
+  }
+  if(timedOut)throw Error("请求超时，请检查网络");
+  if(isExpectedCancellation(error))throw Error("网络请求被中断，请重新连接");
+  throw error;
+ }finally{
+  clearTimeout(timer);
+  if(lifecycleSignal)lifecycleSignal.removeEventListener("abort",cancel);
+ }
 }
 // The ten-minute app is a CURRENT-STRATEGY ONLY view.
 // Old signal files stay on the server for audit, but are never displayed or counted.
@@ -269,15 +294,42 @@ function refreshConnectionBadge(){
    ("无法读取最新信号"+(state.eventLastError?"："+state.eventLastError:"")+"；不会将连接故障误判为无信号");
  }
 }
+// Cancel stale requests when Android suspends the page. This also unblocks
+// the next foreground request instead of waiting for the old 9s/11s timeout.
+function cancelEventRefresh(){
+ state.eventEpoch++;
+ if(state.eventFetchController)state.eventFetchController.abort();
+ state.eventFetchController=null;
+ state.eventRefreshBusy=false;
+ state.busy=false;
+}
+function clearEventRetry(){
+ if(state.eventRetryTimer!==null)clearTimeout(state.eventRetryTimer);
+ state.eventRetryTimer=null;
+ state.eventRetryDelayMs=1200;
+}
+function scheduleEventRetry(){
+ if(document.hidden||state.eventRetryTimer!==null)return;
+ const delay=state.eventRetryDelayMs;
+ state.eventRetryDelayMs=Math.min(12000,Math.round(delay*1.8));
+ state.eventRetryTimer=setTimeout(()=>{
+  state.eventRetryTimer=null;
+  if(!document.hidden)void refreshEvent10Only();
+ },delay);
+}
 async function refreshEvent10Only(){
  if(state.eventRefreshBusy||document.hidden)return;
+ const epoch=++state.eventEpoch;
+ const controller=new AbortController();
+ state.eventFetchController=controller;
  state.eventRefreshBusy=true;
  let service=null,serviceError=null;
+ const outdated=()=>epoch!==state.eventEpoch||controller.signal.aborted||document.hidden;
  try{
-  // Prioritize the small, critical live status request. Do not wait for the
-  // much larger 25-row history response to show the actual latest signal.
+  // Live status is primary; optional history must not block current signals.
   try{
-   service=await api("/event10/api/status",9000);
+   service=await api("/event10/api/status",9000,controller.signal);
+   if(outdated())return;
    const version=service?.decisionReviewVersion;
    if(typeof version!=="string"||!/^EVENT10_[A-Z0-9_]{8,100}$/.test(version))
      throw Error("服务返回的策略版本无效");
@@ -289,39 +341,45 @@ async function refreshEvent10Only(){
    }
    state.eventOnline=true;state.eventLastError=null;
    state.eventLastStatus=service;state.eventLastStatusAt=Date.now();
-   // The status itself is authoritative for the current signal/AI progress.
    event(service,null);
    refreshConnectionBadge();
+   clearEventRetry();
   }catch(error){
+   if(outdated())return; // Intentional Android backgrounding is not a disconnect.
    service=null;serviceError=String(error?.message||error).slice(0,105);
    state.eventOnline=false;state.eventLedgerOnline=false;
    state.eventLastError=serviceError;
    if(state.eventLastStatus?.decisionReviewVersion===EVENT10_FREQ_OPTIMIZED_VERSION){
-    // Preserve, but explicitly mark as stale, last valid live state.
     event(state.eventLastStatus,null);
-    put("eReason","最新信号刷新失败："+serviceError+"；显示上次成功读取的状态，并非当前实时结论。");
-    pill("eStatus","bad","连接中断·历史快照");
+    put("eReason","最新信号刷新未成功："+serviceError+"；正在重连。当前显示历史快照，不代表实时方向。");
+    pill("eStatus","bad","重新连接中·历史快照");
    }else eventError(serviceError);
    refreshConnectionBadge();
+   scheduleEventRetry();
   }
-  // History is an independent best-effort endpoint, not a condition for
-  // showing current direction. Never mix results across strategy versions.
-  if(!service)return;
+  if(!service||outdated())return;
   try{
-   const ledger=await api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000);
+   const ledger=await api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000,controller.signal);
+   if(outdated())return;
    if(ledger?.version!==EVENT10_FREQ_OPTIMIZED_VERSION||!Array.isArray(ledger.records))
     throw Error("历史接口策略版本不一致");
    state.eventLedgerOnline=true;
    state.eventHistoryError=null;
    event(service,ledger);
   }catch(error){
+   if(outdated())return;
    state.eventLedgerOnline=false;
    state.eventHistoryError="历史记录暂未同步："+String(error?.message||error).slice(0,100);
-   // Leave the working status signal and loaded history untouched.
    drawEventHistory();
   }
-  refreshConnectionBadge();
- }finally{state.eventRefreshBusy=false;}
+  if(!outdated())refreshConnectionBadge();
+ }finally{
+  // An old aborted request must not unlock a NEW foreground refresh.
+  if(epoch===state.eventEpoch){
+   state.eventRefreshBusy=false;
+   state.eventFetchController=null;
+  }
+ }
 }
 async function refresh(){
  if(state.busy||document.hidden)return;
@@ -351,7 +409,9 @@ async function checkHotUpdate(onReturn=false){
    put("appUpdateState","已经是最新网页版本 · 无须更新APK");
    return;
   }
-  if(onReturn&&!state.manualBusy&&!state.busy){window.location.reload();return;}
+  // Never auto-reload on Android foreground resume: reloading while requests
+  // are recovering is the main cause of aborted fetches and stale UI badges.
+  // Still show an explicit hot-update button so new code can be applied safely.
   $("hotUpdateBanner").hidden=false;
   put("hotUpdateText","发现新版网页功能 · 点击刷新即可使用，不需要卸载或重装");
   put("appUpdateState","检测到新版本："+meta.commit.slice(0,8)+" · 等待应用");
@@ -437,12 +497,34 @@ $("manualCheck").addEventListener("click",async()=>{
   result.textContent="检测未确认："+String(err).slice(0,180)+"。请先核实当前状态，避免重复点击。";
  }finally{state.manualBusy=false;$("manualCheck").disabled=false;}
 });
+// Android reliably calls the native entrypoint onResume; browsers also fire
+// visibilitychange/pageshow/focus. Debounce duplicate foreground notifications.
+function foregroundResume(source="foreground"){
+ if(document.hidden)return;
+ const now=Date.now();
+ if(now-state.eventLastResumeAt<500)return;
+ state.eventLastResumeAt=now;
+ state.eventLifecycle=source;
+ cancelEventRefresh();
+ clearEventRetry();
+ pill("eStatus","",state.eventLastStatus?"正在恢复实时连接":"正在连接信号服务");
+ put("eConnectionDetail","已返回应用，正在重新同步最新信号…");
+ void refreshEvent10Only();
+ void checkHotUpdate(true);
+}
+window.ZLForegroundResume=foregroundResume;
 document.addEventListener("visibilitychange",()=>{
- if(!document.hidden){
-  void checkHotUpdate(true);
-  void refresh();
- }
+ if(document.hidden){
+  state.eventLifecycle="background";
+  cancelEventRefresh();
+  clearEventRetry();
+ }else foregroundResume("visibility");
 });
+window.addEventListener("pageshow",event=>{
+ if(event.persisted)foregroundResume("pageshow");
+});
+window.addEventListener("focus",()=>foregroundResume("focus"));
+window.addEventListener("online",()=>foregroundResume("network-online"));
 const initial=location.hash.replace("#","");
 navigate(["event10","more"].includes(initial)?initial:"event10");
 void refresh();

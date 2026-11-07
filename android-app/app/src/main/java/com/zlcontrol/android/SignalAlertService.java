@@ -308,7 +308,12 @@ public final class SignalAlertService extends Service {
                 byte[] raw=payload.toString().getBytes(StandardCharsets.UTF_8);
                 conn.setFixedLengthStreamingMode(raw.length);
                 try(OutputStream out=conn.getOutputStream()){out.write(raw);}
-                if(conn.getResponseCode()!=200)return;
+                int result=conn.getResponseCode();
+                // 404 means a stale previous-strategy signal after cutover;
+                // discarding that receipt avoids starving later valid receipts.
+                if(result!=200&&result!=404&&result!=410)return;
+                if(result!=200)p.edit().putString(PREF_LAST_ACK_STATE,
+                    "EXPIRED_OLD_VERSION_RECEIPT_DISCARDED").apply();
             }finally{conn.disconnect();}
             JSONArray remaining=new JSONArray();
             for(int i=1;i<pending.length();i++)remaining.put(pending.optString(i));

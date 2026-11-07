@@ -121,7 +121,7 @@ a{color:inherit;text-decoration:none}
 <div class="mini" id="eScanGates">尚无拒绝原因统计。</div>
 <div class="mini" id="eFreshness" style="margin-top:9px">正在核实最近一次行情扫描时间…</div>
 <div class="message" id="eReason">正在同步最近一次规则检查结果…</div>
-<div class="mini" id="eAiReview" style="margin-top:9px" aria-live="polite">正在读取 AI 方向复核状态…</div>
+<div class="mini" id="eAiReview" style="margin-top:9px" aria-live="polite">当前为纯规则信号，不调用 AI。</div>
 <button class="btn primary full" style="margin-top:14px" type="button" id="manualCheck">立即手动检测信号</button>
 <div class="mini" style="margin-top:9px">只提供研究方向，不自动下单。安卓原生提醒每2秒检查，延迟超过120秒的信号会记为过晚而不补响；手机锁屏、系统权限和网络仍可能影响及时性。</div>
 <div class="message" id="manualResult" hidden aria-live="polite"></div>
@@ -141,7 +141,7 @@ a{color:inherit;text-decoration:none}
   <span><strong>反向信号提醒</strong><small>开启：原模型 UP → 手机提醒 DOWN；原模型 DOWN → 提醒 UP。<br>关闭：保持原方向提醒。</small></span>
   <input id="reverseAlertToggle" type="checkbox" role="switch" aria-label="反向信号提醒" aria-describedby="reverseAlertHelp" disabled>
 </label>
-<p class="mini" id="reverseAlertHelp" style="margin:12px 0 2px">仅改变本机系统通知、闹铃文字和悬浮弹窗，不改变 AI 模型判断、历史信号、结算和胜率。不改变顶部闹铃总开关。此开关需要安卓安装版 v1.3.2 及以上。</p>
+<p class="mini" id="reverseAlertHelp" style="margin:12px 0 2px">仅改变本机系统通知、闹铃文字和悬浮弹窗，不改变原始规则方向、历史信号、结算和胜率。不改变顶部闹铃总开关。此开关需要安卓安装版 v1.3.2 及以上。</p>
 <div class="mini" id="reverseAlertState" role="status" aria-live="polite" style="margin-top:10px">正在检查本机提醒开关支持情况…</div>
 </div>
 <div class="card">

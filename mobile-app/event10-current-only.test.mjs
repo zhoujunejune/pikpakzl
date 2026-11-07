@@ -144,7 +144,7 @@ test("app independently discovers current strategy from live status, verifies le
  assert.ok(src.includes("event(service,null)"));
  assert.ok(src.includes("state.eventOnline=true"));
  assert.ok(src.includes("state.eventLedgerOnline=false"));
- assert.ok(src.includes("Live direction and AI state must NEVER be blocked"));
+ assert.ok(src.includes("Live rule direction must NEVER be blocked"));
  assert.ok(src.includes('api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000)'));
  assert.ok(src.includes("version!==EVENT10_FREQ_OPTIMIZED_VERSION"));
  assert.ok(src.includes("EVENT10_FREQ_OPTIMIZED_VERSION=version"));
@@ -152,7 +152,7 @@ test("app independently discovers current strategy from live status, verifies le
  assert.ok(!src.includes('const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"'));
 });
 
-test("a slow signal-history endpoint must not hide currently available live AI signal",()=>{
+test("a slow signal-history endpoint must not hide currently available pure-rule signal",()=>{
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
  assert.ok(html.includes('id="eConnectionDetail"'));
  assert.ok(src.includes('const stats=(currentLedger?ledger?.stats:e?.stats)||{};'));

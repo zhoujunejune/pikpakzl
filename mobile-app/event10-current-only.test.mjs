@@ -161,6 +161,6 @@ test("a slow signal-history endpoint must not hide currently available pure-rule
  assert.ok(src.includes('state.eventOnline=true;state.eventLastError=null;'));
  assert.ok(src.includes('state.eventLastStatus=service'));
  assert.ok(src.includes('event(state.eventLastStatus,null)'));
- assert.ok(src.includes('信号已连接 · 记录同步中'));
+ assert.ok(src.includes('put("eMiniConnection",state.eventOnline?"● 已连接":"● 连接异常")'));
  assert.ok(!src.includes('if(!currentLedger)throw Error("新策略历史接口未就绪'));
 });

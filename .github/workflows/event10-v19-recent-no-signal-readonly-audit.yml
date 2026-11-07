@@ -112,7 +112,9 @@ jobs:
           print('EVENT10_REMOTE_SERVICE',json.dumps({'fields':service.stdout.strip().splitlines()},ensure_ascii=False),flush=True)
           print('EVENT10_REMOTE_AUDIT_COMPLETED=true',flush=True)
           """
-          remote='\n'.join(line.lstrip() for line in remote.splitlines())+'\n'
+          import textwrap
+          parts=remote.splitlines()
+          remote=parts[0]+'\n'+textwrap.dedent('\n'.join(parts[1:]))+'\n'
           # RunCommand runs under root, no writes/config changes.
           cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,
              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))

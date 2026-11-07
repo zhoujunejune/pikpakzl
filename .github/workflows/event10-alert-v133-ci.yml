@@ -2,7 +2,7 @@ name: EVENT10 V19 non-trading alert watch and receipt CI
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
-    paths: ['.github/workflows/event10-alert-v133-ci.yml','event10-bot/server.mjs','event10-bot/alert-watch.test.mjs','android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java']
+    paths: ['.github/workflows/event10-alert-v133-ci.yml','event10-bot/server.mjs','event10-bot/alert-watch.test.mjs','android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java','android-app/tests/SignalAlarmPolicySmoke.java']
   workflow_dispatch:
 permissions: {contents: read}
 jobs:

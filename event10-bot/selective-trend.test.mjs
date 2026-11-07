@@ -39,7 +39,7 @@ test("V19 never calls AI even when a DeepSeek key exists; rule decides instantly
   env:{EVENT10_STATE_FILE:file,DEEPSEEK_API_KEY:"invalid-test-secret"},
   clock:()=>now,
   fetcher:async(url)=>{
-   if(/api\\.deepseek\\.com|chat\\/completions/.test(url)){aiRequests++;throw Error("AI_FORBIDDEN");}
+   if(url.includes("api.deepseek.com")||url.includes("chat/completions")){aiRequests++;throw Error("AI_FORBIDDEN");}
    if(url.includes("shadow-market-data"))return {ok:true,json:async()=>feed(now)};
    if(url.includes("premiumIndex"))return {ok:true,json:async()=>({
     symbol:"BTCUSDT",indexPrice:"70000",time:now-100})};

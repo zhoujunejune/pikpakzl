@@ -1,0 +1,202 @@
+name: 海派事件合约 Android v1.3.1 signed stable release
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-android-stable-first-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: zl-android-stable-release
+  cancel-in-progress: false
+jobs:
+  stable-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/zl-futures-bot-v1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Install Android SDK 35
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35" "build-tools;35.0.0"
+      - name: Bootstrap or retrieve the same release signing key using Alibaba server
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          EXPECTED_CERT_SHA256: ${{ vars.ZL_ANDROID_CERT_SHA256 }}
+        run: |
+          python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+          python - <<'PY'
+          import os,base64,time,secrets,subprocess,tempfile,pathlib,re
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID','')
+          sk=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET','')
+          if not ak or not sk:raise RuntimeError('ALIYUN_AUTH_MISSING')
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          instance='b67374069bb3457ba6a3a2ede9305d3f'
+          def cloud(script,label):
+              request=sw.RunCommandRequest(region_id='ap-southeast-1',
+                  instance_id=instance,name=label,type='RunShellScript',
+                  working_user='root',command_content=script,timeout=120)
+              resp=cli.run_command(request)
+              invoke=resp.body.invoke_id
+              if not invoke:raise RuntimeError('CLOUD_COMMAND_UNAVAILABLE')
+              for attempt in range(45):
+                  time.sleep(2)
+                  z=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                      region_id='ap-southeast-1',instance_id=instance,invoke_id=invoke)).body.invocation_result
+                  if not z:continue
+                  status=str(z.invocation_status)
+                  if status not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+                  if status!='Success' or int(z.exit_code)!=0:
+                      raise RuntimeError('CLOUD_COMMAND_FAILED_'+label+'_'+status)
+                  return base64.b64decode(z.output or '').decode('utf8','replace')
+              raise RuntimeError('CLOUD_COMMAND_TIMEOUT_'+label)
+          directory='/root/.zlcontrol-android-release-signing'
+          check=cloud('test -s '+directory+'/release.jks && test -s '+directory+'/password && echo PRESENT || echo ABSENT',
+                     'zl-android-signer-existence')
+          keyfile=pathlib.Path(os.environ['RUNNER_TEMP'])/'zlcontrol-stable-release.jks'
+          if 'PRESENT' in check:
+              out=cloud('set -eu; d='+directory+
+                '; printf "KEY_B64="; base64 -w0 "$d/release.jks"; echo; printf "PASS_B64="; base64 -w0 "$d/password"; echo',
+                'zl-android-signer-secure-fetch')
+              fields={}
+              for line in out.splitlines():
+                  if line.startswith(('KEY_B64=','PASS_B64=')):
+                      k,v=line.split('=',1);fields[k]=base64.b64decode(v)
+              if 'KEY_B64' not in fields or 'PASS_B64' not in fields:
+                  raise RuntimeError('STABLE_KEY_RETRIEVAL_FAILED')
+              keyfile.write_bytes(fields['KEY_B64'])
+              password=fields['PASS_B64'].decode()
+              print('ANDROID_SIGNER_REUSED=true')
+          elif 'ABSENT' in check:
+              password=secrets.token_urlsafe(35)
+              subprocess.run(['keytool','-genkeypair','-v',
+                  '-alias','zlcontrol','-keyalg','RSA','-keysize','3072',
+                  '-sigalg','SHA256withRSA','-storetype','PKCS12',
+                  '-keystore',str(keyfile),'-storepass',password,
+                  '-keypass',password,'-validity','10000',
+                  '-dname','CN=ZL Control Android, OU=ZL, O=Independent, C=CN','-noprompt'],
+                  check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+              contents=base64.b64encode(keyfile.read_bytes()).decode('ascii')
+              pw=base64.b64encode(password.encode()).decode('ascii')
+              script='''#!/bin/bash
+          set -eu
+          umask 077
+          d=/root/.zlcontrol-android-release-signing
+          mkdir -p "$d"
+          if test -e "$d/release.jks" || test -e "$d/password"; then
+              echo 'SIGNER_ALREADY_EXISTS'; exit 3
+          fi
+          printf '%s' 'KEY_REPLACE' | base64 --decode > "$d/release.jks"
+          printf '%s' 'PASS_REPLACE' | base64 --decode > "$d/password"
+          chmod 600 "$d/release.jks" "$d/password"
+          printf 'SIGNER_SAVED=true\\n'
+          '''
+              script=script.replace('KEY_REPLACE',contents).replace('PASS_REPLACE',pw)
+              out=cloud(script,'zl-android-save-new-stable-signer')
+              if 'SIGNER_SAVED=true' not in out:raise RuntimeError('SIGNER_PERSISTENCE_NOT_CONFIRMED')
+              print('ANDROID_SIGNER_NEW_PERSISTED=true')
+          else:raise RuntimeError('UNKNOWN_SIGNER_STATE')
+          keyfile.chmod(0o600)
+          subprocess.run(['keytool','-list','-keystore',str(keyfile),
+              '-storepass',password,'-alias','zlcontrol'],check=True,
+              stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+          # The sensitive file and password stay out of code, logs and APK.
+          print('::add-mask::'+password)
+          with open(os.environ['GITHUB_ENV'],'a') as env:
+              for k,v in [('ZL_SIGNING_STORE_FILE',str(keyfile)),
+                          ('ZL_SIGNING_STORE_PASSWORD',password),
+                          ('ZL_SIGNING_KEY_ALIAS','zlcontrol'),
+                          ('ZL_SIGNING_KEY_PASSWORD',password)]:
+                  env.write(k+'='+v+'\n')
+          print('ANDROID_STABLE_KEY_READY=true')
+          PY
+      - name: Verify EVENT10-only package identity and upgrade version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          g=Path('android-app/app/build.gradle').read_text()
+          m=Path('android-app/app/src/main/AndroidManifest.xml').read_text()
+          t=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java').read_text()
+          assert "applicationId 'com.zlcontrol.android'" in g
+          assert 'versionCode 13' in g and "versionName '1.3.1'" in g
+          assert 'android:label="海派事件合约"' in m
+          assert 'String name=direction.equals("UP")?"看涨":"看跌";' in t
+          assert 'STRICT_RESEARCH' not in t and 'STANDARD_RESEARCH' not in t
+          assert '/event10/api/signals?limit=50&offset=0' in t
+          p=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalPopupOverlay.java').read_text()
+          assert 'signalPopup.show(signalId,direction,opened,' in t
+          assert 'setContentTitle("新信号："+name+' in t
+          assert 'void show(String signalId,String direction,long openedAt' in p
+          assert 'String tier' not in t and '+tier' not in p
+          assert '↑  看涨' in p and '↓  看跌' in p
+          import struct
+          icon=Path('android-app/app/src/main/res/drawable-nodpi/sea_friends_icon.png')
+          data=icon.read_bytes()
+          assert len(data)>3000 and data[:8]==b'\x89PNG\r\n\x1a\n'
+          assert struct.unpack('>II',data[16:24])==(512,512)
+          assert 'android:icon="@drawable/sea_friends_icon"' in m
+          assert 'android:label="海派事件合约"' in m
+          print('HAIPAI_EVENT10_V131_STATIC_VALIDATED=true')
+          PY
+      - name: Build release APK (never debug)
+        working-directory: android-app
+        run: |
+          gradle --no-daemon :app:assembleRelease
+          test -s app/build/outputs/apk/release/app-release.apk
+      - name: Verify release signing and publish as a downloadable asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_CERT_SHA256: ${{ vars.ZL_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          apk=android-app/app/build/outputs/apk/release/app-release.apk
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort | tail -1)"
+          if ! "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/verify.txt" 2>&1; then
+            echo "ANDROID_APKSIGNER_VERIFY_FAILED=true"
+            sed -n '1,35p' "$RUNNER_TEMP/verify.txt"
+            exit 1
+          fi
+          echo "ANDROID_APKSIGNER_VERIFY_OK=true"
+          sed -n '1,15p' "$RUNNER_TEMP/verify.txt"
+          cert="$(sed -n \
+            -e 's/^V2 Signer: certificate SHA-256 digest: //p' \
+            -e 's/^Signer #1 certificate SHA-256 digest: //p' \
+            "$RUNNER_TEMP/verify.txt" | head -n1)"
+          test -n "$cert"
+          if [[ -n "$EXPECTED_CERT_SHA256" && "${cert,,}" != "${EXPECTED_CERT_SHA256,,}" ]]; then
+            echo "Release signer differs from expected certificate"; exit 1
+          fi
+          echo "ANDROID_RELEASE_CERT_SHA256=$cert"
+          mkdir -p dist
+          cp "$apk" dist/Haipai-Event10-v1.3.1-STABLE-RELEASE.apk
+          sha256sum dist/*.apk
+          if gh release view haipai-event10-v1.3.1-stable-20261106 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "ANDROID_STABLE_RELEASE_ALREADY_PUBLISHED=true"
+          else
+            gh release create haipai-event10-v1.3.1-stable-20261106 dist/Haipai-Event10-v1.3.1-STABLE-RELEASE.apk \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "海派事件合约 v1.3.1 - Official Stable Android" \
+              --notes "海派事件合约 v1.3.1: renamed app and user-provided underwater friends launcher icon, ten-minute BTC signal-only screen, native alert retained. Same package ID and release signing certificate as v1.3.0, in-place upgrade supported for same-signed installs. No live trading engine changes."
+            echo "ANDROID_STABLE_RELEASE_PUBLISHED=true"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Haipai-Event10-v1.3.1-STABLE-RELEASE
+          path: dist/Haipai-Event10-v1.3.1-STABLE-RELEASE.apk
+          if-no-files-found: error
+          retention-days: 90

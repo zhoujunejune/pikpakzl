@@ -1,0 +1,38 @@
+name: Deploy MPC-first Prediction payment patch to SWAS when idle
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_payment_priority_deploy.py'
+      - '.github/workflows/zl-aliyun-payment-priority-deploy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-payment-targeted
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify wallet-routing regression tests before any server change
+        run: |
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/wrapper.mjs
+          node --test railway-diagnostic/payment-source-priority.test.mjs
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Apply minimal contextual patch only if service idle and diff compatible
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_payment_priority_deploy.py

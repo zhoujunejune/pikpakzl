@@ -1,0 +1,60 @@
+name: EVENT10 public HTTPS longpoll and alert receipt read-only smoke
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-alert-public-watch-smoke.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Test live authenticated V19 HTTPS longpoll latency and ACK diagnostics endpoint
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,urllib.request,base64,json,time,datetime,urllib.parse
+          pw=os.environ.get('ZL_PANEL_PASSWORD','')
+          assert pw,'AUTH_SECRET_MISSING'
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          def get(path,timeout=30):
+              start=time.monotonic()
+              request=urllib.request.Request(base+path,headers={
+                'Authorization':auth,'Cache-Control':'no-store','Accept':'application/json'})
+              with urllib.request.urlopen(request,timeout=timeout) as response:
+                assert response.status==200,('HTTP',response.status)
+                obj=json.loads(response.read(2500000))
+              return obj,round((time.monotonic()-start)*1000)
+          status,_=get('/event10/api/status')
+          ledger,_=get('/event10/api/signals?limit=8&offset=0')
+          assert status.get('decisionReviewVersion')=='EVENT10_PURE_RULE_V19_20261107'
+          assert status.get('aiMandatory') is False and status.get('modelCalls')==0
+          assert ledger.get('version')==status.get('decisionReviewVersion')
+          first=(ledger.get('records') or [{}])[0]
+          cursor=first.get('id') or ''
+          path='/event10/api/watch?after='+urllib.parse.quote(cursor,safe='')
+          watched,ms=get(path,30)
+          assert watched.get('ok') is True
+          assert watched.get('version')==ledger.get('version')
+          assert isinstance(watched.get('records'),list)
+          if cursor and watched.get('watchTimeout'):
+              assert len(watched['records'])==0
+              assert 14000<=ms<=29000,('WATCH_TIMEOUT_OUT_OF_BOUNDS',ms)
+          elif cursor:
+              assert watched['records'] and watched['records'][0]['id']!=cursor
+          health,health_ms=get('/event10/api/alert-health')
+          assert health.get('ok') is True
+          assert health.get('source')=='ANONYMOUS_ANDROID_ACKS_NOT_OS_DELIVERY'
+          print('ALERT_HTTPS_WATCH_REPORT',json.dumps({
+            'at':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(timespec='seconds'),
+            'v19':status.get('decisionReviewVersion'),'modelCalls':status.get('modelCalls'),
+            'cursor':cursor,'watchMs':ms,'watchTimeout':watched.get('watchTimeout'),
+            'watchReturnedCount':len(watched['records']),
+            'ackStats':health.get('summary'),'ackReadMs':health_ms,
+            'privacyNote':'Server sees only client-reported state; no real phone lock-screen test'
+          },ensure_ascii=False),flush=True)
+          print('ALERT_HTTPS_WATCH_COMPLETE=true',flush=True)
+          PY

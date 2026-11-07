@@ -1,0 +1,27 @@
+{
+  "id": "/app/",
+  "name": "海派事件合约",
+  "short_name": "海派事件合约",
+  "description": "海派事件合约：BTC 十分钟方向信号、历史记录与到期核验。",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#e9f5ff",
+  "theme_color": "#e9f5ff",
+  "lang": "zh-CN",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/app/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/app/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

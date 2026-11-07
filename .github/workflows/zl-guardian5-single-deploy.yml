@@ -1,0 +1,62 @@
+name: Deploy GUARDIAN5 shadow analysis to single bot
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/guardian5-core.mjs
+      - prediction-bot-v1/guardian5-core.test.mjs
+      - prediction-bot-v1/guardian5-service.mjs
+      - prediction-bot-v1/aliyun_guardian5_deploy.py
+      - prediction-bot-v1/aliyun_guardian_prod_switch.py
+      - prediction-bot-v1/aliyun_guardian_dashboard_cutover.py
+      - railway-diagnostic/guardian-main-dashboard.mjs
+      - .github/workflows/zl-guardian5-single-deploy.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-guardian5-single-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate strategy and UI syntax
+        run: |
+          node --check prediction-bot-v1/guardian5-core.mjs
+          node --check prediction-bot-v1/guardian5-service.mjs
+          node --check railway-diagnostic/guardian-main-dashboard.mjs
+          node --check prediction-bot-v1/deepseek-5m-features.mjs
+          node --test prediction-bot-v1/guardian5-core.test.mjs
+          python -m py_compile prediction-bot-v1/aliyun_guardian5_deploy.py prediction-bot-v1/aliyun_guardian_prod_switch.py prediction-bot-v1/aliyun_guardian_dashboard_cutover.py
+          python - <<'PY'
+          import ast,subprocess
+          p='prediction-bot-v1/aliyun_guardian5_deploy.py'
+          t=ast.parse(open(p).read())
+          s=next(n.value.value for n in t.body if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='SCRIPT' for x in n.targets))
+          x=subprocess.run(['bash','-n'],input=s,text=True,capture_output=True)
+          print(x.stderr)
+          assert x.returncode==0,'REMOTE_SHELL_INVALID'
+          print('GUARDIAN_REMOTE_SHELL_VALID=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy shadow analysis, preserve disabled live execution
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian5_deploy.py
+      - name: Switch production signal to GUARDIAN only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_prod_switch.py
+      - name: Replace retired FAST5 homepage widget with GUARDIAN monitoring
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_dashboard_cutover.py

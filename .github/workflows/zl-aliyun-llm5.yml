@@ -1,0 +1,132 @@
+name: Deploy isolated Alibaba Qwen 5min signal service (orders off)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/llm-5m-engine.mjs
+      - prediction-bot-v1/llm-5m-engine.test.mjs
+      - prediction-bot-v1/aliyun_install_llm5.py
+      - .github/workflows/zl-aliyun-llm5.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-llm5-isolated-signal
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          node --check prediction-bot-v1/llm-5m-engine.mjs
+          node --test prediction-bot-v1/llm-5m-engine.test.mjs
+          python -m py_compile prediction-bot-v1/aliyun_install_llm5.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Install only isolated LLM service and protected URL
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_install_llm5.py
+      - name: Set isolated Qwen credential on Alibaba server
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os, time, base64, sys
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          key=os.environ.get('DASHSCOPE_API_KEY','')
+          if not key.startswith('sk-') or len(key)<20: sys.exit('QWEN_SECRET_NOT_CONFIGURED')
+          client=Client(api.Config(
+              access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+              access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          encoded=base64.b64encode(key.encode()).decode()
+          script='''#!/bin/bash
+          set -eu
+          umask 077
+          test "$(systemctl is-active zl-prediction-llm5)" = active
+          python3 - <<'REMOTE'
+          import base64, os, tempfile
+          from pathlib import Path
+          p=Path('/etc/zl-prediction/llm5.env')
+          assert p.exists() and not p.is_symlink()
+          secret=base64.b64decode('ENCODED_VALUE').decode('utf-8')
+          original=p.read_text()
+          lines=[x for x in original.splitlines() if not x.startswith('DASHSCOPE_API_KEY=')]
+          lines.append('DASHSCOPE_API_KEY='+secret)
+          fd,tmp=tempfile.mkstemp(dir=str(p.parent),prefix='.qwen-')
+          try:
+              with os.fdopen(fd,'w') as handle: handle.write('\\n'.join(lines)+'\\n')
+              os.chmod(tmp,0o600)
+              os.replace(tmp,p)
+          finally:
+              if os.path.exists(tmp): os.remove(tmp)
+          REMOTE
+          systemctl restart zl-prediction-llm5.service
+          python3 - <<'VERIFY'
+          import json,urllib.request
+          with urllib.request.urlopen('http://127.0.0.1:13018/api/status',timeout=10) as r:
+              d=json.load(r)
+          assert d['model']=='LLM_5M_V1' and d['configured'] is True
+          assert d['realOrderEnabled'] is False and d['tradeIntegration'] is False
+          print('QWEN_CONFIGURED=true')
+          print('QWEN_ORDER_MODE=read_only')
+          VERIFY
+          '''.replace('ENCODED_VALUE',encoded)
+          x=client.run_command(sw.RunCommandRequest(
+              region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+              name='zl-qwen-secret-setup-only',type='RunShellScript',
+              working_user='root',command_content=script,timeout=120)).body.invoke_id
+          for _ in range(35):
+              time.sleep(3)
+              o=client.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                  region_id='ap-southeast-1',
+                  instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+                  invoke_id=x)).body.invocation_result
+              if o and str(o.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):
+                  if str(o.invocation_status)!='Success' or int(o.exit_code)!=0:
+                      sys.exit('QWEN_REMOTE_CONFIGURATION_FAILED')
+                  print('QWEN_SECRET_APPLIED=true')
+                  break
+          else: sys.exit('QWEN_REMOTE_CONFIGURATION_TIMEOUT')
+          PY
+      - name: Check external login protected LLM status without trading
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,base64,os,json
+          base='https://prediction.47-237-188-69.sslip.io'
+          pwd=os.getenv('ZL_PANEL_PASSWORD','')
+          assert pwd,'password not present'
+          authorization='Basic '+base64.b64encode(('zl:'+pwd).encode()).decode()
+          def get(path,login):
+            r=urllib.request.Request(base+path,headers={'Authorization':authorization} if login else {})
+            try:
+              with urllib.request.urlopen(r,timeout=15) as resp:return resp.status,resp.read(80000)
+            except urllib.error.HTTPError as err:return err.code,err.read(5000)
+          assert get('/llm/',False)[0]==401
+          code,html=get('/llm/',True)
+          assert code==200 and b'LLM_5M_V1' in html
+          code,body=get('/llm/api/status',True)
+          assert code==200
+          status=json.loads(body)
+          assert status['model']=='LLM_5M_V1'
+          assert status['realOrderEnabled'] is False and status['tradeIntegration'] is False
+          print('LLM5_PROTECTED_PUBLIC_PAGE_HTTP',code)
+          print('LLM5_CONFIGURED',status['configured'])
+          print('LLM5_LIVE_ORDERS_ENABLED',status['realOrderEnabled'])
+          print('LLM5_SAFE_DEPLOY_VERIFIED=true')
+          PY

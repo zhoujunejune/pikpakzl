@@ -1,0 +1,60 @@
+name: Haipai App artwork - generate and commit real launcher icons
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'mobile-app/haipai-friends.webp.b64'
+      - 'mobile-app/generate_haipai_icons.py'
+      - '.github/workflows/haipai-branding-icons.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: haipai-artwork-assets
+  cancel-in-progress: false
+jobs:
+  generate-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/zl-futures-bot-v1
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Pillow and build brand image sizes
+        run: |
+          python -m pip install -q Pillow
+          python mobile-app/generate_haipai_icons.py
+      - name: Confirm user artwork replaces ZL placeholder
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          for name,sz in [('mobile-app/icon-192.png',192),
+                          ('mobile-app/icon-512.png',512),
+                          ('android-app/app/src/main/res/drawable-nodpi/sea_friends_icon.png',512)]:
+              p=Path(name)
+              assert p.stat().st_size>3000,name
+              with Image.open(p) as im:
+                  assert im.size==(sz,sz),(name,im.size)
+          svg=Path('mobile-app/icon.svg').read_text()
+          assert 'data:image/png;base64,' in svg
+          assert 'ZL</text>' not in svg
+          print('HAIPAI_ICON_ARTWORK_VERIFIED=true')
+          PY
+      - name: Commit generated binary icons for PWA and Android builds
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mobile-app/icon-192.png mobile-app/icon-512.png mobile-app/icon.svg \
+            android-app/app/src/main/res/drawable-nodpi/sea_friends_icon.png
+          if git diff --cached --quiet; then
+            echo "HAIPAI_ICONS_ALREADY_CURRENT=true"
+          else
+            git commit -m "Brand Haipai EVENT10: user artwork for Android and PWA launcher icons"
+            git push origin HEAD:feature/zl-futures-bot-v1
+            echo "HAIPAI_ICONS_COMMITTED=true"
+          fi

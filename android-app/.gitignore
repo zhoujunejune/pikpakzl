@@ -1,0 +1,12 @@
+/.gradle/
+/build/
+/app/build/
+/local.properties
+/.idea/
+*.iml
+
+# Never commit an Android signing keystore or passwords.
+*.jks
+*.keystore
+*.p12
+*.properties.local

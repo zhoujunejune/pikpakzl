@@ -1,0 +1,38 @@
+name: GUARDIAN5 full order-chain read-only production audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_full_order_audit.py
+      - .github/workflows/zl-guardian-full-order-audit.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Read-only command syntax checks
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_full_order_audit.py
+          python - <<'PY'
+          import ast,subprocess
+          s=open('prediction-bot-v1/aliyun_guardian_full_order_audit.py').read()
+          tree=ast.parse(s)
+          remote=next(x.value.value for x in tree.body if isinstance(x,ast.Assign) and any(getattr(t,'id',None)=='REMOTE' for t in x.targets))
+          out=subprocess.run(['bash','-n'],input=remote,text=True,capture_output=True)
+          print(out.stderr)
+          assert out.returncode==0,'SHELL_INVALID'
+          assert 'place-order-bundle' not in remote
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read current trade state, risk and relevant journal events, no trade
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID" && test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_full_order_audit.py

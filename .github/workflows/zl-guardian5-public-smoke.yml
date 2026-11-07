@@ -1,0 +1,20 @@
+name: GUARDIAN5 authenticated public smoke
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/guardian5_live_smoke.py
+      - .github/workflows/zl-guardian5-public-smoke.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m py_compile prediction-bot-v1/guardian5_live_smoke.py
+      - name: Verify public login, GUARDIAN, original single and retired routes
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python prediction-bot-v1/guardian5_live_smoke.py

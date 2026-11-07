@@ -1,0 +1,32 @@
+name: Deploy original prediction production-code components to Alibaba (orders OFF)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-prediction-core.yml'
+      - 'prediction-bot-v1/install_original_core.sh'
+      - 'prediction-bot-v1/aliyun_core_deploy.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-real-code-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 21
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax check of isolated install script
+        run: bash -n prediction-bot-v1/install_original_core.sh
+      - name: Install Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Install real prediction service source, dedicated Redis and panel on SWAS (orders disabled until cutover)
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_core_deploy.py

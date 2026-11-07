@@ -1,0 +1,71 @@
+name: EVENT10 read-only reminder backend latency audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-readonly-alert-health-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Measure 12 authenticated live signal reads and current V19 history
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json,os,base64,urllib.request,urllib.error,datetime,time,statistics
+          pw=os.environ.get('ZL_PANEL_PASSWORD')
+          assert pw,'AUTH_MISSING'
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          def read(path):
+            st=time.monotonic()
+            rq=urllib.request.Request(base+path,headers={'Authorization':auth,'Accept':'application/json','Cache-Control':'no-store'})
+            with urllib.request.urlopen(rq,timeout=13) as r:
+              raw=r.read(2000000)
+              result=json.loads(raw)
+              assert r.status==200 and result.get('ok') is True, ('INVALID_RESPONSE',r.status)
+            return result,round((time.monotonic()-st)*1000)
+          results=[]
+          st=time.monotonic()
+          for i in range(12):
+            try:
+              ledger,ms=read('/event10/api/signals?limit=8&offset=0')
+              results.append(ms)
+              first=(ledger.get('records') or [{}])[0]
+              print('ALERT_BACKEND_POLL',json.dumps({'i':i+1,'ms':ms,'version':ledger.get('version'),
+                'total':ledger.get('total'),'latestId':str(first.get('id') or '')[:70],
+                'latestAt':first.get('openedAt')}),flush=True)
+            except Exception as e:
+              print('ALERT_BACKEND_POLL_ERROR',i+1,type(e).__name__,str(e)[:140],flush=True)
+            if i<11:time.sleep(2)
+          status,statusms=read('/event10/api/status')
+          full,fullms=read('/event10/api/signals?limit=50&offset=0')
+          version=status.get('decisionReviewVersion')
+          assert full.get('version')==version
+          print('ALERT_BACKEND_SUMMARY',json.dumps({
+            'checkedAt':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(timespec='seconds'),
+            'version':version,'total':full.get('total'),
+            'successful':len(results),'failures':12-len(results),
+            'minMs':min(results) if results else None,
+            'p50Ms':round(statistics.median(results)) if results else None,
+            'maxMs':max(results) if results else None,
+            'statusMs':statusms,'full50Ms':fullms,
+            'aiMandatory':status.get('aiMandatory'),
+            'modelCalls':status.get('modelCalls'),
+            'autoIntervalMs':status.get('autoIntervalMs'),
+            'minSignalGapMs':status.get('minSignalGapMs'),
+            'lastSuccessfulScanAt':status.get('lastSuccessfulScanAt'),
+            'lastCheckAt':(status.get('lastCheck') or {}).get('checkedAt'),
+            'lastCheckTag':(status.get('lastCheck') or {}).get('eventTag'),
+            'lastError':status.get('lastError'),
+            'lastHourScans':(status.get('scanDiagnostics') or {}).get('lastHour'),
+            'ledgerSettled':(full.get('stats') or {}).get('proxySettled'),
+            'ledgerAccuracyPct':(full.get('stats') or {}).get('proxyAccuracyPct'),
+            'note':'Remote GitHub runner, NOT on-device signal receipt or lock-screen testing'
+          },ensure_ascii=False),flush=True)
+          print('ALERT_BACKEND_AUDIT_COMPLETE=true',flush=True)
+          PY

@@ -1,0 +1,26 @@
+name: Read-only V4 Pro API compatibility check
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - .github/workflows/zl-deepseek-v4-pro-preflight.yml
+      - prediction-bot-v1/aliyun_deepseek_v4_pro_preflight.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Syntax check
+        run: python -m py_compile prediction-bot-v1/aliyun_deepseek_v4_pro_preflight.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Use existing on-server API key, never submit orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_v4_pro_preflight.py

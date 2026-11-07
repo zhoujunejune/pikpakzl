@@ -1,0 +1,94 @@
+# 2026-11-05: rerun real cached 1m/5m signal frequency and T+600 proxy evaluation after feed fix.
+name: EVENT10 3-per-hour model readonly candidate benchmark
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-three-per-hour-benchmark.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud-swas-open20200601==4.0.0
+      - name: Historical candidate comparison, NO orders or service modifications
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak,sk=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID'),os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk
+          script=r"""#!/bin/bash
+          set -eu
+          /opt/zl-prediction-node/bin/node --input-type=module <<'NODE'
+          const r=await fetch('http://127.0.0.1:13003/api/shadow-market-data',{signal:AbortSignal.timeout(9000)});
+          if(!r.ok)throw Error('FEED_HTTP_'+r.status);
+          const f=await r.json();
+          if(f.ok!==true)throw Error('FEED_NOT_OK');
+          const c=i=>(f.candles?.[i]?.rows||f.candles?.[i]||[]).filter(x=>x.closed===true).sort((a,b)=>a.startMs-b.startMs);
+          const one=c('1m'),five=c('5m');
+          const ema=(a,n)=>{let v=a.slice(0,n).reduce((x,y)=>x+y,0)/n;for(const p of a.slice(n))v+=(2/(n+1))*(p-v);return v};
+          const rsi=a=>{let g=0,l=0;for(let i=a.length-14;i<a.length;i++){let d=a[i]-a[i-1];g+=Math.max(d,0);l+=Math.max(-d,0)}return l===0?100:100-100/(1+g/l)};
+          const stats={};
+          const methods=['trend','reversal','regime','rsi','oneMomentum','fiveTrend'];
+          for(const k of methods)stats[k]={n:0,hits:0,byHour:{},timeStart:null,timeEnd:null};
+          let start=Math.max(Number(one.at(65)?.startMs)+60000,Number(five.at(40)?.startMs)+300000);
+          const end=Number(one.at(-12)?.startMs)+60000;
+          for(let at=Math.ceil(start/1200000)*1200000;at+600000<=end;at+=1200000){
+            const a=one.filter(x=>x.startMs+60000<=at).slice(-65),b=five.filter(x=>x.startMs+300000<=at).slice(-40);
+            const cur=one.filter(x=>x.startMs+60000<=at).at(-1);
+            const fut=one.filter(x=>x.startMs+60000<=at+600000).at(-1);
+            if(a.length<65||b.length<40||!cur||!fut)continue;
+            const p=a.map(x=>x.close),q=b.map(x=>x.close),m3=(p.at(-1)/p.at(-4)-1)*100;
+            const e1=ema(p,9)-ema(p,21),e5=ema(q,9)-ema(q,21);
+            const fiveMovePct=100*e5/q.at(-1),r=rsi(p);
+            const s3=Math.sign(m3)||Math.sign(p.at(-1)-p.at(-6))||1;
+            const trend=Math.sign(e1+e5*0.6)||s3;
+            const isRange=Math.abs(fiveMovePct)<0.065;
+            const mix=isRange?-s3:trend;
+            const outcomes={trend,reversal:-s3,regime:mix,rsi:r>=63?-1:r<=37?1:trend,oneMomentum:s3,fiveTrend:Math.sign(e5)||s3};
+            const actual=Math.sign(fut.close-cur.close);
+            const hour=new Date(at).toISOString().slice(0,13);
+            for(const [k,dir] of Object.entries(outcomes)){
+              if(dir!==1&&dir!==-1)continue;
+              const t=stats[k];t.n++;if(dir===actual)t.hits++;
+              t.byHour[hour]=(t.byHour[hour]||0)+1;t.timeStart??=at;t.timeEnd=at;
+            }
+          }
+          const summary=Object.fromEntries(Object.entries(stats).map(([k,v])=>[k,{
+            signals:v.n,hits:v.hits,winRatePct:v.n?+(100*v.hits/v.n).toFixed(2):null,
+            hours:Object.keys(v.byHour).length,minPerHour:Math.min(...Object.values(v.byHour)),
+            firstAt:v.timeStart,lastAt:v.timeEnd}]));
+          console.log('THREE_HOUR_BENCHMARK',JSON.stringify({
+            source:'BINANCE_CLOSED_SPOT_KLINE_10M_PROXY_NOT_OFFICIAL_INDEX',summary,
+            caveat:'15h one market regime, cherry-picking cannot establish high future accuracy'
+          }));
+          NODE
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inst='b67374069bb3457ba6a3a2ede9305d3f'
+          res=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=inst,
+              name='event10-three-hour-readonly-benchmark',type='RunShellScript',
+              working_user='root',command_content=script,timeout=60))
+          invoke=res.body.invoke_id
+          assert invoke
+          for _ in range(45):
+              time.sleep(2)
+              r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id=inst,invoke_id=invoke)).body.invocation_result
+              if not r or str(r.invocation_status) not in ('Success','Failed','Aborted',
+                  'ExecutionTimeout','ExitCodeNonzero','ClientNotRunning'): continue
+              out=base64.b64decode(r.output or '').decode('utf-8','replace')
+              for line in out.splitlines():
+                  if line.startswith('THREE_HOUR_BENCHMARK'):print(line,flush=True)
+              assert str(r.invocation_status)=='Success' and int(r.exit_code)==0,'BENCHMARK_REMOTE_FAILED '+out[-450:]
+              break
+          else:raise RuntimeError('BENCHMARK_TIMED_OUT')
+          PY

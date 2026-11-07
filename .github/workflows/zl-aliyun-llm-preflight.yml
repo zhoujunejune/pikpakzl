@@ -1,0 +1,29 @@
+name: Alibaba LLM 5min prediction integration preflight
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_llm_preflight.py
+      - .github/workflows/zl-aliyun-llm-preflight.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m py_compile prediction-bot-v1/aliyun_llm_preflight.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only private server LLM source and credential-presence check
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          DASHSCOPE_KEY_PRESENT: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          echo "LLM_GITHUB_QWEN_KEY_PRESENT=$([ -n "$DASHSCOPE_KEY_PRESENT" ] && echo yes || echo no)"
+          python prediction-bot-v1/aliyun_llm_preflight.py

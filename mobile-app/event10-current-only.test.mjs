@@ -121,11 +121,13 @@ test("V16 shows unified accuracy and rejection audit without confusing signal ti
  for(const key of ["scanDiagnostics","lastSuccessfulScanAt","eScanAudit"])assert.ok(src.includes(key),key);
  assert.ok(src.includes("指数代理"),"official event contract settlement must never be claimed");
 });
-test("海派事件合约 v1.3.4 retains only EVENT10 with no Guardian API or navigation",()=>{
+test("海派事件合约 v1.3.5 retains only EVENT10 with no Guardian API or navigation",()=>{
  const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
  const manifest=JSON.parse(fs.readFileSync(new URL("./manifest.webmanifest",import.meta.url),"utf8"));
  assert.ok(html.includes('id="panel-event10"')&&html.includes('id="panel-more"'));
+ assert.ok(html.includes('id="panel-stats"')&&html.includes('id="panel-records"'));
  assert.ok(html.includes('data-go="event10"')&&html.includes('data-go="more"'));
+ assert.ok(html.includes('data-go="stats"')&&html.includes('data-go="records"'));
  assert.ok(!html.includes('panel-guardian')&&!html.includes('data-go="guardian"'));
  assert.ok(!html.includes('panel-overview')&&!html.includes('data-go="overview"'));
  assert.ok(!html.includes('gRecords')&&!html.includes('GUARDIAN'));
@@ -134,8 +136,8 @@ test("海派事件合约 v1.3.4 retains only EVENT10 with no Guardian API or nav
  assert.ok(src.includes('async function refreshEvent10Only(){'));
  assert.ok(src.includes('api("/event10/api/status",9000,controller.signal)'));
  assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
- assert.ok(src.includes('navigate(["event10","more"].includes(initial)?initial:"event10")'));
- assert.ok(src.includes('APP_VERSION="1.3.4"'));
+ assert.ok(src.includes('navigate(["event10","stats","records","more"].includes(initial)?initial:"event10")'));
+ assert.ok(src.includes('APP_VERSION="1.3.5"'));
  assert.equal(manifest.name,"海派事件合约");
 });
 test("app independently discovers current strategy from live status, verifies ledger only when available",()=>{

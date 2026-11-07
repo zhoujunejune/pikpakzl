@@ -24,6 +24,9 @@ import org.json.JSONObject;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.io.OutputStream;
+import java.net.URLEncoder;
+import java.util.UUID;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.Executors;
@@ -61,6 +64,13 @@ public final class SignalAlertService extends Service {
     public static final String PREF_AUDIT_TRAIL="event10_alert_audit_trail_v2";
     public static final String PREF_LAST_AUDIT_KEY="event10_alert_last_audit_key_v2";
     public static final String PREF_LAST_MISSED_TIME="event10_alert_last_missed_time_v2";
+    public static final String PREF_LAST_FULL_SYNC="event10_alert_last_full_sync_v133";
+    public static final String PREF_WATCH_MODE="event10_alert_watch_mode_v133";
+    public static final String PREF_LAST_ACK_STATE="event10_alert_last_ack_state_v133";
+    public static final String PREF_LAST_ACK_TIME="event10_alert_last_ack_time_v133";
+    public static final String PREF_PENDING_RECEIPTS="event10_alert_pending_receipts_v133";
+    public static final String PREF_ACK_CLIENT_ID="event10_alert_anon_id_v133";
+    private static final String ACK_LAST_KEY="event10_alert_ack_last_key_v133";
     private static final String FOREGROUND_CHANNEL="zl_event10_foreground_v1";
     private static final String ALARM_CHANNEL="zl_event10_alarm_v2_audible";
     private static final int FOREGROUND_ID=101;
@@ -70,11 +80,15 @@ public final class SignalAlertService extends Service {
     private static final int SIGNAL_POLL_SECONDS=2;
     private static final String SIGNAL_FULL_URL="https://prediction.47-237-188-69.sslip.io/event10/api/signals?limit=50&offset=0";
     private static final String SIGNAL_FAST_URL="https://prediction.47-237-188-69.sslip.io/event10/api/signals?limit=8&offset=0";
+    private static final String SIGNAL_WATCH_URL="https://prediction.47-237-188-69.sslip.io/event10/api/watch?after=";
+    private static final String SIGNAL_RECEIPT_URL="https://prediction.47-237-188-69.sslip.io/event10/api/alert-receipt";
     private ScheduledExecutorService executor;
     private final AlarmPlayer sound=new AlarmPlayer();
     private SignalPopupOverlay signalPopup;
     private volatile String activeAlarmSignalId;
     private volatile boolean stopped=false;
+    private volatile long watchDisabledUntilElapsedMs=0L; // temporary, automatically retry WATCH
+
 
     public static void start(Context context){
         Intent intent=new Intent(context,SignalAlertService.class).setAction(ACTION_START);
@@ -175,7 +189,7 @@ public final class SignalAlertService extends Service {
             PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
             if(pm!=null){
                 lock=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"ZLControl:event10-network-check");
-                lock.acquire(20000L); // Only during the request, never held permanently.
+                lock.acquire(27000L); // Bounded CPU lock for the 18s server long-poll; OS may still restrict network.
             }
             poll();
         }
@@ -193,26 +207,30 @@ public final class SignalAlertService extends Service {
             if(lock!=null&&lock.isHeld())lock.release();
         }
     }
-    private JSONObject fetch(boolean catchUp) throws Exception {
+    private HttpURLConnection authorizedRequest(URL url,String method,int readTimeout) throws Exception {
         String[] credentials=SecureStore.loadLogin(this);
         if(credentials==null)throw new IllegalStateException("登录信息不可用，请重新登录");
-        // No caller-provided URLs: credentials are transmitted only to the verified HTTPS host.
-        URL url=new URL(catchUp?SIGNAL_FULL_URL:SIGNAL_FAST_URL);
+        if(!"https".equalsIgnoreCase(url.getProtocol())||
+           !"prediction.47-237-188-69.sslip.io".equalsIgnoreCase(url.getHost()))
+            throw new SecurityException("UNTRUSTED_SIGNAL_HOST");
         HttpURLConnection conn=(HttpURLConnection)url.openConnection();
         conn.setInstanceFollowRedirects(false);
-        conn.setRequestMethod("GET");
+        conn.setRequestMethod(method);
         conn.setConnectTimeout(3500);
-        conn.setReadTimeout(4500);
+        conn.setReadTimeout(readTimeout);
         conn.setRequestProperty("Accept","application/json");
         conn.setRequestProperty("Cache-Control","no-store");
         conn.setRequestProperty("Authorization","Basic "+Base64.encodeToString(
             (credentials[0]+":"+credentials[1]).getBytes(StandardCharsets.UTF_8),Base64.NO_WRAP));
+        return conn;
+    }
+    private JSONObject getJson(String url,int timeout) throws Exception {
+        HttpURLConnection conn=authorizedRequest(new URL(url),"GET",timeout);
         try{
             int code=conn.getResponseCode();
             if(code!=200)throw new IllegalStateException("HTTP "+code);
-            try(InputStream in=conn.getInputStream(); ByteArrayOutputStream out=new ByteArrayOutputStream()){
-                byte[] buf=new byte[4096];
-                int n;
+            try(InputStream in=conn.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
+                byte[] buf=new byte[4096];int n;
                 while((n=in.read(buf))!=-1){
                     if(out.size()+n>400000)throw new IllegalStateException("响应过大");
                     out.write(buf,0,n);
@@ -221,6 +239,88 @@ public final class SignalAlertService extends Service {
             }
         }finally{conn.disconnect();}
     }
+    private JSONObject fetch(boolean catchUp) throws Exception {
+        SharedPreferences p=SecureStore.prefs(this);
+        if(catchUp){
+            p.edit().putString(PREF_WATCH_MODE,"定期完整对账").apply();
+            return getJson(SIGNAL_FULL_URL,4500);
+        }
+        final String cursor=p.getString(PREF_LAST_SEEN,"");
+        final boolean canWatch=cursor!=null&&!cursor.isEmpty()&&
+            SystemClock.elapsedRealtime()>=watchDisabledUntilElapsedMs;
+        if(!canWatch){
+            p.edit().putString(PREF_WATCH_MODE,"短轮询兜底").apply();
+            return getJson(SIGNAL_FAST_URL,4500);
+        }
+        try{
+            p.edit().putString(PREF_WATCH_MODE,"服务器长轮询（最长18秒）").apply();
+            String url=SIGNAL_WATCH_URL+URLEncoder.encode(cursor,"UTF-8");
+            JSONObject result=getJson(url,21500);
+            if(result.optBoolean("ok",false))return result;
+            throw new IllegalStateException("WATCH_RESPONSE_INVALID");
+        }catch(Exception watchError){
+            // A proxy/OS timeout, or a server that has not been upgraded, must
+            // never make signal notifications unavailable. Restore old polling.
+            watchDisabledUntilElapsedMs=SystemClock.elapsedRealtime()+60_000L;
+            p.edit().putString(PREF_WATCH_MODE,"长轮询异常，60秒短轮询兜底").apply();
+            audit(p,"WATCH_FALLBACK",null,watchError.getClass().getSimpleName(),0,0);
+            return getJson(SIGNAL_FAST_URL,4500);
+        }
+    }
+    private void queueReceipt(SharedPreferences p,String id,String state){
+        if(id==null||id.isEmpty())return;
+        final String key=id+"|"+state;
+        if(key.equals(p.getString(ACK_LAST_KEY,"")))return;
+        try{
+            JSONArray pending=new JSONArray(p.getString(PREF_PENDING_RECEIPTS,"[]"));
+            for(int i=0;i<pending.length();i++){
+                if(key.equals(pending.optString(i)))return;
+            }
+            JSONArray next=new JSONArray();
+            for(int i=Math.max(0,pending.length()-18);i<pending.length();i++){
+                next.put(pending.optString(i));
+            }
+            next.put(key);
+            p.edit().putString(PREF_PENDING_RECEIPTS,next.toString()).commit();
+        }catch(Exception ignored){}
+    }
+    private void transmitReceipts(SharedPreferences p){
+        try{
+            JSONArray pending=new JSONArray(p.getString(PREF_PENDING_RECEIPTS,"[]"));
+            if(pending.length()==0)return;
+            String item=pending.optString(0);
+            int ix=item.lastIndexOf('|');
+            if(ix<12)return;
+            String id=item.substring(0,ix),state=item.substring(ix+1);
+            String client=p.getString(PREF_ACK_CLIENT_ID,null);
+            if(client==null){
+                client=UUID.randomUUID().toString().toLowerCase(java.util.Locale.ROOT);
+                if(!p.edit().putString(PREF_ACK_CLIENT_ID,client).commit())return;
+            }
+            JSONObject payload=new JSONObject().put("signalId",id)
+                .put("clientId",client).put("state",state);
+            HttpURLConnection conn=authorizedRequest(new URL(SIGNAL_RECEIPT_URL),"POST",1600);
+            try{
+                conn.setConnectTimeout(1600);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type","application/json");
+                byte[] raw=payload.toString().getBytes(StandardCharsets.UTF_8);
+                conn.setFixedLengthStreamingMode(raw.length);
+                try(OutputStream out=conn.getOutputStream()){out.write(raw);}
+                if(conn.getResponseCode()!=200)return;
+            }finally{conn.disconnect();}
+            JSONArray remaining=new JSONArray();
+            for(int i=1;i<pending.length();i++)remaining.put(pending.optString(i));
+            p.edit().putString(PREF_PENDING_RECEIPTS,remaining.toString())
+                .putString(ACK_LAST_KEY,item)
+                .putString(PREF_LAST_ACK_STATE,state)
+                .putLong(PREF_LAST_ACK_TIME,System.currentTimeMillis()).commit();
+        }catch(Exception e){
+            // This is telemetry only. A failed ACK must NEVER suppress or delay
+            // a future signal (queue is persisted and retried on next cycle).
+        }
+    }
+
     private void audit(SharedPreferences p,String action,String id,String detail,
                        long openedAt,long expiresAt) {
         String fingerprint=String.valueOf(id)+"|"+action+"|"+String.valueOf(detail);
@@ -252,18 +352,22 @@ public final class SignalAlertService extends Service {
         // Fast endpoint is sufficient for normal 4-minute spacing; full history
         // reconciles after a long offline gap or on service startup.
         long previousSuccess=p.getLong(PREF_LAST_SUCCESS,0L);
-        boolean catchUp=previousSuccess<=0L||requestStarted-previousSuccess>60_000L;
+        boolean catchUp=previousSuccess<=0L||requestStarted-previousSuccess>60_000L||
+            requestStarted-p.getLong(PREF_LAST_FULL_SYNC,0L)>45_000L;
         JSONObject response=fetch(catchUp);
         if(!response.optBoolean("ok",false))throw new IllegalStateException("服务响应异常");
         JSONArray records=response.optJSONArray("records");
         if(records==null)throw new IllegalStateException("信号记录缺失");
         long now=System.currentTimeMillis();
-        p.edit().putLong(PREF_LAST_SUCCESS,now)
-            .putLong(PREF_LAST_API_LATENCY_MS,Math.max(0L,now-requestStarted))
+        SharedPreferences.Editor success=p.edit().putLong(PREF_LAST_SUCCESS,now)
+            .putLong(PREF_LAST_API_LATENCY_MS,Math.max(0L,now-requestStarted));
+        if(catchUp)success.putLong(PREF_LAST_FULL_SYNC,now);
+        success
             .remove(PREF_LAST_ERROR).apply();
         String clockTime=new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.CHINA)
             .format(new java.util.Date(now));
         if(records.length()==0){
+            transmitReceipts(p);
             status("监听正常 "+clockTime+" · 等待新信号");
             return;
         }
@@ -308,6 +412,7 @@ public final class SignalAlertService extends Service {
                 p.edit().putLong(PREF_LAST_MISSED_TIME,now)
                     .putString(PREF_LAST_REASON,decision).apply();
                 audit(p,"MISSED_EXPIRED",id,decision+" "+dir,opened,expires);
+                queueReceipt(p,id,"MISSED_SIGNAL_EXPIRED");
                 continue;
             }
             if(!SignalAlarmPolicy.ALERT.equals(decision)){
@@ -317,18 +422,21 @@ public final class SignalAlertService extends Service {
             }
             if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
                 audit(p,"BLOCKED",id,"NO_NOTIFICATION_PERMISSION",opened,expires);
+                queueReceipt(p,id,"NOTIFICATION_BLOCKED");
                 p.edit().putString(PREF_LAST_REASON,"NO_NOTIFICATION_PERMISSION").apply();
                 continue; // Permission may later be granted before contract expires.
             }
             NotificationManager nm=getSystemService(NotificationManager.class);
             if(!nm.areNotificationsEnabled()){
                 audit(p,"BLOCKED",id,"NOTIFICATIONS_DISABLED",opened,expires);
+                queueReceipt(p,id,"NOTIFICATION_BLOCKED");
                 p.edit().putString(PREF_LAST_REASON,"NOTIFICATIONS_DISABLED").apply();
                 continue;
             }
             NotificationChannel channel=nm.getNotificationChannel(ALARM_CHANNEL);
             if(channel!=null&&channel.getImportance()==NotificationManager.IMPORTANCE_NONE){
                 audit(p,"BLOCKED",id,"ALARM_CHANNEL_DISABLED",opened,expires);
+                queueReceipt(p,id,"NOTIFICATION_BLOCKED");
                 p.edit().putString(PREF_LAST_REASON,"ALARM_CHANNEL_DISABLED").apply();
                 continue;
             }
@@ -338,10 +446,19 @@ public final class SignalAlertService extends Service {
             if(ageMs>15_000L)audit(p,"DELAYED_ALERT",id,dir+" delayMs="+ageMs,opened,expires);
             boolean soundStarted=alert(dir,signal);
             processed.add(id);
-            p.edit().putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
+            // Persist as handled immediately AFTER the NotificationManager
+            // accepted our call. Reduces repeat alarms on service/process crash.
+            boolean saved=p.edit().putStringSet(PREF_HANDLED_IDS,new HashSet<>(processed))
+                .putString(PREF_LAST_ID,id).putString(PREF_LAST_ALARM,id)
                 .putLong(PREF_LAST_ALARM_TIME,System.currentTimeMillis())
                 .putLong(PREF_LAST_ALARM_DELAY_MS,Math.max(0L,System.currentTimeMillis()-opened))
-                .putString(PREF_LAST_REASON,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY").apply();
+                .putString(PREF_LAST_REASON,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY")
+                .commit();
+            if(!saved)audit(p,"HANDLED_PERSIST_FAILED",id,"PREF_COMMIT_FAILED",opened,expires);
+            final boolean muted=p.getInt("event10_alert_alarm_volume",-1)==0;
+            queueReceipt(p,id,soundStarted?
+                (muted?"NOTIFICATION_POSTED_ALARM_MUTED":"NOTIFICATION_POSTED_ALARM_STARTED"):
+                "NOTIFICATION_POSTED_SOUND_FAILED");
             audit(p,soundStarted?"RING_STARTED":"SOUND_FAILED_NOTICE_ONLY",
                 id,dir,opened,expires);
         }
@@ -355,6 +472,7 @@ public final class SignalAlertService extends Service {
             processed=keep;
         }
         p.edit().putStringSet(PREF_HANDLED_IDS,processed).apply();
+        transmitReceipts(p);
         if(missed>0){
             status("监听已恢复 · 发现"+missed+"条已过期未提醒信号");
         }else{
@@ -381,7 +499,7 @@ public final class SignalAlertService extends Service {
         String freshness=ageSeconds>15L?" · 发现延迟"+ageSeconds+"秒":" · 及时发现";
         String content="BTC 10分钟 · "+(reverse?"反向提醒 · ":"")+name+" · "+signalTime+" · "+trigger+freshness;
         // Reference-cycle expiry is NOT the expiry of a new Binance order.
-        String detail=content+(reverse?"。原AI方向："+originalName+"，仅本机提醒已反向。":"。")+"金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
+        String detail=content+(reverse?"。原规则方向："+originalName+"，仅本机提醒已反向。":"。")+"金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
             +"确认方向、开仓指数价格和最终到期时间，再由你手动下单。没有自动成交。";
         Intent silencer=new Intent(this,SignalAlertService.class)
             .setAction(ACTION_SILENCE)

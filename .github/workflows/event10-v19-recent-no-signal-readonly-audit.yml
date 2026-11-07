@@ -1,0 +1,138 @@
+name: EVENT10 V19 recent no-signal production diagnosis read only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-v19-recent-no-signal-readonly-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Production authenticated status and signal ledger
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,datetime,json,urllib.request,base64,time
+          pw=os.environ.get('ZL_PANEL_PASSWORD','')
+          assert pw,'PANEL_PASSWORD_MISSING'
+          base='https://prediction.47-237-188-69.sslip.io'
+          header='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          def get(p):
+              st=time.monotonic()
+              req=urllib.request.Request(base+p,headers={'Authorization':header,'Cache-Control':'no-store'})
+              with urllib.request.urlopen(req,timeout=20) as r:
+                  assert r.status==200
+                  return json.loads(r.read(1500000)),round(1000*(time.monotonic()-st))
+          stat,ms=get('/event10/api/status')
+          ledger,lms=get('/event10/api/signals?limit=100&offset=0')
+          health,hms=get('/event10/api/alert-health')
+          assert stat.get('ok') and ledger.get('ok') and health.get('ok')
+          assert stat.get('decisionReviewVersion')==ledger.get('version')
+          utc8=datetime.timezone(datetime.timedelta(hours=8))
+          def at(v):
+              return datetime.datetime.fromtimestamp(v/1000,utc8).isoformat(timespec='seconds') if isinstance(v,(int,float)) and v>0 else None
+          check=stat.get('lastCheck') or {}
+          diag=stat.get('scanDiagnostics') or {}
+          print('EVENT10_NOW',json.dumps({'checkedAt':datetime.datetime.now(utc8).isoformat(timespec='seconds'),
+              'version':stat.get('decisionReviewVersion'),'configured':stat.get('configured'),
+              'autoEnabled':stat.get('autoSignalEnabled'),'autoIntervalMs':stat.get('autoIntervalMs'),
+              'aiCalls':stat.get('modelCalls'),'busyStart':stat.get('busyStart'),'busySettle':stat.get('busySettle'),
+              'error':stat.get('lastError'),'dataError':stat.get('lastDataError'),'dataErrorAt':at(stat.get('lastDataErrorAt')),
+              'scanAt':at(stat.get('lastSuccessfulScanAt')),'lastAutoCheckAt':at(stat.get('lastAutoCheckAt')),
+              'nextAutoCheckAt':at(stat.get('nextAutoCheckAt')),
+              'lastCheck':{'at':at(check.get('checkedAt')),'status':check.get('status'),
+                           'tag':check.get('eventTag'),'reason':check.get('reason'),'error':check.get('error'),
+                           'latencyMs':check.get('checkLatencyMs')},
+              'lastHour':diag.get('lastHour'),'last24Hours':diag.get('last24Hours'),
+              'ledgerTotal':ledger.get('total'),'ledgerStats':ledger.get('stats'),
+              'httpStatusLatencyMs':ms,'httpLedgerLatencyMs':lms,
+              'alertReceipts':health.get('summary'),'alertReceiptLastAt':at(health.get('lastAt')),
+              'alertHealthLatencyMs':hms},ensure_ascii=False),flush=True)
+          for item in (ledger.get('records') or [])[:24]:
+              print('EVENT10_DIRECTION',json.dumps({'at':at(item.get('openedAt')),
+                  'id':item.get('id'),'direction':item.get('direction'),
+                  'status':item.get('status'),'eventTag':item.get('eventTag'),
+                  'proxyHit':item.get('proxyHit'),'settled':item.get('settlementStatus')},ensure_ascii=False),flush=True)
+          print('EVENT10_STATUS_AUDIT_DONE=true',flush=True)
+          PY
+      - name: Read only last six hours of production scan audit and service liveness
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+          python3 - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
+          sk=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk,'ALIYUN_READ_CREDS_MISSING'
+          # Reads the persisted V19 scan audit file and service liveness ONLY.
+          remote=r"""#!/usr/bin/env python3
+          import os,json,collections,datetime,subprocess,time,pathlib
+          utc8=datetime.timezone(datetime.timedelta(hours=8))
+          now=int(time.time()*1000)
+          p=pathlib.Path('/var/lib/zl-event10/rule-scan-audit-v16.json')
+          print('EVENT10_REMOTE_AUDIT_PATH_EXISTS='+str(p.is_file()),flush=True)
+          rows=json.loads(p.read_text('utf8')) if p.is_file() else []
+          if not isinstance(rows,list):raise RuntimeError('AUDIT_FILE_INVALID')
+          def at(v):
+              return datetime.datetime.fromtimestamp(v/1000,utc8).strftime('%Y-%m-%d %H:%M:%S') if isinstance(v,(int,float)) and v>0 else None
+          def summary(r):
+              reasons=collections.Counter()
+              for x in r:
+                  fails=x.get('fails') or []
+                  if fails:reasons.update(fails)
+                  elif not x.get('direction'):reasons.update([x.get('tag') or 'UNKNOWN'])
+              return {'checks':len(r),'auto':sum(x.get('source')=='AUTO' for x in r),
+                 'manual':sum(x.get('source')=='MANUAL' for x in r),
+                 'signals':sum(x.get('direction') in ('UP','DOWN') for x in r),
+                 'noSignal':sum(not x.get('direction') and not x.get('dataError') for x in r),
+                 'dataErrors':sum(bool(x.get('dataError')) for x in r),
+                 'reasonCounts':reasons.most_common(15)}
+          for hrs in (1,2,3,4,6):
+              recent=[x for x in rows if now-hrs*3600000<=x.get('at',0)<=now+1000]
+              print('EVENT10_REMOTE_'+str(hrs)+'H',json.dumps(summary(recent),ensure_ascii=False),flush=True)
+          for back in reversed(range(6)):
+              lo=now-(back+1)*3600000;hi=now-back*3600000
+              sub=[x for x in rows if lo<x.get('at',0)<=hi]
+              print('EVENT10_REMOTE_HOURLY',json.dumps({'from':at(lo),'to':at(hi),**summary(sub)},ensure_ascii=False),flush=True)
+          recent=[x for x in rows if now-6*3600000<=x.get('at',0)<=now+1000]
+          for x in recent[-12:]:
+              print('EVENT10_REMOTE_LAST_SCAN',json.dumps({'at':at(x.get('at')),'source':x.get('source'),
+                 'tag':x.get('tag'),'direction':x.get('direction'),'fails':x.get('fails')},ensure_ascii=False),flush=True)
+          service=subprocess.run(['systemctl','show','zl-event10-deepseek','-p','ActiveState','-p','MainPID',
+              '-p','NRestarts','-p','ActiveEnterTimestamp'],capture_output=True,text=True,timeout=8)
+          print('EVENT10_REMOTE_SERVICE',json.dumps({'fields':service.stdout.strip().splitlines()},ensure_ascii=False),flush=True)
+          print('EVENT10_REMOTE_AUDIT_COMPLETED=true',flush=True)
+          """
+          remote='\n'.join(line.lstrip() for line in remote.splitlines())+'\n'
+          # RunCommand runs under root, no writes/config changes.
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+             region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          resp=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+              instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='event10-v19-readonly-6h-scan-audit',
+              type='RunShellScript',working_user='root',command_content=remote,timeout=65))
+          invoke=resp.body.invoke_id
+          assert invoke,'NO_INVOCATION_ID'
+          for _ in range(40):
+              time.sleep(2)
+              data=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                  region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+                  invoke_id=invoke)).body.invocation_result
+              if data and str(data.invocation_status) in ('Success','Failed','Aborted',
+                   'ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):
+                  output=base64.b64decode(data.output or '').decode('utf8','replace')
+                  for line in output.splitlines():
+                      if line.startswith('EVENT10_REMOTE_'):print(line,flush=True)
+                  assert str(data.invocation_status)=='Success' and int(data.exit_code)==0,('CLOUD_READ_FAILED',output[-800:])
+                  assert 'EVENT10_REMOTE_AUDIT_COMPLETED=true' in output
+                  break
+          else:raise RuntimeError('NO_CLOUD_READ_RESULT')
+          PY

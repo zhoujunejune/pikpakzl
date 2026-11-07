@@ -202,7 +202,7 @@ function event(e,ledger){
  if(e?.decisionReviewVersion!==EVENT10_FREQ_OPTIMIZED_VERSION)
   throw Error("十分钟服务尚未确认运行最新版信号策略，旧版统计不会显示");
  const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION&&Array.isArray(ledger.records);
- // Live direction and AI state must NEVER be blocked by optional signal-history paging.
+ // Live rule direction must NEVER be blocked by optional signal-history paging.
  // A missing/mismatched ledger is NOT a service outage; it must not repopulate old rows.
  const s=currentEventRecord(e);
  // The status fallback is safe only after verifying the server's strategy version.
@@ -226,18 +226,7 @@ function event(e,ledger){
  const lastScan=e.lastSuccessfulScanAt,elapsed=Number.isFinite(lastScan)?Math.round((Date.now()-lastScan)/1000):null;
  put("eFreshness",elapsed!==null&&elapsed>=0&&elapsed<=90?"最近有效行情扫描 "+elapsed+"秒前 · "+stamp(lastScan):"行情扫描新鲜度未确认；请检查后台连接");
 
- const review=s?.aiReview||e?.lastCheck?.aiReview||null;
- const outcomes=e?.aiReviewStats||{};
- put("eAiReview","AI 方向复核："+(
-   e?.aiInProgress?"AI高强度分析正在进行，等待完整结果，请勿重复点击":
-   review?.analysisCompleted===true&&review?.status==="AI_REVIEWED"?"完整分析已通过校验（高强度思考）":
-   review?.status==="AI_INCOMPLETE_FALLBACK"||review?.status==="AI_FALLBACK"?"AI分析未完成，本轮无信号（不计胜率）":
-   review?.status==="NO_KEY_OR_DISABLED"?"AI未运行，本轮无信号":
-   e?.aiInProgress?"高强度思考进行中，暂未给出完整AI结论":
-   e?.aiReviewConfigured?"已就绪，等待符合条件的信号":"尚未启用")+
-   " · "+(e?.aiReviewModel||"—")+
-   " · 成功 "+(outcomes.reviewed||0)+" / "+(outcomes.calls||0)+" 次"+
-   " · 已结算失败 "+(e?.aiLearningProfile?.lossCount||0)+" 条 / 参考 "+(e?.aiLearningProfile?.settledSamples||0)+" 条，供下次经验复盘（非模型权重训练）");
+ put("eAiReview","信号来源：纯规则 V19 · 不调用AI · 仍按原有技术指标筛选并进行5分钟EMA方向校正。");
  put("eReason",s?.direction?(s?.reason||"方向已确认；10分钟后核验。"):
    (s?.reason||"当前没有符合规则的方向信号。"));
  pill("eStatus",e.configured===true?"good":"bad",active?"信号待核对":e.configured===true?(currentLedger?"已连接":"已连接·记录同步中"):"服务未就绪");
@@ -429,7 +418,7 @@ $("manualCheck").addEventListener("click",async()=>{
  if(state.manualBusy)return;
  state.manualBusy=true;$("manualCheck").disabled=true;
  const result=$("manualResult");
- result.hidden=false;result.textContent="正在检测实时行情；符合信号条件时，AI会进行高强度思考及完整性校验，可能需要数十秒。未完成前不会标记AI分析成功…";
+ result.hidden=false;result.textContent="正在获取行情并检查现有规则条件，符合条件立即给出方向（不调用AI）。";
  try{
   const requestId=crypto.randomUUID();
   const controller=new AbortController();
@@ -442,7 +431,7 @@ $("manualCheck").addEventListener("click",async()=>{
   }finally{clearTimeout(timer);}
   const data=await res.json();
   if(!res.ok||data.ok!==true)throw Error(data.error||"HTTP "+res.status);
-  result.textContent=data.session?.aiReview?.analysisCompleted===true?"AI高强度分析已完成并通过校验；请查看本轮方向。":"检查已结束；AI未完成时本轮无信号，不显示UP/DOWN，不会触发信号提醒。";
+  result.textContent=data.session?.direction==="UP"?"规则判断完成：看涨 UP。":data.session?.direction==="DOWN"?"规则判断完成：看跌 DOWN。":"规则检查结束：当前条件不满足，未产生信号。";
   await refreshEvent10Only();
  }catch(err){
   result.textContent="检测未确认："+String(err).slice(0,180)+"。请先核实当前状态，避免重复点击。";

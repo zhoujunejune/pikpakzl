@@ -1,3 +1,4 @@
+# V19 rule-only release: retry after fixing the mocked no-AI URL check.
 name: EVENT10 V19 pure rule no AI Alibaba production release
 on:
   push:

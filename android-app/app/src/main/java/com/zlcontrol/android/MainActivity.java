@@ -409,9 +409,9 @@ public final class MainActivity extends Activity {
         }catch(Exception e){log.append("\n日志读取失败");}
         if(log.length()==0)log.append("\n暂无提醒事件");
         String report="监控开关："+(enabled?"开启":"关闭")+
-            "\\n反向信号提醒："+(p.getBoolean(SignalAlertService.PREF_REVERSE_ALERT,false)?"已开启（仅通知显示反向）":"关闭（按原信号提醒）")+
-            "\\n最近提醒原模型方向："+directionName(p.getString("event10_alert_last_original_direction","无"))+
-            "\\n最近实际提醒方向："+directionName(p.getString("event10_alert_last_displayed_direction","无"))+
+            "\n反向信号提醒："+(p.getBoolean(SignalAlertService.PREF_REVERSE_ALERT,false)?"已开启（仅通知显示反向）":"关闭（按原信号提醒）")+
+            "\n最近提醒原模型方向："+directionName(p.getString("event10_alert_last_original_direction","无"))+
+            "\n最近实际提醒方向："+directionName(p.getString("event10_alert_last_displayed_direction","无"))+
             "\n本次开启时间："+timeOf(p.getLong(SignalAlertService.PREF_ENABLED_SINCE,0L))+
             "\n后台最后尝试："+timeOf(lastPoll)+
             "\n后台最后成功："+timeOf(lastSuccess)+

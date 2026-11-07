@@ -1,7 +1,7 @@
 /* ZL EVENT10-only app — browser-only client; no exchange credentials or order calls. */
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
-const APP_VERSION="1.3.2"; // Ten-minute-signal-only UI release.
+const APP_VERSION="1.3.3"; // Ten-minute-signal-only UI release.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
@@ -377,15 +377,15 @@ function configureReverseAlertSetting(){
     typeof bridge.setReverseAlertsEnabled!=="function"){
   toggle.checked=false;
   toggle.disabled=true;
-  status.textContent="当前网页环境不支持原生信号反向提醒。请安装海派事件合约 v1.3.2 或更新安卓安装包。";
+  status.textContent="当前网页环境不支持原生信号反向提醒。请安装海派事件合约 v1.3.3 或更新安卓安装包。";
   return;
  }
  try{
   toggle.checked=Boolean(bridge.getReverseAlertsEnabled());
   toggle.disabled=false;
   status.textContent=toggle.checked?
-   "已开启：仅手机通知和悬浮弹窗反向；AI原始信号与胜率不变。":
-   "已关闭：手机提醒原始AI方向。";
+   "已开启：仅手机通知和悬浮弹窗反向；原始规则信号与胜率不变。":
+   "已关闭：手机提醒原始规则方向。";
  }catch(error){
   toggle.checked=false;
   toggle.disabled=true;

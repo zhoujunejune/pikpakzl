@@ -1,4 +1,4 @@
-name: Release ZL 海派事件合约 v1.3.4 PWA to Alibaba
+name: Release ZL 海派事件合约 v1.3.5 PWA to Alibaba
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -25,7 +25,7 @@ jobs:
       - name: Validate app JS, service worker, install metadata and deploy shell
         run: |
           node --check mobile-app/app.js
-          node --test mobile-app/event10-current-only.test.mjs mobile-app/event10-foreground-recovery.test.mjs
+          node --test mobile-app/event10-current-only.test.mjs mobile-app/event10-foreground-recovery.test.mjs mobile-app/ocean-ui-v135.test.mjs
           node --check mobile-app/sw.js
           python -m py_compile mobile-app/aliyun_deploy.py
           python - <<'PY'
@@ -53,7 +53,7 @@ jobs:
           assert 'panel-guardian' not in html and 'panel-overview' not in html
           assert 'data-go="guardian"' not in html and 'data-go="overview"' not in html
           assert '/guardian/api/status' not in js and 'guardianOnline' not in js
-          assert 'APP_VERSION="1.3.4"' in js
+          assert 'APP_VERSION="1.3.5"' in js
           assert m['name']=='海派事件合约' and m['short_name']=='海派事件合约'
           assert '<title>海派事件合约</title>' in html
           assert 'src="/app/icon-192.png"' in html

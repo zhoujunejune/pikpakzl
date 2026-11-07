@@ -9,6 +9,9 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.widget.ImageView;
+import android.view.Gravity;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -97,14 +100,30 @@ public final class MainActivity extends Activity {
     }
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_LONG).show();}
+    private GradientDrawable rounded(int fill,int stroke,int radius){
+        GradientDrawable bg=new GradientDrawable();
+        bg.setColor(fill);
+        bg.setCornerRadius(dp(radius));
+        bg.setStroke(dp(1),stroke);
+        return bg;
+    }
+    private void styleButton(Button button,boolean primary){
+        button.setAllCaps(false);
+        button.setTextSize(12);
+        button.setTextColor(primary?Color.WHITE:Color.rgb(32,110,170));
+        button.setBackground(rounded(primary?Color.rgb(35,139,219):Color.rgb(242,249,255),
+            primary?Color.rgb(35,139,219):Color.rgb(205,228,246),12));
+    }
     @Override @SuppressLint("SetJavaScriptEnabled")
     public void onCreate(Bundle savedInstanceState){
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.rgb(10,18,32));
-        getWindow().setNavigationBarColor(Color.rgb(11,22,37));
+        getWindow().setStatusBarColor(Color.rgb(222,240,255));
+        getWindow().setNavigationBarColor(Color.rgb(241,249,255));
+        getWindow().getDecorView().setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         LinearLayout outer=new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL);
-        outer.setBackgroundColor(Color.rgb(10,18,32));
+        outer.setBackgroundColor(Color.rgb(234,246,255));
         setContentView(outer);
         // Android 15+ draws app content behind the status bar by default.
         // Keep the native alarm toggle entirely below system UI on all API levels.
@@ -123,90 +142,102 @@ public final class MainActivity extends Activity {
         });
         outer.requestApplyInsets();
 
+        // Compact light-ocean native watcher bar; the large optional diagnostic
+        // actions are collapsed to leave the signal dashboard most of the screen.
         LinearLayout top=new LinearLayout(this);
         top.setOrientation(LinearLayout.VERTICAL);
-        top.setPadding(dp(16),dp(8),dp(16),dp(6));
-        top.setBackgroundColor(Color.rgb(17,30,47));
-        LinearLayout line=new LinearLayout(this);
-        line.setOrientation(LinearLayout.HORIZONTAL);
-        line.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(14),dp(7),dp(14),dp(7));
+        top.setBackgroundColor(Color.rgb(235,246,255));
+        LinearLayout row=new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         TextView title=new TextView(this);
-        title.setText("🔔 10分钟信号闹铃");
-        title.setTextSize(15);
-        title.setTextColor(Color.WHITE);
+        title.setText("🔔 信号闹铃");
+        title.setTextSize(14);
+        title.setTextColor(Color.rgb(19,57,89));
         title.setTypeface(null,android.graphics.Typeface.BOLD);
-        line.addView(title,new LinearLayout.LayoutParams(0,dp(34),1));
-        Button binance=new Button(this);
-        binance.setText("打开币安");
-        binance.setTextSize(12);
-        binance.setAllCaps(false);
-        binance.setContentDescription("打开币安App，手动确认10分钟事件合约下单");
-        binance.setOnClickListener(v->launchBinance());
-        line.addView(binance,new LinearLayout.LayoutParams(dp(112),dp(42)));
-        top.addView(line);
-
-        // Full-width dedicated row: the control must not hide behind the status bar.
-        LinearLayout toggleLine=new LinearLayout(this);
-        toggleLine.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        toggleLine.setOrientation(LinearLayout.HORIZONTAL);
-        TextView toggleHint=new TextView(this);
-        toggleHint.setText("仅新 Higher / Lower 信号提醒");
-        toggleHint.setTextSize(12);
-        toggleHint.setTextColor(Color.rgb(171,200,229));
-        toggleLine.addView(toggleHint,new LinearLayout.LayoutParams(0,dp(44),1));
+        row.addView(title,new LinearLayout.LayoutParams(0,dp(38),1));
         alarmToggle=new Switch(this);
         alarmToggle.setText("关闭");
-        alarmToggle.setTextSize(14);
-        alarmToggle.setTextColor(Color.WHITE);
-        alarmToggle.setMinWidth(dp(118));
-        alarmToggle.setPadding(dp(8),0,dp(8),0);
+        alarmToggle.setTextSize(13);
+        alarmToggle.setTextColor(Color.rgb(30,88,132));
+        alarmToggle.setMinWidth(dp(112));
+        alarmToggle.setPadding(dp(6),0,dp(6),0);
         alarmToggle.setContentDescription("十分钟事件合约有信号才响铃，开关");
-        toggleLine.addView(alarmToggle,new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,dp(48)));
-        top.addView(toggleLine);
+        row.addView(alarmToggle,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,dp(42)));
+        top.addView(row);
 
-        LinearLayout bottom=new LinearLayout(this);
-        bottom.setOrientation(LinearLayout.HORIZONTAL);
-        bottom.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        LinearLayout statusRow=new LinearLayout(this);
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        statusRow.setOrientation(LinearLayout.HORIZONTAL);
         alarmStatus=new TextView(this);
         alarmStatus.setTextSize(11);
-        alarmStatus.setTextColor(Color.rgb(156,182,211));
-        bottom.addView(alarmStatus,new LinearLayout.LayoutParams(0,dp(36),1));
+        alarmStatus.setMaxLines(2);
+        alarmStatus.setTextColor(Color.rgb(82,121,151));
+        statusRow.addView(alarmStatus,new LinearLayout.LayoutParams(0,dp(34),1));
+        Button manage=new Button(this);
+        manage.setText("提醒管理 ▾");
+        styleButton(manage,false);
+        statusRow.addView(manage,new LinearLayout.LayoutParams(dp(110),dp(36)));
+        top.addView(statusRow);
+
+        LinearLayout advanced=new LinearLayout(this);
+        advanced.setOrientation(LinearLayout.VERTICAL);
+        advanced.setPadding(0,dp(6),0,0);
+        advanced.setVisibility(View.GONE);
+        LinearLayout actions=new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        Button binance=new Button(this);
+        binance.setText("打开币安");
+        styleButton(binance,true);
+        binance.setContentDescription("打开币安App，手动确认10分钟事件合约下单");
+        binance.setOnClickListener(v->launchBinance());
+        actions.addView(binance,new LinearLayout.LayoutParams(0,dp(42),1));
         Button test=new Button(this);
-        test.setAllCaps(false);
         test.setText("试听");
-        test.setTextSize(11);
+        styleButton(test,false);
         test.setOnClickListener(v->{
             if(preview.play(this,5))toast("试听系统闹钟铃声（5秒）");
             else toast("未读取到系统闹钟铃声，请在手机设置中选择铃声");
         });
-        bottom.addView(test,new LinearLayout.LayoutParams(dp(66),dp(42)));
+        LinearLayout.LayoutParams testLp=new LinearLayout.LayoutParams(0,dp(42),1);
+        testLp.leftMargin=dp(7);
+        actions.addView(test,testLp);
         Button settings=new Button(this);
-        settings.setAllCaps(false);
         settings.setText("闹铃设置");
-        settings.setTextSize(11);
+        styleButton(settings,false);
         settings.setOnClickListener(v->{
             try{startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS));}
             catch(ActivityNotFoundException e){toast("请从手机设置调整闹铃音量与铃声");}
         });
-        bottom.addView(settings,new LinearLayout.LayoutParams(dp(96),dp(42)));
-        top.addView(bottom);
-
-        // User-visible observability: distinguish switch-on from actual successful polling.
+        LinearLayout.LayoutParams settingsLp=new LinearLayout.LayoutParams(0,dp(42),1);
+        settingsLp.leftMargin=dp(7);
+        actions.addView(settings,settingsLp);
+        advanced.addView(actions);
         Button diagnose=new Button(this);
-        diagnose.setAllCaps(false);
-        diagnose.setText("查看提醒诊断（最近读取 / 最新信号 / 漏提醒原因）");
-        diagnose.setTextSize(11);
+        diagnose.setText("查看提醒诊断（最近读取、通知延迟、漏提醒原因）");
+        styleButton(diagnose,false);
         diagnose.setOnClickListener(v->showAlarmDiagnostics());
-        top.addView(diagnose,new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,dp(40)));
+        LinearLayout.LayoutParams diagLp=new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,dp(41));
+        diagLp.topMargin=dp(7);
+        advanced.addView(diagnose,diagLp);
         Button overlayAccess=new Button(this);
-        overlayAccess.setAllCaps(false);
-        overlayAccess.setText("信号屏幕弹窗权限（显示在其他应用上层）");
-        overlayAccess.setTextSize(11);
+        overlayAccess.setText("屏幕弹窗权限 · 后台显示提醒");
+        styleButton(overlayAccess,false);
         overlayAccess.setOnClickListener(v->openOverlayPermissionSettings());
-        top.addView(overlayAccess,new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,dp(40)));
+        LinearLayout.LayoutParams overlayLp=new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,dp(41));
+        overlayLp.topMargin=dp(7);
+        advanced.addView(overlayAccess,overlayLp);
+        top.addView(advanced);
+        manage.setOnClickListener(v->{
+            boolean expanded=advanced.getVisibility()!=View.VISIBLE;
+            advanced.setVisibility(expanded?View.VISIBLE:View.GONE);
+            manage.setText(expanded?"收起 ▴":"提醒管理 ▾");
+        });
         outer.addView(top);
 
         alarmToggle.setChecked(SecureStore.prefs(this)
@@ -226,7 +257,7 @@ public final class MainActivity extends Activity {
 
         webView=new WebView(this);
         webView.addJavascriptInterface(new AlertSettingsBridge(),"HaipaiAlertPrefs");
-        webView.setBackgroundColor(Color.rgb(10,18,32));
+        webView.setBackgroundColor(Color.rgb(234,246,255));
         outer.addView(webView,new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,0,1));
         WebSettings ws=webView.getSettings();
@@ -552,30 +583,76 @@ public final class MainActivity extends Activity {
         pendingAuth.add(handler);
         if(loginDialogOpen)return;
         loginDialogOpen=true;
+        // Preserve original Caddy HTTP Basic Auth and encrypted Keystore
+        // storage. This is visual styling only, not a new login protocol.
         LinearLayout layout=new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(24),dp(12),dp(24),dp(4));
+        layout.setPadding(dp(22),dp(10),dp(22),dp(7));
+        layout.setBackgroundColor(Color.WHITE);
+
+        ImageView mascot=new ImageView(this);
+        mascot.setImageResource(R.drawable.sea_friends_icon);
+        mascot.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        mascot.setBackground(rounded(Color.rgb(234,246,255),Color.rgb(211,231,247),14));
+        LinearLayout.LayoutParams mascotLp=new LinearLayout.LayoutParams(dp(62),dp(62));
+        mascotLp.gravity=Gravity.CENTER_HORIZONTAL;
+        mascotLp.bottomMargin=dp(10);
+        layout.addView(mascot,mascotLp);
+        TextView subtitle=new TextView(this);
+        subtitle.setText("欢迎来到海派信号站");
+        subtitle.setTextSize(17);
+        subtitle.setTypeface(null,android.graphics.Typeface.BOLD);
+        subtitle.setTextColor(Color.rgb(21,61,95));
+        subtitle.setGravity(Gravity.CENTER);
+        layout.addView(subtitle);
+        TextView secondary=new TextView(this);
+        secondary.setText("使用原有管理账号安全登录");
+        secondary.setTextSize(12);
+        secondary.setTextColor(Color.rgb(102,132,157));
+        secondary.setGravity(Gravity.CENTER);
+        secondary.setPadding(0,dp(4),0,dp(17));
+        layout.addView(secondary);
+
         EditText username=new EditText(this);
         username.setSingleLine(true);
         username.setText(sessionUsername==null?"zl":sessionUsername);
-        username.setHint("原管理账号");
+        username.setHint("管理账号");
+        username.setTextSize(15);
+        username.setTextColor(Color.rgb(24,62,91));
+        username.setHintTextColor(Color.rgb(135,158,178));
+        username.setPadding(dp(14),0,dp(12),0);
+        username.setBackground(rounded(Color.rgb(247,251,255),Color.rgb(217,235,248),11));
         username.setInputType(InputType.TYPE_CLASS_TEXT);
-        layout.addView(username);
+        LinearLayout.LayoutParams unameLp=new LinearLayout.LayoutParams(-1,dp(51));
+        layout.addView(username,unameLp);
+
         EditText password=new EditText(this);
         password.setSingleLine(true);
-        password.setHint("原管理密码");
+        password.setHint("管理密码");
+        password.setTextSize(15);
+        password.setTextColor(Color.rgb(24,62,91));
+        password.setHintTextColor(Color.rgb(135,158,178));
+        password.setPadding(dp(14),0,dp(12),0);
+        password.setBackground(rounded(Color.rgb(247,251,255),Color.rgb(217,235,248),11));
         password.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        layout.addView(password);
-        password.requestFocus();
-        new AlertDialog.Builder(this)
-            .setTitle("登录 ZL EVENT10")
-            .setMessage("为支持关屏后的信号提醒，App 使用安卓 Keystore 加密保管登录凭证；不保存交易 API 密钥。")
+        LinearLayout.LayoutParams passwordLp=new LinearLayout.LayoutParams(-1,dp(51));
+        passwordLp.topMargin=dp(11);
+        layout.addView(password,passwordLp);
+
+        TextView privacy=new TextView(this);
+        privacy.setText("登录凭证使用安卓 Keystore 加密保存，用于后台信号提醒。不存储交易 API 密钥。");
+        privacy.setTextSize(11);
+        privacy.setTextColor(Color.rgb(112,141,163));
+        privacy.setPadding(0,dp(14),0,dp(1));
+        layout.addView(privacy);
+
+        AlertDialog dialog=new AlertDialog.Builder(this)
             .setView(layout).setCancelable(false)
-            .setNegativeButton("取消",(dialog,which)->{
+            .setNegativeButton("取消",(d,which)->{
                 for(HttpAuthHandler h:pendingAuth)h.cancel();
                 pendingAuth.clear();loginDialogOpen=false;
             })
-            .setPositiveButton("登录",(dialog,which)->{
+            .setPositiveButton("登录",(d,which)->{
                 sessionUsername=username.getText().toString().trim();
                 sessionPassword=password.getText().toString();
                 try{SecureStore.saveLogin(this,sessionUsername,sessionPassword);}
@@ -586,7 +663,15 @@ public final class MainActivity extends Activity {
                 if(SecureStore.prefs(this).getBoolean(SignalAlertService.PREF_ENABLED,false)){
                     try{SignalAlertService.start(this);}catch(Exception ignored){}
                 }
-            }).show();
+            }).create();
+        dialog.setOnShowListener(d->{
+            if(dialog.getWindow()!=null){
+                dialog.getWindow().setBackgroundDrawable(rounded(Color.WHITE,Color.rgb(213,232,246),22));
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(Color.rgb(27,132,208));
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(Color.rgb(105,140,167));
+        });
+        dialog.show();
     }
     @Override protected void onResume(){
         super.onResume();

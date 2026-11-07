@@ -43,6 +43,7 @@ public final class SignalAlertService extends Service {
     public static final String ACTION_SILENCE="com.zlcontrol.android.SILENCE_ALARM";
     public static final String ACTION_START="com.zlcontrol.android.START_ALERTS";
     public static final String PREF_ENABLED="event10_alert_enabled";
+    public static final String PREF_REVERSE_ALERT="event10_alert_reverse_direction_v1";
     public static final String PREF_ENABLED_SINCE="event10_alert_enabled_since";
     public static final String PREF_LAST_ID="event10_alert_last_id";
     public static final String PREF_LAST_STATE="event10_alert_state";
@@ -361,7 +362,14 @@ public final class SignalAlertService extends Service {
         }
     }
     private boolean alert(String direction,JSONObject signal) {
-        String name=direction.equals("UP")?"看涨":"看跌";
+        // The transform is strictly presentation-only and occurs AFTER the
+        // original signal has passed freshness, permission and dedupe checks.
+        // All backend records, success statistics and signal IDs remain original.
+        boolean reverse=SecureStore.prefs(this).getBoolean(PREF_REVERSE_ALERT,false);
+        String alertedDirection=AlertDirectionPolicy.notifiedDirection(direction,reverse);
+        if(alertedDirection==null)return false;
+        String name=alertedDirection.equals("UP")?"看涨":"看跌";
+        String originalName=direction.equals("UP")?"看涨":"看跌";
         String trigger="AUTO".equals(signal.optString("trigger"))?"后台自动信号":"手动检测信号";
         String signalId=signal.optString("id","");
         int notificationId=(signalId.hashCode()&0x3fffffff)+2000;
@@ -371,9 +379,9 @@ public final class SignalAlertService extends Service {
         
         long ageSeconds=Math.max(0L,(System.currentTimeMillis()-opened)/1000L);
         String freshness=ageSeconds>15L?" · 发现延迟"+ageSeconds+"秒":" · 及时发现";
-        String content="BTC 10分钟 · "+name+" · "+signalTime+" · "+trigger+freshness;
+        String content="BTC 10分钟 · "+(reverse?"反向提醒 · ":"")+name+" · "+signalTime+" · "+trigger+freshness;
         // Reference-cycle expiry is NOT the expiry of a new Binance order.
-        String detail=content+"。金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
+        String detail=content+(reverse?"。原AI方向："+originalName+"，仅本机提醒已反向。":"。")+"金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
             +"确认方向、开仓指数价格和最终到期时间，再由你手动下单。没有自动成交。";
         Intent silencer=new Intent(this,SignalAlertService.class)
             .setAction(ACTION_SILENCE)
@@ -385,7 +393,7 @@ public final class SignalAlertService extends Service {
         PendingIntent binance=openBinanceIntent(signalId);
         Notification notice=new Notification.Builder(this,ALARM_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("新信号："+name+" · 请核对价格")
+            .setContentTitle((reverse?"反向提醒：":"新信号：")+name+" · 请核对价格")
             .setContentText(content)
             .setStyle(new Notification.BigTextStyle().bigText(detail))
             .setAutoCancel(true)
@@ -413,8 +421,10 @@ public final class SignalAlertService extends Service {
         boolean started=sound.play(this,25);
         // Display only after the notification has been posted successfully.
         // Overlay permission is opt-in, and notification is always the fallback.
-        if(signalPopup!=null)signalPopup.show(signalId,direction,opened,signal.optLong("expiresAt",0L),notificationId);
-        status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name);
+        if(signalPopup!=null)signalPopup.show(signalId,alertedDirection,opened,signal.optLong("expiresAt",0L),notificationId,reverse);
+        status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name+(reverse?"（反向模式）":""));
+        diagnostics.edit().putString("event10_alert_last_displayed_direction",alertedDirection)
+            .putString("event10_alert_last_original_direction",direction).apply();
         return started;
     }
     private void confirmAndOpenBinance(String id,int notificationId){

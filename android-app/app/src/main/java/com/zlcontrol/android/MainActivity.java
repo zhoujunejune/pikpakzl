@@ -590,6 +590,17 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onResume(){
         super.onResume();
+        // Some Android WebViews do not reliably emit visibilitychange after an
+        // OEM has frozen the activity. Explicitly recover in-flight status.
+        if(webView!=null){
+            webView.onResume();
+            Uri current=webView.getUrl()==null?null:Uri.parse(webView.getUrl());
+            if(isTrusted(current)){
+                webView.evaluateJavascript(
+                    "if(window.ZLForegroundResume)window.ZLForegroundResume('native-onResume');",
+                    null);
+            }
+        }
         statusHandler.removeCallbacks(statusUpdate);
         statusHandler.post(statusUpdate);
         if(SecureStore.prefs(this).getBoolean(SignalAlertService.PREF_ENABLED,false)
@@ -599,6 +610,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onPause(){
         statusHandler.removeCallbacks(statusUpdate);
+        if(webView!=null)webView.onPause();
         super.onPause();
     }
     @Override public void onBackPressed(){

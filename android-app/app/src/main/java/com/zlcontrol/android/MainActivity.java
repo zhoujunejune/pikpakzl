@@ -2,6 +2,7 @@ package com.zlcontrol.android;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.webkit.JavascriptInterface;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
@@ -59,6 +60,22 @@ public final class MainActivity extends Activity {
     private Switch alarmToggle;
     private TextView alarmStatus;
     private final AlarmPlayer preview=new AlarmPlayer();
+
+    /**
+     * Intentionally tiny WebView bridge. This device-local preference cannot
+     * read secrets, trigger orders, modify server data or affect model output.
+     * Website/PWA browsers without this bridge show the setting as unavailable.
+     */
+    private final class AlertSettingsBridge {
+        @JavascriptInterface public boolean getReverseAlertsEnabled() {
+            return SecureStore.prefs(MainActivity.this)
+                .getBoolean(SignalAlertService.PREF_REVERSE_ALERT,false);
+        }
+        @JavascriptInterface public boolean setReverseAlertsEnabled(boolean enabled) {
+            return SecureStore.prefs(MainActivity.this).edit()
+                .putBoolean(SignalAlertService.PREF_REVERSE_ALERT,enabled).commit();
+        }
+    }
     private final Handler statusHandler=new Handler(Looper.getMainLooper());
     private final List<HttpAuthHandler> pendingAuth=new ArrayList<>();
     private boolean loginDialogOpen=false;
@@ -208,6 +225,7 @@ public final class MainActivity extends Activity {
         });
 
         webView=new WebView(this);
+        webView.addJavascriptInterface(new AlertSettingsBridge(),"HaipaiAlertPrefs");
         webView.setBackgroundColor(Color.rgb(10,18,32));
         outer.addView(webView,new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,0,1));
@@ -391,6 +409,9 @@ public final class MainActivity extends Activity {
         }catch(Exception e){log.append("\n日志读取失败");}
         if(log.length()==0)log.append("\n暂无提醒事件");
         String report="监控开关："+(enabled?"开启":"关闭")+
+            "\\n反向信号提醒："+(p.getBoolean(SignalAlertService.PREF_REVERSE_ALERT,false)?"已开启（仅通知显示反向）":"关闭（按原信号提醒）")+
+            "\\n最近提醒原模型方向："+directionName(p.getString("event10_alert_last_original_direction","无"))+
+            "\\n最近实际提醒方向："+directionName(p.getString("event10_alert_last_displayed_direction","无"))+
             "\n本次开启时间："+timeOf(p.getLong(SignalAlertService.PREF_ENABLED_SINCE,0L))+
             "\n后台最后尝试："+timeOf(lastPoll)+
             "\n后台最后成功："+timeOf(lastSuccess)+

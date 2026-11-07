@@ -87,7 +87,7 @@ for expected in ('/event10/api/status','/event10/api/signals','/event10/api/star
 assert 'localStorage' not in js and 'sessionStorage' not in js
 assert 'panel-guardian' not in html and 'panel-overview' not in html
 assert '/guardian/api/status' not in js and 'function guardian(' not in js
-assert 'APP_VERSION="1.3.4"' in js
+assert 'APP_VERSION="1.3.5"' in js
 assert re.fullmatch(r'[a-f0-9]{40}',json.loads((p/'version.json').read_text())['commit'])
 assert '__ZL_APP_RELEASE_SHA__' not in js
 assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html

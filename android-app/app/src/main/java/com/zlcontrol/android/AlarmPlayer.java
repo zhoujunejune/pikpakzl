@@ -9,7 +9,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
-import android.content.Context;
 import android.os.Build;
 import java.io.IOException;
 
@@ -21,22 +20,32 @@ public final class AlarmPlayer {
     private final Runnable stopTask=this::stop;
     public synchronized boolean play(Context context,int seconds){
         stop();
+        // Always try haptics, including when the chosen alarm sound is missing
+        // or the audio stream is muted. The notification itself is posted first.
         Uri sound=RingtoneManager.getActualDefaultRingtoneUri(context,RingtoneManager.TYPE_ALARM);
         if(sound==null)sound=RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-        try {
-            if(sound==null)return false;
-            MediaPlayer p=new MediaPlayer();
-            p.setAudioAttributes(new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
-            p.setDataSource(context,sound);
-            p.setLooping(true);
-            p.prepare();
-            p.start();
-            player=p;
+        MediaPlayer candidate=null;
+        boolean started=false;
+        try{
+            if(sound!=null){
+                candidate=new MediaPlayer();
+                candidate.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+                candidate.setDataSource(context,sound);
+                candidate.setLooping(true);
+                candidate.prepare();
+                candidate.start();
+                player=candidate;
+                started=true;
+            }
         }catch(Exception e){
-            if(player!=null){try{player.release();}catch(Exception ignored){} player=null;}
-            return false;
+            // Release the *local* partially created player (the old code could
+            // leak it if setDataSource/prepare threw before assigning player).
+            if(candidate!=null){
+                try{candidate.release();}catch(Exception ignored){}
+            }
+            player=null;
         }
         try{
             vibrator=(Vibrator)context.getSystemService(Context.VIBRATOR_SERVICE);
@@ -45,8 +54,8 @@ public final class AlarmPlayer {
                   new long[]{0,550,250,550,300,700,350,700},0));
             }
         }catch(Exception ignored){}
-        handler.postDelayed(stopTask,seconds*1000L);
-        return true;
+        handler.postDelayed(stopTask,Math.max(1,seconds)*1000L);
+        return started;
     }
     public synchronized void stop(){
         handler.removeCallbacks(stopTask);

@@ -72,7 +72,7 @@ public final class SignalAlertService extends Service {
     public static final String PREF_ACK_CLIENT_ID="event10_alert_anon_id_v133";
     private static final String ACK_LAST_KEY="event10_alert_ack_last_key_v133";
     private static final String FOREGROUND_CHANNEL="zl_event10_foreground_v1";
-    private static final String ALARM_CHANNEL="zl_event10_alarm_v2_audible";
+    private static final String ALARM_CHANNEL="zl_event10_alarm_v3_silent_notice";
     private static final int FOREGROUND_ID=101;
     private static final int SIGNAL_ID=102;
     // Foreground-only low-latency polling: no speculative signals, no extra exchange requests.
@@ -111,9 +111,10 @@ public final class SignalAlertService extends Service {
         foreground.setSound(null,null);
         nm.createNotificationChannel(foreground);
         NotificationChannel alerts=new NotificationChannel(ALARM_CHANNEL,"10分钟信号闹铃",NotificationManager.IMPORTANCE_HIGH);
-        alerts.setDescription("出现新的10分钟事件信号时显示高优先级通知，响系统闹钟铃声");
-        alerts.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-            new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT).build());
+        alerts.setDescription("独立高优先级通知不发第二种提示音；由本机闹钟播放器响铃");
+        // System notification tone and manually played alarm would otherwise
+        // generate two different audible alerts for one signal. Use alarm audio only.
+        alerts.setSound(null,null);
         alerts.enableVibration(true); // Keep notification vibration when the alarm media route is inaudible.
         nm.createNotificationChannel(alerts);
         Notification ongoing=new Notification.Builder(this,FOREGROUND_CHANNEL)

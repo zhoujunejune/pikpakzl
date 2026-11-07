@@ -323,10 +323,10 @@ public final class MainActivity extends Activity {
                 long lastSuccess=SecureStore.prefs(this).getLong(SignalAlertService.PREF_LAST_SUCCESS,0L);
                 long since=SecureStore.prefs(this).getLong(SignalAlertService.PREF_ENABLED_SINCE,0L);
                 long now=System.currentTimeMillis();
-                if(now-Math.max(last,since)>12000L){
-                    status="⚠ 后台监听超过12秒未运行，请检查后台权限";
-                }else if(now-Math.max(lastSuccess>=since?lastSuccess:0L,since)>15000L){
-                    status="⚠ 超过15秒未成功获取信号，请查看提醒诊断";
+                if(now-Math.max(last,since)>35000L){
+                    status="⚠ 后台监听超过35秒未运行，请检查后台权限和网络";
+                }else if(now-Math.max(lastSuccess>=since?lastSuccess:0L,since)>45000L){
+                    status="⚠ 超过45秒未完成信号同步，请查看提醒诊断";
                 }
             }
             alarmStatus.setText(status);
@@ -357,6 +357,10 @@ public final class MainActivity extends Activity {
             case "BLOCKED":return "信号被提醒条件拦截";
             default:return reason==null||reason.isEmpty()?"暂无":reason;
         }
+    }
+    private int pendingReceiptCount(android.content.SharedPreferences p){
+        try{return new JSONArray(p.getString(SignalAlertService.PREF_PENDING_RECEIPTS,"[]")).length();}
+        catch(Exception e){return -1;}
     }
     private String directionName(String direction){
         return "UP".equals(direction)?"看涨↑":
@@ -415,6 +419,11 @@ public final class MainActivity extends Activity {
             "\n本次开启时间："+timeOf(p.getLong(SignalAlertService.PREF_ENABLED_SINCE,0L))+
             "\n后台最后尝试："+timeOf(lastPoll)+
             "\n后台最后成功："+timeOf(lastSuccess)+
+            "\n提醒获取模式："+p.getString(SignalAlertService.PREF_WATCH_MODE,"未读取")+
+            "\n最近完整对账："+timeOf(p.getLong(SignalAlertService.PREF_LAST_FULL_SYNC,0L))+
+            "\n服务器回执状态："+p.getString(SignalAlertService.PREF_LAST_ACK_STATE,"未发送")+
+            "\n最近服务器确认："+timeOf(p.getLong(SignalAlertService.PREF_LAST_ACK_TIME,0L))+
+            "\n待上传回执："+pendingReceiptCount(p)+
             "\n最近接口耗时："+p.getLong(SignalAlertService.PREF_LAST_API_LATENCY_MS,0L)+"毫秒"+
             "\n最近信号通知延迟："+(lastAlarm>0?p.getLong(SignalAlertService.PREF_LAST_ALARM_DELAY_MS,0L)+"毫秒":"无记录")+
             "\n本机近期已发提醒："+recentRings+"次（发现延迟>15秒："+lateRings+"次，最长："+largestDelayMs+"毫秒）"+

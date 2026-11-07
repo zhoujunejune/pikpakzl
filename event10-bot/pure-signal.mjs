@@ -1,5 +1,5 @@
-// V18: original candidate eligibility/cadence; DeepSeek must fully complete before any UP/DOWN is published. No trading.
-export const RULE_VERSION="EVENT10_AI_REQUIRED_LEARNING_V18_20261106";
+// V19: unchanged original multi-indicator candidate gates, 5m EMA direction, cooldown; no AI or trading.
+export const RULE_VERSION="EVENT10_PURE_RULE_V19_20261107";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=60000;
 const positive=n=>typeof n==="number"&&Number.isFinite(n)&&n>0;
@@ -190,7 +190,7 @@ export async function collectRuleFeatures({fetcher=fetch,now=Date.now,timeoutMs=
   }catch(e){availability.indexQuote={available:false,error:String(e?.message||e).slice(0,110)};}
   return {source:"BINANCE_USDM_INDEX_SPOT_CLOSED_1M_5M_PROXY_NOT_OFFICIAL",
     available:features.indexQuote?1:0,total:1,features,availability,
-    caveats:["V17完全保留V16的信号触发与10分钟间隔，AI仅复核方向，失败使用规则兜底。",
+    caveats:["V19保留同一套V16指标筛选与10分钟限频，方向完全由规则与5分钟EMA给出，不调用AI。",
       "数据异常、动量冲突或全平盘不出方向；连续失误不暂停信号。大模型和规则都可能误判，不执行真实订单。",
       "锁定指数代理价与10分钟后代理价并非币安事件合约官方开仓Strike或结算。"]};
 }

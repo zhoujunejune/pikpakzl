@@ -20,22 +20,46 @@ function feed(at=START,side=1,flat=false){
  }
  return {ok:true,readOnly:true,symbol:"BTCUSDT",latest:{marketFeedConnected:true},candles};
 }
-const goodAiResponse=(direction="UP")=>({choices:[{finish_reason:"stop",message:{
- content:JSON.stringify({direction,confidence:0.62,
- reason:"短周期EMA持续向上同时动量确认了上涨趋势",
- upCase:"短期的正动量与EMA金叉表示上涨的可能性",
- downCase:"RSI处于较高区域可能发生快速回落反转",
- decisiveEvidence:"一分和五分钟EMA共振且三分钟动量为正",
- risk:"历史案例有限可能出现急速反转导致误判"}),
- reasoning_content:"test validated high-reasoning evidence"}}]});
 const fixtureEngine=(options={})=>{
  const provided=options.fetcher||fetch;
- return createEngine({...options,env:{...options.env,DEEPSEEK_API_KEY:"fixture-key"},
-  fetcher:async(url,args)=>url.includes("chat/completions")?
-   {ok:true,json:async()=>goodAiResponse(JSON.parse(args.body).messages?.[1]?.content?.includes('"ruleDirection":"DOWN"')?"DOWN":"UP")}:provided(url,args)});
+ return createEngine({...options,env:{...options.env,DEEPSEEK_API_KEY:"present-but-MUST-NOT-BE-USED"},
+  fetcher:async(url,args)=>{
+   if(url.includes("chat/completions")||url.includes("api.deepseek.com"))
+    throw Error("FORBIDDEN_AI_HTTP_REQUEST");
+   return provided(url,args);
+  }});
 };
 const evaluate=(at,trigger="AUTO",f=feed(at))=>evaluatePureSignal({
  feed:f,reference:{observedAt:at},indexSnapshot:{price:70000,observedAt:at-100},trigger});
+test("V19 never calls AI even when a DeepSeek key exists; rule decides instantly",async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"event10-pure-rule-v19-"));
+ const file=path.join(dir,"sessions.json");
+ const now=START+1000;let aiRequests=0;
+ const engine=fixtureEngine({
+  env:{EVENT10_STATE_FILE:file,DEEPSEEK_API_KEY:"invalid-test-secret"},
+  clock:()=>now,
+  fetcher:async(url)=>{
+   if(/api\\.deepseek\\.com|chat\\/completions/.test(url)){aiRequests++;throw Error("AI_FORBIDDEN");}
+   if(url.includes("shadow-market-data"))return {ok:true,json:async()=>feed(now)};
+   if(url.includes("premiumIndex"))return {ok:true,json:async()=>({
+    symbol:"BTCUSDT",indexPrice:"70000",time:now-100})};
+   throw Error("UNEXPECTED_URL "+url);
+  }});
+ const predicted=await engine.start("manual-pure-rule-v19-001");
+ const expected=evaluate(now,"MANUAL",feed(now)).direction;
+ assert.equal(predicted.direction,expected);
+ assert.equal(predicted.model,"PURE_SIGNAL_V19_EMA5_DIRECTION");
+ assert.equal(predicted.aiReview,null);
+ assert.equal(engine.status().aiMandatory,false);
+ assert.equal(engine.status().aiReviewConfigured,false);
+ assert.equal(engine.status().aiReviewModel,null);
+ assert.equal(engine.status().thinkingMode,"disabled");
+ assert.equal(engine.status().modelCalls,0);
+ assert.equal(aiRequests,0);
+ assert.equal(engine.signals().records[0].baseDirection,expected);
+ assert.equal(predicted.expiresAt-predicted.openedAt,600000);
+ assert.equal(engine.status().minSignalGapMs,600000);
+});
 test("V17 strict retains six core gates without the old wide secondary veto",()=>{
  const at=START+60000;
  const bullish=feed(at,1);
@@ -59,7 +83,7 @@ test("V17 long RSI threshold stays below 63 and down requires 15m persistence",(
  assert.ok(Number.isFinite(down.evidence.change15mPct));
 });
 test("no forced directions at 00/20/40: flat markets always abstain",()=>{
- assert.equal(RULE_VERSION,"EVENT10_AI_REQUIRED_LEARNING_V18_20261106");assert.equal(AUTO_SLOT_MS,60000);
+ assert.equal(RULE_VERSION,"EVENT10_PURE_RULE_V19_20261107");assert.equal(AUTO_SLOT_MS,60000);
  for(const m of [0,20,40]){
    const r=evaluate(START+m*60000,"AUTO",feed(START+m*60000,1,true));
    assert.equal(r.direction,null);assert.equal(r.quality,"NO_SIGNAL");

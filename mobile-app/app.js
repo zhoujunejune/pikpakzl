@@ -1,9 +1,9 @@
 /* ZL EVENT10-only app — browser-only client; no exchange credentials or order calls. */
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
-const APP_VERSION="1.3.4"; // Ten-minute-signal-only UI release.
+const APP_VERSION="1.3.5"; // Ten-minute-signal-only UI release.
 const $=id=>document.getElementById(id);
-const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null,eventEpoch:0,eventFetchController:null,eventRetryTimer:null,eventRetryDelayMs:1200,eventLastResumeAt:0,eventLifecycle:"foreground"};
+const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',homeHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null,eventEpoch:0,eventFetchController:null,eventRetryTimer:null,eventRetryDelayMs:1200,eventLastResumeAt:0,eventLifecycle:"foreground"};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
@@ -178,6 +178,16 @@ function drawEventHistory(){
   }else viewport.scrollTop=0;
   state.eventHistorySignature=signature;
  }
+ const homeSignature=eventHistoryFingerprint(state.eventRecords.slice(0,2));
+ if(homeSignature!==state.homeHistorySignature){
+  renderRecords("eHomeRecords",state.eventRecords.slice(0,2));
+  state.homeHistorySignature=homeSignature;
+ }
+ put("eHomeTotal",state.eventTotal);
+ const recentSettled=state.eventRecords.filter(x=>typeof x.proxyHit==="boolean").slice(0,10);
+ const lastTen=recentSettled.length?recentSettled.filter(x=>x.proxyHit===true).length+"/"+recentSettled.length:"—";
+ put("eLastTen",lastTen);
+ put("eLastTenDetail",lastTen);
  put("eTotal","新策略 "+state.eventTotal+" 条 · 已加载 "+state.eventRecords.length+" 条");
  let status;
  if(state.eventHistoryBusy)status="正在加载更多历史信号…";
@@ -201,7 +211,7 @@ function updateEventHistory(ledger){
 async function loadMoreEventSignals(){
  if(state.eventHistoryBusy||document.hidden||
     state.eventRecords.length>=state.eventTotal||
-    !$("panel-event10").classList.contains("active"))return;
+    !$("panel-records").classList.contains("active"))return;
  state.eventHistoryBusy=true;
  state.eventHistoryError=null;
  drawEventHistory();
@@ -234,14 +244,19 @@ function event(e,ledger){
  const stats=(currentLedger?ledger?.stats:e?.stats)||{};
  const records=currentLedger?mergeEventRecords(ledger):[];
  const active=!!e.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION;
- put("eSignal",dir(s?.direction||null));
- put("ePhase",s?.status||"暂无新版信号");
+ const direction=s?.direction==="UP"||s?.direction==="DOWN"?s.direction:null;
+ put("eSignal",direction?dir(direction):"等待新信号");
+ $("eHero").dataset.direction=direction||"WAIT";
+ put("ePhase",direction?"V19 纯规则 · "+(s?.status||"方向已确认"):
+   "V19 纯规则 · "+(e.configured?"正在监控 BTC 行情":"服务未就绪"));
  const validDirections=stats.validDirections??stats.total??"—";
  put("eCounts",validDirections+" / "+(stats.proxySettled??"—"));
  const accuracy=pct(stats.proxyHits,stats.proxySettled);
  const servicePct=typeof stats.proxyAccuracyPct==="number"&&Number.isFinite(stats.proxyAccuracyPct)?stats.proxyAccuracyPct:null;
  const proxyDisplay=accuracy!=="—"?accuracy:(servicePct!==null?servicePct.toFixed(1)+"%":"—（新版暂无已核对样本）");
  put("eProxyAccuracy",proxyDisplay);
+ put("eProxyAccuracyDetail",proxyDisplay);
+ put("eHomeTotal",validDirections);
  const audit=e.scanDiagnostics?.lastHour;
  const produced=(audit?.strictSignals||0)+(audit?.standardSignals||0);
  put("eScanAudit",audit?"最近1小时检查 "+audit.checks+"次，产生方向信号 "+produced+"条，无信号 "+audit.noSignal+"次，数据异常 "+audit.dataErrors+"次。":"当前暂无扫描统计。");
@@ -271,7 +286,8 @@ function eventError(error){
  state.eventHistoryError="状态读取失败，已加载记录仍然保留";
  drawEventHistory();
  pill("eStatus","bad","暂不可用");
- for(const id of ["eSignal","ePhase","eCounts","eProxyAccuracy","eScanAudit","eScanGates","eFreshness","eAiReview"])put(id,"不可用");
+ for(const id of ["eSignal","ePhase","eCounts","eProxyAccuracy","eProxyAccuracyDetail","eHomeTotal","eLastTen","eLastTenDetail","eScanAudit","eScanGates","eFreshness","eAiReview"])put(id,"不可用");
+ $("eHero").dataset.direction="WAIT";
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
  if(!state.eventRecords.length){
   put("eTotal","记录接口暂时不可用");
@@ -283,9 +299,8 @@ function eventError(error){
 // Only EVENT10 status contributes to the App connection indicator.
 function refreshConnectionBadge(){
  $("healthDot").className="dot "+(state.eventOnline?"up":"down");
- put("healthText",state.eventOnline?
-   (state.eventLedgerOnline?"信号服务已连接":"信号已连接 · 记录同步中"):
-   "信号服务连接异常");
+ put("healthText",state.eventOnline?"已连接":"连接异常");
+ put("eMiniConnection",state.eventOnline?"● 已连接":"● 连接异常");
  const live=$("eConnectionDetail");
  if(live){
   const t=state.eventLastStatusAt;
@@ -336,7 +351,7 @@ async function refreshEvent10Only(){
    if(version!==EVENT10_FREQ_OPTIMIZED_VERSION){
     EVENT10_FREQ_OPTIMIZED_VERSION=version;
     state.eventRecords=[];state.lastEvent=[];state.eventTotal=0;
-    state.eventHistorySignature="";state.eventHistoryError=null;
+    state.eventHistorySignature="";state.homeHistorySignature="";state.eventHistoryError=null;
     state.eventLedgerOnline=false;
    }
    state.eventOnline=true;state.eventLastError=null;
@@ -423,6 +438,7 @@ async function checkHotUpdate(onReturn=false){
 function navigate(page){
  for(const el of document.querySelectorAll(".section-panel"))el.classList.toggle("active",el.id==="panel-"+page);
  for(const el of document.querySelectorAll(".tab"))el.classList.toggle("selected",el.dataset.go===page);
+ if(page==="records")void loadMoreEventSignals();
  history.replaceState(null,"","#"+page);
  window.scrollTo({top:0,behavior:"instant"});
 }
@@ -437,7 +453,7 @@ function configureReverseAlertSetting(){
     typeof bridge.setReverseAlertsEnabled!=="function"){
   toggle.checked=false;
   toggle.disabled=true;
-  status.textContent="当前网页环境不支持原生信号反向提醒。请安装海派事件合约 v1.3.4 或更新安卓安装包。";
+  status.textContent="当前网页环境不支持原生信号反向提醒。请安装海派事件合约 v1.3.5 或更新安卓安装包。";
   return;
  }
  try{
@@ -526,7 +542,7 @@ window.addEventListener("pageshow",event=>{
 window.addEventListener("focus",()=>foregroundResume("focus"));
 window.addEventListener("online",()=>foregroundResume("network-online"));
 const initial=location.hash.replace("#","");
-navigate(["event10","more"].includes(initial)?initial:"event10");
+navigate(["event10","stats","records","more"].includes(initial)?initial:"event10");
 void refresh();
 void checkHotUpdate();
 setInterval(()=>void refresh(),10000);

@@ -377,7 +377,51 @@ function navigate(page){
  history.replaceState(null,"","#"+page);
  window.scrollTo({top:0,behavior:"instant"});
 }
+// Native Android background poller alone owns alarm-direction inversion.
+// Use only a boolean bridge, never persist an imitation toggle in the web PWA.
+function configureReverseAlertSetting(){
+ const toggle=$("reverseAlertToggle");
+ const status=$("reverseAlertState");
+ if(!toggle||!status)return;
+ const bridge=window.HaipaiAlertPrefs;
+ if(!bridge||typeof bridge.getReverseAlertsEnabled!=="function"||
+    typeof bridge.setReverseAlertsEnabled!=="function"){
+  toggle.checked=false;
+  toggle.disabled=true;
+  status.textContent="当前网页环境不支持原生信号反向提醒。请安装海派事件合约 v1.3.2 或更新安卓安装包。";
+  return;
+ }
+ try{
+  toggle.checked=Boolean(bridge.getReverseAlertsEnabled());
+  toggle.disabled=false;
+  status.textContent=toggle.checked?
+   "已开启：仅手机通知和悬浮弹窗反向；AI原始信号与胜率不变。":
+   "已关闭：手机提醒原始AI方向。";
+ }catch(error){
+  toggle.checked=false;
+  toggle.disabled=true;
+  status.textContent="本机开关读取失败，未修改原始信号。";
+  return;
+ }
+ toggle.addEventListener("change",()=>{
+  const previous=!toggle.checked;
+  const next=toggle.checked;
+  try{
+   if(bridge.setReverseAlertsEnabled(next)!==true)throw Error("保存失败");
+   toggle.checked=Boolean(bridge.getReverseAlertsEnabled());
+   if(toggle.checked!==next)throw Error("保存验证失败");
+   status.textContent=next?
+    "反向提醒已开启：UP提醒DOWN，DOWN提醒UP（只影响之后的新提醒）。":
+    "反向提醒已关闭：后续提醒与模型方向相同。";
+  }catch(error){
+   toggle.checked=previous;
+   status.textContent="保存本机提醒设置失败，请重试；模型信号没有改变。";
+  }
+ });
+}
+
 for(const btn of document.querySelectorAll("[data-go]"))btn.addEventListener("click",()=>navigate(btn.dataset.go));
+configureReverseAlertSetting();
 $("refresh").addEventListener("click",()=>void refresh());
 $("eRecordScroll").addEventListener("scroll",onEventHistoryScroll,{passive:true});
 $("hotUpdateButton").addEventListener("click",()=>window.location.reload());

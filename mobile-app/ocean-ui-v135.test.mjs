@@ -31,7 +31,8 @@ test("navigation exposes four real panels and historical signal pagination stays
  assert.ok(js.includes('eventHistoryFingerprint'));
 });
 test("signal popup retains notification directions and a dedicated stop-alarm action",()=>{
- for(const part of ["↑  看涨","↓  看跌","10分钟反向提醒","确认并打开币安",
+ for(const part of ["买涨","买跌","UP","DOWN","V19 原始信号","反向模式",
+   "信号时间","提醒延迟","haipai_up","haipai_down","确认并打开币安",
    "关闭提醒","R.drawable.sea_friends_icon", "SignalAlertService.ACTION_SILENCE"]){
    assert.ok(overlay.includes(part),part);
  }

@@ -16,6 +16,21 @@ public final class AlertDirectionPolicySmoke {
         expect(AlertDirectionPolicy.notifiedDirection(null,true),null,"null reverse");
         expect(AlertDirectionPolicy.notifiedDirection("",true),null,"empty reverse");
         expect(AlertDirectionPolicy.notifiedDirection("UP",true),"DOWN","repeat deterministic");
+        // Switch OFF is a first-class original-direction UI, not an implicit reverse.
+        expect(AlertDirectionPolicy.overlayDirectionText("UP",false),"↑  看涨","off original up");
+        expect(AlertDirectionPolicy.overlayDirectionText("DOWN",false),"↓  看跌","off original down");
+        expect(AlertDirectionPolicy.notificationTitle("UP",false),"原始信号：看涨","off notice up");
+        expect(AlertDirectionPolicy.notificationTitle("DOWN",false),"原始信号：看跌","off notice down");
+        // Switch ON shows the inverse direction, clearly labelled as inverse.
+        expect(AlertDirectionPolicy.overlayDirectionText("UP",true),"↓  反向买跌","on original up");
+        expect(AlertDirectionPolicy.overlayDirectionText("DOWN",true),"↑  反向买涨","on original down");
+        expect(AlertDirectionPolicy.notificationTitle("UP",true),"反向提醒：买跌","on notice down");
+        expect(AlertDirectionPolicy.notificationTitle("DOWN",true),"反向提醒：买涨","on notice up");
+        // Invalid directions never become actionable UI.
+        expect(AlertDirectionPolicy.overlayDirectionText("WAIT",false),null,"off wait");
+        expect(AlertDirectionPolicy.overlayDirectionText("WAIT",true),null,"on wait");
+        expect(AlertDirectionPolicy.notificationTitle("",true),null,"on empty");
+        expect(AlertDirectionPolicy.modelDirectionText("WAIT"),null,"raw wait");
         System.out.println("HAIPAI_REVERSE_DIRECTION_POLICY_TESTS_OK=true");
     }
 }

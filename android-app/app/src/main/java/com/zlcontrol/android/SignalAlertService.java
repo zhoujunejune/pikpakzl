@@ -503,9 +503,12 @@ public final class SignalAlertService extends Service {
         
         long ageSeconds=Math.max(0L,(System.currentTimeMillis()-opened)/1000L);
         String freshness=ageSeconds>15L?" · 发现延迟"+ageSeconds+"秒":" · 及时发现";
-        String content="BTC 10分钟 · "+(reverse?"反向提醒 · ":"")+name+" · "+signalTime+" · "+trigger+freshness;
+        String content="BTC 10分钟 · "+(reverse?"反向操作 · ":"模型原始方向 · ")
+            +(reverse?"买":"看")+(alertedDirection.equals("UP")?"涨":"跌")+" "+alertedDirection
+            +" · "+signalTime+" · "+trigger+freshness;
         // Reference-cycle expiry is NOT the expiry of a new Binance order.
-        String detail=content+(reverse?"。原规则方向："+originalName+"，仅本机提醒已反向。":"。")+"金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
+        String detail=content+"。"+AlertDirectionPolicy.modeHint(direction,reverse).replace("\\n","；")
+            +"。金额请在币安内核对。打开币安后进入 合约→事件→BTC→10分钟，"
             +"确认方向、开仓指数价格和最终到期时间，再由你手动下单。没有自动成交。";
         Intent silencer=new Intent(this,SignalAlertService.class)
             .setAction(ACTION_SILENCE)
@@ -517,7 +520,7 @@ public final class SignalAlertService extends Service {
         PendingIntent binance=openBinanceIntent(signalId);
         Notification notice=new Notification.Builder(this,ALARM_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle((reverse?"反向提醒：":"新信号：")+name+" · 请核对价格")
+            .setContentTitle(AlertDirectionPolicy.notificationTitle(direction,reverse)+" · 请核对价格")
             .setContentText(content)
             .setStyle(new Notification.BigTextStyle().bigText(detail))
             .setAutoCancel(true)
@@ -545,7 +548,7 @@ public final class SignalAlertService extends Service {
         boolean started=sound.play(this,25);
         // Display only after the notification has been posted successfully.
         // Overlay permission is opt-in, and notification is always the fallback.
-        if(signalPopup!=null)signalPopup.show(signalId,alertedDirection,opened,signal.optLong("expiresAt",0L),notificationId,reverse);
+        if(signalPopup!=null)signalPopup.show(signalId,direction,opened,signal.optLong("expiresAt",0L),notificationId,reverse);
         status((started?"响铃提醒：":"系统铃声播放失败（仅通知）：")+name+(reverse?"（反向模式）":""));
         diagnostics.edit().putString("event10_alert_last_displayed_direction",alertedDirection)
             .putString("event10_alert_last_original_direction",direction).apply();

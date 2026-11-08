@@ -1,36 +1,40 @@
 package com.zlcontrol.android;
 
-/**
- * Presentation-only alert direction transform. Source record, signal ID,
- * settlement, accuracy and cloud model output must NEVER be modified.
- */
+/** Presentation-only direction mapping: never modify model, ledger or settlement. */
 public final class AlertDirectionPolicy {
     private AlertDirectionPolicy() {}
 
-    /** UI text is derived from the SAME raw model direction as the Android alert. */
-    public static String modelDirectionText(String original) {
-        if ("UP".equals(original)) return "看涨";
-        if ("DOWN".equals(original)) return "看跌";
+    public static String notifiedDirection(String original,boolean reverseEnabled) {
+        if ("UP".equals(original)) return reverseEnabled ? "DOWN" : "UP";
+        if ("DOWN".equals(original)) return reverseEnabled ? "UP" : "DOWN";
+        return null; // WAIT/invalid never generates a trading prompt.
+    }
+
+    public static String originalDescription(String original) {
+        if ("UP".equals(original)) return "看涨 UP";
+        if ("DOWN".equals(original)) return "看跌 DOWN";
         return null;
     }
 
-    public static String overlayDirectionText(String original,boolean reverseEnabled) {
+    public static String overlayLabel(String original,boolean reverseEnabled) {
         String shown=notifiedDirection(original,reverseEnabled);
         if(shown==null)return null;
-        if(reverseEnabled)return "UP".equals(shown)?"↑  反向买涨":"↓  反向买跌";
-        return "UP".equals(shown)?"↑  看涨":"↓  看跌";
+        return ("UP".equals(shown)?"↑  ":"↓  ")
+            +(reverseEnabled?"买":"看")+("UP".equals(shown)?"涨":"跌")+"  "+shown;
     }
 
     public static String notificationTitle(String original,boolean reverseEnabled) {
         String shown=notifiedDirection(original,reverseEnabled);
         if(shown==null)return null;
-        String label=modelDirectionText(shown);
-        return reverseEnabled?"反向提醒：买"+label.substring(1):"原始信号："+label;
+        return (reverseEnabled?"反向操作：":"模型信号：")
+            +(reverseEnabled?"买":"看")+("UP".equals(shown)?"涨":"跌")+" "+shown;
     }
 
-    public static String notifiedDirection(String original,boolean reverseEnabled) {
-        if ("UP".equals(original)) return reverseEnabled ? "DOWN" : "UP";
-        if ("DOWN".equals(original)) return reverseEnabled ? "UP" : "DOWN";
-        return null; // WAIT/no-signal/invalid must not create an alert.
+    public static String modeHint(String original,boolean reverseEnabled) {
+        String source=originalDescription(original);
+        if(source==null)return null;
+        return reverseEnabled
+            ?"V19原始模型方向："+source+"\n仅本机反向提醒，原始记录与胜率不变"
+            :"反向提醒已关闭 · V19原始方向："+source+"\n请核对币安事件轮次和价格";
     }
 }

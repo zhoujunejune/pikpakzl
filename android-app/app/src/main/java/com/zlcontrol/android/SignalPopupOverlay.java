@@ -63,15 +63,16 @@ final class SignalPopupOverlay {
         return v;
     }
 
-    void show(String signalId,String direction,long openedAt,long expiresAt,int noticeId,boolean reversed){
+    void show(String signalId,String originalDirection,long openedAt,long expiresAt,int noticeId,boolean reversed){
         main.post(()->{
             // The normal system notification is the fallback when overlay access
             // is unavailable, e.g. Android denies it on the lock screen.
             if(!Settings.canDrawOverlays(service))return;
-            if(!"UP".equals(direction)&&!"DOWN".equals(direction))return;
+            final String displayedDirection=AlertDirectionPolicy.notifiedDirection(originalDirection,reversed);
+            if(displayedDirection==null)return;
             dismissNow();
             try{
-                final boolean up="UP".equals(direction);
+                final boolean up="UP".equals(displayedDirection);
                 final int navy=Color.rgb(22,58,88);
                 final int secondary=Color.rgb(92,125,151);
                 final int blue=Color.rgb(34,139,219);
@@ -90,26 +91,24 @@ final class SignalPopupOverlay {
                 logoLp.bottomMargin=dp(8);
                 layout.addView(mascot,logoLp);
 
-                TextView headline=line(reversed?"BTC · 10分钟反向提醒":"BTC · 10分钟新信号",15,navy,true);
+                TextView headline=line(reversed?"BTC · 10分钟反向操作提示":"BTC · 10分钟模型原始信号",15,navy,true);
                 layout.addView(headline,new LinearLayout.LayoutParams(-1,dp(32)));
-                TextView arrow=line(up?"↑  看涨":"↓  看跌",
+                TextView arrow=line(AlertDirectionPolicy.overlayLabel(originalDirection,reversed),
                     31,accent,true);
                 layout.addView(arrow,new LinearLayout.LayoutParams(-1,dp(66)));
-                TextView subtitle=line("BTC / USDT   ·   V19 纯规则",12,secondary,false);
+                TextView subtitle=line(reversed?"反向提醒已开启 · V19 纯规则":"反向提醒已关闭 · V19 纯规则",12,secondary,false);
                 layout.addView(subtitle,new LinearLayout.LayoutParams(-1,dp(26)));
 
                 String date=new SimpleDateFormat("HH:mm:ss",Locale.CHINA)
                     .format(new Date(openedAt));
-                TextView time=line("信号时间："+date,13,navy,false);
+                long seconds=Math.max(0L,(System.currentTimeMillis()-openedAt)/1000L);
+                TextView time=line("信号 "+date+" · 已过去"+seconds+"秒",13,navy,false);
                 LinearLayout.LayoutParams timeLp=new LinearLayout.LayoutParams(-1,dp(38));
                 timeLp.topMargin=dp(8);
                 time.setBackground(background(Color.rgb(236,247,255),Color.rgb(226,241,251)));
                 layout.addView(time,timeLp);
 
-                String originalLabel="UP".equals(direction)?"看跌":"看涨";
-                String hintText=reversed?
-                    "已开启反向提醒 · 原规则方向："+originalLabel+"\n仅更改手机提醒，不更改模型记录":
-                    "信号仅供参考，请核对币安方向及开仓价格";
+                String hintText=AlertDirectionPolicy.modeHint(originalDirection,reversed);
                 TextView hint=line(hintText,12,secondary,false);
                 LinearLayout.LayoutParams hintLp=new LinearLayout.LayoutParams(-1,dp(51));
                 hintLp.topMargin=dp(7);
@@ -154,7 +153,7 @@ final class SignalPopupOverlay {
                     listener.onConfirm(signalId,noticeId);
                 });
                 layout.addView(buttons,buttonGroupLp);
-                TextView caution=line("不会自动下单 · 锁屏时以系统通知为准",11,secondary,false);
+                TextView caution=line("仅提醒 · 不自动下单 · 锁屏以系统通知为准",11,secondary,false);
                 LinearLayout.LayoutParams cautionLp=new LinearLayout.LayoutParams(-1,dp(22));
                 cautionLp.topMargin=dp(7);
                 layout.addView(caution,cautionLp);

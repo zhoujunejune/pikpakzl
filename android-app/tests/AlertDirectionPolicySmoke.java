@@ -31,6 +31,19 @@ public final class AlertDirectionPolicySmoke {
         expect(AlertDirectionPolicy.overlayDirectionText("WAIT",true),null,"on wait");
         expect(AlertDirectionPolicy.notificationTitle("",true),null,"on empty");
         expect(AlertDirectionPolicy.modelDirectionText("WAIT"),null,"raw wait");
+        // Both states must agree across the heads-up notification and the overlay.
+        expect(AlertDirectionPolicy.overlayLabel("UP",false),"↑  看涨  UP","off up overlay");
+        expect(AlertDirectionPolicy.overlayLabel("DOWN",false),"↓  看跌  DOWN","off down overlay");
+        expect(AlertDirectionPolicy.overlayLabel("UP",true),"↓  买跌  DOWN","on up overlay");
+        expect(AlertDirectionPolicy.overlayLabel("DOWN",true),"↑  买涨  UP","on down overlay");
+        expect(AlertDirectionPolicy.notificationTitle("UP",false),"模型信号：看涨 UP","off up notice");
+        expect(AlertDirectionPolicy.notificationTitle("DOWN",false),"模型信号：看跌 DOWN","off down notice");
+        expect(AlertDirectionPolicy.notificationTitle("UP",true),"反向操作：买跌 DOWN","on up notice");
+        expect(AlertDirectionPolicy.notificationTitle("DOWN",true),"反向操作：买涨 UP","on down notice");
+        expect(AlertDirectionPolicy.overlayLabel("WAIT",true),null,"no fake reverse");
+        expect(AlertDirectionPolicy.notificationTitle("WAIT",false),null,"no fake normal");
+        if(!AlertDirectionPolicy.modeHint("UP",false).contains("已关闭"))throw new AssertionError("off hint");
+        if(!AlertDirectionPolicy.modeHint("UP",true).contains("原始模型方向：看涨 UP"))throw new AssertionError("on source hint");
         System.out.println("HAIPAI_REVERSE_DIRECTION_POLICY_TESTS_OK=true");
     }
 }

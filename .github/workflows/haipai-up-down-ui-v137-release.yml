@@ -4,6 +4,7 @@ on:
     branches: [feature/zl-futures-bot-v1]
     paths:
       - '.github/workflows/haipai-up-down-ui-v137-release.yml'
+      - 'mobile-app/ocean-ui-v135.test.mjs'
   workflow_dispatch:
 permissions:
   contents: write

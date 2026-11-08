@@ -82,8 +82,8 @@ jobs:
           assert 'launchBinance()' in j and 'openBinanceIntent' in service
           assert 'openEvent10Intent' in service
           assert 'signal_notification_id' in service
-          assert 'zl_event10_alarm_v2_audible' in service
-          assert 'RingtoneManager.TYPE_NOTIFICATION' in service
+          assert 'zl_event10_alarm_v3_silent_notice' in service
+          assert 'alerts.setSound(null,null)' in service
           assert 'alerts.enableVibration(true)' in service
           assert 'event10_alert_alarm_volume' in service and 'event10_alert_alarm_max_volume' in service
           assert '系统闹钟音量' in j

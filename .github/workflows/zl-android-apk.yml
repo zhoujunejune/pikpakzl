@@ -60,7 +60,7 @@ jobs:
           assert 'outer.setOnApplyWindowInsetsListener' in j
           assert 'WindowInsets.Type.statusBars()' in j
           assert 'PREF_ENABLED_SINCE' in j
-          assert '仅新 Higher / Lower 信号提醒' in j
+          assert '新 Higher / Lower 信号出现在其他应用的屏幕中央' in j
           assert 'PREF_ENABLED_SINCE' in service
           assert 'SignalAlarmPolicy.decide' in service
           assert 'PREF_LAST_REASON' in service
@@ -72,7 +72,7 @@ jobs:
           assert 'SIGNAL_POLL_SECONDS=2' in service
           assert 'setConnectTimeout(3500)' in service and 'setReadTimeout(4500)' in service
           assert 'PREF_LAST_ALARM_DELAY_MS' in service and 'PREF_LAST_API_LATENCY_MS' in service
-          assert '超过15秒未成功获取信号' in j
+          assert '超过45秒未完成信号同步' in j
           assert 'PREF_AUDIT_TRAIL' in service
           assert 'PARTIAL_WAKE_LOCK' in service
           assert '忽略电池优化' in j and '本次开启时间' in j
@@ -100,6 +100,8 @@ jobs:
           assert 'signalPopup.show(' in service and 'confirmAndOpenBinance' in service
           assert 'sound.stop()' in service and 'activeAlarmSignalId' in service
           assert 'onConfirm(signalId,noticeId)' in popup
+          for check in ('V19 原始信号','反向模式','信号时间','提醒延迟','haipai_up','haipai_down'):
+            assert check in popup,check
           print('ZL_CENTER_POPUP_CONFIRM_BINANCE_INVARIANTS_PASS')
           assert 'ZL_SIGNING_STORE_FILE' in Path('android-app/app/build.gradle').read_text()
           policy=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlarmPolicy.java').read_text()

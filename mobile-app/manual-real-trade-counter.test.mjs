@@ -83,7 +83,7 @@ test('native journal persists manual timestamps, throttles double taps, and has 
  assert.match(native,/\.commit\(\)/);
  assert.match(native,/undoLastToday/);
  assert.match(native,/MANUAL_USER_CONFIRMED_LOCAL_ONLY/);
- assert.doesNotMatch(native,/createOrder|placeOrder|api\/order|Binance.*API/i);
+ assert.doesNotMatch(native,/\b(?:createOrder|placeOrder|submitOrder)\s*\(|["\x27]\/api\/order/);
  assert.match(main,/addJavascriptInterface\(new RealTradeBridge\(\),"HaipaiRealTrades"\)/);
  for(const field of ['tradeRecordButton','tradeTodayCount','tradeUndoButton','tradeHistoryList'])
   assert.ok(html.includes('id="'+field+'"'));

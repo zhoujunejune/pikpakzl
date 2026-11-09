@@ -114,6 +114,22 @@ jobs:
           emit('CONTRARIAN_HOURLY',hourly)
           emit('CONTRARIAN_FOUR_HOURLY',four_hour)
           emit('CONTRARIAN_DAILY',daily)
+          # Day-scoped 16:00-24:00 and first-ten-only results (counterfactual signal proxy).
+          day_window=defaultdict(list)
+          for x in settled:
+              dt=datetime.datetime.fromtimestamp(x['openedAt']/1000,localtz)
+              if dt.hour>=16:
+                  day_window[dt.strftime('%Y-%m-%d')].append(x)
+          for date in sorted(day_window):
+              ordered=sorted(day_window[date],key=lambda x:(x['openedAt'],x.get('id') or ''))
+              for label,subset in [('all',ordered),('first10',ordered[:10])]:
+                  reverse_hits=sum(x.get('proxyHit') is False for x in subset)
+                  print('CONTRARIAN_EVENING_CAP',json.dumps({'date':date,
+                      'selection':label,'signals':len(subset),'reverseHits':reverse_hits,
+                      'reverseLosses':len(subset)-reverse_hits,
+                      'reverseRate':round(reverse_hits*100/len(subset),2),
+                      'firstLocal':clock(subset[0]['openedAt']),
+                      'lastLocal':clock(subset[-1]['openedAt'])},ensure_ascii=False),flush=True)
           print('CONTRARIAN_READONLY_COMPLETED=true',flush=True)
           print('TEN_ROUND_CHECK_COMPLETED=true',flush=True)
           PY

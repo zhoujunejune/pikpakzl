@@ -246,18 +246,21 @@ jobs:
           mkdir -p dist
           cp "$apk" dist/Haipai-Event10-v1.3.8-STABLE-RELEASE.apk
           sha256sum dist/*.apk
-          if gh release view haipai-event10-v1.3.8-up-down-ui-20261108 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release view haipai-event10-v1.3.8-up-down-ui-20261108 --json assets --repo "$GITHUB_REPOSITORY" \
-              --jq '.assets[].name' | grep -Fx 'Haipai-Event10-v1.3.8-STABLE-RELEASE.apk'
+          if gh release view haipai-event10-v1.3.8-manual-trade-counter-20261109 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "ANDROID_STABLE_RELEASE_ALREADY_PUBLISHED=true"
           else
-            gh release create haipai-event10-v1.3.8-up-down-ui-20261108 dist/Haipai-Event10-v1.3.8-STABLE-RELEASE.apk \
+            if gh release create haipai-event10-v1.3.8-manual-trade-counter-20261109 dist/Haipai-Event10-v1.3.8-STABLE-RELEASE.apk \
               --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "海派事件合约 v1.3.8 - 今日真实交易手动计数" \
-              --notes "海派事件合约 v1.3.8：信号页新增今日真实交易手动登记按钮，每点一次代表用户已完成一笔真实交易；每日按北京时间分组，最近30个日期的登记历史在统计页查看；提供本日最后一笔撤销和1.2秒防重复点。数据仅存在手机本地，不接入币安订单、不发起交易、不计入V19代理胜率；延续v1.3.7双角色弹窗、反向提醒、后台铃声、统一蓝白UI及原发布签名，可直接覆盖升级。"
-            echo "ANDROID_STABLE_RELEASE_PUBLISHED=true"
+              --notes "手动真实交易计数，按北京时间自动分天、历史保留、误点撤销、防连点；保留V19纯规则、反向提醒、原有弹窗和正式签名。" >"$RUNNER_TEMP/gh_release.txt" 2>&1; then
+              echo "ANDROID_STABLE_RELEASE_PUBLISHED=true"
+            elif grep -q 'HTTP 403:' "$RUNNER_TEMP/gh_release.txt"; then
+              echo "::warning::Release creation denied by GitHub 403. The signed APK will be available via Actions artifacts."
+              echo "ANDROID_STABLE_RELEASE_PUBLICATION_DENIED=true"
+            else
+              cat "$RUNNER_TEMP/gh_release.txt"; exit 1
+            fi
           fi
-
       - uses: actions/upload-artifact@v4
         with:
           name: Haipai-Event10-v1.3.8-STABLE-RELEASE

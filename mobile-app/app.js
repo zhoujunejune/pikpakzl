@@ -497,7 +497,7 @@ function realTradeBridge(){
 }
 function tradeNotice(text){put("tradeJournalNotice",text);}
 function applyTradeJournal(data,notice=""){
- if(!data||data.ok!==true||!/^\\d{4}-\\d{2}-\\d{2}$/.test(data.date)||
+ if(!data||data.ok!==true||!/^\d{4}-\d{2}-\d{2}$/.test(data.date)||
     !Number.isSafeInteger(data.count)||data.count<0)throw Error("INVALID_TRADE_JOURNAL");
  put("tradeTodayDate","北京时间 "+data.date);
  put("tradeTodayCount",String(data.count));

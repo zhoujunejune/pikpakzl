@@ -31,7 +31,8 @@ function makeUi(bridge){
     append(...nodes){this.childNodes.push(...nodes);}}),
   JSON,Number
  };
- vm.runInNewContext(moduleCode,sandbox);
+ vm.createContext(sandbox);
+ vm.runInContext(moduleCode,sandbox);
  return {elements,sandbox,element};
 }
 
@@ -70,7 +71,7 @@ test('day snapshot rolls over by Beijing date, historical rows remain',()=>{
  const {element,sandbox}=makeUi(bridge);
  assert.equal(element('tradeTodayCount').textContent,'9');
  date='2026-11-10';count=0;
- vm.runInNewContext('refreshTradeJournal()',sandbox);
+ vm.runInContext('refreshTradeJournal()',sandbox);
  assert.equal(element('tradeTodayCount').textContent,'0');
  assert.match(element('tradeTodayDate').textContent,/2026-11-10/);
  assert.equal(element('tradeHistoryList').childNodes.length,2);

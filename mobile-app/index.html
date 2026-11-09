@@ -70,6 +70,18 @@ button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:poin
 .details{margin-top:13px;border-top:1px solid var(--line);padding-top:11px}.details summary{cursor:pointer;color:#407cac;font-size:12px;font-weight:680;list-style:none}
 .details summary:after{content:"  ﹀"}.details[open] summary:after{content:"  ﹀"}
 .quick-link{color:var(--accent);font-size:12px;font-weight:700}.home-records .record:nth-child(n+3){display:none}
+.trade-card{border:1px solid #dcecf8}
+.trade-main{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:13px}
+.trade-counter{display:flex;align-items:baseline;gap:4px;white-space:nowrap;color:#143555}
+.trade-counter strong{font-size:34px;font-weight:820;line-height:1.1;font-variant-numeric:tabular-nums}
+.trade-counter span{font-size:12px;color:var(--sub)}
+.trade-add{flex:1;max-width:245px;min-width:0}
+.trade-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px}
+.trade-undo{border:0;background:transparent;color:#337eb7;font-size:12px;padding:8px 1px;white-space:nowrap}
+.trade-undo:disabled{color:#a4b6c5}
+.trade-history-row{display:flex;align-items:center;justify-content:space-between;padding:10px 2px;border-bottom:1px solid #e7eff7;font-size:13px}
+.trade-history-row:last-child{border-bottom:0}
+@media(max-width:355px){.trade-main{flex-wrap:wrap}.trade-add{max-width:none;width:100%}}
 .site-footnote{font-size:11px;color:#7891a6;line-height:1.65;margin-top:12px}
 [hidden]{display:none!important}
 @media(min-width:600px){.hi{font-size:28px}.shell{padding-left:29px;padding-right:29px}.stat-row{gap:13px}.hero{min-height:275px}}
@@ -105,6 +117,21 @@ button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:poin
   <div class="message" id="manualResult" hidden aria-live="polite"></div>
   <p class="site-footnote">仅提供方向研究，不代替币安事件合约开仓价格或官方结算。闹铃开关与权限请在 App 顶部的提醒管理中设置。</p>
  </div>
+ <div class="card section trade-card" id="tradeJournalCard" aria-label="真实交易手动登记">
+  <div class="card-top">
+   <div><div class="card-title">今日真实交易</div><div class="card-sub" id="tradeTodayDate">北京时间 · 正在读取</div></div>
+   <span class="pill" id="tradeLimitState">目标≤10单/天</span>
+  </div>
+  <div class="trade-main">
+   <div class="trade-counter"><strong id="tradeTodayCount">—</strong><span>/ 10 单</span></div>
+   <button class="btn primary trade-add" id="tradeRecordButton" type="button" disabled>＋ 我已完成一笔交易</button>
+  </div>
+  <div class="trade-footer">
+   <span class="mini" id="tradeJournalNotice" role="status" aria-live="polite">正在检查本机交易记录…</span>
+   <button class="trade-undo" id="tradeUndoButton" type="button" disabled>撤销最后一笔</button>
+  </div>
+  <p class="site-footnote">手动登记：每完成一笔真实交易后点一次。仅保存到此手机，不自动读取币安成交；每日北京时间00:00自动开始新一天。</p>
+ </div>
  <div class="stat-row" aria-label="当前策略统计">
   <div class="stat"><span class="k">信号总数</span><span class="v" id="eHomeTotal">—</span></div>
   <div class="stat"><span class="k">代理胜率</span><span class="v uptext" id="eProxyAccuracy">—</span></div>
@@ -127,6 +154,11 @@ button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:poin
   <p class="mini" id="eScanGates">尚无拒绝原因统计。</p>
   <div class="mini" id="eAiReview" aria-live="polite">当前为纯规则信号，不调用 AI。</div>
   <details class="details"><summary>统计说明</summary><p class="mini">代理命中以公开币安指数信号锁定价与600秒后指数价比较，不是币安官方事件合约交易结果，也不是收益率。</p></details>
+ </div>
+ <div class="card" id="tradeHistoryCard">
+  <div class="card-title">每天真实交易次数（手动登记）</div>
+  <p class="mini">按北京时间统计，最近30个有记录的日期；与你的V19信号胜率独立。</p>
+  <div id="tradeHistoryList" role="region" aria-label="已登记真实交易的每日次数"><div class="mini">正在读取本机记录…</div></div>
  </div>
 </section>
 <section id="panel-records" class="section-panel" aria-label="历史信号记录">

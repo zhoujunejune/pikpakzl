@@ -79,6 +79,13 @@ public final class MainActivity extends Activity {
                 .putBoolean(SignalAlertService.PREF_REVERSE_ALERT,enabled).commit();
         }
     }
+    /** Native-only counter: a press is one user's own declaration of a completed trade. */
+    private final class RealTradeBridge {
+        private final TradeJournal journal=new TradeJournal(MainActivity.this);
+        @JavascriptInterface public String getSnapshot() {return journal.snapshot();}
+        @JavascriptInterface public String confirmRealTrade() {return journal.record();}
+        @JavascriptInterface public String undoLastToday() {return journal.undoLastToday();}
+    }
     private final Handler statusHandler=new Handler(Looper.getMainLooper());
     private final List<HttpAuthHandler> pendingAuth=new ArrayList<>();
     private boolean loginDialogOpen=false;
@@ -257,6 +264,7 @@ public final class MainActivity extends Activity {
 
         webView=new WebView(this);
         webView.addJavascriptInterface(new AlertSettingsBridge(),"HaipaiAlertPrefs");
+        webView.addJavascriptInterface(new RealTradeBridge(),"HaipaiRealTrades");
         webView.setBackgroundColor(Color.rgb(234,246,255));
         outer.addView(webView,new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,0,1));

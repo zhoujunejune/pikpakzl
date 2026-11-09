@@ -1,7 +1,7 @@
 /* ZL EVENT10-only app — browser-only client; no exchange credentials or order calls. */
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
-const APP_VERSION="1.3.5"; // Ten-minute-signal-only UI release.
+const APP_VERSION="1.3.8"; // Stable signal + on-device manual real-trade journal.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',homeHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null,eventEpoch:0,eventFetchController:null,eventRetryTimer:null,eventRetryDelayMs:1200,eventLastResumeAt:0,eventLifecycle:"foreground"};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
@@ -439,6 +439,7 @@ function navigate(page){
  for(const el of document.querySelectorAll(".section-panel"))el.classList.toggle("active",el.id==="panel-"+page);
  for(const el of document.querySelectorAll(".tab"))el.classList.toggle("selected",el.dataset.go===page);
  if(page==="records")void loadMoreEventSignals();
+ if(page==="stats"||page==="event10")refreshTradeJournal();
  history.replaceState(null,"","#"+page);
  window.scrollTo({top:0,behavior:"instant"});
 }
@@ -485,6 +486,86 @@ function configureReverseAlertSetting(){
  });
 }
 
+// User-declared actual trade tally, kept in native Android preferences.
+// Never infer completed trades from strategy signals or send trades to the server.
+let tradeActionBusy=false;
+function realTradeBridge(){
+ const bridge=window.HaipaiRealTrades;
+ return bridge&&typeof bridge.getSnapshot==="function"&&
+  typeof bridge.confirmRealTrade==="function"&&typeof bridge.undoLastToday==="function"
+  ?bridge:null;
+}
+function tradeNotice(text){put("tradeJournalNotice",text);}
+function applyTradeJournal(data,notice=""){
+ if(!data||data.ok!==true||!/^\\d{4}-\\d{2}-\\d{2}$/.test(data.date)||
+    !Number.isSafeInteger(data.count)||data.count<0)throw Error("INVALID_TRADE_JOURNAL");
+ put("tradeTodayDate","北京时间 "+data.date);
+ put("tradeTodayCount",String(data.count));
+ put("tradeLimitState",data.count>=10?"已达每天10单目标上限":"目标≤10单/天");
+ const add=$("tradeRecordButton"),undo=$("tradeUndoButton");
+ add.disabled=tradeActionBusy;
+ undo.disabled=tradeActionBusy||!data.canUndo;
+ tradeNotice(notice||(data.count>=10?
+  "已登记 "+data.count+" 单 · 建议今天停止交易":"已登记 "+data.count+" 单 · 本机保存"));
+ const history=$("tradeHistoryList");
+ history.replaceChildren();
+ for(const entry of (Array.isArray(data.history)?data.history:[])){
+  if(!entry||typeof entry.date!=="string"||!Number.isSafeInteger(entry.count))continue;
+  const row=node("div","trade-history-row");
+  row.append(node("span","",entry.date),node("strong","",entry.count+" 单"));
+  history.append(row);
+ }
+ if(!history.childNodes.length)history.append(node("div","mini","暂无手动交易记录"));
+}
+function refreshTradeJournal(){
+ if(tradeActionBusy)return;
+ const bridge=realTradeBridge();
+ if(!bridge){
+  $("tradeRecordButton").disabled=true;
+  $("tradeUndoButton").disabled=true;
+  put("tradeTodayCount","—");
+  tradeNotice("仅正式安卓 App 支持本机记录，请升级安装包");
+  put("tradeHistoryList","当前浏览器不支持手机本地交易计数");
+  return;
+ }
+ try{applyTradeJournal(JSON.parse(bridge.getSnapshot()));}
+ catch(error){
+  $("tradeRecordButton").disabled=true;
+  $("tradeUndoButton").disabled=true;
+  tradeNotice("本机记录读取失败，已停止登记，请检查 App");
+ }
+}
+function doTradeJournalAction(action){
+ const bridge=realTradeBridge();
+ if(tradeActionBusy||!bridge)return;
+ tradeActionBusy=true;
+ $("tradeRecordButton").disabled=true;
+ $("tradeUndoButton").disabled=true;
+ try{
+  const reply=JSON.parse(action==="add"?bridge.confirmRealTrade():bridge.undoLastToday());
+  if(reply?.ok!==true){
+   const messages={DUPLICATE_TAP:"已忽略短时间重复点击，次数未增加",
+    NOTHING_TO_UNDO:"今天没有可撤销的登记",SAVE_FAILED:"保存失败，未确认计数",
+    UNDO_FAILED:"撤销失败，请核对计数"};
+   const message=messages[reply?.error]||"登记未成功，请核对后重试";
+   tradeActionBusy=false;
+   refreshTradeJournal();
+   tradeNotice(message);
+   return;
+  }
+  tradeActionBusy=false;
+  applyTradeJournal(reply,action==="add"?"登记成功 · 今日第 "+reply.count+" 单":
+   "已撤销最后一笔 · 今日 "+reply.count+" 单");
+ }catch(error){
+  tradeActionBusy=false;
+  refreshTradeJournal();
+  tradeNotice("操作未确认，请核对计数，勿连续点击");
+ }
+}
+$("tradeRecordButton").addEventListener("click",()=>doTradeJournalAction("add"));
+$("tradeUndoButton").addEventListener("click",()=>doTradeJournalAction("undo"));
+refreshTradeJournal();
+
 for(const btn of document.querySelectorAll("[data-go]"))btn.addEventListener("click",()=>navigate(btn.dataset.go));
 configureReverseAlertSetting();
 $("refresh").addEventListener("click",()=>void refresh());
@@ -521,6 +602,7 @@ function foregroundResume(source="foreground"){
  if(now-state.eventLastResumeAt<500)return;
  state.eventLastResumeAt=now;
  state.eventLifecycle=source;
+ refreshTradeJournal();
  cancelEventRefresh();
  clearEventRetry();
  pill("eStatus","",state.eventLastStatus?"正在恢复实时连接":"正在连接信号服务");
@@ -546,6 +628,8 @@ navigate(["event10","stats","records","more"].includes(initial)?initial:"event10
 void refresh();
 void checkHotUpdate();
 setInterval(()=>void refresh(),10000);
+// Date changes at Beijing midnight; no change to the remote V19 model or signal polling.
+setInterval(()=>{if(!document.hidden)refreshTradeJournal();},60000);
 // On the 10-minute screen, show server-confirmed signals in around 3s while visible.
 // Native Android notification service works independently when this page is hidden.
 setInterval(()=>{if(location.hash==="#event10")void refreshEvent10Only();},3000);

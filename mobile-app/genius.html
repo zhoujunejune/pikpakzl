@@ -26,6 +26,13 @@ h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 
 .position-pagination button{width:9px;height:9px;min-width:9px;border:0;border-radius:99px;background:#b3d1e4;padding:0;cursor:pointer}
 .position-pagination button.is-active{background:#228bd5;width:18px}
 .position-counter{font-size:12px;color:var(--muted);text-align:center;margin:5px 0}
+.pnl-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.pnl-main{font-size:29px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin:6px 0 13px}
+.pnl-positive{color:#188367}.pnl-negative{color:#be5260}
+.pnl-item{border:1px solid #deecf6;border-radius:13px;padding:12px;background:#f9fcff}
+.pnl-item span{display:block;color:var(--muted);font-size:12px}
+.pnl-item b{display:block;font-size:18px;margin-top:4px;font-variant-numeric:tabular-nums}
+.pnl-footnote{font-size:12px;color:var(--muted);margin:12px 0 0}
 
 @media(max-width:380px){.price{font-size:27px}.brand b{font-size:18px}.field label{font-size:12px}}
 </style></head><body><main class="shell">
@@ -41,6 +48,16 @@ h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 
  <div id="positionTrack" class="position-scroll" aria-label="模拟持仓卡片，左右滑动查看" tabindex="0"></div>
  <div id="positionDots" class="position-pagination" aria-label="选择持仓"></div>
  <div id="positionPage" class="position-counter" aria-live="polite"></div>
+</section>
+<section class="card" id="cumulativePnlCard">
+ <div class="pnl-head"><h2 style="margin:0">模拟交易累计盈亏</h2><span class="pill">累计统计</span></div>
+ <p class="mini">累计总盈亏（含当前持仓，按最新标记价格估算）</p>
+ <div class="pnl-main" id="cumulativePnl">正在读取…</div>
+ <div class="grid">
+  <div class="pnl-item"><span>累计已实现净盈亏</span><b id="realizedPnl">—</b></div>
+  <div class="pnl-item"><span>当前持仓浮盈亏（未扣费用）</span><b id="unrealizedPnl">—</b></div>
+ </div>
+ <p class="pnl-footnote" id="cumulativePnlNote">已实现盈亏计入模拟开平仓手续费；累计总盈亏估算还计入未平仓模拟手续费及滑点，不含资金费、强平和真实交易结果。</p>
 </section>
 <section class="card hero">
  <div class="row"><strong>BTC / ETH / SOL · AI 自选机会</strong><span class="pill" id="connection">正在连接</span></div>

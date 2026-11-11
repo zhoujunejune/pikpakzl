@@ -7,31 +7,44 @@ import path from 'node:path';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const source=fs.readFileSync(path.join(here,'genius.js'),'utf8');
 const html=fs.readFileSync(path.join(here,'genius.html'),'utf8');
-const position={
- id:'paper-test-001',symbol:'BTCUSDT',side:'LONG',entry:50000,qty:.0002,
- marginUsdt:5,leverage:2,horizon:'MEDIUM',openedAt:Date.now()-30000
-};
-function setup({withPosition=true,historyFails=true,legacyHtml=false}={}){
- const ids=['connection','marketStream','markPrice','engineState','lastAnalysis','marketLag',
-  'aiLatency','aiTrigger','microWindow','recentError','aiDecision','balance','tradeCount',
-  'toggle','position','positionState','leverage','marginUsdt','saveStatus','save','stop','history'];
- if(!legacyHtml)ids.push('multiTrend');
- const elements=Object.fromEntries(ids.map(id=>[id,{
-  id,textContent:'',value:'',children:[],
+const NOW=Date.now();
+const positions=[
+ {id:'paper-test-btc',symbol:'BTCUSDT',side:'LONG',entry:50000,qty:.0002,marginUsdt:5,
+   leverage:2,horizon:'MEDIUM',openedAt:NOW-30000},
+ {id:'paper-test-eth',symbol:'ETHUSDT',side:'SHORT',entry:3300,qty:.003,marginUsdt:5,
+   leverage:2,horizon:'LONG',openedAt:NOW-30000},
+ {id:'paper-test-sol',symbol:'SOLUSDT',side:'LONG',entry:180,qty:.05,marginUsdt:5,
+   leverage:2,horizon:'SHORT',openedAt:NOW-30000}
+];
+function el(tag='div'){
+ return {
+  tag,children:[],textContent:'',value:'',className:'',dataset:{},style:{},
+  clientWidth:320,scrollLeft:0,hidden:false,events:{},attrs:{},
   replaceChildren(...nodes){this.children=nodes;this.textContent='';},
   append(...nodes){this.children.push(...nodes);},
-  addEventListener(){}
- }]));
- const document={
-  getElementById(id){return elements[id]||null;},
-  createElement(tag){return {tag,textContent:'',children:[],append(...nodes){this.children.push(...nodes);}}}
+  addEventListener(name,handler){this.events[name]=handler;},
+  setAttribute(key,value){this.attrs[key]=value;},
+  querySelector(selector){return selector==='strong'?this.children.find(v=>v.tag==='strong')||null:null;},
+  scrollTo({left}){this.scrollLeft=left;this.events.scroll?.();},
+  classList:{toggle(){}}
  };
- const status={ok:true,mode:'PAPER_ONLY',realTradingEnabled:false,aiModel:'deepseek-flash',
+}
+function setup({withPositions=positions.slice(0,1),historyFails=true}={}){
+ const ids=['connection','marketStream','markPrice','engineState','lastAnalysis','marketLag',
+  'aiLatency','aiTrigger','microWindow','recentError','aiDecision','balance','tradeCount',
+  'toggle','positionState','positionTrack','positionDots','positionEmpty',
+  'positionCount','positionTotalPnl','positionPage',
+  'leverage','marginUsdt','saveStatus','save','stop','history','multiTrend'];
+ const elements=Object.fromEntries(ids.map(id=>[id,el()]));
+ let status={ok:true,mode:'PAPER_ONLY',realTradingEnabled:false,aiModel:'deepseek-flash',
   aiConfigured:true,aiStatus:'SUCCESS',settings:{enabled:true,emergencyStop:false,
     leverage:2,marginUsdt:5},paperBalance:199,totalClosed:13,
-  position:withPosition?position:null,
-  marketSnapshots:[{symbol:'BTCUSDT',markPrice:50500,checkedAt:Date.now()}],
-  lastMarket:{symbol:'BTCUSDT',markPrice:50500,checkedAt:Date.now()},
+  positions:withPositions,position:withPositions[0]||null,
+  marketSnapshots:[
+   {symbol:'BTCUSDT',markPrice:50500,checkedAt:NOW},
+   {symbol:'ETHUSDT',markPrice:3270,checkedAt:NOW},
+   {symbol:'SOLUSDT',markPrice:182,checkedAt:NOW}],
+  lastMarket:{symbol:'BTCUSDT',markPrice:50500,checkedAt:NOW},
   metrics:{perSymbol:{BTCUSDT:{trades:{w10:{changePct:.1,buyRatio:.6}},higherComplete:false}}}};
  const fetch=async url=>{
   if(url.endsWith('/status'))return {ok:true,json:async()=>status};
@@ -41,31 +54,58 @@ function setup({withPosition=true,historyFails=true,legacyHtml=false}={}){
   }
   throw Error('unexpected endpoint');
  };
- const context=vm.createContext({document,fetch,AbortSignal,setInterval(){},Date,Number,Math,Error,
+ const document={getElementById(id){return elements[id]||null;},createElement:tag=>el(tag)};
+ let refresh;
+ const context=vm.createContext({document,fetch,AbortSignal,setInterval(fn){refresh=fn;},Date,Number,Math,Error,
   String,Array,Object,Boolean,console});
  vm.runInContext(source,context,{filename:'genius.js'});
- return {elements};
+ return {elements,runRefresh:async()=>{refresh();await settle();},
+  updatePositions:next=>{status={...status,positions:next,position:next[0]||null};}};
 }
 const settle=()=>new Promise(resolve=>setTimeout(resolve,25));
-test('current paper position renders despite broken history service and missing optional old-HTML element',async()=>{
- const {elements}=setup({legacyHtml:true,historyFails:true});
+test('one paper position renders despite broken history and not as real Binance balance',async()=>{
+ const {elements}=setup();
  await settle();
  assert.equal(elements.positionState.textContent,'模拟持仓中');
- const rows=elements.position.children.map(r=>r.children.map(x=>x.textContent).join(':'));
- assert.ok(rows.some(x=>x.includes('BTCUSDT / 看涨 LONG')));
- assert.ok(rows.some(x=>x.includes('模拟开仓价:50,000')));
- assert.ok(rows.some(x=>x.includes('浮动盈亏')));
- assert.ok(rows.some(x=>x.includes('AI 持仓周期:中线')));
+ assert.equal(elements.positionCount.textContent,'1 / 3');
+ assert.equal(elements.positionTrack.children.length,1);
+ const lines=elements.positionTrack.children[0].children
+   .map(r=>r.children.map(x=>x.textContent).join(':'));
+ assert.ok(lines.some(s=>s.includes('BTCUSDT / 看涨 LONG')));
+ assert.ok(lines.some(s=>s.includes('AI 持仓周期:中线')));
  assert.match(elements.history.textContent,/历史记录读取失败/);
 });
-test('no simulated position is clearly distinguished from history and real Binance balance',async()=>{
- const {elements}=setup({withPosition:false,historyFails:false});
+test('zero positions shows empty state, not history or simulated fake account',async()=>{
+ const {elements}=setup({withPositions:[],historyFails:false});
  await settle();
  assert.equal(elements.positionState.textContent,'当前空仓');
- assert.match(elements.position.textContent,/当前没有未平仓/);
+ assert.equal(elements.positionTrack.children.length,0);
+ assert.match(elements.positionEmpty.textContent,/当前没有未平仓/);
+ assert.equal(elements.positionCount.textContent,'0 / 3');
 });
-test('position is located above analysis and has explicit paper-only scope',()=>{
+test('three positions display distinct cards, total floating PnL and swipe pagination',async()=>{
+ const {elements,runRefresh,updatePositions}=setup({withPositions:positions,historyFails:false});
+ await settle();
+ const track=elements.positionTrack;
+ assert.equal(track.children.length,3);
+ assert.equal(elements.positionCount.textContent,'3 / 3');
+ assert.match(elements.positionTotalPnl.textContent,/\+/);
+ track.scrollLeft=320;track.events.scroll();
+ assert.equal(elements.positionPage.textContent,'2 / 3 · 左右滑动');
+ const secondCard=track.children[1];
+ await runRefresh();
+ assert.equal(track.children[1],secondCard,'refresh should not rebuild carousel');
+ assert.equal(elements.positionPage.textContent,'2 / 3 · 左右滑动','refresh should retain viewed page');
+ assert.ok(secondCard.children[0].children[1].textContent.includes('ETHUSDT / 看跌 SHORT'));
+ updatePositions(positions.slice(0,2));
+ await runRefresh();
+ assert.equal(track.children.length,2);
+ assert.equal(elements.positionPage.textContent,'2 / 2 · 左右滑动');
+});
+test('position carousel remains above main analysis and paper-only is explicit',()=>{
  assert.ok(html.indexOf('id="positionCard"')<html.indexOf('class="card hero"'));
- assert.match(html,/不同步币安账户中的真实仓位/);
+ assert.match(html,/不代表真实币安仓位/);
+ assert.match(html,/id="positionTrack"/);
+ assert.match(html,/id="positionTotalPnl"/);
  assert.match(source,/api\('status'\)\.then\(renderStatus\)/);
 });

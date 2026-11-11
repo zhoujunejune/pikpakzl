@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V144_MULTIPOSITION';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V145_CUMULATIVE_PNL';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
 const finite = Number.isFinite;
@@ -106,7 +106,7 @@ export function makeMarket({symbol,markPrice,markTime,oneMin,fiveMin,now=Date.no
     dataType:'BINANCE_USDM_MARK_PRICE_AND_CLOSED_FUTURES_KLINES'};
 }
 export function newState(settings=DEFAULT_SETTINGS){return {settings:validateSettings({...settings}),balance:settings.paperBalance,
-  day:null,dayStart:settings.paperBalance,positions:[],closed:[],lastDecision:null,lastError:null,lastActionAt:0,
+  day:null,dayStart:settings.paperBalance,positions:[],closed:[],realizedNetPnl:0,lastDecision:null,lastError:null,lastActionAt:0,
   lastMarket:null,aiStatus:'NOT_REQUESTED',cycleCount:0};}
 const dayOf=(t)=>new Date(t).toISOString().slice(0,10);
 export function rollDay(state,now){
@@ -154,6 +154,9 @@ export function paperMark(state,market,now=Date.now(),closeReason=null,aiReason=
   const trade={...cleanPosition,close,closedAt:now,exitReason:closeReason,
     aiExitReason:closeReason==='AI_CLOSE'?String(aiReason||'AI requested close').slice(0,300):null,
     grossPnl:gross,netPnl:net,closeFee:fee,paper:true};
+  // Lifetime realized PnL must not reset when the visible 500-record ledger rolls over.
+  if(!Number.isFinite(state.realizedNetPnl))throw Error('MISSING_REALIZED_PNL_LEDGER');
+  state.realizedNetPnl=round(state.realizedNetPnl+net);
   state.closed.unshift(trade);
   state.closed=state.closed.slice(0,500);
   state.positions=positions.filter(x=>x.id!==p.id);
@@ -169,4 +172,30 @@ export function paperFloatingPnL(positions,snapshots,now=Date.now()){
     out.total=round(out.total+sign*(quote.markPrice-p.entry)*p.qty);
     return out;
   },{total:0,complete:true});
+}
+
+/** Separate lifetime closed-trade net PnL from active gross PnL and a fee/slippage
+ * adjusted mark-to-market estimate. Never equate open positions with realized profit.
+ */
+export function paperPnlSummary(state,snapshots=[],now=Date.now()){
+  if(!Number.isFinite(state.realizedNetPnl))throw Error('INVALID_REALIZED_PNL_LEDGER');
+  const positions=normalizePaperPositions(state);
+  const floating=paperFloatingPnL(positions,snapshots,now);
+  let estimatedOpenNet=0,complete=floating.complete;
+  for(const p of positions){
+    const quote=snapshots.find(x=>x.symbol===p.symbol&&Number.isFinite(x.markPrice)&&
+      x.markPrice>0&&Number.isFinite(x.checkedAt)&&now-x.checkedAt<10000);
+    if(!quote){complete=false;continue;}
+    const sign=p.side==='LONG'?1:-1;
+    const simulatedClose=round(quote.markPrice*(1-sign*0.0003),6);
+    const gross=sign*(simulatedClose-p.entry)*p.qty;
+    const closeFee=simulatedClose*p.qty*0.0005;
+    estimatedOpenNet+=gross-p.openFee-closeFee;
+  }
+  return {realizedNetPnl:round(state.realizedNetPnl),
+    openGrossPnl:complete?floating.total:null,
+    estimatedOpenNetPnl:complete?round(estimatedOpenNet):null,
+    estimatedCumulativePnl:complete?round(state.realizedNetPnl+estimatedOpenNet):null,
+    complete,closedRecordsAvailable:state.closed.length,openPositions:positions.length,
+    accounting:'SIMULATION_INCLUDES_OPEN_AND_CLOSE_FEES_AND_SLIPPAGE_NO_FUNDING'};
 }

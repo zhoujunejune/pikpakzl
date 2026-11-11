@@ -80,8 +80,17 @@ async function cycle(){
       else if(!state.lastActionAt||now-state.lastActionAt>=state.settings.cooldownMinutes*60000){
         const decision=await deepseekDecision(market);
         state.lastDecision=decision?{...decision,at:Date.now(),model:MODEL}:null;
-        // If AI takes too long, entry fails closed; old quote is not traded.
-        if(decision)paperOpen(state,market,decision,Date.now());
+        if(decision&&decision.action!=='WAIT'&&decision.confidence>=0.6){
+          // Re-fetch after the model finishes; NEVER open at a quote captured before thinking.
+          const readyAt=Date.now(),fresh=await collectMarket(readyAt);
+          state.lastMarket=fresh;
+          if(fresh.symbol!==market.symbol||fresh.trend1m!==market.trend1m||
+              fresh.trend5m!==market.trend5m){
+            state.aiStatus='SIGNAL_STALE_OR_TREND_CHANGED_NO_ENTRY';
+          }else{
+            paperOpen(state,fresh,decision,readyAt);
+          }
+        }
       }
     }
     state.cycleCount=(state.cycleCount||0)+1;state.lastError=null;store();

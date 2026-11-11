@@ -20,8 +20,8 @@ function load(){
   try{
     const s=JSON.parse(fs.readFileSync(STATE_FILE,'utf8'));
     // Migrate existing settings without resetting balance, history or a paper position.
-    const {takeProfitPct,stopLossPct,...currentSettings}=s.settings;
-    s.settings={...DEFAULT_SETTINGS,...currentSettings,cooldownMinutes:DEFAULT_SETTINGS.cooldownMinutes};
+    const {takeProfitPct,stopLossPct,maxDailyLossUsdt,cooldownMinutes,...currentSettings}=s.settings;
+    s.settings={...DEFAULT_SETTINGS,...currentSettings};
     validateSettings(s.settings);
     // Historic paper positions may still carry obsolete price targets; never execute them.
     if(s.position){delete s.position.stop;delete s.position.takeProfit;}
@@ -155,8 +155,6 @@ async function cycle(){
     }
     if(state.settings.enabled&&!state.settings.emergencyStop){
       if(!process.env.DEEPSEEK_API_KEY)state.aiStatus='KEY_NOT_CONFIGURED';
-      else if(!state.position&&state.dayStart-state.balance>=state.settings.maxDailyLossUsdt)
-        state.aiStatus='DAILY_LOSS_STOP';
       else if(Date.now()-lastModelCallAt>=25000){
         const oldPosition=state.position;
         const decision=await deepseekDecision(markets,oldPosition);
@@ -169,7 +167,7 @@ async function cycle(){
               paperMark(state,fresh,Date.now(),'AI_CLOSE',decision.reason);
             // HOLD never mutates or generates a fixed exit trigger.
           }
-        }else if(decision&&['LONG','SHORT'].includes(decision.action)&&decision.confidence>=0.6){
+        }else if(decision&&['LONG','SHORT'].includes(decision.action)){
           const before=markets.find(x=>x.symbol===decision.symbol);
           if(!before)throw Error('SELECTED_MARKET_UNAVAILABLE');
           const fresh=await collectMarket(decision.symbol);

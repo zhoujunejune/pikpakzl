@@ -53,6 +53,11 @@ export function assessPositions(positions=[],markets=[],now=Date.now()){
     const base={symbol:p.symbol,side:p.side,entry:p.entry,qty:p.qty,
       marginUsdt:p.marginUsdt,leverage:p.leverage,
       horizon:p.horizon||'UNSPECIFIED',
+      entryHorizon:p.entryHorizon||p.horizon||'UNSPECIFIED',
+      entryThesis:typeof p.reason==='string'?p.reason.slice(0,300):null,
+      entrySignals:p.entrySignals||null,
+      latestAIHoldReason:typeof p.lastHoldReason==='string'?p.lastHoldReason.slice(0,200):null,
+      lastExitReview:p.lastExitReview||null,
       heldSeconds:finite(p.openedAt)?Math.max(0,Math.floor((now-p.openedAt)/1000)):null,
       openedAt:p.openedAt,markPrice:valid?q.markPrice:null,
       marketDataFresh:Boolean(valid),unrealizedGrossPnlUsdt:null,
@@ -69,4 +74,18 @@ export function assessPositions(positions=[],markets=[],now=Date.now()){
       estimatedNetPnlIfClosedUsdt:round(net),
       estimatedExitCostUsdt:round(Math.abs(q.markPrice-executionClose)*p.qty+closeFee)};
   });
+}
+
+
+// The AI may explicitly confirm or reject a proposed exit. No price or time
+// based stops are encoded here. When the second model is unavailable, preserve
+// the primary model's CLOSE so a review outage cannot trap a high-risk position.
+export function resolveAIExit(proposal,review){
+  if(!proposal||proposal.action!=='CLOSE')throw Error('NOT_AN_AI_CLOSE_PROPOSAL');
+  if(review==null)return {execute:true,status:'REVIEW_UNAVAILABLE_PRIMARY_AI_CLOSE'};
+  if(review.symbol!==proposal.symbol||!['HOLD','CLOSE'].includes(review.action))
+    throw Error('INVALID_AI_EXIT_REVIEW');
+  return review.action==='CLOSE'?
+    {execute:true,status:'TWO_AI_DECISIONS_AGREE'}:
+    {execute:false,status:'SECOND_AI_CHOSE_HOLD'};
 }

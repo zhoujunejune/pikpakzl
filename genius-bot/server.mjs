@@ -7,7 +7,7 @@ import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarke
   newState,rollDay,paperOpen,paperMark,parsePortfolioPlan,normalizePaperPositions,
   paperFloatingPnL,paperPnlSummary,MAX_PAPER_POSITIONS} from './engine.mjs';
 import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
-import {summarizeClosedTrades,estimatedEntryCosts,assessPositions} from './decision-context.mjs';
+import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit} from './decision-context.mjs';
 import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
 const PORT=Number(process.env.GENIUS_PORT||13023),HOST='127.0.0.1';
@@ -27,7 +27,8 @@ const tickPrices=new Map(),candleCache=new Map(),tradeBuckets=new Map(),orderBoo
 const higherCache=new Map(),timeframeBySymbol=new Map();
 const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0,
   wsLagMs:null,bookRestFallbacks:0,bookWsState:'CONNECTING',bookWsMessages:0,aiAttempts:0,aiSuccess:0,aiFailure:0,aiDurationMs:null,aiLastFinishedAt:0,
-  lastTrigger:'NONE',marketRestFallbacks:0,higherRequests:0,higherFailures:0,timeframeSnapshots:0,errors:[]};
+  lastTrigger:'NONE',marketRestFallbacks:0,higherRequests:0,higherFailures:0,timeframeSnapshots:0,
+  exitReviewCalls:0,exitReviewConfirmed:0,exitReviewRejected:0,exitReviewFailed:0,lastExitReview:null,errors:[]};
 let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
 let socket=null,reconnectTimer=null,bookSocket=null,bookReconnectTimer=null,bookWsLastAt=0;
 
@@ -256,10 +257,10 @@ const DECISION_POLICY=[
   '每个币种最多一条，支持BTCUSDT、ETHUSDT、SOLUSDT。无仓位可LONG/SHORT/WAIT，持有仓位必须HOLD或CLOSE；每个持仓必须给出决定。',
   '短线SHORT、中线MEDIUM、长线LONG由你自主选择；比较1m、5m、15m、1h、4h、日线、周线和实时成交盘口。',
   '开仓前要分析交易费与滑点、市场波动潜力、预期净收益和风险收益比。若预期波动不足以覆盖模拟成本、证据不足或周期明显冲突，可以WAIT，不要为了多交易而入场。',
-  '评估持仓应依据该仓选定的周期：短周期噪声不应自动导致中长线平仓。比较趋势是否失效、持仓结构与风险暴露、浮动盈亏和预计平仓后的净盈亏，独立决定HOLD或CLOSE。',
+  '评估持仓应依据entryHorizon原始开仓周期及entryThesis开仓依据：短周期噪声不应自动导致中长线平仓。比较开仓逻辑是否被新事实推翻、持仓结构与风险暴露、浮动盈亏及预计平仓后的净盈亏，独立决定HOLD或CLOSE。',
   '亏损不意味着必须立刻平仓，盈利也不意味着必须立即止盈；当趋势失效或风险收益显著恶化时，可主动CLOSE。不要仅为避免实现亏损而长期死扛。',
   '结合recentClosedTradeReview识别同一币种、同一周期反复小亏、交易费侵蚀或过早平仓的问题；交易历史只是少量模拟样本，不是训练结果，不意味着未来必定盈利。',
-  'reason必须具体说明关键周期信号和净收益/风险考虑，若CLOSE需说明趋势失效、风险变化或获利兑现依据。不得把未知行情当作真实值；已有持仓缺少对应最新市场价格不能CLOSE。',
+  'reason必须具体说明关键周期信号和净收益/风险考虑。提出CLOSE前，先对照entryThesis、entryHorizon和latestAIHoldReason，说明什么新的市场证据让继续HOLD不如CLOSE；如果只是秒级噪声或手续费造成的小额浮亏，优先重新考虑持有而不是反复止损。明确判断获利兑现机会，不要只会亏损平仓。但趋势真的失效时可以果断CLOSE，不要死扛。不得把未知行情当作真实值；已有持仓缺少对应最新价格不能CLOSE。',
   '新增开仓只允许higherTimeframesComplete=true的币种。单币种不可重复持仓，最多三笔。',
   '每笔止盈、止损和平仓都只由你实时自主决定，没有固定价格/百分比自动止盈止损；紧急停止仅供用户手动操作。不要保证盈利。仅模拟交易，不进行币安真实下单。'
 ].join('');
@@ -307,6 +308,66 @@ async function deepseekDecision(markets,positions){
   state.aiStatus='SUCCESS';
   return decisions;
 }
+// Independent AI review of each proposed close, with immutable entry thesis,
+// cost-aware mark-to-market and fresh cross-timeframe evidence. Never invent
+// a fixed stop-loss or take-profit. The review is advisory when unavailable.
+async function reviewProposedClose(proposal,position,market){
+  metrics.exitReviewCalls++;
+  const key=process.env.DEEPSEEK_API_KEY||'';
+  const context=assessPositions([position],[market],Date.now())[0];
+  if(!key||!context?.marketDataFresh){
+    metrics.exitReviewFailed++;
+    const error=!key?'AI_EXIT_REVIEW_MISSING_KEY':'AI_EXIT_REVIEW_STALE_MARKET';
+    rememberError('AI_EXIT_REVIEW',error);
+    return null;
+  }
+  const payload={
+    task:'独立复核一次已有AI提出的模拟平仓请求，重新决定CLOSE或HOLD。',
+    originalCloseProposal:proposal,
+    position:context,
+    currentMarket:{
+      ...market,
+      micro:marketMicro(position.symbol),
+      higherTimeframes:timeframesOf(position.symbol).frames,
+      higherTimeframesComplete:timeframesOf(position.symbol).complete
+    },
+    recentClosedTradeReview:summarizeClosedTrades(state.closed,20),
+    costModel:estimatedEntryCosts(state.settings)
+  };
+  const policy='你是独立的永续合约模拟平仓复核AI。只返回单个JSON对象，格式{"action":"HOLD","symbol":"BTCUSDT","confidence":0.7,"horizon":"MEDIUM","reason":"至少六字的具体中文依据"}。只能HOLD或CLOSE，必须同币种。'
+    +'同时认真考虑最初开仓理由entryThesis、原定周期entryHorizon、实际最新行情、周期结构、净收益与手续费、继续持有与立即平仓的机会成本。'
+    +'不要把短周期噪声和仅因手续费造成的浮亏视为趋势确认失效；但也不要为了避免亏损或提高胜率而死扛，严重趋势失效、风险恶化时可以果断CLOSE。'
+    +'盈利时也需客观比较兑现与继续持有，不要只能判断亏损离场。没有最新价格不能确认平仓。不要保证盈利，不添加固定止盈止损。仅模拟，不下实盘单。';
+  try{
+    const response=await fetch('https://api.deepseek.com/chat/completions',{
+      method:'POST',signal:AbortSignal.timeout(27000),
+      headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
+      body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
+        response_format:{type:'json_object'},max_tokens:1200,messages:[
+        {role:'system',content:policy},
+        {role:'user',content:JSON.stringify(payload)}
+      ]})
+    });
+    if(!response.ok)throw Error('EXIT_REVIEW_HTTP_'+response.status);
+    const raw=await response.json(),msg=raw?.choices?.[0]?.message?.content;
+    if(typeof msg!=='string'||!msg.trim())throw Error('EXIT_REVIEW_EMPTY');
+    const review=parseDecision(msg);
+    if(review.symbol!==position.symbol||!['HOLD','CLOSE'].includes(review.action))
+      throw Error('EXIT_REVIEW_INVALID_ACTION_OR_SYMBOL');
+    if(review.action==='HOLD')metrics.exitReviewRejected++;
+    else metrics.exitReviewConfirmed++;
+    metrics.lastExitReview={at:Date.now(),symbol:position.symbol,
+      proposed:'CLOSE',result:review.action,reason:review.reason.slice(0,200)};
+    return review;
+  }catch(e){
+    metrics.exitReviewFailed++;
+    rememberError('AI_EXIT_REVIEW',e);
+    metrics.lastExitReview={at:Date.now(),symbol:position.symbol,
+      proposed:'CLOSE',result:'UNAVAILABLE',reason:String(e?.message||e).slice(0,140)};
+    return null;
+  }
+}
+
 async function cycle(){
   if(busy)return;
   busy=true;
@@ -345,12 +406,30 @@ async function cycle(){
                 const current=state.positions.find(p=>p.symbol===d.symbol);
                 if(!current||current.id!==original.id)continue;
                 const fresh=await collectMarket(d.symbol);
-                if(state.settings.enabled&&!state.settings.emergencyStop)
-                  paperMark(state,fresh,Date.now(),'AI_CLOSE',d.reason);
+                const review=await reviewProposedClose(d,current,fresh);
+                const resolution=resolveAIExit(d,review);
+                current.lastExitReview={at:Date.now(),action:review?.action||'UNAVAILABLE',
+                  status:resolution.status,reason:review?.reason||'独立复核不可用，遵从原AI的平仓决定'};
+                // Review rejection is AI choosing HOLD, not a price/time gate.
+                if(!resolution.execute){
+                  current.lastHoldReason=review.reason;
+                  continue;
+                }
+                if(!state.settings.enabled||state.settings.emergencyStop)continue;
+                const latest=await collectMarket(d.symbol);
+                const stillHeld=state.positions.find(p=>p.id===original.id);
+                if(!stillHeld||!state.settings.enabled||state.settings.emergencyStop)continue;
+                paperMark(state,latest,Date.now(),'AI_CLOSE',
+                  (d.reason+'；复核：'+(review?.reason||'复核不可用，原AI决策')).slice(0,300));
               }
               for(const d of decisions.filter(d=>d.action==='HOLD')){
                 const current=state.positions.find(p=>p.symbol===d.symbol);
-                if(current&&d.horizon)current.horizon=d.horizon;
+                if(current){
+                  // Keep the original investment horizon: transient AI flips do not
+                  // silently turn a failed short-term trade into a "long-term" hold.
+                  if(current.horizon==='UNSPECIFIED'&&d.horizon)current.horizon=d.horizon;
+                  current.lastHoldReason=d.reason;
+                }
               }
               for(const d of decisions.filter(d=>['LONG','SHORT'].includes(d.action))){
                 if(!state.settings.enabled||state.settings.emergencyStop)break;

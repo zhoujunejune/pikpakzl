@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {newState,paperOpen,paperMark,DEFAULT_SETTINGS,PAPER_FEE_RATE,PAPER_SLIPPAGE_RATE} from './engine.mjs';
-import {summarizeClosedTrades,estimatedEntryCosts,assessPositions} from './decision-context.mjs';
+import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit} from './decision-context.mjs';
 const NOW=Date.parse('2026-11-11T14:00:00Z');
 const trade=(symbol,netPnl,reason='AI_CLOSE')=>({symbol,netPnl,paper:true,exitReason:reason,
   side:'LONG',horizon:'MEDIUM',openedAt:NOW-600000,closedAt:NOW,
@@ -50,4 +50,33 @@ test('manual emergency and AI CLOSE remain the only execution exit mechanisms',(
   assert.equal(paperMark(s,m,NOW).reason,'AI_HOLD');
   assert.equal(paperMark(s,m,NOW,'AI_CLOSE','AI分析后主动平仓').ok,true);
   assert.equal(s.closed[0].exitReason,'AI_CLOSE');
+});
+
+
+test('AI close proposal requires independent AI review when available; no fixed stops',()=>{
+  const candidate={action:'CLOSE',symbol:'BTCUSDT',reason:'中周期趋势破坏后减少持仓风险'};
+  assert.deepEqual(resolveAIExit(candidate,{action:'HOLD',symbol:'BTCUSDT'}),
+    {execute:false,status:'SECOND_AI_CHOSE_HOLD'});
+  assert.deepEqual(resolveAIExit(candidate,{action:'CLOSE',symbol:'BTCUSDT'}),
+    {execute:true,status:'TWO_AI_DECISIONS_AGREE'});
+  assert.deepEqual(resolveAIExit(candidate,null),
+    {execute:true,status:'REVIEW_UNAVAILABLE_PRIMARY_AI_CLOSE'});
+  assert.throws(()=>resolveAIExit({action:'HOLD'},null),/NOT_AN_AI_CLOSE_PROPOSAL/);
+  assert.throws(()=>resolveAIExit(candidate,{action:'CLOSE',symbol:'ETHUSDT'}),/INVALID_AI_EXIT_REVIEW/);
+});
+test('position context preserves original AI entry thesis and selected timeframe',()=>{
+  const s=newState({...DEFAULT_SETTINGS,enabled:true,leverage:5,marginUsdt:10});
+  const m={symbol:'BTCUSDT',markPrice:50000,checkedAt:NOW,trend1m:'UP',trend5m:'DOWN',momentum3mPct:.12};
+  const d={action:'LONG',symbol:'BTCUSDT',confidence:.82,horizon:'LONG',reason:'周线趋势延续，预期中长期回报可覆盖模拟交易成本'};
+  assert.equal(paperOpen(s,m,d,NOW).ok,true);
+  const p=s.positions[0];
+  assert.equal(p.entryHorizon,'LONG');
+  assert.equal(p.entrySignals.trend5m,'DOWN');
+  p.lastExitReview={at:NOW,action:'HOLD',reason:'日线趋势未失效'};
+  p.lastHoldReason='长周期趋势仍有效，保留交易结构';
+  const r=assessPositions([p],[m],NOW)[0];
+  assert.equal(r.entryThesis,d.reason);
+  assert.equal(r.entryHorizon,'LONG');
+  assert.equal(r.lastExitReview.action,'HOLD');
+  assert.equal(r.latestAIHoldReason,p.lastHoldReason);
 });

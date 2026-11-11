@@ -1,4 +1,4 @@
-name: 海派合约天才 Android v1.4.0 signed stable release
+name: 海派合约天才 Android v1.4.1 signed stable release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -147,7 +147,7 @@ jobs:
           m=Path('android-app/app/src/main/AndroidManifest.xml').read_text()
           t=Path('android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java').read_text()
           assert "applicationId 'com.zlcontrol.android'" in g
-          assert 'versionCode 22' in g and "versionName '1.4.0'" in g
+          assert 'versionCode 23' in g and "versionName '1.4.1'" in g
           assert 'android:label="海派合约天才"' in m
           assert 'AlertDirectionPolicy.notifiedDirection(direction,reverse)' in t
           assert 'PREF_REVERSE_ALERT' in t
@@ -184,6 +184,7 @@ jobs:
           assert 'panel-stats' in Path('mobile-app/index.html').read_text()
           assert 'panel-records' in Path('mobile-app/index.html').read_text()
           assert '欢迎来到海派合约天才' in Path('android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java').read_text()
+          assert 'alarmContainer.setVisibility(genius?View.GONE:View.VISIBLE)' in Path('android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java').read_text()
           assert '提醒管理 ▾' in Path('android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java').read_text()
           main=Path('android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java').read_text()
           html=Path('mobile-app/index.html').read_text()
@@ -248,14 +249,14 @@ jobs:
           fi
           echo "ANDROID_RELEASE_CERT_SHA256=$cert"
           mkdir -p dist
-          cp "$apk" dist/Haipai-Genius-v1.4.0-STABLE-RELEASE.apk
+          cp "$apk" dist/Haipai-Genius-v1.4.1-STABLE-RELEASE.apk
           sha256sum dist/*.apk
-          if gh release view haipai-genius-v1.4.0-20261111 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view haipai-genius-v1.4.1-20261111 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "ANDROID_STABLE_RELEASE_ALREADY_PUBLISHED=true"
           else
-            if gh release create haipai-genius-v1.4.0-20261111 dist/Haipai-Genius-v1.4.0-STABLE-RELEASE.apk \
+            if gh release create haipai-genius-v1.4.1-20261111 dist/Haipai-Genius-v1.4.1-STABLE-RELEASE.apk \
               --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "海派合约天才 v1.4.0 - DeepSeek 永续合约模拟" \
+              --title "海派合约天才 v1.4.1 - AI自主分析界面" \
               --notes "海派合约天才，DeepSeek永续合约分析与自动模拟，参数、止盈止损和紧急停止；保留旧事件合约研究入口。沿用原签名，不发送实盘订单。" >"$RUNNER_TEMP/gh_release.txt" 2>&1; then
               echo "ANDROID_STABLE_RELEASE_PUBLISHED=true"
             elif grep -q 'HTTP 403:' "$RUNNER_TEMP/gh_release.txt"; then
@@ -267,7 +268,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: Haipai-Genius-v1.4.0-STABLE-RELEASE
-          path: dist/Haipai-Genius-v1.4.0-STABLE-RELEASE.apk
+          name: Haipai-Genius-v1.4.1-STABLE-RELEASE
+          path: dist/Haipai-Genius-v1.4.1-STABLE-RELEASE.apk
           if-no-files-found: error
           retention-days: 90

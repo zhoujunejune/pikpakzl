@@ -6,7 +6,7 @@ import path from 'node:path';
 import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarket,newState,rollDay,paperOpen,paperMark} from './engine.mjs';
 const PORT=Number(process.env.GENIUS_PORT||13023),HOST='127.0.0.1';
 const STATE_FILE=process.env.GENIUS_STATE_FILE||'/var/lib/haipai-genius-paper/state.json';
-const MODEL='deepseek-v4-flash',BASE='https://fapi.binance.com';
+const MODEL='deepseek-flash',BASE='https://fapi.binance.com';
 const SITE='https://prediction.47-237-188-69.sslip.io';
 let busy=false,marketError=null;
 function load(){

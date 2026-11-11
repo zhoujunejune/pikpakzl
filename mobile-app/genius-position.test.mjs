@@ -138,12 +138,12 @@ test('closed trade history is compact, excludes model explanations, and preserve
  const history=elements.history;
  assert.equal(history.children.length,2);
  const first=history.children[0];
- assert.match(first.children[0].textContent,/盈亏 -0\\.16 USDT/);
+ assert.match(first.children[0].textContent,/盈亏 -0\.16 USDT/);
  assert.match(first.children[1].children[0].textContent,/开仓：2026/);
  assert.match(first.children[1].children[1].textContent,/平仓：2026/);
  assert.equal(first.children.length,2);
  assert.doesNotMatch(first.textContent+first.children[0].textContent+first.children[1].children.map(x=>x.textContent).join(''),/研究推理|多余|AI 自主平仓/);
- assert.match(history.children[1].children[0].textContent,/\\+0\\.38 USDT/);
+ assert.match(history.children[1].children[0].textContent,/\+0\.38 USDT/);
  history.scrollTop=130;
  await runRefresh();
  assert.equal(history.scrollTop,130,'internal scroll position must not reset on polling');

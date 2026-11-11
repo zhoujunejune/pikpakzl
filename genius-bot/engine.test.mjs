@@ -60,10 +60,17 @@ test('only AI CLOSE or explicit emergency stop can close a simulated position',(
  assert.equal(close.trade.aiExitReason,'AI判断风险增加，选择结束持仓');
  assert.equal(close.trade.netPnl<0,true);
  assert.equal(s.position,null);
- assert.equal(paperOpen(s,market(),answer(),NOW+1000).reason,'COOLDOWN');
+ assert.equal(paperOpen(s,market(),answer(),NOW+1000).ok,true);
  const e=newState();e.settings.enabled=true;
  paperOpen(e,market(),answer('SHORT'),NOW);
  assert.equal(paperMark(e,market(),NOW,'EMERGENCY_STOP').trade.exitReason,'EMERGENCY_STOP');
+});
+test('an AI LONG decision with low confidence is not suppressed by hidden execution policy',()=>{
+ const s=newState();s.settings.enabled=true;
+ const d={...answer(),confidence:0.15};
+ assert.equal(paperOpen(s,market(),d,NOW).ok,true);
+ assert.equal(Object.hasOwn(s.settings,'maxDailyLossUsdt'),false);
+ assert.equal(Object.hasOwn(s.settings,'cooldownMinutes'),false);
 });
 test('AI may choose any supported market',()=>{
  const s=newState();s.settings.enabled=true;

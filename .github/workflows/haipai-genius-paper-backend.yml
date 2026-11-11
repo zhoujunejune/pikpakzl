@@ -37,6 +37,8 @@ jobs:
           assert "'127.0.0.1'" in src
           assert 'DEFAULT_SETTINGS' in Path('genius-bot/engine.mjs').read_text()
           assert 'leverage:[1,100]' in Path('genius-bot/engine.mjs').read_text()
+          assert 'MARGIN_OVER_TEN_PERCENT_OF_PAPER_BALANCE' not in Path('genius-bot/engine.mjs').read_text()
+          assert "const allowed=['enabled','emergencyStop','leverage','marginUsdt']" in src
           assert 'parsePortfolioPlan(' in src and 'MAX_PAPER_POSITIONS' in src
           assert 'positions:state.positions' in src
           assert 'pnlSummary:paperPnlSummary(' in src
@@ -110,7 +112,7 @@ jobs:
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
           assert 1<=obj['settings']['leverage']<=100
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V146_PAPER_100X'
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V147_CONTROL_FIX'
           positions=obj.get('positions')
           pnl=obj.get('pnlSummary') or {}
           assert isinstance(pnl.get('realizedNetPnl'),(int,float))

@@ -61,6 +61,7 @@ public final class MainActivity extends Activity {
     public static final String ACTION_VIEW_EVENT10="com.zlcontrol.android.VIEW_EVENT10";
     private static final String BINANCE_PACKAGE="com.binance.dev";
     private WebView webView;
+    private LinearLayout alarmContainer;
     private Switch alarmToggle;
     private TextView alarmStatus;
     private final AlarmPlayer preview=new AlarmPlayer();
@@ -247,6 +248,10 @@ public final class MainActivity extends Activity {
             manage.setText(expanded?"收起 ▴":"提醒管理 ▾");
         });
         outer.addView(top);
+        alarmContainer=top;
+        // The AI autonomous trading screen has its own toggle; legacy EVENT10 alarm controls
+        // appear only on the legacy EVENT10 page, keeping the two-field AI UI uncluttered.
+        top.setVisibility(View.GONE);
 
         alarmToggle.setChecked(SecureStore.prefs(this)
             .getBoolean(SignalAlertService.PREF_ENABLED,false));
@@ -306,6 +311,10 @@ public final class MainActivity extends Activity {
             @Override public void onPageFinished(WebView view,String url){
                 super.onPageFinished(view,url);
                 if(url!=null&&url.startsWith("https://"+HOST+"/"))cachedCredentialRetry=0;
+                if(alarmContainer!=null&&url!=null&&isTrusted(Uri.parse(url))){
+                    boolean genius="/app/genius.html".equals(Uri.parse(url).getPath());
+                    alarmContainer.setVisibility(genius?View.GONE:View.VISIBLE);
+                }
             }
             @Override public void onReceivedSslError(WebView view,SslErrorHandler handler,SslError error){
                 handler.cancel();

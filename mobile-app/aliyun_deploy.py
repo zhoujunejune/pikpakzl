@@ -51,7 +51,7 @@ test -r "$CADDY"
 # The five-minute Guardian service is intentionally retired, not a deployment dependency.
 test "$trade_before" = 0 || { echo "MOBILE_APP_RETIRED_GUARDIAN_UNEXPECTEDLY_RUNNING=true"; exit 44; }
 test "$event_before" != 0
-for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png;do
+for file in index.html app.js genius.html genius.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png;do
   curl -fsSL --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/mobile-app/$file" -o "$STAGE/$file"
 done
 test -s "$STAGE/index.html" && test -s "$STAGE/app.js"
@@ -87,9 +87,11 @@ for expected in ('/event10/api/status','/event10/api/signals','/event10/api/star
 assert 'localStorage' not in js and 'sessionStorage' not in js
 assert 'panel-guardian' not in html and 'panel-overview' not in html
 assert '/guardian/api/status' not in js and 'function guardian(' not in js
-assert 'APP_VERSION="1.3.9"' in js
+assert 'APP_VERSION="1.4.0"' in js
 assert re.fullmatch(r'[a-f0-9]{40}',json.loads((p/'version.json').read_text())['commit'])
 assert '__ZL_APP_RELEASE_SHA__' not in js
+assert '海派合约天才' in (p/'genius.html').read_text()
+assert '/genius/api/status' in (p/'genius.js').read_text()
 assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html
 # Deploy the exact user-supplied artwork committed by the branding build.
 # Never regenerate the previous synthetic ZL chart icon.
@@ -155,7 +157,7 @@ Path(sys.argv[2]).write_text(result)
 print('MOBILE_CADDY_STATIC_ROUTE_STAGED=true')
 CADDY_PATCH
 install -d -o root -g root -m 0755 "$APP"
-for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png version.json;do
+for file in index.html app.js genius.html genius.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png version.json;do
   install -o root -g root -m 0644 "$STAGE/$file" "$APP/$file"
 done
 cp "$STAGE/Caddyfile.staged" "$CADDY"
@@ -174,7 +176,7 @@ fi
 echo MOBILE_CADDY_RELOAD_COMPLETED=true
 checkpoint=AUTHENTICATION_CHECK
 # A compromised public route must never reveal the app or trading APIs without login.
-for route in /app/ /app/app.js /app/version.json /app/manifest.webmanifest /event10/api/status;do
+for route in /app/ /app/genius.html /app/genius.js /app/app.js /app/version.json /app/manifest.webmanifest /event10/api/status;do
   if ! status=$(curl -skS --max-time 9 --resolve "$HOST:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$HOST$route");then
     echo MOBILE_AUTH_CURL_FAILED_PATH=$route
     exit 42

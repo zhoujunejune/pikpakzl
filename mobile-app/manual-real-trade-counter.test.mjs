@@ -87,6 +87,6 @@ test('native journal persists manual timestamps, throttles double taps, and has 
  assert.match(main,/addJavascriptInterface\(new RealTradeBridge\(\),"HaipaiRealTrades"\)/);
  for(const field of ['tradeRecordButton','tradeTodayCount','tradeUndoButton','tradeHistoryList'])
   assert.ok(html.includes('id="'+field+'"'));
- assert.match(js,/APP_VERSION="1\.3\.8"/);
+ assert.match(js,/APP_VERSION="1\.3\.9"/);
  assert.ok(!js.includes('localStorage')&&!js.includes('sessionStorage'));
 });

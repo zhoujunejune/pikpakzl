@@ -32,12 +32,12 @@ finish(){
 trap finish EXIT
 [[ -x "$NODE" && -r "$CADDY" ]] || exit 31
 systemctl is-active --quiet caddy
-for file in engine.mjs server.mjs engine.test.mjs market-signals.mjs market-signals.test.mjs;do
+for file in engine.mjs server.mjs engine.test.mjs market-signals.mjs market-signals.test.mjs timeframes.mjs timeframes.test.mjs;do
   curl -fsSL --max-time 35 "$BASE/genius-bot/$file" -o "$STAGE/$file"
 done
 "$NODE" --check "$STAGE/engine.mjs"
 "$NODE" --check "$STAGE/server.mjs"
-"$NODE" --test "$STAGE/engine.test.mjs" "$STAGE/market-signals.test.mjs"
+"$NODE" --test "$STAGE/engine.test.mjs" "$STAGE/market-signals.test.mjs" "$STAGE/timeframes.test.mjs"
 if grep -Eq '/fapi/v1/(order|algoOrder)' "$STAGE/engine.mjs" "$STAGE/server.mjs";then
   echo HAIPAI_GENIUS_REAL_ORDER_ROUTE_FORBIDDEN=true; exit 29
 fi
@@ -46,7 +46,7 @@ if [[ -d "$ROOT" ]];then HAD_ROOT=1;cp -a "$ROOT" "$BACK/oldapp";fi
 if [[ -r "$UNIT" ]];then HAD_UNIT=1;cp -p "$UNIT" "$BACK/service";fi
 install -d -m 0700 "$STATE"
 install -d -m 0755 "$ROOT"
-for f in engine.mjs server.mjs engine.test.mjs market-signals.mjs market-signals.test.mjs;do install -m 0644 "$STAGE/$f" "$ROOT/$f";done
+for f in engine.mjs server.mjs engine.test.mjs market-signals.mjs market-signals.test.mjs timeframes.mjs timeframes.test.mjs;do install -m 0644 "$STAGE/$f" "$ROOT/$f";done
 CHANGED=1
 cat > "$UNIT" <<'SYSTEMD'
 [Unit]

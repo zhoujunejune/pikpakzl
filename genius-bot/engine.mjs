@@ -32,11 +32,11 @@ export function parseDecision(payload){
     throw Error('INVALID_AI_REASON');
   if(typeof d.confidence!=='number'||!finite(d.confidence)||d.confidence<0||d.confidence>1)
     throw Error('INVALID_AI_SCORE');
-  if(d.symbol!==undefined&&!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(d.symbol))throw Error('INVALID_AI_SYMBOL');
+  if(d.symbol!=null&&!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(d.symbol))throw Error('INVALID_AI_SYMBOL');
   const out={action:d.action,reason:d.reason,confidence:round(d.confidence,3)};
   if(d.symbol)out.symbol=d.symbol;
   for(const k of ['takeProfitPct','stopLossPct']){
-    if(d[k]!==undefined){
+    if(d[k]!=null){
       const max=k==='stopLossPct'?3:5;
       if(typeof d[k]!=='number'||!finite(d[k])||d[k]<0.2||d[k]>max)throw Error('INVALID_AI_'+k);
       out[k]=round(d[k],3);

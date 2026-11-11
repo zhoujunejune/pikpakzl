@@ -18,7 +18,7 @@ function candles(now,side=1){
     high:Math.max(price,next)+.1,low:Math.min(price,next)-.1,volume:i===n-1?140:100});
    price=next;
   }
-  if(key==="1m"){rows.at(-9).high+=12;rows.at(-10).low-=12;}
+  if(key==="1m"){rows.at(-9).high+=4;rows.at(-10).low-=4;}
   c[key]=rows;
  }
  return c;

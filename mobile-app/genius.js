@@ -158,18 +158,27 @@ function renderStatus(s){
 }
 function renderHistory(h){
  const root=$('history');if(!root)return;
+ // Keep the user's scroll position while live data refreshes every five seconds.
+ const previousScroll=Number(root.scrollTop)||0;
  root.replaceChildren();
  if(!Array.isArray(h.records)||!h.records.length){
-  root.textContent='尚无已结束的模拟交易。';return;
+  root.textContent='暂无已平仓的模拟交易记录。';
+  root.scrollTop=0;return;
  }
- for(const r of h.records.slice(0,20)){
-  const d=document.createElement('div'),head=document.createElement('strong');
-  head.textContent=r.symbol+' '+r.side+' · '+(r.netPnl>=0?'+':'')+money(r.netPnl);
-  const detail=document.createElement('small');
-  const type=r.exitReason==='AI_CLOSE'?'AI 自主平仓':r.exitReason==='EMERGENCY_STOP'?'手动紧急停止':r.exitReason;
-  detail.textContent=time(r.closedAt)+' · '+type+(r.aiExitReason?' · '+r.aiExitReason:'')+' · 模拟';
-  d.append(head,detail);root.append(d);
+ for(const r of h.records.slice(0,100)){
+  const item=document.createElement('div');
+  const pnl=document.createElement('strong');
+  const net=typeof r.netPnl==='number'&&Number.isFinite(r.netPnl)?r.netPnl:null;
+  pnl.textContent='盈亏 '+(net===null?'—':signedMoney(net));
+  pnl.className=net===null?'':net>=0?'pnl-up':'pnl-down';
+  const times=document.createElement('div');times.className='trade-times';
+  const opened=document.createElement('small');opened.textContent='开仓：'+time(r.openedAt);
+  const closed=document.createElement('small');closed.textContent='平仓：'+time(r.closedAt);
+  times.append(opened,closed);
+  item.append(pnl,times);
+  root.append(item);
  }
+ root.scrollTop=previousScroll;
 }
 async function refresh(){
  if(updating)return;

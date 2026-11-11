@@ -1,0 +1,105 @@
+name: Haipai Genius V140 paper-only backend deploy
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/haipai-genius-paper-backend.yml','genius-bot/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: haipai-genius-paper-only-backend
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Fail-closed DeepSeek + market + paper trade regression
+        run: |
+          node --check genius-bot/engine.mjs
+          node --check genius-bot/server.mjs
+          node --test genius-bot/engine.test.mjs
+          bash -n genius-bot/install_aliyun.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          src=Path('genius-bot/server.mjs').read_text()
+          assert '/fapi/v1/order' not in src and '/fapi/v1/algoOrder' not in src
+          assert "realTradingEnabled:false" in src
+          assert "const MODEL='deepseek-v4-flash'" in src
+          assert "'127.0.0.1'" in src
+          assert 'DEFAULT_SETTINGS' in Path('genius-bot/engine.mjs').read_text()
+          print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')
+          PY
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Isolated Alibaba Cloud service install; rollback if not verified
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64,re
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}',sha)
+          ak=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
+          sk=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk,'ALIYUN_CREDENTIALS_NOT_CONFIGURED'
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          temp=$(mktemp -d /tmp/haipai-genius-release-XXXXXXXX)
+          trap 'rm -rf "$temp"' EXIT
+          curl -fsSL --retry 3 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/SHA_HERE/genius-bot/install_aliyun.sh" -o "$temp/install.sh"
+          bash "$temp/install.sh" SHA_HERE
+          """.replace('SHA_HERE',sha)
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          x=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+            name='haipai-genius-v140-paper-only-install',type='RunShellScript',
+            working_user='root',command_content=script,timeout=400))
+          assert x.body.invoke_id,'NO_CLOUD_INVOCATION'
+          for _ in range(175):
+            time.sleep(2)
+            r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+              region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+              invoke_id=x.body.invoke_id)).body.invocation_result
+            if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning'):continue
+            output=base64.b64decode(r.output or '').decode('utf8','replace')
+            for line in output.splitlines():
+              if line.startswith('HAIPAI_GENIUS_'):print(line,flush=True)
+            assert str(r.invocation_status)=='Success' and int(r.exit_code)==0,('REMOTE_FAILED',output[-900:])
+            assert 'HAIPAI_GENIUS_BACKEND_DEPLOYED=true' in output
+            assert 'HAIPAI_GENIUS_REAL_ORDER_TRADING_ENABLED=false' in output
+            break
+          else:raise RuntimeError('CLOUD_DEPLOY_TIMEOUT')
+          PY
+      - name: Read authenticated paper-mode status from public site
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,json,urllib.request
+          pw=os.environ.get('ZL_PANEL_PASSWORD','')
+          assert pw,'PANEL_CREDENTIAL_MISSING'
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          request=urllib.request.Request('https://prediction.47-237-188-69.sslip.io/genius/api/status',headers={'Authorization':auth,'Cache-Control':'no-store'})
+          with urllib.request.urlopen(request,timeout=15) as response:
+            obj=json.load(response)
+          assert obj['app']=='海派合约天才'
+          assert obj['mode']=='PAPER_ONLY' and obj['realTradingEnabled'] is False
+          assert obj['realOrderExecutionAvailable'] is False
+          assert obj['settings']['enabled'] is False
+          print('HAIPAI_GENIUS_PRODUCTION_PAPER_ONLY_VERIFIED=true')
+          print('HAIPAI_GENIUS_AI_KEY_CONFIGURED='+str(obj['aiConfigured']))
+          PY

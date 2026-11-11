@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V144_MULTIPOSITION';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
 const finite = Number.isFinite;
@@ -36,6 +36,37 @@ export function parseDecision(payload){
   if(d.horizon!==undefined){
     if(!['SHORT','MEDIUM','LONG'].includes(d.horizon))throw Error('INVALID_AI_HORIZON');
     out.horizon=d.horizon;
+  }
+  return out;
+}
+export const MAX_PAPER_POSITIONS=3;
+export function normalizePaperPositions(state){
+  if(!state||typeof state!=='object'||!Array.isArray(state.positions))throw Error('INVALID_PAPER_POSITIONS');
+  if(state.positions.length>MAX_PAPER_POSITIONS)throw Error('TOO_MANY_PAPER_POSITIONS');
+  const seen=new Set();
+  for(const p of state.positions){
+    if(!p||p.source!=='DEEPSEEK_PAPER_ONLY'||!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(p.symbol)||
+      seen.has(p.symbol)||!['LONG','SHORT'].includes(p.side)||
+      !Number.isFinite(p.entry)||p.entry<=0||!Number.isFinite(p.qty)||p.qty<=0||
+      !Number.isFinite(p.marginUsdt)||p.marginUsdt<=0||!Number.isFinite(p.leverage)||p.leverage<=0)
+      throw Error('INVALID_PAPER_POSITION');
+    seen.add(p.symbol);
+    delete p.stop;
+    delete p.takeProfit;
+  }
+  return state.positions;
+}
+export function parsePortfolioPlan(payload){
+  const obj=typeof payload==='string'?JSON.parse(payload):payload;
+  if(!obj||typeof obj!=='object'||Array.isArray(obj))throw Error('INVALID_AI_PORTFOLIO');
+  // Older JSON response formats are permitted only as a single explicit decision.
+  const raw=Array.isArray(obj.decisions)?obj.decisions:obj.action?[obj]:null;
+  if(!raw||raw.length<1||raw.length>6)throw Error('INVALID_AI_PORTFOLIO_DECISIONS');
+  const out=raw.map(parseDecision);
+  const unique=new Set();
+  for(const d of out){
+    if(!d.symbol||unique.has(d.symbol))throw Error('AI_DUPLICATE_OR_MISSING_SYMBOL');
+    unique.add(d.symbol);
   }
   return out;
 }
@@ -75,7 +106,7 @@ export function makeMarket({symbol,markPrice,markTime,oneMin,fiveMin,now=Date.no
     dataType:'BINANCE_USDM_MARK_PRICE_AND_CLOSED_FUTURES_KLINES'};
 }
 export function newState(settings=DEFAULT_SETTINGS){return {settings:validateSettings({...settings}),balance:settings.paperBalance,
-  day:null,dayStart:settings.paperBalance,position:null,closed:[],lastDecision:null,lastError:null,lastActionAt:0,
+  day:null,dayStart:settings.paperBalance,positions:[],closed:[],lastDecision:null,lastError:null,lastActionAt:0,
   lastMarket:null,aiStatus:'NOT_REQUESTED',cycleCount:0};}
 const dayOf=(t)=>new Date(t).toISOString().slice(0,10);
 export function rollDay(state,now){
@@ -84,39 +115,58 @@ export function rollDay(state,now){
 }
 export function paperOpen(state,market,decision,now=Date.now()){
   const s=state.settings;
-  if(!s.enabled||s.emergencyStop||state.position)return {ok:false,reason:'NOT_ARMED_OR_ALREADY_OPEN'};
+  const positions=normalizePaperPositions(state);
+  if(!s.enabled||s.emergencyStop)return {ok:false,reason:'NOT_ARMED'};
+  if(positions.length>=MAX_PAPER_POSITIONS)return {ok:false,reason:'MAX_THREE_PAPER_POSITIONS'};
   if(!['LONG','SHORT'].includes(decision.action))return {ok:false,reason:'AI_DID_NOT_REQUEST_ENTRY'};
-  if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(market.symbol)||decision.symbol&&market.symbol!==decision.symbol||now-market.checkedAt>5000)throw Error('STALE_OR_MISMATCHED_MARKET');
-  // A numerical self-confidence from an LLM is not a calibrated win probability.
-  const side=decision.action==='LONG'?'LONG':'SHORT',sign=side==='LONG'?1:-1;
-  const entry=round(market.markPrice*(1+sign*0.0003),6); // pessimistic paper slippage
+  if(positions.some(p=>p.symbol===market.symbol))return {ok:false,reason:'SYMBOL_ALREADY_HELD'};
+  if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(market.symbol)||
+      decision.symbol!==market.symbol||now-market.checkedAt>5000)throw Error('STALE_OR_MISMATCHED_MARKET');
+  const locked=positions.reduce((v,p)=>v+p.marginUsdt,0);
+  if(locked+s.marginUsdt>state.balance)return {ok:false,reason:'INSUFFICIENT_FREE_PAPER_MARGIN'};
+  const side=decision.action,sign=side==='LONG'?1:-1;
+  const entry=round(market.markPrice*(1+sign*0.0003),6);
   const qty=round(s.marginUsdt*s.leverage/entry,8),openFee=round(qty*entry*0.0005,6);
-  if(qty<=0||s.marginUsdt+openFee>state.balance)return {ok:false,reason:'INSUFFICIENT_PAPER_FUNDS'};
-  // Entry is never assigned a fixed stop/take-profit trigger. AI decides when to close.
+  if(qty<=0||s.marginUsdt+openFee>state.balance-locked)return {ok:false,reason:'INSUFFICIENT_PAPER_FUNDS'};
   state.balance=round(state.balance-openFee,6);
-  state.position={id:'paper-'+now,symbol:market.symbol,side,qty,marginUsdt:s.marginUsdt,leverage:s.leverage,
-    entry,openedAt:now,openFee,horizon:decision.horizon||'UNSPECIFIED',source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
+  const position={id:'paper-'+now+'-'+market.symbol,symbol:market.symbol,side,qty,
+    marginUsdt:s.marginUsdt,leverage:s.leverage,entry,openedAt:now,openFee,
+    horizon:decision.horizon||'UNSPECIFIED',source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
+  positions.push(position);
   state.lastActionAt=now;
-  return {ok:true,position:state.position};
+  return {ok:true,position};
 }
-/** Close a simulated position only on a completed AI CLOSE decision or an explicit emergency stop.
- * WebSocket price ticks NEVER trigger automatic take-profit/stop-loss exits.
+/** Simulated position is closed only by an AI CLOSE decision or manual emergency stop.
+ * A price tick alone cannot create a closing instruction.
  */
 export function paperMark(state,market,now=Date.now(),closeReason=null,aiReason=null){
-  const p=state.position;
-  if(!p)return {ok:false,reason:'NO_POSITION'};
-  if(market.symbol!==p.symbol||now-market.checkedAt>10000)throw Error('MARKET_NOT_FRESH');
+  const positions=normalizePaperPositions(state);
+  const p=positions.find(x=>x.symbol===market.symbol);
+  if(!p)return {ok:false,reason:'NO_MATCHING_POSITION'};
+  if(now-market.checkedAt>10000)throw Error('MARKET_NOT_FRESH');
   if(closeReason!=='AI_CLOSE'&&closeReason!=='EMERGENCY_STOP')return {ok:false,reason:'AI_HOLD'};
   const sign=p.side==='LONG'?1:-1;
-  const close=round(market.markPrice*(1-sign*0.0003),6); // simulation slippage only
+  const close=round(market.markPrice*(1-sign*0.0003),6);
   const gross=round(sign*(close-p.entry)*p.qty,6),fee=round(close*p.qty*0.0005,6);
   const net=round(gross-p.openFee-fee,6);
   state.balance=round(state.balance+gross-fee,6);
-  // Legacy stop/takeProfit values from old paper positions are stripped from new history.
   const {stop,takeProfit,...cleanPosition}=p;
-  const trade={...cleanPosition,close,closedAt:now,exitReason:closeReason,aiExitReason:closeReason==='AI_CLOSE'?String(aiReason||'AI requested close').slice(0,300):null,
+  const trade={...cleanPosition,close,closedAt:now,exitReason:closeReason,
+    aiExitReason:closeReason==='AI_CLOSE'?String(aiReason||'AI requested close').slice(0,300):null,
     grossPnl:gross,netPnl:net,closeFee:fee,paper:true};
-  state.closed.unshift(trade);state.closed=state.closed.slice(0,500);
-  state.position=null;state.lastActionAt=now;
+  state.closed.unshift(trade);
+  state.closed=state.closed.slice(0,500);
+  state.positions=positions.filter(x=>x.id!==p.id);
+  state.lastActionAt=now;
   return {ok:true,trade};
+}
+export function paperFloatingPnL(positions,snapshots,now=Date.now()){
+  return positions.reduce((out,p)=>{
+    const quote=snapshots.find(x=>x.symbol===p.symbol&&Number.isFinite(x.markPrice)&&
+      Number.isFinite(x.checkedAt)&&now-x.checkedAt<10000);
+    if(!quote){out.complete=false;return out;}
+    const sign=p.side==='LONG'?1:-1;
+    out.total=round(out.total+sign*(quote.markPrice-p.entry)*p.qty);
+    return out;
+  },{total:0,complete:true});
 }

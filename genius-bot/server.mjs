@@ -4,7 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarket,
-  newState,rollDay,paperOpen,paperMark,paperAdjustStops} from './engine.mjs';
+  newState,rollDay,paperOpen,paperMark} from './engine.mjs';
 
 const PORT=Number(process.env.GENIUS_PORT||13023),HOST='127.0.0.1';
 const STATE_FILE=process.env.GENIUS_STATE_FILE||'/var/lib/haipai-genius-paper/state.json';
@@ -19,9 +19,12 @@ let socket=null,reconnectTimer=null;
 function load(){
   try{
     const s=JSON.parse(fs.readFileSync(STATE_FILE,'utf8'));
+    // Migrate existing settings without resetting balance, history or a paper position.
+    const {takeProfitPct,stopLossPct,...currentSettings}=s.settings;
+    s.settings={...DEFAULT_SETTINGS,...currentSettings,cooldownMinutes:DEFAULT_SETTINGS.cooldownMinutes};
     validateSettings(s.settings);
-    // Migrate older hidden tuning: AI now owns ordinary entries/exits, while safety bounds remain.
-    s.settings.cooldownMinutes=DEFAULT_SETTINGS.cooldownMinutes;
+    // Historic paper positions may still carry obsolete price targets; never execute them.
+    if(s.position){delete s.position.stop;delete s.position.takeProfit;}
     if(typeof s.balance!=='number'||!Number.isFinite(s.balance)||!Array.isArray(s.closed)||
         s.closed.some(x=>x.paper!==true)||s.position&&s.position.source!=='DEEPSEEK_PAPER_ONLY')
       throw Error('INVALID_PAPER_LEDGER');
@@ -66,11 +69,7 @@ function connectStream(){
         const item={symbol,markPrice:price,checkedAt:Date.now()};
         if(slot>=0)state.marketSnapshots[slot]=item;
         else state.marketSnapshots.push(item);
-        if(state.position&&state.position.symbol===symbol){
-          // Protective stops are checked on each fresh market event, not blocked by AI thinking.
-          const result=paperMark(state,{symbol,markPrice:price,checkedAt:Date.now()},Date.now(),state.settings.emergencyStop);
-          if(result.ok)store();
-        }
+        // The price feed updates mark prices only. It must never force a close.
       }catch(e){marketError=String(e.message||e).slice(0,120);}
     });
     socket.addEventListener('error',()=>{wsState='ERROR_RECONNECTING';});
@@ -119,7 +118,7 @@ async function deepseekDecision(markets,position){
       volumeRatio:m.volumeRatio,pricePosition20mPct:m.pricePosition20mPct,high20m:m.high20m,low20m:m.low20m})),
     position:position?{symbol:position.symbol,side:position.side,entry:position.entry,
       markPrice:markets.find(x=>x.symbol===position.symbol)?.markPrice,
-      stop:position.stop,takeProfit:position.takeProfit,openedAt:position.openedAt}:null,
+      openedAt:position.openedAt}:null,
     rules:'Only PAPER simulation. Entry risk bounded server-side. Do not assume profitable trades.'};
   lastModelCallAt=Date.now();state.aiStatus='THINKING';
   const response=await fetch('https://api.deepseek.com/chat/completions',{
@@ -127,7 +126,7 @@ async function deepseekDecision(markets,position){
     headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
     body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
       response_format:{type:'json_object'},max_tokens:1800,messages:[
-      {role:'system',content:'你是永续合约模拟研究分析模型。仅输出JSON对象，字段action、symbol、confidence、reason、takeProfitPct、stopLossPct。无仓时action只能LONG/SHORT/WAIT，持仓时只能HOLD/CLOSE；symbol为BTCUSDT/ETHUSDT/SOLUSDT，持仓时必须与持仓币种一致；confidence为0至1。reason为6至300字中文。入场时自行建议止盈价格百分比0.2至5、止损百分比0.2至3；持仓时可继续调整，但服务器始终限制最大损失且不允许放宽已设定止损。趋势不一致、流动性或数据不足时选择WAIT。你提供的confidence并非验证过的胜率，不要保证盈利。只做模拟分析，不进行实盘交易。'},
+      {role:'system',content:'你是永续合约模拟研究分析模型。只返回JSON对象，字段action、symbol、confidence、reason。无仓时action只能LONG/SHORT/WAIT，持仓时只能HOLD/CLOSE；symbol为BTCUSDT/ETHUSDT/SOLUSDT，持仓时必须与持仓币种一致。confidence为0到1，reason为6到300字中文。你须在每次持仓分析中自行判断继续持有或主动平仓；后台不设置固定止盈价或止损价，也不会因触价自动平仓。请综合趋势、波动、成交量、当前损益和持仓时间，自行分析退出时机。行情数据不足或模型不确定时谨慎决策。模型评分不是胜率保证。仅做模拟交易，不会发出实盘订单。'},
       {role:'user',content:JSON.stringify(payload)}]})});
   if(!response.ok)throw Error('DEEPSEEK_HTTP_'+response.status);
   const obj=await response.json(),msg=obj?.choices?.[0]?.message?.content;
@@ -152,7 +151,7 @@ async function cycle(){
     state.marketSnapshots=markets.map(x=>({symbol:x.symbol,markPrice:x.markPrice,checkedAt:x.checkedAt}));
     if(state.position){
       if(!held)throw Error('POSITION_MARKET_UNAVAILABLE');
-      paperMark(state,held,Date.now(),state.settings.emergencyStop);
+      if(state.settings.emergencyStop)paperMark(state,held,Date.now(),'EMERGENCY_STOP');
     }
     if(state.settings.enabled&&!state.settings.emergencyStop){
       if(!process.env.DEEPSEEK_API_KEY)state.aiStatus='KEY_NOT_CONFIGURED';
@@ -165,9 +164,10 @@ async function cycle(){
         if(decision&&oldPosition){
           const fresh=await collectMarket(oldPosition.symbol);
           if(state.position&&state.position.id===oldPosition.id){
-            paperMark(state,fresh,Date.now(),state.settings.emergencyStop);
-            if(state.position&&decision.action==='CLOSE')paperMark(state,fresh,Date.now(),'AI_CLOSE');
-            else if(state.position&&decision.action==='HOLD')paperAdjustStops(state,fresh,decision);
+            if(state.settings.emergencyStop)paperMark(state,fresh,Date.now(),'EMERGENCY_STOP');
+            else if(state.position&&decision.action==='CLOSE')
+              paperMark(state,fresh,Date.now(),'AI_CLOSE',decision.reason);
+            // HOLD never mutates or generates a fixed exit trigger.
           }
         }else if(decision&&['LONG','SHORT'].includes(decision.action)&&decision.confidence>=0.6){
           const before=markets.find(x=>x.symbol===decision.symbol);

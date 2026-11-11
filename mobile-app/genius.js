@@ -151,10 +151,16 @@ function renderStatus(s){
  const activeHigher=met.perSymbol?.[activeSymbol];
  put('multiTrend',activeHigher?.higherComplete?['15m','1h','4h','1d','1w'].map(k=>k+':'+({UP:'涨',DOWN:'跌',MIXED:'震荡'}[activeHigher.higher?.[k]?.bias]||'待更新')).join(' · '):'高周期行情待补齐');
  put('balance',money(s.paperBalance));put('tradeCount',s.totalClosed);
- $('toggle').textContent=active?'关闭 AI 自动分析':'开启 AI 自动分析';
+ if(!saving)$('toggle').textContent=active?'关闭 AI 自动分析':'开启 AI 自动分析';
 
- if(!settings){settings=s.settings;setForm(settings);}
- if(!saving&&s.lastError)put('saveStatus','行情或 AI 异常：'+s.lastError+'；暂停新增模拟开仓。');
+ // Always sync the control state from the server, but preserve unsaved sizing inputs.
+ const firstLoad=!settings;
+ settings=s.settings;
+ if(firstLoad){
+   setForm(settings);
+   put('saveStatus','参数已加载。AI 开关与杠杆金额分别保存。');
+ }
+ // Market errors are displayed in "最近异常记录", never overwrite control feedback.
 }
 function renderHistory(h){
  const root=$('history');if(!root)return;

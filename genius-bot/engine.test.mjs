@@ -16,10 +16,14 @@ const answer=(action='LONG',symbol='BTCUSDT')=>({
  action,symbol,confidence:.8,horizon:'MEDIUM',
  reason:'根据多个周期的行情趋势判断模拟交易方向并持续研究持仓'});
 test('paper-only, three positions maximum, exact settings schema',()=>{
- assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V145_CUMULATIVE_PNL');
+ assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V146_PAPER_100X');
  assert.equal(MAX_PAPER_POSITIONS,3);
  assert.equal(DEFAULT_SETTINGS.enabled,false);
  assert.equal(validateSettings({...DEFAULT_SETTINGS}).leverage,2);
+ assert.equal(validateSettings({...DEFAULT_SETTINGS,leverage:100}).leverage,100);
+ assert.equal(validateSettings({...DEFAULT_SETTINGS,leverage:1}).leverage,1);
+ assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:101}),/INVALID_leverage/);
+ assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:0}),/INVALID_leverage/);
  assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:125}),/INVALID_leverage/);
  assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,stopLossPct:0.2}),/INVALID_SETTINGS_FIELDS/);
 });

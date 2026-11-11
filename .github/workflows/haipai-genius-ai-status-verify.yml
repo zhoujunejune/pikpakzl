@@ -49,5 +49,15 @@ jobs:
           print('HAIPAI_GENIUS_AI_DURATION_MS='+str(metrics.get('aiDurationMs')))
           print('HAIPAI_GENIUS_AI_TRIGGER='+str(metrics.get('lastTrigger')))
           print('HAIPAI_GENIUS_LAST_FIVE_ERRORS='+str([(v.get('kind'),v.get('detail')) for v in (metrics.get('errors') or [])[:5]])[:350])
+          per=metrics.get('perSymbol') or {}
+          for symbol in ('BTCUSDT','ETHUSDT','SOLUSDT'):
+              item=per.get(symbol,{})
+              print('HAIPAI_GENIUS_'+symbol+'_HIGHER_COMPLETE='+str(item.get('higherComplete')))
+              print('HAIPAI_GENIUS_'+symbol+'_HIGHER_BIAS='+str({key: value.get('bias') for key,value in (item.get('higher') or {}).items()}))
+          print('HAIPAI_GENIUS_LAST_HORIZON='+str((x.get('lastDecision') or {}).get('horizon')))
+          print('HAIPAI_GENIUS_HIGHER_REQUESTS='+str(metrics.get('higherRequests')))
+          assert x['version']=='HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON'
+          assert all(per.get(symbol,{}).get('higherComplete') is True for symbol in ('BTCUSDT','ETHUSDT','SOLUSDT')), 'MULTI_TIMEFRAME_DATA_INCOMPLETE'
+          print('HAIPAI_GENIUS_MULTI_HORIZON_VERIFIED=true')
           print('HAIPAI_GENIUS_PAPER_SERVICE_OK=true')
           PY

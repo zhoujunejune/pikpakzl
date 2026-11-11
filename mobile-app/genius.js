@@ -21,6 +21,14 @@ function renderStatus(s){
  const active=Boolean(s.settings?.enabled&&!s.settings?.emergencyStop);
  put('engineState',s.settings?.emergencyStop?'紧急停止':active?'AI 自动分析已开启 · '+s.aiStatus:'AI 自动分析已关闭');
  put('lastAnalysis',time(s.lastDecision?.at||s.lastModelCallAt));
+ const met=s.metrics||{},activeSymbol=s.position?.symbol||s.lastMarket?.symbol||'BTCUSDT';
+ const micro=met.perSymbol?.[activeSymbol]?.trades?.w10;
+ put('marketLag',Number.isFinite(met.wsLagMs)?met.wsLagMs+' 毫秒 · 最新 '+Math.round(met.marketAgeMs||0)+' 毫秒前':'等待行情');
+ put('aiLatency',Number.isFinite(met.aiDurationMs)?met.aiDurationMs+' 毫秒 · 成功 '+(met.aiSuccess||0)+' 次':'尚无完成记录');
+ put('aiTrigger',met.lastTrigger==='PRICE_EVENT'?'行情异动':met.lastTrigger==='SCHEDULED'?'定时检查':'尚未触发');
+ put('microWindow',micro?activeSymbol+' · 10秒 '+(micro.changePct>=0?'+':'')+micro.changePct+'% · 主动买入 '+Math.round(micro.buyRatio*100)+'%':'等待逐笔成交');
+ const err=met.errors?.[0];
+ put('recentError',err?time(err.at)+' · '+err.kind+' · '+err.detail:'无记录');
  const actions={LONG:'看涨开仓',SHORT:'看跌开仓',HOLD:'继续持有',CLOSE:'AI 主动平仓',WAIT:'暂不操作'};
  put('aiDecision',s.lastDecision?((s.lastDecision.symbol||'全市场')+' · '+(actions[s.lastDecision.action]||s.lastDecision.action)+' · '+s.lastDecision.reason):'尚无有效 AI 决策');
  put('balance',money(s.paperBalance));put('tradeCount',s.totalClosed);

@@ -3,7 +3,7 @@
 export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V142_AI_EXIT_ONLY';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5,
-  takeProfitPct:1.2,stopLossPct:0.8,maxDailyLossUsdt:5,cooldownMinutes:1});
+  maxDailyLossUsdt:5,cooldownMinutes:1});
 const finite = Number.isFinite;
 const round=(n,p=6)=>Number(n.toFixed(p));
 export function validateSettings(value){
@@ -14,14 +14,13 @@ export function validateSettings(value){
   for(const name of ['enabled','emergencyStop'])if(typeof s[name]!=='boolean')throw Error('INVALID_'+name);
   if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol))throw Error('UNSUPPORTED_SYMBOL');
   const ranges={paperBalance:[10,10000],leverage:[1,10],marginUsdt:[1,100],
-    takeProfitPct:[0.2,5],stopLossPct:[0.2,3],maxDailyLossUsdt:[1,200],cooldownMinutes:[1,1440]};
+    maxDailyLossUsdt:[1,200],cooldownMinutes:[1,1440]};
   for(const [name,[min,max]] of Object.entries(ranges)){
     if(typeof s[name]!=='number'||!finite(s[name])||s[name]<min||s[name]>max)
       throw Error('INVALID_'+name);
   }
   if(!Number.isInteger(s.leverage)||!Number.isInteger(s.cooldownMinutes))throw Error('INVALID_INTEGER_SETTING');
   if(s.marginUsdt>s.paperBalance*0.1)throw Error('MARGIN_OVER_TEN_PERCENT_OF_PAPER_BALANCE');
-  if(s.stopLossPct*s.marginUsdt*s.leverage/100>s.maxDailyLossUsdt)throw Error('POSITION_RISK_OVER_DAILY_CAP');
   return s;
 }
 export function parseDecision(payload){
@@ -102,7 +101,7 @@ export function paperOpen(state,market,decision,now=Date.now()){
 /** Close a simulated position only on a completed AI CLOSE decision or an explicit emergency stop.
  * WebSocket price ticks NEVER trigger automatic take-profit/stop-loss exits.
  */
-export function paperMark(state,market,now=Date.now(),closeReason=null){
+export function paperMark(state,market,now=Date.now(),closeReason=null,aiReason=null){
   const p=state.position;
   if(!p)return {ok:false,reason:'NO_POSITION'};
   if(market.symbol!==p.symbol||now-market.checkedAt>10000)throw Error('MARKET_NOT_FRESH');
@@ -114,7 +113,7 @@ export function paperMark(state,market,now=Date.now(),closeReason=null){
   state.balance=round(state.balance+gross-fee,6);
   // Legacy stop/takeProfit values from old paper positions are stripped from new history.
   const {stop,takeProfit,...cleanPosition}=p;
-  const trade={...cleanPosition,close,closedAt:now,exitReason:closeReason,
+  const trade={...cleanPosition,close,closedAt:now,exitReason:closeReason,aiExitReason:closeReason==='AI_CLOSE'?String(aiReason||'AI requested close').slice(0,300):null,
     grossPnl:gross,netPnl:net,closeFee:fee,paper:true};
   state.closed.unshift(trade);state.closed=state.closed.slice(0,500);
   state.position=null;state.lastActionAt=now;

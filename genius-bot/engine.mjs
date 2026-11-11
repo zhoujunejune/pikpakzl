@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V145_CUMULATIVE_PNL';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V146_PAPER_100X';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
 const finite = Number.isFinite;
@@ -12,7 +12,7 @@ export function validateSettings(value){
   const s={...value};
   for(const name of ['enabled','emergencyStop'])if(typeof s[name]!=='boolean')throw Error('INVALID_'+name);
   if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol))throw Error('UNSUPPORTED_SYMBOL');
-  const ranges={paperBalance:[10,10000],leverage:[1,10],marginUsdt:[1,100],
+  const ranges={paperBalance:[10,10000],leverage:[1,100],marginUsdt:[1,100],
     };
   for(const [name,[min,max]] of Object.entries(ranges)){
     if(typeof s[name]!=='number'||!finite(s[name])||s[name]<min||s[name]>max)

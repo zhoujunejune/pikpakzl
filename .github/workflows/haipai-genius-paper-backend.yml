@@ -28,7 +28,7 @@ jobs:
           src=Path('genius-bot/server.mjs').read_text()
           assert '/fapi/v1/order' not in src and '/fapi/v1/algoOrder' not in src
           assert "realTradingEnabled:false" in src
-          assert "const MODEL='deepseek-v4-flash'" in src
+          assert "const MODEL='deepseek-flash'" in src
           assert "'127.0.0.1'" in src
           assert 'DEFAULT_SETTINGS' in Path('genius-bot/engine.mjs').read_text()
           print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')

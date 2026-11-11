@@ -13,46 +13,109 @@ async function api(route,config={}){
 function formValue(){return {leverage:Number($('leverage').value),marginUsdt:Number($('marginUsdt').value)};}
 function setForm(s){$('leverage').value=s.leverage;$('marginUsdt').value=s.marginUsdt;}
 const horizonLabels={SHORT:'短线',MEDIUM:'中线',LONG:'长线',UNSPECIFIED:'待确定'};
+let visiblePositionId=null;
+let positionIdsKey='';
+const horizonLabels={SHORT:'短线',MEDIUM:'中线',LONG:'长线',UNSPECIFIED:'待确定'};
+const signedMoney=n=>(n>=0?'+':'')+money(n);
+function visiblePage(){
+ const track=$('positionTrack'),cards=track?.children;
+ if(!track||!cards?.length)return 0;
+ return Math.min(cards.length-1,Math.max(0,Math.round(track.scrollLeft/Math.max(1,track.clientWidth))));
+}
+function setPositionPage(index){
+ const track=$('positionTrack'),cards=track?.children;
+ const length=cards?.length||0;
+ if(!length){put('positionPage','');return;}
+ const current=Math.max(0,Math.min(index,length-1));
+ visiblePositionId=cards[current]?.dataset.id||null;
+ put('positionPage',length>1?(current+1)+' / '+length+' · 左右滑动':'');
+ [...$('positionDots').children].forEach((node,i)=>{
+   node.classList.toggle('is-active',i===current);
+   node.setAttribute('aria-current',i===current?'true':'false');
+ });
+}
+function ensurePositionCarousel(positions){
+ const track=$('positionTrack'),dots=$('positionDots');
+ const key=positions.map(p=>p.id).join('|');
+ if(key===positionIdsKey)return;
+ const prevId=visiblePositionId;
+ positionIdsKey=key;
+ track.replaceChildren();dots.replaceChildren();
+ positions.forEach((p,i)=>{
+   const card=document.createElement('div');
+   card.className='position-slide';card.dataset.id=String(p.id);
+   card.setAttribute('aria-label',p.symbol+'模拟持仓');
+   const labels=['币种 / 方向','模拟开仓价','实时标记价格','浮动盈亏（未扣平仓费）',
+     '每笔开仓金额 / 杠杆','AI 持仓周期','开仓时间','平仓方式'];
+   for(const label of labels){card.append(textLine(label,'—'));}
+   track.append(card);
+   if(positions.length>1){
+     const dot=document.createElement('button');dot.type='button';
+     dot.setAttribute('aria-label','查看第'+(i+1)+'笔持仓');
+     dot.addEventListener('click',()=>track.scrollTo({left:i*track.clientWidth,behavior:'smooth'}));
+     dots.append(dot);
+   }
+ });
+ dots.hidden=positions.length<2;
+ const prevIndex=positions.findIndex(p=>String(p.id)===prevId);
+ const index=prevIndex>=0?prevIndex:0;
+ track.scrollLeft=index*track.clientWidth;
+ setPositionPage(index);
+}
 function renderPosition(s){
- const root=$('position');
- if(!root)return;
- if(!s.position){
-   put('positionState','当前空仓');
-   root.textContent='当前没有未平仓的 AI 模拟订单。已平仓订单请查看下方历史记录。';
+ const positions=Array.isArray(s.positions)?s.positions:(s.position?[s.position]:[]);
+ put('positionCount',positions.length+' / 3');
+ put('positionState',positions.length?'模拟持仓中':'当前空仓');
+ const empty=$('positionEmpty'),track=$('positionTrack');
+ empty.hidden=positions.length>0;
+ if(!positions.length){
+   empty.textContent='当前没有未平仓模拟订单；已平仓订单请查看下方记录。';
+   positionIdsKey='';visiblePositionId=null;
+   track.replaceChildren();$('positionDots').replaceChildren();
+   $('positionDots').hidden=true;put('positionPage','');
+   put('positionTotalPnl','0.00 USDT');
    return;
  }
- const p=s.position;
- put('positionState','模拟持仓中');
- const symbol=String(p.symbol||'未知'),side=p.side==='LONG'?'看涨 LONG':p.side==='SHORT'?'看跌 SHORT':'未知方向';
- const now=Date.now();
- const snapshot=(s.marketSnapshots||[]).find(m=>m.symbol===symbol&&
-   Number.isFinite(Number(m.markPrice))&&Number.isFinite(Number(m.checkedAt))&&now-Number(m.checkedAt)<10000)
-    ||(s.lastMarket?.symbol===symbol&&now-Number(s.lastMarket.checkedAt)<10000?s.lastMarket:null);
- const price=Number(snapshot?.markPrice),entry=Number(p.entry),qty=Number(p.qty);
- const usable=Number.isFinite(price)&&price>0&&Number.isFinite(entry)&&entry>0&&
-   Number.isFinite(qty)&&qty>0;
- const pnl=usable?(p.side==='LONG'?1:-1)*(price-entry)*qty:null;
- root.replaceChildren();
- root.append(textLine('币种 / 方向',symbol+' / '+side),
-   textLine('模拟开仓价',Number.isFinite(entry)?num(entry):'—'),
-   textLine('实时标记价格',usable?num(price):'行情更新中'),
-   textLine('浮动盈亏（未扣平仓费）',pnl===null?'行情待更新':(pnl>=0?'+':'')+money(pnl)),
-   textLine('每笔开仓金额 / 杠杆',money(p.marginUsdt)+' / '+(p.leverage??'—')+'倍'),
-   textLine('AI 持仓周期',horizonLabels[p.horizon]||'待确定'),
-   textLine('开仓时间',time(p.openedAt)),
-   textLine('平仓方式','等待 AI 自主 CLOSE / 可手动紧急停止'));
+ ensurePositionCarousel(positions);
+ const now=Date.now(),snapshots=s.marketSnapshots||[];
+ let total=0,complete=true;
+ positions.forEach((p,i)=>{
+   const root=track.children[i];if(!root)return;
+   const symbol=String(p.symbol||'未知');
+   const q=snapshots.find(m=>m.symbol===symbol&&
+     Number.isFinite(Number(m.markPrice))&&Number(m.markPrice)>0&&
+     Number.isFinite(Number(m.checkedAt))&&now-Number(m.checkedAt)<10000);
+   const last=q||(s.lastMarket?.symbol===symbol&&now-Number(s.lastMarket.checkedAt)<10000?s.lastMarket:null);
+   const price=Number(last?.markPrice),entry=Number(p.entry),qty=Number(p.qty);
+   const available=last&&Number.isFinite(price)&&price>0&&Number.isFinite(entry)&&entry>0&&
+     Number.isFinite(qty)&&qty>0;
+   const pnl=available?(p.side==='LONG'?1:-1)*(price-entry)*qty:null;
+   if(pnl===null)complete=false;else total+=pnl;
+   const side=p.side==='LONG'?'看涨 LONG':'看跌 SHORT';
+   const vals=[symbol+' / '+side,Number.isFinite(entry)?num(entry):'—',
+     available?num(price):'行情待更新',pnl===null?'行情待更新':signedMoney(pnl),
+     money(p.marginUsdt)+' / '+p.leverage+'倍',horizonLabels[p.horizon]||'待确定',
+     time(p.openedAt),'AI 自主 CLOSE / 手动紧急停止'];
+   [...root.children].forEach((row,j)=>{
+     const strong=row.querySelector('strong');if(strong)strong.textContent=vals[j];
+   });
+ });
+ put('positionTotalPnl',complete?signedMoney(total):'部分行情待更新');
+ setPositionPage(visiblePage());
 }
+$('positionTrack').addEventListener('scroll',()=>setPositionPage(visiblePage()),{passive:true});
 function renderStatus(s){
  renderPosition(s);
  const ok=s.mode==='PAPER_ONLY'&&s.realTradingEnabled===false;
  put('connection',ok?'模拟服务在线':'连接异常');
  put('marketStream',s.marketStream==='LIVE'?'行情流实时连接':(s.marketStream||'行情流待连接')+' · REST 备用');
- const m=s.position?s.marketSnapshots?.find(x=>x.symbol===s.position.symbol):s.lastMarket;
+ const first=(Array.isArray(s.positions)?s.positions[0]:s.position);
+ const m=first?s.marketSnapshots?.find(x=>x.symbol===first.symbol):s.lastMarket;
  put('markPrice',m?.markPrice?(m.symbol+'  '+num(m.markPrice)+' USDT'):'行情待更新');
  const active=Boolean(s.settings?.enabled&&!s.settings?.emergencyStop);
  put('engineState',s.settings?.emergencyStop?'紧急停止':active?'AI 自动分析已开启 · '+s.aiStatus:'AI 自动分析已关闭');
  put('lastAnalysis',time(s.lastDecision?.at||s.lastModelCallAt));
- const met=s.metrics||{},activeSymbol=s.position?.symbol||s.lastMarket?.symbol||'BTCUSDT';
+ const met=s.metrics||{},activeSymbol=first?.symbol||s.lastMarket?.symbol||'BTCUSDT';
  const micro=met.perSymbol?.[activeSymbol]?.trades?.w10;
  put('marketLag',Number.isFinite(met.wsLagMs)?met.wsLagMs+' 毫秒 · 最新 '+Math.round(met.marketAgeMs||0)+' 毫秒前':'等待行情');
  put('aiLatency',Number.isFinite(met.aiDurationMs)?met.aiDurationMs+' 毫秒 · 成功 '+(met.aiSuccess||0)+' 次':'尚无完成记录');

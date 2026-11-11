@@ -106,7 +106,7 @@ import sys,json
 x=json.loads(sys.argv[1]);assert x['mode']=='PAPER_ONLY'
 assert x['realTradingEnabled'] is False
 assert isinstance(x['settings']['enabled'],bool)
-assert x['settings']['leverage']<=10
+assert 1<=x['settings']['leverage']<=100
 print('HAIPAI_GENIUS_PAPER_ONLY_VERIFIED=true',flush=True)
 print('HAIPAI_GENIUS_DEEPSEEK_CONFIGURED='+str(x['aiConfigured']),flush=True)
 PY

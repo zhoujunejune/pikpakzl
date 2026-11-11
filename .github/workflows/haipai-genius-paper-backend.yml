@@ -55,6 +55,9 @@ jobs:
           assert 'shouldScoutOpportunities({' in src
           assert 'shouldRefreshClosedCandles(cached,now)' in src
           assert 'candleBoundaryRefreshes' in src
+          assert 'max_tokens:5600' in src and 'max_tokens:3800' in src
+          assert src.count('max_tokens:3000')==2
+          assert 'DEEPSEEK_EMPTY_DECISION_' in src
           print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')
           PY
   deploy:
@@ -125,7 +128,7 @@ jobs:
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
           assert 1<=obj['settings']['leverage']<=100
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V151_OPPORTUNITY_RESCOUT'
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V152_MODEL_OUTPUT_RELIABILITY'
           positions=obj.get('positions')
           pnl=obj.get('pnlSummary') or {}
           assert isinstance(pnl.get('realizedNetPnl'),(int,float))

@@ -299,7 +299,7 @@ async function scoutAlternativeOpportunities(markets){
       method:'POST',signal:AbortSignal.timeout(27000),
       headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
       body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
-        response_format:{type:'json_object'},max_tokens:1800,messages:[
+        response_format:{type:'json_object'},max_tokens:3800,messages:[
         {role:'system',content:policy},
         {role:'user',content:JSON.stringify(body)}
       ]})
@@ -307,7 +307,7 @@ async function scoutAlternativeOpportunities(markets){
     if(!response.ok)throw Error('SCOUT_HTTP_'+response.status);
     const raw=await response.json();
     const answer=raw?.choices?.[0]?.message?.content;
-    if(typeof answer!=='string'||!answer.trim())throw Error('SCOUT_EMPTY');
+    if(typeof answer!=='string'||!answer.trim())throw Error('SCOUT_EMPTY_'+String(raw?.choices?.[0]?.finish_reason||'UNKNOWN'));
     const decisions=parsePortfolioPlan(answer);
     for(const d of decisions){
       if(!['WAIT','LONG','SHORT'].includes(d.action)||
@@ -351,12 +351,12 @@ async function deepseekDecision(markets,positions){
     method:'POST',signal:AbortSignal.timeout(27000),
     headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
     body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
-      response_format:{type:'json_object'},max_tokens:2400,messages:[
+      response_format:{type:'json_object'},max_tokens:5600,messages:[
       {role:'system',content:DECISION_POLICY},
       {role:'user',content:JSON.stringify(payload)}]})});
   if(!response.ok)throw Error('DEEPSEEK_HTTP_'+response.status);
   const obj=await response.json(),msg=obj?.choices?.[0]?.message?.content;
-  if(typeof msg!=='string'||!msg.trim())throw Error('DEEPSEEK_EMPTY_DECISION');
+  if(typeof msg!=='string'||!msg.trim())throw Error('DEEPSEEK_EMPTY_DECISION_'+String(obj?.choices?.[0]?.finish_reason||'UNKNOWN'));
   const decisions=parsePortfolioPlan(msg);
   for(const d of decisions){
     const held=positions.some(p=>p.symbol===d.symbol);
@@ -405,14 +405,14 @@ async function reviewProposedEntry(proposal,market){
       method:'POST',signal:AbortSignal.timeout(27000),
       headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
       body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
-        response_format:{type:'json_object'},max_tokens:1200,messages:[
+        response_format:{type:'json_object'},max_tokens:3000,messages:[
         {role:'system',content:policy},
         {role:'user',content:JSON.stringify(payload)}
       ]})
     });
     if(!response.ok)throw Error('ENTRY_REVIEW_HTTP_'+response.status);
     const raw=await response.json(),msg=raw?.choices?.[0]?.message?.content;
-    if(typeof msg!=='string'||!msg.trim())throw Error('ENTRY_REVIEW_EMPTY');
+    if(typeof msg!=='string'||!msg.trim())throw Error('ENTRY_REVIEW_EMPTY_'+String(raw?.choices?.[0]?.finish_reason||'UNKNOWN'));
     const review=parseDecision(msg);
     if(review.symbol!==market.symbol||!['LONG','SHORT','WAIT'].includes(review.action))
       throw Error('ENTRY_REVIEW_INVALID_ACTION_OR_SYMBOL');
@@ -465,14 +465,14 @@ async function reviewProposedClose(proposal,position,market){
       method:'POST',signal:AbortSignal.timeout(27000),
       headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
       body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
-        response_format:{type:'json_object'},max_tokens:1200,messages:[
+        response_format:{type:'json_object'},max_tokens:3000,messages:[
         {role:'system',content:policy},
         {role:'user',content:JSON.stringify(payload)}
       ]})
     });
     if(!response.ok)throw Error('EXIT_REVIEW_HTTP_'+response.status);
     const raw=await response.json(),msg=raw?.choices?.[0]?.message?.content;
-    if(typeof msg!=='string'||!msg.trim())throw Error('EXIT_REVIEW_EMPTY');
+    if(typeof msg!=='string'||!msg.trim())throw Error('EXIT_REVIEW_EMPTY_'+String(raw?.choices?.[0]?.finish_reason||'UNKNOWN'));
     const review=parseDecision(msg);
     if(review.symbol!==position.symbol||!['HOLD','CLOSE'].includes(review.action))
       throw Error('EXIT_REVIEW_INVALID_ACTION_OR_SYMBOL');

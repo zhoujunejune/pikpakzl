@@ -1,9 +1,9 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V140_20261111';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V141_AUTONOMOUS';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5,
-  takeProfitPct:1.2,stopLossPct:0.8,maxDailyLossUsdt:5,cooldownMinutes:30});
+  takeProfitPct:1.2,stopLossPct:0.8,maxDailyLossUsdt:5,cooldownMinutes:1});
 const finite = Number.isFinite;
 const round=(n,p=6)=>Number(n.toFixed(p));
 export function validateSettings(value){
@@ -14,7 +14,7 @@ export function validateSettings(value){
   for(const name of ['enabled','emergencyStop'])if(typeof s[name]!=='boolean')throw Error('INVALID_'+name);
   if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol))throw Error('UNSUPPORTED_SYMBOL');
   const ranges={paperBalance:[10,10000],leverage:[1,10],marginUsdt:[1,100],
-    takeProfitPct:[0.2,5],stopLossPct:[0.2,3],maxDailyLossUsdt:[1,200],cooldownMinutes:[5,1440]};
+    takeProfitPct:[0.2,5],stopLossPct:[0.2,3],maxDailyLossUsdt:[1,200],cooldownMinutes:[1,1440]};
   for(const [name,[min,max]] of Object.entries(ranges)){
     if(typeof s[name]!=='number'||!finite(s[name])||s[name]<min||s[name]>max)
       throw Error('INVALID_'+name);
@@ -26,13 +26,23 @@ export function validateSettings(value){
 }
 export function parseDecision(payload){
   const d=typeof payload==='string'?JSON.parse(payload):payload;
-  if(!d||typeof d!=='object'||Array.isArray(d)||!['LONG','SHORT','WAIT'].includes(d.action))
+  if(!d||typeof d!=='object'||Array.isArray(d)||!['LONG','SHORT','WAIT','HOLD','CLOSE'].includes(d.action))
     throw Error('INVALID_AI_DIRECTION');
   if(typeof d.reason!=='string'||d.reason.length<6||d.reason.length>300)
     throw Error('INVALID_AI_REASON');
   if(typeof d.confidence!=='number'||!finite(d.confidence)||d.confidence<0||d.confidence>1)
     throw Error('INVALID_AI_SCORE');
-  return {action:d.action,reason:d.reason,confidence:round(d.confidence,3)};
+  if(d.symbol!==undefined&&!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(d.symbol))throw Error('INVALID_AI_SYMBOL');
+  const out={action:d.action,reason:d.reason,confidence:round(d.confidence,3)};
+  if(d.symbol)out.symbol=d.symbol;
+  for(const k of ['takeProfitPct','stopLossPct']){
+    if(d[k]!==undefined){
+      const max=k==='stopLossPct'?3:5;
+      if(typeof d[k]!=='number'||!finite(d[k])||d[k]<0.2||d[k]>max)throw Error('INVALID_AI_'+k);
+      out[k]=round(d[k],3);
+    }
+  }
+  return out;
 }
 export function ema(values,period){
   if(!Array.isArray(values)||values.length<period||!values.every(v=>finite(v)&&v>0))throw Error('INVALID_CANDLES_FOR_EMA');
@@ -83,16 +93,19 @@ export function paperOpen(state,market,decision,now=Date.now()){
   if(decision.action==='WAIT'||decision.confidence<0.6)return {ok:false,reason:'AI_WAIT_OR_LOW_SCORE'};
   if(state.lastActionAt&&now-state.lastActionAt<s.cooldownMinutes*60000)return {ok:false,reason:'COOLDOWN'};
   if(state.dayStart-state.balance>=s.maxDailyLossUsdt)return {ok:false,reason:'DAILY_LOSS_LIMIT'};
-  if(market.symbol!==s.symbol||now-market.checkedAt>5000)throw Error('STALE_OR_MISMATCHED_MARKET');
+  if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(market.symbol)||decision.symbol&&market.symbol!==decision.symbol||now-market.checkedAt>5000)throw Error('STALE_OR_MISMATCHED_MARKET');
   // A numerical self-confidence from an LLM is not a calibrated win probability.
   const side=decision.action==='LONG'?'LONG':'SHORT',sign=side==='LONG'?1:-1;
   const entry=round(market.markPrice*(1+sign*0.0003),6); // pessimistic paper slippage
   const qty=round(s.marginUsdt*s.leverage/entry,8),openFee=round(qty*entry*0.0005,6);
   if(qty<=0||s.marginUsdt+openFee>state.balance)return {ok:false,reason:'INSUFFICIENT_PAPER_FUNDS'};
-  const stop=round(entry*(1-sign*s.stopLossPct/100),6);
-  const takeProfit=round(entry*(1+sign*s.takeProfitPct/100),6);
+  const riskCapPct=Math.max(0.2,Math.min(3,100*s.maxDailyLossUsdt/(s.marginUsdt*s.leverage)));
+  const stopPct=Math.min(decision.stopLossPct??s.stopLossPct,riskCapPct);
+  const tpPct=decision.takeProfitPct??s.takeProfitPct;
+  const stop=round(entry*(1-sign*stopPct/100),6);
+  const takeProfit=round(entry*(1+sign*tpPct/100),6);
   state.balance=round(state.balance-openFee,6);
-  state.position={id:'paper-'+now,symbol:s.symbol,side,qty,marginUsdt:s.marginUsdt,leverage:s.leverage,
+  state.position={id:'paper-'+now,symbol:market.symbol,side,qty,marginUsdt:s.marginUsdt,leverage:s.leverage,
     entry,stop,takeProfit,openedAt:now,openFee,source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
   state.lastActionAt=now;
   return {ok:true,position:state.position};
@@ -108,9 +121,27 @@ export function paperMark(state,market,now=Date.now(),forceClose=false){
   const gross=round(sign*(close-p.entry)*p.qty,6),fee=round(close*p.qty*0.0005,6);
   const net=round(gross-p.openFee-fee,6);
   state.balance=round(state.balance+gross-fee,6);
-  const trade={...p,close,closedAt:now,exitReason:forceClose?'EMERGENCY_STOP':stopHit?'STOP_LOSS':'TAKE_PROFIT',
+  const trade={...p,close,closedAt:now,exitReason:forceClose==='AI_CLOSE'?'AI_CLOSE':forceClose?'EMERGENCY_STOP':stopHit?'STOP_LOSS':'TAKE_PROFIT',
     grossPnl:gross,netPnl:net,closeFee:fee,paper:true};
   state.closed.unshift(trade);state.closed=state.closed.slice(0,500);
   state.position=null;state.lastActionAt=now;
   return {ok:true,trade};
+}
+/** Model may tighten/adjust exit targets; absolute per-trade hard-loss limit remains server-owned. */
+export function paperAdjustStops(state,market,decision){
+  const p=state.position;
+  if(!p||p.symbol!==market.symbol)return {ok:false,reason:'NO_MATCHING_POSITION'};
+  if(!['HOLD','WAIT'].includes(decision.action))return {ok:false,reason:'NOT_HOLD_DECISION'};
+  const sign=p.side==='LONG'?1:-1;
+  const maxRisk=Math.max(0.2,Math.min(3,100*state.settings.maxDailyLossUsdt/(p.marginUsdt*p.leverage)));
+  if(decision.stopLossPct!==undefined){
+    const stopPct=Math.min(decision.stopLossPct,maxRisk);
+    const newStop=round(p.entry*(1-sign*stopPct/100),6);
+    // AI may tighten protection, but never widen a previously accepted stop.
+    p.stop=sign>0?Math.max(p.stop,newStop):Math.min(p.stop,newStop);
+  }
+  if(decision.takeProfitPct!==undefined){
+    p.takeProfit=round(p.entry*(1+sign*decision.takeProfitPct/100),6);
+  }
+  return {ok:true,stop:p.stop,takeProfit:p.takeProfit};
 }

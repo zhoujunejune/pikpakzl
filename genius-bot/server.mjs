@@ -7,6 +7,7 @@ import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarke
   newState,rollDay,paperOpen,paperMark,parsePortfolioPlan,normalizePaperPositions,
   paperFloatingPnL,paperPnlSummary,MAX_PAPER_POSITIONS} from './engine.mjs';
 import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze,shouldRefreshClosedCandles,shouldScoutOpportunities} from './market-signals.mjs';
+import {deriveOpportunityCandidates} from './opportunity-candidates.mjs';
 import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit,resolveAIEntry} from './decision-context.mjs';
 import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
@@ -31,7 +32,8 @@ const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0
   exitReviewCalls:0,exitReviewConfirmed:0,exitReviewRejected:0,exitReviewFailed:0,lastExitReview:null,
   entryReviewCalls:0,entryReviewConfirmed:0,entryReviewRejected:0,entryReviewFailed:0,lastEntryReview:null,
   consecutiveAllWait:0,scoutCalls:0,scoutSuccess:0,scoutEntriesProposed:0,scoutFailure:0,lastScout:null,
-  candleBoundaryRefreshes:0,errors:[]};
+  candleBoundaryRefreshes:0,marketCandidates:0,candidateReviewCalls:0,candidateAIApproved:0,
+  candidateAIRejected:0,lastMarketCandidate:null,errors:[]};
 let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
 let socket=null,reconnectTimer=null,bookSocket=null,bookReconnectTimer=null,bookWsLastAt=0;
 
@@ -520,7 +522,18 @@ async function cycle(){
             const allWait=beforePositions.length===0&&decisions.every(d=>d.action==='WAIT');
             metrics.consecutiveAllWait=allWait?metrics.consecutiveAllWait+1:0;
             let chosen=decisions;
-            if(shouldScoutOpportunities({enabled:state.settings.enabled,
+            // Generate at most one quality-screened research candidate from
+            // Binance data. The reviewer AI must still explicitly agree.
+            let marketCandidate=null;
+            if(allWait&&metrics.consecutiveAllWait%2===0){
+              const micro=Object.fromEntries(markets.map(m=>[m.symbol,marketMicro(m.symbol)]));
+              const higher=Object.fromEntries(markets.map(m=>[m.symbol,timeframesOf(m.symbol)]));
+              const candidates=deriveOpportunityCandidates(markets,micro,higher,Date.now());
+              metrics.marketCandidates+=candidates.length;
+              marketCandidate=candidates[0]||null;
+              if(marketCandidate)metrics.lastMarketCandidate={at:Date.now(),...marketCandidate};
+            }
+            if(!marketCandidate&&shouldScoutOpportunities({enabled:state.settings.enabled,
               heldCount:beforePositions.length,decisions,
               waitStreak:metrics.consecutiveAllWait})){
               const alternate=await scoutAlternativeOpportunities(markets);
@@ -582,6 +595,37 @@ async function cycle(){
                 if(state.positions.some(p=>p.symbol===d.symbol)||
                     state.positions.length>=MAX_PAPER_POSITIONS)continue;
                 paperOpen(state,latest,d,Date.now());
+              }
+              // Structured candidate path is activated only after repeated
+              // fully WAIT decisions; it never bypasses AI or stale quote checks.
+              if(marketCandidate&&!state.positions.some(p=>p.symbol===marketCandidate.symbol)&&
+                  state.positions.length<MAX_PAPER_POSITIONS&&
+                  state.settings.enabled&&!state.settings.emergencyStop){
+                const original=markets.find(m=>m.symbol===marketCandidate.symbol);
+                const fresh=await collectMarket(marketCandidate.symbol);
+                // The research trigger must still refer to the same direction
+                // and stable market; no blind simulation entries after latency.
+                if(original&&fresh.trend1m===original.trend1m&&
+                    fresh.trend5m===original.trend5m&&
+                    Math.abs(fresh.markPrice/original.markPrice-1)<=0.005){
+                  metrics.candidateReviewCalls++;
+                  const review=await reviewProposedEntry(marketCandidate,fresh);
+                  const resolution=resolveAIEntry(marketCandidate,review);
+                  if(resolution.execute){
+                    if(state.settings.enabled&&!state.settings.emergencyStop&&
+                        !state.positions.some(p=>p.symbol===marketCandidate.symbol)&&
+                        state.positions.length<MAX_PAPER_POSITIONS){
+                      const latest=await collectMarket(marketCandidate.symbol);
+                      if(latest.trend1m===original.trend1m&&latest.trend5m===original.trend5m&&
+                          Math.abs(latest.markPrice/original.markPrice-1)<=0.005){
+                        const aiApproved={...review,
+                          reason:('AI确认：'+review.reason).slice(0,300)};
+                        const result=paperOpen(state,latest,aiApproved,Date.now());
+                        if(result.ok)metrics.candidateAIApproved++;
+                      }
+                    }
+                  }else metrics.candidateAIRejected++;
+                }
               }
             }
           }

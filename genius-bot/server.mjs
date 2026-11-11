@@ -5,15 +5,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarket,
   newState,rollDay,paperOpen,paperMark} from './engine.mjs';
+import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
 
 const PORT=Number(process.env.GENIUS_PORT||13023),HOST='127.0.0.1';
 const STATE_FILE=process.env.GENIUS_STATE_FILE||'/var/lib/haipai-genius-paper/state.json';
 const MODEL='deepseek-flash',BASE='https://fapi.binance.com';
 const SITE='https://prediction.47-237-188-69.sslip.io';
 const SYMBOLS=['BTCUSDT','ETHUSDT','SOLUSDT'];
-const WS_URL='wss://fstream.binance.com/stream?streams='+SYMBOLS.map(s=>s.toLowerCase()+'@markPrice@1s').join('/');
-const tickPrices=new Map(),candleCache=new Map();
-let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0;
+// Binance retired the legacy URL in April 2026. Use its dedicated market stream.
+const WS_URL='wss://fstream.binance.com/market/stream?streams='+SYMBOLS.flatMap(s=>{
+  const lower=s.toLowerCase();
+  return [lower+'@markPrice@1s',lower+'@aggTrade',lower+'@bookTicker'];
+}).join('/');
+const tickPrices=new Map(),candleCache=new Map(),tradeBuckets=new Map(),orderBooks=new Map();
+const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0,
+  wsLagMs:null,aiAttempts:0,aiSuccess:0,aiFailure:0,aiDurationMs:null,aiLastFinishedAt:0,
+  lastTrigger:'NONE',marketRestFallbacks:0,errors:[]};
+let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
 let socket=null,reconnectTimer=null;
 
 function load(){
@@ -48,42 +56,77 @@ function convertCandles(raw,now,ms){
   return raw.filter(x=>Array.isArray(x)&&Number.isSafeInteger(x[0])&&x[0]+ms<=now)
     .map(x=>({startMs:x[0],close:Number(x[4]),high:Number(x[2]),low:Number(x[3]),volume:Number(x[5])}));
 }
+function rememberError(kind,error){
+  const detail=String(error?.message||error).slice(0,140),at=Date.now();
+  metrics.errors.unshift({at,kind,detail});metrics.errors=metrics.errors.slice(0,15);
+}
 function connectStream(){
   if(typeof WebSocket!=='function'){wsState='WEBSOCKET_NOT_SUPPORTED_REST_FALLBACK';return;}
   try{
     socket=new WebSocket(WS_URL);wsState='CONNECTING';
-    socket.addEventListener('open',()=>{wsState='LIVE';});
+    socket.addEventListener('open',()=>{wsState='LIVE';wsOpenedAt=Date.now();});
     socket.addEventListener('message',event=>{
       try{
-        const msg=JSON.parse(String(event.data)),m=msg.data||msg;
-        const symbol=String(m.s||'').toUpperCase(),price=Number(m.p),time=Number(m.E);
-        if(!SYMBOLS.includes(symbol)||!Number.isFinite(price)||price<=0||
-            !Number.isFinite(time)||Math.abs(Date.now()-time)>7000)return;
-        tickPrices.set(symbol,{price,time});lastSocketAt=Date.now();wsState='LIVE';
-        // UI price snapshots move on every websocket tick even while AI is thinking.
-        if(state.lastMarket?.symbol===symbol){
-          state.lastMarket={...state.lastMarket,markPrice:price,markTime:time,checkedAt:Date.now()};
+        const now=Date.now(),msg=JSON.parse(String(event.data)),m=msg.data||msg;
+        const symbol=String(m.s||'').toUpperCase(),eventAt=Number(m.E||m.T||now);
+        if(!SYMBOLS.includes(symbol)||!Number.isSafeInteger(eventAt)||Math.abs(now-eventAt)>7000)return;
+        metrics.wsMessages++;lastSocketAt=now;wsState='LIVE';
+        const lag=Math.max(0,now-eventAt);
+        metrics.wsLagMs=metrics.wsLagMs===null?lag:Math.round(.85*metrics.wsLagMs+.15*lag);
+        if(m.e==='markPriceUpdate'){
+          const price=Number(m.p);
+          if(!Number.isFinite(price)||price<=0)return;
+          tickPrices.set(symbol,{price,time:eventAt});
+          metrics.markEvents++;
+          if(state.lastMarket?.symbol===symbol)
+            state.lastMarket={...state.lastMarket,markPrice:price,markTime:eventAt,checkedAt:now};
+          if(!Array.isArray(state.marketSnapshots))state.marketSnapshots=[];
+          const index=state.marketSnapshots.findIndex(x=>x.symbol===symbol);
+          const next={symbol,markPrice:price,checkedAt:now};
+          if(index>=0)state.marketSnapshots[index]=next;else state.marketSnapshots.push(next);
+        }else if(m.e==='aggTrade'){
+          const b=tradeBuckets.get(symbol)||[];
+          if(ingestTrade(b,{price:Number(m.p),qty:Number(m.q),
+            time:Number(m.T||eventAt),buyerMaker:m.m===true},now)){
+            tradeBuckets.set(symbol,b);metrics.aggTrades++;
+          }
+        }else if(m.e==='bookTicker'||(m.b!==undefined&&m.a!==undefined)){
+          orderBooks.set(symbol,{bid:Number(m.b),ask:Number(m.a),bidQty:Number(m.B),
+            askQty:Number(m.A),at:now});metrics.bookEvents++;
         }
-        if(!Array.isArray(state.marketSnapshots))state.marketSnapshots=[];
-        const slot=state.marketSnapshots.findIndex(x=>x.symbol===symbol);
-        const item={symbol,markPrice:price,checkedAt:Date.now()};
-        if(slot>=0)state.marketSnapshots[slot]=item;
-        else state.marketSnapshots.push(item);
-        // The price feed updates mark prices only. It must never force a close.
-      }catch(e){marketError=String(e.message||e).slice(0,120);}
+        // Never submit a simulated close merely because a price level is reached.
+      }catch(e){marketError=String(e.message||e).slice(0,120);rememberError('WS_MESSAGE',e);}
     });
     socket.addEventListener('error',()=>{wsState='ERROR_RECONNECTING';});
     socket.addEventListener('close',()=>{
-      wsState='DISCONNECTED_RECONNECTING';
+      wsState='DISCONNECTED_RECONNECTING';metrics.wsReconnects++;
       if(reconnectTimer)clearTimeout(reconnectTimer);
-      reconnectTimer=setTimeout(connectStream,3000);
+      reconnectTimer=setTimeout(connectStream,Math.min(10000,1500+metrics.wsReconnects*300));
     });
-  }catch(e){wsState='ERROR_RECONNECTING';reconnectTimer=setTimeout(connectStream,5000);}
+  }catch(e){
+    wsState='ERROR_RECONNECTING';rememberError('WS_CONNECT',e);
+    if(reconnectTimer)clearTimeout(reconnectTimer);
+    reconnectTimer=setTimeout(connectStream,5000);
+  }
+}
+function verifyStreamHealth(){
+  if(socket&&wsState==='LIVE'&&Date.now()-lastSocketAt>15000){
+    wsState='STALE_RECONNECTING';
+    try{socket.close();}catch(e){rememberError('WS_CLOSE',e);}
+  }
+  // Connections are rotated before Binance's 24-hour maximum lifetime.
+  if(socket&&wsOpenedAt&&Date.now()-wsOpenedAt>23*60*60*1000){
+    wsOpenedAt=0;try{socket.close();}catch(e){rememberError('WS_ROTATE',e);}
+  }
+}
+function marketMicro(symbol,now=Date.now()){
+  return {trades:summarizeTrades(tradeBuckets.get(symbol)||[],now),
+    book:bookSummary(orderBooks.get(symbol),now)};
 }
 async function collectMarket(symbol,now=Date.now()){
   if(!SYMBOLS.includes(symbol))throw Error('UNSUPPORTED_SYMBOL');
   let cached=candleCache.get(symbol);
-  if(!cached||now-cached.savedAt>30000){
+  if(!cached||now-cached.savedAt>15000){
     const ss=encodeURIComponent(symbol);
     const [one,five]=await Promise.all([
       getJson(BASE+'/fapi/v1/klines?symbol='+ss+'&interval=1m&limit=65'),
@@ -94,7 +137,8 @@ async function collectMarket(symbol,now=Date.now()){
   }
   let tick=tickPrices.get(symbol);
   if(!tick||now-tick.time>5000){
-    // REST fallback if websocket stalls. No simulated entries on stale quotes.
+    // REST fallback for stale stream data; state remains observable to the operator.
+    metrics.marketRestFallbacks++;
     const quote=await getJson(BASE+'/fapi/v1/premiumIndex?symbol='+encodeURIComponent(symbol));
     tick={price:Number(quote.markPrice),time:Number(quote.time)};
   }
@@ -115,12 +159,18 @@ async function deepseekDecision(markets,position){
       :'Select best opportunity among BTCUSDT, ETHUSDT and SOLUSDT or WAIT; no obligation to enter.',
     markets:markets.map(m=>({symbol:m.symbol,markPrice:m.markPrice,checkedAt:m.checkedAt,
       trend1m:m.trend1m,trend5m:m.trend5m,momentum3mPct:m.momentum3mPct,
-      volumeRatio:m.volumeRatio,pricePosition20mPct:m.pricePosition20mPct,high20m:m.high20m,low20m:m.low20m})),
+      volumeRatio:m.volumeRatio,pricePosition20mPct:m.pricePosition20mPct,high20m:m.high20m,low20m:m.low20m,
+      micro:marketMicro(m.symbol)})),
     position:position?{symbol:position.symbol,side:position.side,entry:position.entry,
       markPrice:markets.find(x=>x.symbol===position.symbol)?.markPrice,
-      openedAt:position.openedAt}:null,
+      unrealizedPct:(()=>{
+        const price=markets.find(x=>x.symbol===position.symbol)?.markPrice;
+        if(!Number.isFinite(price))return null;
+        return Number((100*(price/position.entry-1)*(position.side==='LONG'?1:-1)).toFixed(4));
+      })(),
+      heldSeconds:Math.floor((Date.now()-position.openedAt)/1000),openedAt:position.openedAt}:null,
     rules:'Only PAPER simulation. Entry risk bounded server-side. Do not assume profitable trades.'};
-  lastModelCallAt=Date.now();state.aiStatus='THINKING';
+  lastModelCallAt=Date.now();metrics.aiAttempts++;state.aiStatus='THINKING';
   const response=await fetch('https://api.deepseek.com/chat/completions',{
     method:'POST',signal:AbortSignal.timeout(27000),
     headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
@@ -137,6 +187,8 @@ async function deepseekDecision(markets,position){
       throw Error('AI_POSITION_DECISION_MISMATCH');
   }else if(!['WAIT','LONG','SHORT'].includes(decision.action)||
     decision.action!=='WAIT'&&!decision.symbol)throw Error('AI_ENTRY_DECISION_MISMATCH');
+  metrics.aiSuccess++;metrics.aiLastFinishedAt=Date.now();
+  metrics.aiDurationMs=metrics.aiLastFinishedAt-lastModelCallAt;
   state.aiStatus='SUCCESS';
   return decision;
 }
@@ -155,7 +207,17 @@ async function cycle(){
     }
     if(state.settings.enabled&&!state.settings.emergencyStop){
       if(!process.env.DEEPSEEK_API_KEY)state.aiStatus='KEY_NOT_CONFIGURED';
-      else if(Date.now()-lastModelCallAt>=25000){
+      else {
+        const holding=Boolean(state.position);
+        const target=holding?[state.position.symbol]:SYMBOLS;
+        const largestMove=Math.max(0,...target.map(sym=>
+          Math.abs(marketMicro(sym).trades.w10?.changePct||0)));
+        if(!shouldAnalyze({now:Date.now(),lastAt:lastModelCallAt,holding,
+          change10sPct:largestMove,enabled:true})){
+          // Market is still monitored continuously; model calls are paced separately.
+        }else{
+        metrics.lastTrigger=largestMove>=(holding?.12:.25)?'PRICE_EVENT':'SCHEDULED';
+
         const oldPosition=state.position;
         const decision=await deepseekDecision(markets,oldPosition);
         state.lastDecision=decision?{...decision,at:Date.now(),model:MODEL}:null;
@@ -176,11 +238,18 @@ async function cycle(){
             state.aiStatus='SIGNAL_STALE_OR_TREND_CHANGED_NO_ENTRY';
           }else if(!state.position)paperOpen(state,fresh,decision,Date.now());
         }
+        }
       }
     }else if(!state.settings.enabled)state.aiStatus='PAUSED';
     state.cycleCount=(state.cycleCount||0)+1;state.lastError=null;store();
   }catch(e){
     marketError=String(e?.message||e).slice(0,150);state.lastError=marketError;
+    if(state.aiStatus==='THINKING'||String(marketError).startsWith('DEEPSEEK')||
+      /timeout|aborted|AI_/.test(String(marketError).toLowerCase())){
+      metrics.aiFailure++;
+      metrics.aiDurationMs=lastModelCallAt?Date.now()-lastModelCallAt:null;
+      rememberError('AI_OR_DECISION',e);
+    }else rememberError('MARKET_OR_CYCLE',e);
     state.aiStatus='ERROR_OR_MARKET_UNAVAILABLE';store();
   }finally{busy=false;}
 }
@@ -193,6 +262,9 @@ function publicSnapshot(){
     position:state.position,lastDecision:state.lastDecision,lastMarket:state.lastMarket,
     marketSnapshots:state.marketSnapshots||[],marketStream:tickFresh?'LIVE':wsState,
     lastMarketTickAt:lastSocketAt,lastModelCallAt,
+    metrics:{...metrics,marketAgeMs:lastSocketAt?Date.now()-lastSocketAt:null,
+      perSymbol:Object.fromEntries(SYMBOLS.map(sym=>[sym,{markAgeMs:tickPrices.get(sym)?
+        Date.now()-tickPrices.get(sym).time:null,...marketMicro(sym)}]))},
     lastError:state.lastError,marketError,totalClosed:state.closed.length,
     cycleCount:state.cycleCount||0,tradingSafety:'NO_REAL_ORDERS_NO_API_KEY_IN_CLIENT',
     paperLimitations:'Paper-only estimates; no real execution, funding, liquidation, depth or real exchange-side protective orders.'};
@@ -231,7 +303,8 @@ const server=http.createServer(async(req,res)=>{
 if(process.env.NODE_ENV!=='test'){
   server.listen(PORT,HOST,()=>console.log('HAIPAI_GENIUS_PAPER_LISTENING='+PORT));
   connectStream();
-  setInterval(()=>void cycle(),5000).unref();
+  setInterval(verifyStreamHealth,5000).unref();
+  setInterval(()=>void cycle(),2000).unref();
   void cycle();
 }
 export {server,publicSnapshot,cycle};

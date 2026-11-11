@@ -104,8 +104,31 @@ function renderPosition(s){
  setPositionPage(visiblePage());
 }
 $('positionTrack').addEventListener('scroll',()=>setPositionPage(visiblePage()),{passive:true});
+function putPnl(id,value){
+ const node=$(id);if(!node)return;
+ const good=typeof value==='number'&&Number.isFinite(value);
+ node.textContent=good?signedMoney(value):'—';
+ node.classList.toggle('pnl-positive',good&&value>0);
+ node.classList.toggle('pnl-negative',good&&value<0);
+}
+function renderPnl(s){
+ const summary=s.pnlSummary;
+ if(!summary||typeof summary!=='object'){
+   putPnl('realizedPnl',null);putPnl('unrealizedPnl',null);
+   putPnl('cumulativePnl',null);
+   put('cumulativePnlNote','累计盈亏数据尚未同步，请检查后台版本。');
+   return;
+ }
+ putPnl('realizedPnl',summary.realizedNetPnl);
+ putPnl('unrealizedPnl',summary.openGrossPnl);
+ putPnl('cumulativePnl',summary.complete?summary.estimatedCumulativePnl:null);
+ put('cumulativePnlNote',summary.complete?
+   '已实现净盈亏包含模拟开平仓手续费；累计总盈亏另估算未平仓手续费与滑点。不含资金费、强平或真实成交。':
+   '部分持仓行情未更新，累计总盈亏暂不显示；已实现净盈亏仍可查看。');
+}
 function renderStatus(s){
  renderPosition(s);
+ renderPnl(s);
  const ok=s.mode==='PAPER_ONLY'&&s.realTradingEnabled===false;
  put('connection',ok?'模拟服务在线':'连接异常');
  put('marketStream',s.marketStream==='LIVE'?'行情流实时连接':(s.marketStream||'行情流待连接')+' · REST 备用');

@@ -26,7 +26,7 @@ jobs:
         run: |
           node --check mobile-app/app.js
           node --check mobile-app/genius.js
-          node --test mobile-app/event10-current-only.test.mjs mobile-app/event10-foreground-recovery.test.mjs mobile-app/ocean-ui-v135.test.mjs mobile-app/manual-real-trade-counter.test.mjs
+          node --test mobile-app/event10-current-only.test.mjs mobile-app/event10-foreground-recovery.test.mjs mobile-app/ocean-ui-v135.test.mjs mobile-app/manual-real-trade-counter.test.mjs mobile-app/genius-position.test.mjs
           node --check mobile-app/sw.js
           python -m py_compile mobile-app/aliyun_deploy.py
           python - <<'PY'

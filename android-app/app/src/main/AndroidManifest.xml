@@ -15,7 +15,7 @@
       android:allowBackup="false"
       android:fullBackupContent="false"
       android:usesCleartextTraffic="false"
-      android:label="海派事件合约"
+      android:label="海派合约天才"
       android:icon="@drawable/sea_friends_icon"
       android:theme="@style/Theme.ZLControl"
       android:supportsRtl="true">

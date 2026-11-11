@@ -294,7 +294,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   let busyStart=false,busySettle=false,lastError=null;
   // Rule-only engine: no AI service, API call, inference, or AI required gate.
   // Historical AI records are retained for already issued T+600 settlements.
-  const aiStats={calls:0,reviewed:0,fallbacks:0,rejected:0,lastStatus:"DISABLED",lastAt:null};
+  let entryObservation=null; // V20 in-memory one-minute entry improvement probe; no trade execution.\n  const aiStats={calls:0,reviewed:0,fallbacks:0,rejected:0,lastStatus:"DISABLED",lastAt:null};
   const aiConfigured=false,aiModel=null,aiInProgress=null;
   let lastDataError=null,lastDataErrorAt=null,lastSuccessfulScanAt=null;
   let lastCheck=null,inFlightStart=null;
@@ -311,7 +311,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
     return {ok:true,bot:"EVENT10", mode:"PACED_V19_PURE_RULE_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_V19_EMA5_DIRECTION",aiMandatory:false,
+      providerModel:"PURE_SIGNAL_V20_ENTRY_POSITION",aiMandatory:false,
       aiReviewConfigured:false,aiReviewModel:null,aiLearningMode:"DISABLED",
       aiReviewStats:{...aiStats},aiInProgress:null,
       aiLearningProfile:null,
@@ -413,15 +413,51 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         rule.reason="距离上次有效信号不足10分钟；避免同一观察期重复通知和连续追单。";
         rule.evidence.quality="COOLDOWN";rule.evidence.cooldownUntil=cooldownUntil;
       }
-      // The existing V16/V18 rule gates and EMA5-corrected direction alone
-      // determine the published UP/DOWN. No AI calls and no AI vetoes.
+      // V20 confirms a candidate only after the quoted index entry price improves
+      // within 15–60 seconds. The final 600-second clock starts only on publication.
+      // This observation does not place orders and never backdates the open price.
+      const quote=filtered.indexQuote?.price;
+      if(entryObservation&&
+          (decisionAt-entryObservation.firstAt>60000||
+           (rule.direction&&entryObservation.direction!==rule.direction))){
+        entryObservation=null;
+      }
+      if(rule.direction&&!existingSignals.length){
+        if(!entryObservation){
+          entryObservation={firstAt:decisionAt,firstPrice:quote,direction:rule.direction};
+          rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
+          rule.eventTag="V20_ENTRY_OBSERVING";rule.quality="NO_SIGNAL";
+          rule.reason="候选趋势和点位有效；正在观察最多60秒，等待更合适的指数锁定价。";
+        }else{
+          const elapsed=decisionAt-entryObservation.firstAt;
+          const improvementBps=(rule.direction==="UP"?
+              entryObservation.firstPrice-quote:quote-entryObservation.firstPrice)/
+              entryObservation.firstPrice*10000;
+          if(elapsed>=15000&&elapsed<=60000&&improvementBps>=0.5){
+            rule.eventTag="V20_ENTRY_IMPROVED_"+rule.direction;
+            rule.reason="V20：完成入场价格改善观察；指数锁定价从最终发布时刻开始计时600秒。";
+            rule.evidence.entryObservation={
+              elapsedMs:elapsed,improvementBps:Number(improvementBps.toFixed(3)),
+              initialIndexPrice:entryObservation.firstPrice};
+            entryObservation=null;
+          }else{
+            rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
+            rule.eventTag="V20_ENTRY_WAIT";rule.quality="NO_SIGNAL";
+            rule.reason="等待指数锁定价改善至少0.5bps，候选最多观察60秒，不强制出信号。";
+            rule.evidence.entryObservation={
+              elapsedMs:elapsed,improvementBps:Number(improvementBps.toFixed(3)),
+              initialIndexPrice:entryObservation.firstPrice};
+          }
+        }
+      }
+      // V20 trend + price entry rules alone determine published UP/DOWN; no AI.
       // Use the same fresh index quote at rule evaluation time; the full
       // 600-second proxy verification window begins when the signal is recorded.
       const aiReview=null;
       const publishAt=decisionAt;
       const publishIndex=filtered.indexQuote;
       if(rule.direction){
-        rule.eventTag="V19_RULE_"+rule.direction;
+        rule.eventTag="V20_RULE_"+rule.direction;
         rule.evidence.indicatorSnapshotAt=decisionAt;
         rule.evidence.finalPublishedAt=publishAt;
         rule.evidence.liveIndexPrice=publishIndex.price;
@@ -459,7 +495,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_V19_EMA5_DIRECTION",
+        model:"PURE_SIGNAL_V20_ENTRY_POSITION",
         aiReview:null,attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
@@ -520,6 +556,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+         h.decisionReviewVersion==="EVENT10_PURE_RULE_V19_20261107"||
         h.decisionReviewVersion==="EVENT10_AI_REQUIRED_LEARNING_V18_20261106"||
         h.decisionReviewVersion==="EVENT10_AI_FEEDBACK_V17_20261106"||
         h.decisionReviewVersion==="EVENT10_EMA5_DIRECTION_V16_20261106"||
@@ -560,7 +597,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

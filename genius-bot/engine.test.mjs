@@ -12,7 +12,7 @@ function market(price=50100){return makeMarket({symbol:'BTCUSDT',markPrice:price
  oneMin:candles(60000,60,2),fiveMin:candles(300000,50,6),now:NOW});}
 const answer=(action='LONG',symbol='BTCUSDT')=>({action,symbol,confidence:.8,reason:'根据当前行情判断模拟交易方向并自主决定平仓'});
 test('strict paper-only settings without TP/SL controls',()=>{
- assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V142_AI_EXIT_ONLY');
+ assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON');
  assert.equal(DEFAULT_SETTINGS.enabled,false);
  assert.equal(validateSettings({...DEFAULT_SETTINGS}).leverage,2);
  assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:125}),/INVALID_leverage/);
@@ -77,4 +77,14 @@ test('AI may choose any supported market',()=>{
  const eth={...market(3400),symbol:'ETHUSDT'};
  assert.equal(paperOpen(s,eth,answer('LONG','ETHUSDT'),NOW).ok,true);
  assert.equal(s.position.symbol,'ETHUSDT');
+});
+
+test('AI can select medium or long research horizon without a fixed price stop',()=>{
+ const s=newState();s.settings.enabled=true;
+ const d=parseDecision({...answer('LONG','BTCUSDT'),horizon:'LONG'});
+ assert.equal(d.horizon,'LONG');
+ assert.equal(paperOpen(s,market(),d,NOW).ok,true);
+ assert.equal(s.position.horizon,'LONG');
+ assert.equal(Object.hasOwn(s.position,'stop'),false);
+ assert.throws(()=>parseDecision({...answer(),horizon:'FOREVER'}),/INVALID_AI_HORIZON/);
 });

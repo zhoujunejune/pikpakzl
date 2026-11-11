@@ -55,6 +55,9 @@ jobs:
               print('HAIPAI_GENIUS_'+symbol+'_HIGHER_COMPLETE='+str(item.get('higherComplete')))
               print('HAIPAI_GENIUS_'+symbol+'_HIGHER_BIAS='+str({key: value.get('bias') for key,value in (item.get('higher') or {}).items()}))
           print('HAIPAI_GENIUS_LAST_HORIZON='+str((x.get('lastDecision') or {}).get('horizon')))
+          print('HAIPAI_GENIUS_CURRENT_PAPER_POSITION_PRESENT='+str(bool(x.get('position'))))
+          print('HAIPAI_GENIUS_CLOSED_PAPER_COUNT='+str(x.get('totalClosed')))
+          print('HAIPAI_GENIUS_HAS_PAPER_HISTORY='+str(x.get('totalClosed',0)>0))
           print('HAIPAI_GENIUS_HIGHER_REQUESTS='+str(metrics.get('higherRequests')))
           assert x['version']=='HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON'
           assert all(per.get(symbol,{}).get('higherComplete') is True for symbol in ('BTCUSDT','ETHUSDT','SOLUSDT')), 'MULTI_TIMEFRAME_DATA_INCOMPLETE'

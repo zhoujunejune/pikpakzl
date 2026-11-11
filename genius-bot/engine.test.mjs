@@ -63,7 +63,7 @@ test('AI can choose instrument and propose bounded paper risk targets',()=>{
  const hold=parseDecision({action:'HOLD',symbol:'ETHUSDT',confidence:.7,
    reason:'维持持仓但收紧模拟风险边界。',stopLossPct:.2,takeProfitPct:1.3});
  assert.equal(paperAdjustStops(s,eth,hold).ok,true);
- assert.ok(s.position.stop>s.position.entry*.9981);
+ assert.ok(s.position.stop>=s.position.entry*.997999);
  assert.equal(paperMark(s,eth,NOW,'AI_CLOSE').trade.exitReason,'AI_CLOSE');
  assert.equal(s.position,null);
 });

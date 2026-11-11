@@ -17,17 +17,17 @@ h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 
 <section class="card hero">
  <div class="row"><strong>BTC / ETH / SOL · AI 自选机会</strong><span class="pill" id="connection">正在连接</span></div>
  <h1>AI 自主分析</h1>
- <p class="mini">实时采集币安公开永续合约行情，AI 自主判断开仓、持有、平仓和模拟止盈止损。无需手动制定交易策略。</p>
+ <p class="mini">实时采集币安公开永续合约行情，AI 自主判断模拟开仓、继续持有或主动平仓。程序不再设置固定止盈价或止损价。</p>
  <div class="price" id="markPrice">行情待更新</div>
  <div class="row"><span>行情接收</span><strong id="marketStream">正在检查</strong></div>
  <div class="row"><span>AI 最新决策</span><strong id="aiDecision">尚无分析</strong></div>
  <div class="row"><span>AI 分析状态</span><strong id="engineState">尚未启动</strong></div>
  <div class="row"><span>最近分析时间</span><strong id="lastAnalysis">—</strong></div>
- <div class="note warn">这是模拟交易版本，AI 不会向币安发出真实订单。连续行情不代表 AI 每秒重新推理，模型分析按后台节奏执行。</div>
+ <div class="note warn">这是模拟交易版本，不会向币安发出真实订单。AI 分析可能超时、报错或失联；没有价格保护止损，失联时模拟仓位可能一直持有。</div>
 </section>
 <section class="card">
  <h2>AI 自动分析</h2>
- <p class="mini">开启后由后台持续获取行情，自主选择 BTC、ETH 或 SOL 的模拟机会；平仓和止盈止损由 AI 判断，另设不可关闭的安全熔断。</p>
+ <p class="mini">开启后由后台持续获取行情，AI 自主选择 BTC、ETH 或 SOL 的模拟机会，并决定什么时候平仓。行情触及任何价格都不会自动止盈或止损；保留你手动操作的紧急停止功能。</p>
  <div class="buttons"><button id="toggle" class="btn main">开启 AI 自动分析</button></div>
  <h2 style="margin-top:24px">只需设置两项</h2>
  <div class="fields">

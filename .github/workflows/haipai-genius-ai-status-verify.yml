@@ -56,11 +56,21 @@ jobs:
               print('HAIPAI_GENIUS_'+symbol+'_HIGHER_BIAS='+str({key: value.get('bias') for key,value in (item.get('higher') or {}).items()}))
           print('HAIPAI_GENIUS_LAST_HORIZON='+str((x.get('lastDecision') or {}).get('horizon')))
           print('HAIPAI_GENIUS_CURRENT_PAPER_POSITION_PRESENT='+str(bool(x.get('position'))))
+          pos=x.get('positions')
+          assert isinstance(pos,list) and len(pos)<=3
+          assert len(set(p['symbol'] for p in pos))==len(pos), 'DUPLICATE_HELD_SYMBOL'
+          assert all(p['source']=='DEEPSEEK_PAPER_ONLY' and not ('stop' in p or 'takeProfit' in p) for p in pos)
+          assert x['positionCount']==len(pos)
+          print('HAIPAI_GENIUS_CURRENT_POSITIONS='+str(len(pos)))
+          print('HAIPAI_GENIUS_HELD_SYMBOLS='+','.join(p['symbol'] for p in pos))
+          print('HAIPAI_GENIUS_FLOATING_PNL_COMPLETE='+str((x.get('floatingPnl') or {}).get('complete')))
+          print('HAIPAI_GENIUS_LAST_PORTFOLIO_DECISIONS='+str([(d.get('symbol'),d.get('action')) for d in x.get('lastDecisions',[])]))
           print('HAIPAI_GENIUS_CLOSED_PAPER_COUNT='+str(x.get('totalClosed')))
           print('HAIPAI_GENIUS_HAS_PAPER_HISTORY='+str(x.get('totalClosed',0)>0))
           print('HAIPAI_GENIUS_HIGHER_REQUESTS='+str(metrics.get('higherRequests')))
-          assert x['version']=='HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON'
+          assert x['version']=='HAIPAI_GENIUS_PAPER_V144_MULTIPOSITION'
           assert all(per.get(symbol,{}).get('higherComplete') is True for symbol in ('BTCUSDT','ETHUSDT','SOLUSDT')), 'MULTI_TIMEFRAME_DATA_INCOMPLETE'
           print('HAIPAI_GENIUS_MULTI_HORIZON_VERIFIED=true')
+          print('HAIPAI_GENIUS_MULTIPOSITION_VERIFIED=true')
           print('HAIPAI_GENIUS_PAPER_SERVICE_OK=true')
           PY

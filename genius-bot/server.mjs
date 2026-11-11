@@ -57,6 +57,15 @@ function connectStream(){
         if(!SYMBOLS.includes(symbol)||!Number.isFinite(price)||price<=0||
             !Number.isFinite(time)||Math.abs(Date.now()-time)>7000)return;
         tickPrices.set(symbol,{price,time});lastSocketAt=Date.now();wsState='LIVE';
+        // UI price snapshots move on every websocket tick even while AI is thinking.
+        if(state.lastMarket?.symbol===symbol){
+          state.lastMarket={...state.lastMarket,markPrice:price,markTime:time,checkedAt:Date.now()};
+        }
+        if(!Array.isArray(state.marketSnapshots))state.marketSnapshots=[];
+        const slot=state.marketSnapshots.findIndex(x=>x.symbol===symbol);
+        const item={symbol,markPrice:price,checkedAt:Date.now()};
+        if(slot>=0)state.marketSnapshots[slot]=item;
+        else state.marketSnapshots.push(item);
         if(state.position&&state.position.symbol===symbol){
           // Protective stops are checked on each fresh market event, not blocked by AI thinking.
           const result=paperMark(state,{symbol,markPrice:price,checkedAt:Date.now()},Date.now(),state.settings.emergencyStop);

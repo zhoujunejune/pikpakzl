@@ -6,6 +6,7 @@ import path from 'node:path';
 import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarket,
   newState,rollDay,paperOpen,paperMark} from './engine.mjs';
 import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
+import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
 const PORT=Number(process.env.GENIUS_PORT||13023),HOST='127.0.0.1';
 const STATE_FILE=process.env.GENIUS_STATE_FILE||'/var/lib/haipai-genius-paper/state.json';
@@ -21,9 +22,10 @@ const BOOK_URL='wss://fstream.binance.com/public/stream?streams='+
   SYMBOLS.map(s=>s.toLowerCase()+'@bookTicker').join('/');
 const bookLastRest=new Map();
 const tickPrices=new Map(),candleCache=new Map(),tradeBuckets=new Map(),orderBooks=new Map();
+const higherCache=new Map(),timeframeBySymbol=new Map();
 const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0,
   wsLagMs:null,bookRestFallbacks:0,bookWsState:'CONNECTING',bookWsMessages:0,aiAttempts:0,aiSuccess:0,aiFailure:0,aiDurationMs:null,aiLastFinishedAt:0,
-  lastTrigger:'NONE',marketRestFallbacks:0,errors:[]};
+  lastTrigger:'NONE',marketRestFallbacks:0,higherRequests:0,higherFailures:0,timeframeSnapshots:0,errors:[]};
 let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
 let socket=null,reconnectTimer=null,bookSocket=null,bookReconnectTimer=null,bookWsLastAt=0;
 
@@ -194,10 +196,44 @@ async function collectMarket(symbol,now=Date.now()){
   return makeMarket({symbol,markPrice:tick.price,markTime:tick.time,
     oneMin:cached.one,fiveMin:cached.five,now:Date.now()});
 }
+// Fetch higher timeframes at their own pace; never synthesize missing bars.
+async function loadHigherTimeframes(symbol,now=Date.now()){
+  if(!SYMBOLS.includes(symbol))throw Error('UNSUPPORTED_SYMBOL');
+  const frames={};
+  await Promise.all(Object.entries(TIMEFRAMES).map(async ([interval,cfg])=>{
+    const key=symbol+':'+interval,old=higherCache.get(key);
+    if(old&&now<old.nextAt){
+      if(old.summary)frames[interval]=old.summary;
+      return;
+    }
+    try{
+      metrics.higherRequests++;
+      const raw=await getJson(BASE+'/fapi/v1/klines?symbol='+encodeURIComponent(symbol)+
+        '&interval='+interval+'&limit=121',6500);
+      const summary=summarizeTimeframe(raw,interval,Date.now());
+      higherCache.set(key,{summary,nextAt:Date.now()+cfg.ttlMs});
+      frames[interval]=summary;
+    }catch(e){
+      metrics.higherFailures++;
+      rememberError('HIGHER_TIMEFRAME_'+interval,e);
+      higherCache.set(key,{summary:null,nextAt:Date.now()+60000});
+    }
+  }));
+  timeframeBySymbol.set(symbol,{frames,complete:higherTimeframesComplete(frames),
+    at:Date.now()});
+  metrics.timeframeSnapshots++;
+  return timeframeBySymbol.get(symbol);
+}
+function timeframesOf(symbol){
+  return timeframeBySymbol.get(symbol)||{frames:{},complete:false,at:0};
+}
 async function collectMarkets(){
   const results=await Promise.allSettled(SYMBOLS.map(s=>collectMarket(s)));
   const valid=results.flatMap(x=>x.status==='fulfilled'?[x.value]:[]);
   if(!valid.length)throw Error('ALL_MARKETS_UNAVAILABLE');
+  if(state.settings.enabled){
+    await Promise.all(valid.map(x=>loadHigherTimeframes(x.symbol)));
+  }
   return valid;
 }
 async function deepseekDecision(markets,position){
@@ -209,7 +245,8 @@ async function deepseekDecision(markets,position){
     markets:markets.map(m=>({symbol:m.symbol,markPrice:m.markPrice,checkedAt:m.checkedAt,
       trend1m:m.trend1m,trend5m:m.trend5m,momentum3mPct:m.momentum3mPct,
       volumeRatio:m.volumeRatio,pricePosition20mPct:m.pricePosition20mPct,high20m:m.high20m,low20m:m.low20m,
-      micro:marketMicro(m.symbol)})),
+      micro:marketMicro(m.symbol),higherTimeframes:timeframesOf(m.symbol).frames,
+      higherTimeframesComplete:timeframesOf(m.symbol).complete})),
     position:position?{symbol:position.symbol,side:position.side,entry:position.entry,
       markPrice:markets.find(x=>x.symbol===position.symbol)?.markPrice,
       unrealizedPct:(()=>{
@@ -217,7 +254,8 @@ async function deepseekDecision(markets,position){
         if(!Number.isFinite(price))return null;
         return Number((100*(price/position.entry-1)*(position.side==='LONG'?1:-1)).toFixed(4));
       })(),
-      heldSeconds:Math.floor((Date.now()-position.openedAt)/1000),openedAt:position.openedAt}:null,
+      heldSeconds:Math.floor((Date.now()-position.openedAt)/1000),openedAt:position.openedAt,
+      horizon:position.horizon||'UNSPECIFIED'}:null,
     rules:'Only PAPER simulation. Entry risk bounded server-side. Do not assume profitable trades.'};
   lastModelCallAt=Date.now();metrics.aiAttempts++;state.aiStatus='THINKING';
   const response=await fetch('https://api.deepseek.com/chat/completions',{
@@ -225,7 +263,7 @@ async function deepseekDecision(markets,position){
     headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
     body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
       response_format:{type:'json_object'},max_tokens:1800,messages:[
-      {role:'system',content:'你是永续合约模拟研究分析模型。只返回JSON对象，字段action、symbol、confidence、reason。无仓时action只能LONG/SHORT/WAIT，持仓时只能HOLD/CLOSE；symbol为BTCUSDT/ETHUSDT/SOLUSDT，持仓时必须与持仓币种一致。confidence为0到1，reason为6到300字中文。你须在每次持仓分析中自行判断继续持有或主动平仓；后台不设置固定止盈价或止损价，也不会因触价自动平仓。请综合趋势、波动、成交量、当前损益和持仓时间，自行分析退出时机。行情数据不足或模型不确定时谨慎决策。模型评分不是胜率保证。仅做模拟交易，不会发出实盘订单。'},
+      {role:'system',content:'你是永续合约模拟研究分析模型，只返回JSON对象。字段action、symbol、horizon、confidence、reason；horizon必须是SHORT（短线）、MEDIUM（中线）或LONG（长线）。无仓时action只能LONG/SHORT/WAIT，持仓时只能HOLD/CLOSE；symbol为BTCUSDT/ETHUSDT/SOLUSDT，持仓时必须与持仓币种一致。confidence为0到1，reason为6到300字中文。每轮同时分析秒级成交/盘口、1m与5m信号及15m/1h/4h/1d/1w已收盘K线趋势、EMA/RSI/ATR、成交量与结构，区分大趋势与短期噪声；AI自主选择短中长持仓研究周期，不强迫短线交易。若入场所选币种higherTimeframesComplete不为true则选择WAIT。中长线仓位不要仅因几秒波动就改变判断，应结合更高周期结构、持仓时间和盈亏，必要时明确CLOSE。已有持仓时允许依据现有可用数据决定主动CLOSE，即使较长周期数据暂时缺失。后台不设置固定止盈止损也不会触价自动平仓；没有AI CLOSE不平仓。模型评分不是胜率保证，长线杠杆存在巨大风险，且本服务仅模拟、无真实交易。'},
       {role:'user',content:JSON.stringify(payload)}]})});
   if(!response.ok)throw Error('DEEPSEEK_HTTP_'+response.status);
   const obj=await response.json(),msg=obj?.choices?.[0]?.message?.content;
@@ -276,16 +314,24 @@ async function cycle(){
             if(state.settings.emergencyStop)paperMark(state,fresh,Date.now(),'EMERGENCY_STOP');
             else if(state.position&&decision.action==='CLOSE')
               paperMark(state,fresh,Date.now(),'AI_CLOSE',decision.reason);
+            else if(state.position&&decision.action==='HOLD'&&decision.horizon)
+              state.position.horizon=decision.horizon;
             // HOLD never mutates or generates a fixed exit trigger.
           }
         }else if(decision&&['LONG','SHORT'].includes(decision.action)){
           const before=markets.find(x=>x.symbol===decision.symbol);
           if(!before)throw Error('SELECTED_MARKET_UNAVAILABLE');
+          // Fail closed for NEW positions if medium/long context cannot be verified.
+          if(!timeframesOf(decision.symbol).complete){
+            state.aiStatus='HIGHER_TIMEFRAME_INCOMPLETE_NO_ENTRY';
+            rememberError('AI_ENTRY_BLOCKED','Required higher timeframe market data missing');
+          }else{
           const fresh=await collectMarket(decision.symbol);
           if(before.trend1m!==fresh.trend1m||before.trend5m!==fresh.trend5m||
               Math.abs(fresh.markPrice/before.markPrice-1)>0.005){
             state.aiStatus='SIGNAL_STALE_OR_TREND_CHANGED_NO_ENTRY';
           }else if(!state.position)paperOpen(state,fresh,decision,Date.now());
+          }
         }
         }
       }
@@ -313,7 +359,11 @@ function publicSnapshot(){
     lastMarketTickAt:lastSocketAt,lastModelCallAt,
     metrics:{...metrics,marketAgeMs:lastSocketAt?Date.now()-lastSocketAt:null,
       perSymbol:Object.fromEntries(SYMBOLS.map(sym=>[sym,{markAgeMs:tickPrices.get(sym)?
-        Date.now()-tickPrices.get(sym).time:null,...marketMicro(sym)}]))},
+        Date.now()-tickPrices.get(sym).time:null,...marketMicro(sym),
+        higherComplete:timeframesOf(sym).complete,
+        higher:Object.fromEntries(Object.entries(timeframesOf(sym).frames).map(([k,v])=>
+          [k,{bias:v.bias,rsi14:v.rsi14,atrPct14:v.atrPct14,
+            change20BarsPct:v.change20BarsPct,lastClosedAt:v.lastClosedAt}]))}]))},
     lastError:state.lastError,marketError,totalClosed:state.closed.length,
     cycleCount:state.cycleCount||0,tradingSafety:'NO_REAL_ORDERS_NO_API_KEY_IN_CLIENT',
     paperLimitations:'Paper-only estimates; no real execution, funding, liquidation, depth or real exchange-side protective orders.'};

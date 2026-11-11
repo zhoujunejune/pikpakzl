@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarket,
   newState,rollDay,paperOpen,paperMark,parsePortfolioPlan,normalizePaperPositions,
-  paperFloatingPnL,MAX_PAPER_POSITIONS} from './engine.mjs';
+  paperFloatingPnL,paperPnlSummary,MAX_PAPER_POSITIONS} from './engine.mjs';
 import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
 import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
@@ -43,6 +43,12 @@ function load(){
     }
     normalizePaperPositions(s);
     delete s.position;
+    // Migrate once from preserved closed trade ledger, then accumulate for lifetime even
+    // after the 500-entry display cap; never clear history or modify an open position.
+    if(!Number.isFinite(s.realizedNetPnl)){
+      if(s.closed.some(t=>!Number.isFinite(t.netPnl)))throw Error('INVALID_HISTORIC_PNL');
+      s.realizedNetPnl=Number(s.closed.reduce((sum,t)=>sum+t.netPnl,0).toFixed(6));
+    }
     if(typeof s.balance!=='number'||!Number.isFinite(s.balance)||!Array.isArray(s.closed)||
         s.closed.some(x=>x.paper!==true))throw Error('INVALID_PAPER_LEDGER');
     return s;
@@ -376,6 +382,7 @@ function publicSnapshot(){
           [k,{bias:v.bias,rsi14:v.rsi14,atrPct14:v.atrPct14,
             change20BarsPct:v.change20BarsPct,lastClosedAt:v.lastClosedAt}]))}]))},
     floatingPnl:paperFloatingPnL(state.positions,state.marketSnapshots||[]),
+    pnlSummary:paperPnlSummary(state,state.marketSnapshots||[]),
     lastError:state.lastError,marketError,totalClosed:state.closed.length,
     cycleCount:state.cycleCount||0,tradingSafety:'NO_REAL_ORDERS_NO_API_KEY_IN_CLIENT',
     paperLimitations:'Paper-only estimates; no real execution, funding, liquidation, depth or real exchange-side protective orders.'};

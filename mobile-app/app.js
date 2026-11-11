@@ -247,8 +247,8 @@ function event(e,ledger){
  const direction=s?.direction==="UP"||s?.direction==="DOWN"?s.direction:null;
  put("eSignal",direction?dir(direction):"等待新信号");
  $("eHero").dataset.direction=direction||"WAIT";
- put("ePhase",direction?"V19 纯规则 · "+(s?.status||"方向已确认"):
-   "V19 纯规则 · "+(e.configured?"正在监控 BTC 行情":"服务未就绪"));
+ put("ePhase",direction?"V20 点位优化 · "+(s?.status||"方向已确认"):
+   "V20 点位优化 · "+(e.configured?"正在监控 BTC 行情":"服务未就绪"));
  const validDirections=stats.validDirections??stats.total??"—";
  put("eCounts",validDirections+" / "+(stats.proxySettled??"—"));
  const accuracy=pct(stats.proxyHits,stats.proxySettled);
@@ -266,7 +266,7 @@ function event(e,ledger){
  const lastScan=e.lastSuccessfulScanAt,elapsed=Number.isFinite(lastScan)?Math.round((Date.now()-lastScan)/1000):null;
  put("eFreshness",elapsed!==null&&elapsed>=0&&elapsed<=90?"最近有效行情扫描 "+elapsed+"秒前 · "+stamp(lastScan):"行情扫描新鲜度未确认；请检查后台连接");
 
- put("eAiReview","信号来源：纯规则 V19 · 不调用AI · 仍按原有技术指标筛选并进行5分钟EMA方向校正。");
+ put("eAiReview","信号来源：纯规则 V20 · 不调用AI · 趋势同向、入场点位筛选与短时价格改善确认；代理结算非官方结果。");
  put("eReason",s?.direction?(s?.reason||"方向已确认；10分钟后核验。"):
    (s?.reason||"当前没有符合规则的方向信号。"));
  pill("eStatus",e.configured===true?"good":"bad",active?"信号待核对":e.configured===true?(currentLedger?"已连接":"已连接·记录同步中"):"服务未就绪");

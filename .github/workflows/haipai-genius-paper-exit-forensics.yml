@@ -1,0 +1,68 @@
+name: Haipai Genius paper exits diagnostic (read-only)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/haipai-genius-paper-exit-forensics.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspect anonymized paper close patterns and market status (no writes)
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import urllib.request, base64, json, os, statistics, datetime, collections
+          pw=os.environ.get('ZL_PANEL_PASSWORD')
+          assert pw, 'PANEL_PASSWORD_NOT_CONFIGURED'
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          url='https://prediction.47-237-188-69.sslip.io/genius/api/'
+          def get(route):
+              req=urllib.request.Request(url+route,headers={'Authorization':auth,'Cache-Control':'no-store'})
+              with urllib.request.urlopen(req,timeout=20) as response: return json.load(response)
+          history=get('history'); status=get('status')
+          assert history.get('ok') is True and status.get('ok') is True
+          assert status.get('mode')=='PAPER_ONLY' and status.get('realTradingEnabled') is False
+          trades=[r for r in history.get('records',[]) if isinstance(r,dict) and isinstance(r.get('netPnl'),(int,float))]
+          cutoff=int(datetime.datetime(2026,11,11,15,59,59,tzinfo=datetime.timezone.utc).timestamp()*1000)
+          def summary(items):
+              if not items: return {'count':0}
+              profit=[x for x in items if x['netPnl']>0]
+              loss=[x for x in items if x['netPnl']<0]
+              times=[(x['closedAt']-x['openedAt'])/60000 for x in items if isinstance(x.get('closedAt'),(int,float)) and isinstance(x.get('openedAt'),(int,float)) and x['closedAt']>=x['openedAt']]
+              bucket=collections.Counter()
+              for minutes in times:
+                  bucket['lt1m' if minutes<1 else '1to3m' if minutes<3 else '3to10m' if minutes<10 else '10to60m' if minutes<60 else 'gte60m']+=1
+              cause=collections.Counter(x.get('exitReason','UNKNOWN') for x in items)
+              symbols=collections.Counter(x.get('symbol','UNKNOWN') for x in items)
+              horizons=collections.Counter(x.get('horizon','UNSPECIFIED') for x in items)
+              reasons=collections.Counter()
+              patterns={'trend':('趋势','结构','均线'),'reversal':('反转','转弱','逆转','反向'),
+                'risk':('风险','失效','止损','亏损'),'profit':('盈利','获利','止盈','兑现'),'unclear':()}
+              for x in items:
+                  reason=str(x.get('aiExitReason') or '')
+                  keys=[k for k,terms in patterns.items() if terms and any(t in reason for t in terms)]
+                  reasons.update(keys or ['uncategorized'])
+              return {'count':len(items),'wins':len(profit),'losses':len(loss),'even':len(items)-len(profit)-len(loss),
+                'winRatePct':round(len(profit)/len(items)*100,1),
+                'netTotalUsdt':round(sum(x['netPnl'] for x in items),3),
+                'meanWinUsdt':round(statistics.mean(x['netPnl'] for x in profit),3) if profit else None,
+                'meanLossUsdt':round(statistics.mean(x['netPnl'] for x in loss),3) if loss else None,
+                'grossPositiveButNetNegative':sum(1 for x in items if isinstance(x.get('grossPnl'),(int,float)) and x['grossPnl']>0 and x['netPnl']<0),
+                'medianHoldMinutes':round(statistics.median(times),2) if times else None,
+                'holdBuckets':dict(bucket),'exitReasons':dict(cause),'symbols':dict(symbols),'horizons':dict(horizons),
+                'exitTextTags':dict(reasons)}
+          print('GENIUS_DIAGNOSTIC_VERSION='+str(status.get('version')))
+          print('GENIUS_DIAGNOSTIC_AI_STATE='+str(status.get('aiStatus')))
+          print('GENIUS_DIAGNOSTIC_MARKET_STREAM='+str(status.get('marketStream')))
+          print('GENIUS_DIAGNOSTIC_MARKET_ERROR='+str(status.get('marketError'))[:160])
+          print('GENIUS_DIAGNOSTIC_PAPER_POSITIONS='+str(len(status.get('positions',[]))))
+          print('GENIUS_DIAGNOSTIC_ALL='+json.dumps(summary(trades),ensure_ascii=False,sort_keys=True))
+          print('GENIUS_DIAGNOSTIC_SINCE_V148='+json.dumps(summary([x for x in trades if isinstance(x.get('closedAt'),(int,float)) and x['closedAt']>=cutoff]),ensure_ascii=False,sort_keys=True))
+          print('GENIUS_DIAGNOSTIC_LAST_10='+json.dumps(summary(trades[:10]),ensure_ascii=False,sort_keys=True))
+          print('GENIUS_DIAGNOSTIC_READ_ONLY=true')
+          PY

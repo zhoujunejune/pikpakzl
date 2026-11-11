@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DEFAULT_SETTINGS,validateSettings,parseDecision,parsePortfolioPlan,
-  makeMarket,newState,normalizePaperPositions,paperOpen,paperMark,paperFloatingPnL,
+  makeMarket,newState,normalizePaperPositions,paperOpen,paperMark,paperFloatingPnL,paperPnlSummary,
   ENGINE_VERSION,MAX_PAPER_POSITIONS} from './engine.mjs';
 const NOW=Date.parse('2026-11-11T12:02:20Z');
 function candles(ms,n,step){
@@ -16,7 +16,7 @@ const answer=(action='LONG',symbol='BTCUSDT')=>({
  action,symbol,confidence:.8,horizon:'MEDIUM',
  reason:'根据多个周期的行情趋势判断模拟交易方向并持续研究持仓'});
 test('paper-only, three positions maximum, exact settings schema',()=>{
- assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V144_MULTIPOSITION');
+ assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V145_CUMULATIVE_PNL');
  assert.equal(MAX_PAPER_POSITIONS,3);
  assert.equal(DEFAULT_SETTINGS.enabled,false);
  assert.equal(validateSettings({...DEFAULT_SETTINGS}).leverage,2);
@@ -88,4 +88,41 @@ test('margin allocation is bounded across multiple concurrent positions',()=>{
  s.balance=1.98;
  assert.equal(paperOpen(s,market(),answer(),NOW).ok,true);
  assert.equal(paperOpen(s,market('ETHUSDT',3500),answer('SHORT','ETHUSDT'),NOW).reason,'INSUFFICIENT_FREE_PAPER_MARGIN');
+});
+
+test('lifetime realized PnL survives 500-history display rollover',()=>{
+ const state=newState();state.settings.enabled=true;
+ for(let i=0;i<501;i++){
+   const when=NOW+i*10000;
+   const marketAt={...market(),checkedAt:when};
+   assert.equal(paperOpen(state,marketAt,answer(),when).ok,true);
+   assert.equal(paperMark(state,marketAt,when,'AI_CLOSE').ok,true);
+ }
+ assert.equal(state.positions.length,0);
+ assert.equal(state.closed.length,500);
+ const visibleSum=state.closed.reduce((acc,t)=>acc+t.netPnl,0);
+ assert.ok(state.realizedNetPnl<visibleSum,'all-time realized includes trades no longer displayed');
+ const summary=paperPnlSummary(state,[],NOW+5010000);
+ assert.equal(summary.realizedNetPnl,state.realizedNetPnl);
+ assert.equal(summary.estimatedCumulativePnl,state.realizedNetPnl);
+ assert.equal(summary.openGrossPnl,0);
+ assert.equal(summary.closedRecordsAvailable,500);
+ assert.equal(summary.complete,true);
+});
+test('cumulative simulation PnL deducts entry and estimated exit fees and slippage',()=>{
+ const state=newState();state.settings.enabled=true;
+ assert.equal(paperOpen(state,market(),answer(),NOW).ok,true);
+ const open=state.positions[0];
+ const snapshot=[{symbol:'BTCUSDT',markPrice:50300,checkedAt:NOW}];
+ const p=paperPnlSummary(state,snapshot,NOW);
+ assert.equal(p.realizedNetPnl,0);
+ assert.equal(p.complete,true);
+ assert.ok(p.openGrossPnl>p.estimatedOpenNetPnl);
+ assert.equal(p.estimatedCumulativePnl,p.estimatedOpenNetPnl);
+ assert.ok(p.estimatedOpenNetPnl<p.openGrossPnl);
+ assert.equal(paperPnlSummary(state,[],NOW).complete,false);
+ assert.equal(paperPnlSummary(state,[],NOW).estimatedCumulativePnl,null);
+ assert.equal(paperMark(state,{...market(),markPrice:50300},NOW,'AI_CLOSE').ok,true);
+ assert.ok(state.realizedNetPnl!==0);
+ assert.equal(paperPnlSummary(state,[],NOW).estimatedCumulativePnl,state.realizedNetPnl);
 });

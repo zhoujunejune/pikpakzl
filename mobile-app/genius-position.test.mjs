@@ -105,6 +105,11 @@ test('three positions display distinct cards, total floating PnL and swipe pagin
  assert.equal(track.children.length,2);
  assert.equal(elements.positionPage.textContent,'2 / 2 · 左右滑动');
 });
+test('simulation leverage selector permits 100x and makes limitations clear',()=>{
+ assert.match(html,/杠杆倍数（1—100 倍）/);
+ assert.match(html,/id="leverage" type="number" min="1" max="100"/);
+ assert.match(html,/当前模拟器未完整模拟真实强平/);
+});
 test('position carousel remains above main analysis and paper-only is explicit',()=>{
  assert.ok(html.indexOf('id="positionCard"')<html.indexOf('class="card hero"'));
  assert.match(html,/不代表真实币安仓位/);

@@ -20,6 +20,8 @@ function load(){
   try{
     const s=JSON.parse(fs.readFileSync(STATE_FILE,'utf8'));
     validateSettings(s.settings);
+    // Migrate older hidden tuning: AI now owns ordinary entries/exits, while safety bounds remain.
+    s.settings.cooldownMinutes=DEFAULT_SETTINGS.cooldownMinutes;
     if(typeof s.balance!=='number'||!Number.isFinite(s.balance)||!Array.isArray(s.closed)||
         s.closed.some(x=>x.paper!==true)||s.position&&s.position.source!=='DEEPSEEK_PAPER_ONLY')
       throw Error('INVALID_PAPER_LEDGER');

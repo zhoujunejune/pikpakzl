@@ -38,6 +38,7 @@ jobs:
           assert 'DEFAULT_SETTINGS' in Path('genius-bot/engine.mjs').read_text()
           assert 'parsePortfolioPlan(' in src and 'MAX_PAPER_POSITIONS' in src
           assert 'positions:state.positions' in src
+          assert 'pnlSummary:paperPnlSummary(' in src
           print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')
           PY
   deploy:
@@ -107,7 +108,13 @@ jobs:
           assert obj['mode']=='PAPER_ONLY' and obj['realTradingEnabled'] is False
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V144_MULTIPOSITION'
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V145_CUMULATIVE_PNL'
+          pnl=obj.get('pnlSummary') or {}
+          assert isinstance(pnl.get('realizedNetPnl'),(int,float))
+          assert isinstance(pnl.get('complete'),bool)
+          assert pnl.get('openPositions')==len(positions)
+          assert 'estimatedCumulativePnl' in pnl
+          assert pnl.get('accounting')=='SIMULATION_INCLUDES_OPEN_AND_CLOSE_FEES_AND_SLIPPAGE_NO_FUNDING'
           positions=obj.get('positions')
           assert isinstance(positions,list) and len(positions)<=3
           assert len({p['symbol'] for p in positions})==len(positions)

@@ -195,17 +195,49 @@ async function refresh(){
   ]);
  }finally{updating=false;}
 }
-async function save(changes){
+async function save(changes,kind='money'){
  if(saving||!settings)return;
  saving=true;
+ const control=kind==='toggle'||kind==='stop',oldLabel=$('toggle').textContent;
+ $('toggle').disabled=true;$('save').disabled=true;$('stop').disabled=true;
+ if(kind==='toggle')$('toggle').textContent=changes.enabled?'正在开启 AI…':'正在关闭 AI…';
+ put('saveStatus',kind==='toggle'?'正在切换 AI 自动分析…':kind==='stop'?
+   '正在停止模拟 AI，后台将按可用的最新行情请求模拟平仓…':'正在保存杠杆和金额…');
  try{
-  const x=await api('settings',{method:'POST',headers:{'Content-Type':'application/json','X-Haipai-Paper-Control':'yes'},body:JSON.stringify(changes)});
-  settings=x.settings;setForm(settings);
-  put('saveStatus','已保存。后台仅进行模拟交易，真实订单保持关闭。');
+  if(kind==='money'){
+   if(!Number.isInteger(changes.leverage)||changes.leverage<1||changes.leverage>100)
+     throw Error('杠杆必须是1—100之间的整数');
+   if(!Number.isFinite(changes.marginUsdt)||changes.marginUsdt<1||changes.marginUsdt>100)
+     throw Error('每笔开仓金额必须在1—100 USDT之间');
+  }
+  const x=await api('settings',{method:'POST',headers:{'Content-Type':'application/json',
+   'X-Haipai-Paper-Control':'yes'},body:JSON.stringify(changes)});
+  settings=x.settings;
+  if(kind==='money'){
+   setForm(settings);
+   put('saveStatus','杠杆和金额已保存；仅影响后续新开仓的模拟交易。');
+  }else if(kind==='toggle'){
+   const active=Boolean(settings.enabled&&!settings.emergencyStop);
+   $('toggle').textContent=active?'关闭 AI 自动分析':'开启 AI 自动分析';
+   put('engineState',active?'AI 自动分析已开启':'AI 自动分析已关闭');
+   put('saveStatus',active?'AI 自动分析已开启（杠杆与金额未随开关修改）':
+     'AI 自动分析已关闭；已有模拟持仓保留，等待你重新开启或紧急停止。');
+  }else{
+   $('toggle').textContent='开启 AI 自动分析';
+   put('engineState','紧急停止');
+   put('saveStatus','已提交紧急停止。已暂停新开仓；现有模拟仓位需有可用行情才能执行模拟平仓。');
+  }
   await refresh();
- }catch(e){put('saveStatus','保存失败：'+e.message);}finally{saving=false;}
+ }catch(e){
+  if(control)$('toggle').textContent=oldLabel;
+  put('saveStatus',(control?'操作失败：':'保存失败：')+e.message);
+ }finally{
+  saving=false;$('toggle').disabled=false;$('save').disabled=false;$('stop').disabled=false;
+ }
 }
-$('save').addEventListener('click',()=>void save(formValue()));
-$('toggle').addEventListener('click',()=>void save({...formValue(),enabled:!(settings?.enabled&&!settings?.emergencyStop),emergencyStop:false}));
-$('stop').addEventListener('click',()=>void save({enabled:false,emergencyStop:true}));
+$('save').addEventListener('click',()=>void save(formValue(),'money'));
+$('toggle').addEventListener('click',()=>void save({
+ enabled:!(settings?.enabled&&!settings?.emergencyStop),emergencyStop:false
+},'toggle'));
+$('stop').addEventListener('click',()=>void save({enabled:false,emergencyStop:true},'stop'));
 void refresh();setInterval(()=>void refresh(),5000);

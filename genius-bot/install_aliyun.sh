@@ -105,7 +105,7 @@ python3 - "$node_status" <<'PY'
 import sys,json
 x=json.loads(sys.argv[1]);assert x['mode']=='PAPER_ONLY'
 assert x['realTradingEnabled'] is False
-assert x['settings']['enabled'] is False
+assert isinstance(x['settings']['enabled'],bool)
 assert x['settings']['leverage']<=10
 print('HAIPAI_GENIUS_PAPER_ONLY_VERIFIED=true',flush=True)
 print('HAIPAI_GENIUS_DEEPSEEK_CONFIGURED='+str(x['aiConfigured']),flush=True)

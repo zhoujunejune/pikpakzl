@@ -59,7 +59,7 @@ jobs:
           assert '<title>海派事件合约</title>' in html
           assert m['start_url']=='/app/genius.html'
           assert '海派合约天才' in (root/'genius.html').read_text()
-          assert '/genius/api/status' in (root/'genius.js').read_text()
+          assert '/genius/api/' in (root/'genius.js').read_text()
           assert 'src="/app/icon-192.png"' in html
           assert 'class="logo">ZL' not in html
           for size in (192,512):

@@ -1,7 +1,7 @@
 /* ZL EVENT10-only app — browser-only client; no exchange credentials or order calls. */
 "use strict";
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
-const APP_VERSION="1.3.8"; // Stable signal + on-device manual real-trade journal.
+const APP_VERSION="1.3.9"; // Stable signal + on-device manual real-trade journal.
 const $=id=>document.getElementById(id);
 const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',homeHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null,eventEpoch:0,eventFetchController:null,eventRetryTimer:null,eventRetryDelayMs:1200,eventLastResumeAt:0,eventLifecycle:"foreground"};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
@@ -628,7 +628,7 @@ navigate(["event10","stats","records","more"].includes(initial)?initial:"event10
 void refresh();
 void checkHotUpdate();
 setInterval(()=>void refresh(),10000);
-// Date changes at Beijing midnight; no change to the remote V19 model or signal polling.
+// Date changes at Beijing midnight; no change to the remote V20 model or signal polling.
 setInterval(()=>{if(!document.hidden)refreshTradeJournal();},60000);
 // On the 10-minute screen, show server-confirmed signals in around 3s while visible.
 // Native Android notification service works independently when this page is hidden.

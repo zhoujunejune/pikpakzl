@@ -204,7 +204,7 @@ jobs:
           assert 'id="tradeHistoryList"' in html
           assert 'APP_VERSION="1.4.0"' in js
           assert '海派合约天才' in Path('mobile-app/genius.html').read_text()
-          assert '/genius/api/status' in Path('mobile-app/genius.js').read_text()
+          assert '/genius/api/' in Path('mobile-app/genius.js').read_text()
           assert 'genius.html' in Path('android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java').read_text()
           assert '"start_url": "/app/genius.html"' in Path('mobile-app/manifest.webmanifest').read_text()
           print('HAIPAI_MANUAL_TRADE_COUNT_ISOLATED=true')

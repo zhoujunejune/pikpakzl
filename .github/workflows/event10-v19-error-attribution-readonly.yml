@@ -244,6 +244,20 @@ jobs:
                           'directionCounts':dict(Counter(x.get('direction') for x in xs))}
                          for xs in runs[:6]]
               },ensure_ascii=False),flush=True)
+          scan=status.get('scanDiagnostics') or {}
+          print('ATTRIBUTION_SERVICE_DIAGNOSTICS',json.dumps({
+             'botMode':status.get('mode'),
+             'modelVersion':status.get('decisionReviewVersion'),
+             'latestSuccessfulScanAt':status.get('lastSuccessfulScanAt'),
+             'lastDataError':status.get('lastDataError'),
+             'lastError':status.get('lastError'),
+             'lastHour':scan.get('lastHour'),
+             'last24Hours':scan.get('last24Hours'),
+             'ruleSamplingMs':status.get('autoIntervalMs'),
+             'signalCooldownMs':status.get('minSignalGapMs'),
+             'aiMandatory':status.get('aiMandatory'),
+             'autoTradingEnabled':status.get('autoTradingEnabled')
+          },ensure_ascii=False),flush=True)
           print('ATTRIBUTION_COMPLETE=true',flush=True)
           print('CONTRARIAN_READONLY_COMPLETED=true',flush=True)
           print('TEN_ROUND_CHECK_COMPLETED=true',flush=True)

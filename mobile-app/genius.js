@@ -15,7 +15,7 @@ function setForm(s){$('leverage').value=s.leverage;$('marginUsdt').value=s.margi
 const horizonLabels={SHORT:'短线',MEDIUM:'中线',LONG:'长线',UNSPECIFIED:'待确定'};
 let visiblePositionId=null;
 let positionIdsKey='';
-const horizonLabels={SHORT:'短线',MEDIUM:'中线',LONG:'长线',UNSPECIFIED:'待确定'};
+
 const signedMoney=n=>(n>=0?'+':'')+money(n);
 function visiblePage(){
  const track=$('positionTrack'),cards=track?.children;

@@ -15,14 +15,17 @@ const SYMBOLS=['BTCUSDT','ETHUSDT','SOLUSDT'];
 // Binance retired the legacy URL in April 2026. Use its dedicated market stream.
 const WS_URL='wss://fstream.binance.com/market/stream?streams='+SYMBOLS.flatMap(s=>{
   const lower=s.toLowerCase();
-  return [lower+'@markPrice@1s',lower+'@aggTrade',lower+'@bookTicker'];
+  return [lower+'@markPrice@1s',lower+'@aggTrade'];
 }).join('/');
+const BOOK_URL='wss://fstream.binance.com/public/stream?streams='+
+  SYMBOLS.map(s=>s.toLowerCase()+'@bookTicker').join('/');
+const bookLastRest=new Map();
 const tickPrices=new Map(),candleCache=new Map(),tradeBuckets=new Map(),orderBooks=new Map();
 const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0,
-  wsLagMs:null,aiAttempts:0,aiSuccess:0,aiFailure:0,aiDurationMs:null,aiLastFinishedAt:0,
+  wsLagMs:null,bookRestFallbacks:0,bookWsState:'CONNECTING',bookWsMessages:0,aiAttempts:0,aiSuccess:0,aiFailure:0,aiDurationMs:null,aiLastFinishedAt:0,
   lastTrigger:'NONE',marketRestFallbacks:0,errors:[]};
 let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
-let socket=null,reconnectTimer=null;
+let socket=null,reconnectTimer=null,bookSocket=null,bookReconnectTimer=null,bookWsLastAt=0;
 
 function load(){
   try{
@@ -109,7 +112,52 @@ function connectStream(){
     reconnectTimer=setTimeout(connectStream,5000);
   }
 }
+function connectBookStream(){
+  if(typeof WebSocket!=='function'){metrics.bookWsState='UNSUPPORTED';return;}
+  try{
+    bookSocket=new WebSocket(BOOK_URL);metrics.bookWsState='CONNECTING';
+    bookSocket.addEventListener('open',()=>{metrics.bookWsState='LIVE';});
+    bookSocket.addEventListener('message',event=>{
+      try{
+        const m=JSON.parse(String(event.data)).data;
+        const symbol=String(m?.s||'').toUpperCase(),now=Date.now();
+        if(!SYMBOLS.includes(symbol))return;
+        const item={bid:Number(m.b),ask:Number(m.a),bidQty:Number(m.B),
+          askQty:Number(m.A),at:now};
+        if(!bookSummary(item,now))return;
+        orderBooks.set(symbol,item);bookWsLastAt=now;
+        metrics.bookEvents++;metrics.bookWsMessages++;metrics.bookWsState='LIVE';
+      }catch(e){rememberError('BOOK_WS_MESSAGE',e);}
+    });
+    bookSocket.addEventListener('error',()=>{metrics.bookWsState='ERROR';});
+    bookSocket.addEventListener('close',()=>{
+      metrics.bookWsState='RECONNECTING';
+      if(bookReconnectTimer)clearTimeout(bookReconnectTimer);
+      bookReconnectTimer=setTimeout(connectBookStream,3500);
+    });
+  }catch(e){
+    metrics.bookWsState='ERROR_RECONNECTING';rememberError('BOOK_WS_CONNECT',e);
+    if(bookReconnectTimer)clearTimeout(bookReconnectTimer);
+    bookReconnectTimer=setTimeout(connectBookStream,5000);
+  }
+}
+async function bookRestFallback(symbol,now=Date.now()){
+  if(bookSummary(orderBooks.get(symbol),now))return;
+  const last=bookLastRest.get(symbol)||0;
+  if(now-last<15000)return;
+  bookLastRest.set(symbol,now);
+  try{
+    const q=await getJson(BASE+'/fapi/v1/ticker/bookTicker?symbol='+encodeURIComponent(symbol),3500);
+    const item={bid:Number(q.bidPrice),ask:Number(q.askPrice),
+      bidQty:Number(q.bidQty),askQty:Number(q.askQty),at:Date.now()};
+    if(bookSummary(item)) {orderBooks.set(symbol,item);metrics.bookRestFallbacks++;}
+  }catch(e){rememberError('BOOK_REST',e);}
+}
 function verifyStreamHealth(){
+  if(bookSocket&&metrics.bookWsState==='LIVE'&&bookWsLastAt&&Date.now()-bookWsLastAt>15000){
+    metrics.bookWsState='STALE_RECONNECTING';
+    try{bookSocket.close();}catch(e){rememberError('BOOK_WS_CLOSE',e);}
+  }
   if(socket&&wsState==='LIVE'&&Date.now()-lastSocketAt>15000){
     wsState='STALE_RECONNECTING';
     try{socket.close();}catch(e){rememberError('WS_CLOSE',e);}
@@ -142,6 +190,7 @@ async function collectMarket(symbol,now=Date.now()){
     const quote=await getJson(BASE+'/fapi/v1/premiumIndex?symbol='+encodeURIComponent(symbol));
     tick={price:Number(quote.markPrice),time:Number(quote.time)};
   }
+  await bookRestFallback(symbol,Date.now());
   return makeMarket({symbol,markPrice:tick.price,markTime:tick.time,
     oneMin:cached.one,fiveMin:cached.five,now:Date.now()});
 }
@@ -303,6 +352,7 @@ const server=http.createServer(async(req,res)=>{
 if(process.env.NODE_ENV!=='test'){
   server.listen(PORT,HOST,()=>console.log('HAIPAI_GENIUS_PAPER_LISTENING='+PORT));
   connectStream();
+  connectBookStream();
   setInterval(verifyStreamHealth,5000).unref();
   setInterval(()=>void cycle(),2000).unref();
   void cycle();

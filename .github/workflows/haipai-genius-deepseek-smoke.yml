@@ -1,0 +1,46 @@
+name: Haipai Genius DeepSeek Flash one-shot API smoke
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/haipai-genius-deepseek-smoke.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: One safe API-only JSON response, without real trades
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os,json,urllib.request,urllib.error
+          key=os.environ.get('DEEPSEEK_API_KEY','')
+          assert key,'DEEPSEEK_KEY_MISSING'
+          data={
+            'model':'deepseek-flash','thinking':{'type':'enabled'},
+            'reasoning_effort':'high','response_format':{'type':'json_object'},
+            'max_tokens':2500,
+            'messages':[
+              {'role':'system','content':'仅输出JSON对象，不要进行交易。包含action=WAIT、confidence=0、reason=不少于六字的中文说明。'},
+              {'role':'user','content':'没有提供任何真实市场数据，请返回WAIT和理由。'}
+            ]
+          }
+          rq=urllib.request.Request('https://api.deepseek.com/chat/completions',
+            data=json.dumps(data).encode(),method='POST',
+            headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+          try:
+            with urllib.request.urlopen(rq,timeout=75) as response:
+              result=json.load(response)
+            msg=json.loads(result['choices'][0]['message']['content'])
+            assert msg['action']=='WAIT'
+            print('HAIPAI_GENIUS_DEEPSEEK_API_HTTP=200')
+            print('HAIPAI_GENIUS_DEEPSEEK_MODEL='+str(result.get('model'))[:80])
+            print('HAIPAI_GENIUS_DEEPSEEK_JSON_VALID=true')
+            print('HAIPAI_GENIUS_NO_TRADE_SUBMITTED=true')
+          except urllib.error.HTTPError as e:
+            print('HAIPAI_GENIUS_DEEPSEEK_API_HTTP='+str(e.code))
+            raise
+          PY

@@ -49,7 +49,15 @@ function setup({withPositions=positions.slice(0,1),historyFails=true,historyReco
    {symbol:'SOLUSDT',markPrice:182,checkedAt:NOW}],
   lastMarket:{symbol:'BTCUSDT',markPrice:50500,checkedAt:NOW},
   metrics:{perSymbol:{BTCUSDT:{trades:{w10:{changePct:.1,buyRatio:.6}},higherComplete:false}}}};
- const fetch=async url=>{
+ const submitted=[];
+ const fetch=async (url,config={})=>{
+  if(url.endsWith('/settings')){
+    if(config.method!=='POST')throw Error('POST_REQUIRED');
+    const data=JSON.parse(config.body);
+    submitted.push(data);
+    status={...status,settings:{...status.settings,...data}};
+    return {ok:true,json:async()=>({ok:true,settings:status.settings})};
+  }
   if(url.endsWith('/status'))return {ok:true,json:async()=>status};
   if(url.endsWith('/history')){
     if(historyFails)throw Error('simulated history service unavailable');
@@ -62,7 +70,7 @@ function setup({withPositions=positions.slice(0,1),historyFails=true,historyReco
  const context=vm.createContext({document,fetch,AbortSignal,setInterval(fn){refresh=fn;},Date,Number,Math,Error,
   String,Array,Object,Boolean,console});
  vm.runInContext(source,context,{filename:'genius.js'});
- return {elements,runRefresh:async()=>{refresh();await settle();},
+ return {elements,submitted,runRefresh:async()=>{refresh();await settle();},
   updatePositions:next=>{status={...status,positions:next,position:next[0]||null};}};
 }
 const settle=()=>new Promise(resolve=>setTimeout(resolve,25));
@@ -155,4 +163,40 @@ test('closed trade history is compact, excludes model explanations, and preserve
  assert.match(html,/height:288px;overflow-y:auto/);
  assert.match(html,/id="history" role="region" tabindex="0"/);
  assert.match(html,/仅显示盈亏及开仓、平仓时间/);
+});
+
+test('AI toggle and emergency stop do not submit invalid unsaved sizing inputs',async()=>{
+ const {elements,submitted}=setup({historyFails:false});
+ await settle();
+ elements.leverage.value='50';elements.marginUsdt.value='300';
+ elements.toggle.events.click();
+ await settle();
+ assert.equal(submitted.length,1);
+ assert.equal(submitted[0].enabled,false);
+ assert.deepEqual(Object.keys(submitted[0]).sort(),['emergencyStop','enabled']);
+ assert.match(elements.toggle.textContent,/开启 AI/);
+ assert.match(elements.saveStatus.textContent,/AI 自动分析已关闭/);
+ elements.toggle.events.click();
+ await settle();
+ assert.equal(submitted.length,2);
+ assert.equal(submitted[1].enabled,true);
+ assert.match(elements.toggle.textContent,/关闭 AI/);
+ elements.stop.events.click();
+ await settle();
+ assert.equal(submitted.length,3);
+ assert.equal(submitted[2].emergencyStop,true);
+ assert.equal(submitted[2].enabled,false);
+ assert.deepEqual(Object.keys(submitted[2]).sort(),['emergencyStop','enabled']);
+});
+test('50x leverage and 30 USDT simulated margin save together without turning off AI',async()=>{
+ const {elements,submitted}=setup({historyFails:false});
+ await settle();
+ elements.leverage.value='50';elements.marginUsdt.value='30';
+ elements.save.events.click();
+ await settle();
+ assert.equal(submitted.length,1);
+ assert.deepEqual(submitted[0],{leverage:50,marginUsdt:30});
+ assert.match(elements.saveStatus.textContent,/杠杆和金额已保存/);
+ assert.match(elements.toggle.textContent,/关闭 AI/);
+ assert.match(html,/id="marginUsdt" type="number" min="1" max="100"/);
 });

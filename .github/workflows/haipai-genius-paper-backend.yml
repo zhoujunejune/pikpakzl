@@ -21,7 +21,8 @@ jobs:
         run: |
           node --check genius-bot/engine.mjs
           node --check genius-bot/server.mjs
-          node --test genius-bot/engine.test.mjs
+          node --check genius-bot/market-signals.mjs
+          node --test genius-bot/engine.test.mjs genius-bot/market-signals.test.mjs
           bash -n genius-bot/install_aliyun.sh
           python3 - <<'PY'
           from pathlib import Path
@@ -29,6 +30,9 @@ jobs:
           assert '/fapi/v1/order' not in src and '/fapi/v1/algoOrder' not in src
           assert "realTradingEnabled:false" in src
           assert "const MODEL='deepseek-flash'" in src
+          assert 'wss://fstream.binance.com/market/stream?streams=' in src
+          assert 'marketMicro(' in src and 'shouldAnalyze(' in src
+          assert 'paperAdjustStops' not in src and 'STOP_LOSS' not in src
           assert "'127.0.0.1'" in src
           assert 'DEFAULT_SETTINGS' in Path('genius-bot/engine.mjs').read_text()
           print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')

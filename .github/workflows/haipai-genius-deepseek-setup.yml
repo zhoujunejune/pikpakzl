@@ -21,7 +21,7 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: |
           python - <<'PY'
-          import os,base64,time
+          import os,base64,time,textwrap
           from alibabacloud_swas_open20200601.client import Client
           from alibabacloud_swas_open20200601 import models as sw
           from alibabacloud_tea_openapi import models as api
@@ -57,6 +57,8 @@ jobs:
           print('HAIPAI_GENIUS_REAL_TRADES_DISABLED=true')
           VERIFY
           """.replace('TOKEN_HERE',token)
+          lines=remote.splitlines()
+          remote=lines[0]+'\n'+textwrap.dedent('\n'.join(lines[1:]))+'\n'
           cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
             access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
             region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))

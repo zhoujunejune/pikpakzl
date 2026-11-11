@@ -22,7 +22,8 @@ jobs:
           node --check genius-bot/engine.mjs
           node --check genius-bot/server.mjs
           node --check genius-bot/market-signals.mjs
-          node --test genius-bot/engine.test.mjs genius-bot/market-signals.test.mjs
+          node --check genius-bot/timeframes.mjs
+          node --test genius-bot/engine.test.mjs genius-bot/market-signals.test.mjs genius-bot/timeframes.test.mjs
           bash -n genius-bot/install_aliyun.sh
           python3 - <<'PY'
           from pathlib import Path
@@ -104,7 +105,8 @@ jobs:
           assert obj['mode']=='PAPER_ONLY' and obj['realTradingEnabled'] is False
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V142_AI_EXIT_ONLY'
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON'
+          assert 'higherRequests' in obj.get('metrics',{})
           assert obj['position'] is None or all(k not in obj['position'] for k in ('stop','takeProfit'))
           print('HAIPAI_GENIUS_PRODUCTION_PAPER_ONLY_VERIFIED=true')
           print('HAIPAI_GENIUS_AI_KEY_CONFIGURED='+str(obj['aiConfigured']))

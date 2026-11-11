@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarket,newState,
-  paperOpen,paperMark,ENGINE_VERSION} from './engine.mjs';
+  paperOpen,paperMark,paperAdjustStops,ENGINE_VERSION} from './engine.mjs';
 const NOW=Date.parse('2026-11-11T07:30:20.000Z');
 function candles(ms,n,step){
  const end=Math.floor(NOW/ms)*ms;
@@ -11,7 +11,7 @@ function candles(ms,n,step){
 function market(price=50100){return makeMarket({symbol:'BTCUSDT',markPrice:price,markTime:NOW-1000,
  oneMin:candles(60000,60,2),fiveMin:candles(300000,50,6),now:NOW});}
 test('risk controls are bounded and paper-only defaults to disabled',()=>{
- assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V140_20261111');
+ assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V141_AUTONOMOUS');
  assert.equal(DEFAULT_SETTINGS.enabled,false);
  assert.equal(validateSettings({...DEFAULT_SETTINGS}).leverage,2);
  assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:125}),/INVALID_leverage/);
@@ -50,4 +50,24 @@ test('paper take-profit stop-loss and emergency-stop accounting',()=>{
  const v=newState();v.settings.enabled=true;
  paperOpen(v,market(),{action:'SHORT',reason:'仅模拟开仓执行逻辑',confidence:.7},NOW);
  assert.equal(paperMark(v,market(),NOW,true).trade.exitReason,'EMERGENCY_STOP');
+});
+test('AI can choose instrument and propose bounded paper risk targets',()=>{
+ const s=newState();s.settings.enabled=true;
+ const eth={...market(3400),symbol:'ETHUSDT'};
+ const d=parseDecision({action:'LONG',symbol:'ETHUSDT',confidence:.81,
+   reason:'观察ETH的趋势和成交量后形成的模拟研究判断。',stopLossPct:.4,takeProfitPct:1.9});
+ assert.equal(paperOpen(s,eth,d,NOW).ok,true);
+ assert.equal(s.position.symbol,'ETHUSDT');
+ assert.ok(s.position.stop>s.position.entry*.995);
+ assert.ok(s.position.takeProfit>s.position.entry*1.018);
+ const hold=parseDecision({action:'HOLD',symbol:'ETHUSDT',confidence:.7,
+   reason:'维持持仓但收紧模拟风险边界。',stopLossPct:.2,takeProfitPct:1.3});
+ assert.equal(paperAdjustStops(s,eth,hold).ok,true);
+ assert.ok(s.position.stop>s.position.entry*.9981);
+ assert.equal(paperMark(s,eth,NOW,'AI_CLOSE').trade.exitReason,'AI_CLOSE');
+ assert.equal(s.position,null);
+});
+test('AI cannot invent symbols or unbounded protective prices',()=>{
+ assert.throws(()=>parseDecision({action:'LONG',symbol:'DOGEUSDT',confidence:.8,reason:'对币种进行不受支持的选择'}),/INVALID_AI_SYMBOL/);
+ assert.throws(()=>parseDecision({action:'LONG',symbol:'BTCUSDT',confidence:.8,reason:'模型试图给出超额的止损',stopLossPct:25}),/INVALID_AI_stopLossPct/);
 });

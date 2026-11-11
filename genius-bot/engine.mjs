@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V142_AI_EXIT_ONLY';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
 const finite = Number.isFinite;
@@ -33,6 +33,10 @@ export function parseDecision(payload){
   if(d.symbol!=null&&!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(d.symbol))throw Error('INVALID_AI_SYMBOL');
   const out={action:d.action,reason:d.reason,confidence:round(d.confidence,3)};
   if(d.symbol)out.symbol=d.symbol;
+  if(d.horizon!==undefined){
+    if(!['SHORT','MEDIUM','LONG'].includes(d.horizon))throw Error('INVALID_AI_HORIZON');
+    out.horizon=d.horizon;
+  }
   return out;
 }
 export function ema(values,period){
@@ -91,7 +95,7 @@ export function paperOpen(state,market,decision,now=Date.now()){
   // Entry is never assigned a fixed stop/take-profit trigger. AI decides when to close.
   state.balance=round(state.balance-openFee,6);
   state.position={id:'paper-'+now,symbol:market.symbol,side,qty,marginUsdt:s.marginUsdt,leverage:s.leverage,
-    entry,openedAt:now,openFee,source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
+    entry,openedAt:now,openFee,horizon:decision.horizon||'UNSPECIFIED',source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
   state.lastActionAt=now;
   return {ok:true,position:state.position};
 }

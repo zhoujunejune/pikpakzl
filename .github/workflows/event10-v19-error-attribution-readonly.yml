@@ -1,0 +1,250 @@
+name: EVENT10 V19 error attribution read-only diagnostic
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-v19-error-attribution-readonly.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  statistics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Retrieve production EVENT10 current-version full ledger and summarize by ten
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,json,time,base64,urllib.request,datetime
+          base='https://prediction.47-237-188-69.sslip.io'
+          password=os.environ.get('ZL_PANEL_PASSWORD','')
+          if not password:
+              raise SystemExit('EVENT10_STATS_ERROR=AUTH_SECRET_MISSING')
+          authorization='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          def get(path):
+              req=urllib.request.Request(base+path,
+                headers={'Authorization':authorization,'Accept':'application/json','Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=24) as resp:
+                  if resp.status != 200:raise RuntimeError('HTTP_'+str(resp.status))
+                  return json.loads(resp.read(4000000))
+          status=get('/event10/api/status')
+          assert status.get('ok') is True,'EVENT10_STATS_STATUS_FAILED'
+          version=status.get('decisionReviewVersion')
+          assert isinstance(version,str) and version.startswith('EVENT10_'),'EVENT10_STATS_VERSION_FAILED'
+          items=[]
+          offset=0
+          reported_total=None
+          for page in range(100):
+              ledger=get('/event10/api/signals?limit=100&offset='+str(offset))
+              assert ledger.get('ok') is True and ledger.get('version')==version,'EVENT10_STATS_VERSION_MISMATCH'
+              rows=ledger.get('records')
+              assert isinstance(rows,list),'EVENT10_STATS_ROWS_INVALID'
+              if reported_total is None:reported_total=ledger.get('total')
+              items.extend(rows)
+              offset+=len(rows)
+              if len(rows)==0 or (isinstance(reported_total,int) and offset>=reported_total):break
+          else:raise RuntimeError('EVENT10_STATS_TRUNCATED')
+          if not isinstance(reported_total,int) or len(items)!=reported_total:
+              raise RuntimeError('EVENT10_STATS_PAGINATION_INCOMPLETE_'+str(len(items))+'_'+str(reported_total))
+          seen=set()
+          unique=[]
+          for item in items:
+              item_id=item.get('id')
+              if item_id in seen:raise RuntimeError('EVENT10_STATS_DUPLICATE_ID')
+              seen.add(item_id)
+              if item.get('strategyVersion')!=version:raise RuntimeError('EVENT10_STATS_MIXED_VERSION')
+              unique.append(item)
+          settled=sorted([x for x in unique if type(x.get('proxyHit')) is bool],
+             key=lambda x:(x.get('openedAt') or 0,x.get('id') or ''))
+          unsettled=[x for x in unique if type(x.get('proxyHit')) is not bool]
+          hits=sum(x['proxyHit'] for x in settled)
+          assert hits==sum(x.get('proxyHit') is True for x in settled)
+          batches=[]
+          def clock(ms):
+              if not isinstance(ms,(float,int)) or ms<=0:return None
+              return datetime.datetime.fromtimestamp(ms/1000,datetime.timezone(datetime.timedelta(hours=8))).strftime('%m-%d %H:%M')
+          for i in range(0,len(settled),10):
+              rows=settled[i:i+10]
+              wins=sum(x.get('proxyHit') is True for x in rows)
+              batch={'range':str(i+1)+'-'+str(i+len(rows)),
+                     'count':len(rows),'hits':wins,'misses':len(rows)-wins,
+                     'winRatePct':round(100*wins/len(rows),2),
+                     'firstLocal':clock(rows[0].get('openedAt')),
+                     'lastLocal':clock(rows[-1].get('openedAt')),
+                     'firstId':str(rows[0].get('id') or '')[:60],
+                     'lastId':str(rows[-1].get('id') or '')[:60]}
+              batches.append(batch)
+          print('TEN_ROUND_PRODUCTION_META',json.dumps({
+              'checkedAtLocal':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S %z'),
+              'model':status.get('aiReviewModel'),'version':version,'aiMandatory':status.get('aiMandatory'),
+              'totalSignals':len(unique),'settledSignals':len(settled),
+              'notSettledOrUnverifiable':len(unsettled),'hits':hits,'misses':len(settled)-hits,
+              'overallWinRatePct':round(100*hits/len(settled),2) if settled else None,
+              'firstLocal':clock(settled[0].get('openedAt')) if settled else None,
+              'lastLocal':clock(settled[-1].get('openedAt')) if settled else None,
+              'ledgerReported':ledger.get('stats'),
+              'signalDefinition':'BINANCE_INDEX_TPLUS600_PROXY_ONLY_NOT_OFFICIAL_EVENT_SETTLEMENT'},ensure_ascii=False),flush=True)
+          for x in batches:
+              print('TEN_ROUND_BATCH',json.dumps(x,ensure_ascii=False),flush=True)
+          # Read-only chronological hourly audit in Asia/Shanghai (UTC+8).
+          # This is IN-SAMPLE proxy validation, not executable trading advice.
+          from collections import defaultdict
+          localtz=datetime.timezone(datetime.timedelta(hours=8))
+          hourly=defaultdict(list)
+          four_hour=defaultdict(list)
+          daily=defaultdict(list)
+          for x in settled:
+              t=datetime.datetime.fromtimestamp(x['openedAt']/1000,localtz)
+              hourly[t.strftime('%H')].append(x)
+              four_hour[f'{(t.hour//4)*4:02d}:00-{((t.hour//4)+1)*4:02d}:00'].append(x)
+              daily[t.strftime('%Y-%m-%d')].append(x)
+          def emit(prefix,buckets):
+              for period in sorted(buckets):
+                  rows=buckets[period]
+                  original_hits=sum(x.get('proxyHit') is True for x in rows)
+                  reverse_hits=len(rows)-original_hits
+                  payload={'period':period,'count':len(rows),
+                      'originalHits':original_hits,'reverseHits':reverse_hits,
+                      'originalRate':round(original_hits*100/len(rows),2),
+                      'reverseRate':round(reverse_hits*100/len(rows),2),
+                      'firstLocal':clock(min(x.get('openedAt') for x in rows)),
+                      'lastLocal':clock(max(x.get('openedAt') for x in rows))}
+                  print(prefix,json.dumps(payload,ensure_ascii=False),flush=True)
+          emit('CONTRARIAN_HOURLY',hourly)
+          emit('CONTRARIAN_FOUR_HOURLY',four_hour)
+          emit('CONTRARIAN_DAILY',daily)
+          # Day-scoped 16:00-24:00 and first-ten-only results (counterfactual signal proxy).
+          day_window=defaultdict(list)
+          for x in settled:
+              dt=datetime.datetime.fromtimestamp(x['openedAt']/1000,localtz)
+              if dt.hour>=16:
+                  day_window[dt.strftime('%Y-%m-%d')].append(x)
+          for date in sorted(day_window):
+              ordered=sorted(day_window[date],key=lambda x:(x['openedAt'],x.get('id') or ''))
+              for label,subset in [('all',ordered),('first10',ordered[:10])]:
+                  reverse_hits=sum(x.get('proxyHit') is False for x in subset)
+                  print('CONTRARIAN_EVENING_CAP',json.dumps({'date':date,
+                      'selection':label,'signals':len(subset),'reverseHits':reverse_hits,
+                      'reverseLosses':len(subset)-reverse_hits,
+                      'reverseRate':round(reverse_hits*100/len(subset),2),
+                      'firstLocal':clock(subset[0]['openedAt']),
+                      'lastLocal':clock(subset[-1]['openedAt'])},ensure_ascii=False),flush=True)
+          # Aggregate-only attribution: no orders, writes, model changes, or personal data.
+          from collections import defaultdict,Counter
+          def bps(x):
+              try:
+                  op=float(x.get('openPrice'));cl=float(x.get('closePrice'))
+                  return (cl/op-1)*10000 if op>0 else None
+              except (TypeError,ValueError,ZeroDivisionError):return None
+          def bucket(name,v):
+              if v is None:return 'MISSING'
+              try:v=float(v)
+              except (ValueError,TypeError):return 'MISSING'
+              if name=='absBps':
+                  return '<=2bps' if v<=2 else '<=5bps' if v<=5 else '<=10bps' if v<=10 else '>10bps'
+              if name=='vol':
+                  return '<0.8' if v<.8 else '0.8-1.2' if v<1.2 else '1.2-2.0' if v<2 else '>=2.0'
+              if name=='rsi':
+                  return '<40' if v<40 else '40-50' if v<50 else '50-60' if v<60 else '>=60'
+              if name=='momentum':
+                  v=abs(v)
+                  return '<0.05pct' if v<.05 else '0.05-0.10pct' if v<.10 else '>=0.10pct'
+              return 'OTHER'
+          def analyze_group(name,rows):
+              if not rows:return
+              hits=sum(x['proxyHit'] is True for x in rows)
+              us=len(rows)-hits
+              ds=[bps(x) for x in rows];ds=[abs(v) for v in ds if v is not None]
+              print('ATTRIBUTION_GROUP',json.dumps({'group':name,'count':len(rows),
+                  'originalHits':hits,'originalAccuracy':round(100*hits/len(rows),2),
+                  'reverseHits':us,'reverseAccuracy':round(100*us/len(rows),2),
+                  'medianAbsMoveBps':round(sorted(ds)[len(ds)//2],2) if ds else None
+              },ensure_ascii=False),flush=True)
+          settled=sorted(settled,key=lambda x:(x.get('openedAt') or 0,x.get('id') or ''))
+          predicates={
+              'direction':lambda x:x.get('direction') or 'MISSING',
+              'tier':lambda x:x.get('signalQuality') or 'MISSING',
+              'directionTier':lambda x:str(x.get('direction'))+'_'+str(x.get('signalQuality')),
+              'ema5CandidateConflict':lambda x:
+                  'CANDIDATE_TREND5_FALSE' if isinstance(x.get('checks'),dict) and x['checks'].get('trend5m') is False
+                  else 'CANDIDATE_TREND5_TRUE' if isinstance(x.get('checks'),dict) and x['checks'].get('trend5m') is True
+                  else 'UNKNOWN',
+              'volumeRatio':lambda x:bucket('vol',x.get('volumeRatio')),
+              'rsi14':lambda x:bucket('rsi',x.get('rsi14')),
+              'momentum3m':lambda x:bucket('momentum',x.get('change3mPct')),
+              'priceMoveSize':lambda x:bucket('absBps',abs(bps(x)) if bps(x) is not None else None),
+              'signalOrigin':lambda x:x.get('trigger') or 'UNKNOWN',
+              'settlementStatus':lambda x:x.get('settlementStatus') or 'UNKNOWN',
+              'expirySampleLagMs':lambda x: 'UNKNOWN' if not isinstance(x.get('expirySampleLagMs'),(int,float)) else
+                  '<=2s' if x['expirySampleLagMs']<=2000 else
+                  '<=10s' if x['expirySampleLagMs']<=10000 else '>10s',
+              'eventTag':lambda x:x.get('eventTag') or 'UNKNOWN',
+          }
+          for field,func in predicates.items():
+              groups=defaultdict(list)
+              for x in settled:groups[func(x)].append(x)
+              for k,rows in sorted(groups.items(),key=lambda kv:kv[0]):
+                  analyze_group(field+'='+str(k),rows)
+          # Per-direction EMA candidate mismatch and day to spot cluster effects.
+          for d in ['UP','DOWN']:
+              for day in sorted({datetime.datetime.fromtimestamp(x['openedAt']/1000,localtz).strftime('%Y-%m-%d') for x in settled}):
+                  rows=[x for x in settled if x.get('direction')==d and datetime.datetime.fromtimestamp(x['openedAt']/1000,localtz).strftime('%Y-%m-%d')==day]
+                  analyze_group('dayDirection='+day+'_'+d,rows)
+          # Persisted checklist statuses; boolean failures may be advisory for STANDARD.
+          names=sorted({k for x in settled for k,v in (x.get('checks') or {}).items() if type(v) is bool})
+          for k in names:
+              for flag in [True,False]:
+                  rows=[x for x in settled if isinstance(x.get('checks'),dict) and x['checks'].get(k) is flag]
+                  analyze_group('recordedCheck='+k+'_'+str(flag),rows)
+          for category,tag in [('ORIGINAL_CORRECT',True),('ORIGINAL_WRONG',False)]:
+              rows=[x for x in settled if x.get('proxyHit') is tag]
+              vals=[abs(bps(x)) for x in rows if bps(x) is not None]
+              vals.sort()
+              print('ATTRIBUTION_MOVE_DISTRIBUTION',json.dumps({
+                  'category':category,'count':len(rows),
+                  'medianAbsBps':round(vals[len(vals)//2],2) if vals else None,
+                  'within2bps':sum(v<=2 for v in vals),'within5bps':sum(v<=5 for v in vals),
+                  'within10bps':sum(v<=10 for v in vals),
+                  'avgAbsBps':round(sum(vals)/len(vals),2) if vals else None
+              },ensure_ascii=False),flush=True)
+              exemplars=(sorted(rows,key=lambda x:abs(bps(x) or 0),reverse=True)[:4]+rows[-3:])
+              seen_examples=set()
+              for x in exemplars:
+                  if x.get('id') in seen_examples:continue
+                  seen_examples.add(x.get('id'))
+                  checked=(x.get('checks') or {})
+                  print('ATTRIBUTION_EXAMPLE',json.dumps({
+                      'category':category,
+                      'timeLocal':clock(x.get('openedAt')),
+                      'direction':x.get('direction'),
+                      'tier':x.get('signalQuality'),
+                      'change3mPct':x.get('change3mPct'),
+                      'volumeRatio':x.get('volumeRatio'),
+                      'rsi14':x.get('rsi14'),
+                      'trend5mCheck':checked.get('trend5m'),
+                      'openPrice':x.get('openPrice'),'closePrice':x.get('closePrice'),
+                      'returnBps':round(bps(x),3) if bps(x) is not None else None,
+                      'lagMs':x.get('expirySampleLagMs')
+                  },ensure_ascii=False),flush=True)
+          # Run lengths of consecutive outcomes in timestamp order, no daily resets.
+          for outcome in [True,False]:
+              runs=[];current=[]
+              for x in settled:
+                  if x.get('proxyHit') is outcome:current.append(x)
+                  else:
+                      if current:runs.append(current)
+                      current=[]
+              if current:runs.append(current)
+              runs.sort(key=lambda xs:len(xs),reverse=True)
+              print('ATTRIBUTION_STREAK',json.dumps({
+                  'type':'ORIGINAL_CORRECT' if outcome else 'ORIGINAL_WRONG',
+                  'top':[{'length':len(xs),'startLocal':clock(xs[0]['openedAt']),
+                          'endLocal':clock(xs[-1]['openedAt']),
+                          'directionCounts':dict(Counter(x.get('direction') for x in xs))}
+                         for xs in runs[:6]]
+              },ensure_ascii=False),flush=True)
+          print('ATTRIBUTION_COMPLETE=true',flush=True)
+          print('CONTRARIAN_READONLY_COMPLETED=true',flush=True)
+          print('TEN_ROUND_CHECK_COMPLETED=true',flush=True)
+          PY

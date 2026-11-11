@@ -49,6 +49,8 @@ jobs:
           assert 'reviewProposedClose(' in src and 'resolveAIExit(d,review)' in src
           assert 'latestAIHoldReason' in Path('genius-bot/decision-context.mjs').read_text()
           assert 'exitReviewCalls' in src
+          assert 'reviewProposedEntry(' in src and 'resolveAIEntry(d,entryReview)' in src
+          assert 'entryReviewCalls' in src
           print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')
           PY
   deploy:
@@ -119,7 +121,7 @@ jobs:
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
           assert 1<=obj['settings']['leverage']<=100
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V149_AI_EXIT_REVIEW'
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V150_DUAL_AI_ENTRY_EXIT'
           positions=obj.get('positions')
           pnl=obj.get('pnlSummary') or {}
           assert isinstance(pnl.get('realizedNetPnl'),(int,float))

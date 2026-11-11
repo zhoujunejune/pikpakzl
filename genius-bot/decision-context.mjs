@@ -89,3 +89,17 @@ export function resolveAIExit(proposal,review){
     {execute:true,status:'TWO_AI_DECISIONS_AGREE'}:
     {execute:false,status:'SECOND_AI_CHOSE_HOLD'};
 }
+
+
+// Two independent model decisions must agree on the candidate direction.
+// An unresponsive or contradicting reviewer is WAIT, never an automatic flip.
+export function resolveAIEntry(proposal,review){
+  if(!proposal||!['LONG','SHORT'].includes(proposal.action))
+    throw Error('NOT_AN_AI_ENTRY_PROPOSAL');
+  if(review==null)return {execute:false,status:'ENTRY_REVIEW_UNAVAILABLE_WAIT'};
+  if(review.symbol!==proposal.symbol||!['LONG','SHORT','WAIT'].includes(review.action))
+    throw Error('INVALID_AI_ENTRY_REVIEW');
+  return review.action===proposal.action?
+    {execute:true,status:'TWO_AI_ENTRIES_AGREE'}:
+    {execute:false,status:'SECOND_AI_DISAGREES_WAIT'};
+}

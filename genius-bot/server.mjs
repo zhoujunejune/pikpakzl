@@ -7,7 +7,7 @@ import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarke
   newState,rollDay,paperOpen,paperMark,parsePortfolioPlan,normalizePaperPositions,
   paperFloatingPnL,paperPnlSummary,MAX_PAPER_POSITIONS} from './engine.mjs';
 import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
-import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit} from './decision-context.mjs';
+import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit,resolveAIEntry} from './decision-context.mjs';
 import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
 const PORT=Number(process.env.GENIUS_PORT||13023),HOST='127.0.0.1';
@@ -28,7 +28,8 @@ const higherCache=new Map(),timeframeBySymbol=new Map();
 const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0,
   wsLagMs:null,bookRestFallbacks:0,bookWsState:'CONNECTING',bookWsMessages:0,aiAttempts:0,aiSuccess:0,aiFailure:0,aiDurationMs:null,aiLastFinishedAt:0,
   lastTrigger:'NONE',marketRestFallbacks:0,higherRequests:0,higherFailures:0,timeframeSnapshots:0,
-  exitReviewCalls:0,exitReviewConfirmed:0,exitReviewRejected:0,exitReviewFailed:0,lastExitReview:null,errors:[]};
+  exitReviewCalls:0,exitReviewConfirmed:0,exitReviewRejected:0,exitReviewFailed:0,lastExitReview:null,
+  entryReviewCalls:0,entryReviewConfirmed:0,entryReviewRejected:0,entryReviewFailed:0,lastEntryReview:null,errors:[]};
 let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
 let socket=null,reconnectTimer=null,bookSocket=null,bookReconnectTimer=null,bookWsLastAt=0;
 
@@ -308,6 +309,65 @@ async function deepseekDecision(markets,positions){
   state.aiStatus='SUCCESS';
   return decisions;
 }
+// An independent AI checks the proposed new entry for direction, cost and
+// timeframe consistency. Only two matching AI decisions create a PAPER entry.
+async function reviewProposedEntry(proposal,market){
+  metrics.entryReviewCalls++;
+  const key=process.env.DEEPSEEK_API_KEY||'';
+  if(!key||!timeframesOf(market.symbol).complete){
+    metrics.entryReviewFailed++;
+    rememberError('AI_ENTRY_REVIEW',!key?'AI_ENTRY_REVIEW_MISSING_KEY':'AI_ENTRY_REVIEW_HIGHER_INCOMPLETE');
+    return null;
+  }
+  const payload={
+    task:'独立审核本次模拟开仓是否真的值得执行，输出明确方向或WAIT。',
+    proposedEntry:proposal,
+    candidateMarket:{
+      ...market,
+      micro:marketMicro(market.symbol),
+      higherTimeframes:timeframesOf(market.symbol).frames,
+      higherTimeframesComplete:timeframesOf(market.symbol).complete
+    },
+    paperCostModel:estimatedEntryCosts(state.settings),
+    recentClosedTradeReview:summarizeClosedTrades(state.closed,25),
+    existingExposure:state.positions.map(p=>({symbol:p.symbol,side:p.side,
+      leverage:p.leverage,marginUsdt:p.marginUsdt,
+      horizon:p.entryHorizon||p.horizon||'UNSPECIFIED'}))
+  };
+  const policy='你是独立的永续合约模拟开仓复核AI，只输出单个JSON对象：{"action":"WAIT","symbol":"BTCUSDT","confidence":0.65,"horizon":"MEDIUM","reason":"至少六字的具体中文理由"}。'
+    +'action只允许LONG、SHORT或WAIT，必须选择请求中的同一币种。不要盲从最初的开仓建议；重新评估短中长周期趋势、行情质量、'
+    +'预期波动空间能否覆盖模型手续费与滑点、净收益风险比、持仓组合和近期失败交易。方向证据不足或成本不合理时自主选择WAIT，'
+    +'确认方向和净收益逻辑时可自主选择LONG或SHORT。不保证盈利，不使用固定胜率承诺。只做模拟交易，不调用真实交易接口。';
+  try{
+    const response=await fetch('https://api.deepseek.com/chat/completions',{
+      method:'POST',signal:AbortSignal.timeout(27000),
+      headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
+      body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
+        response_format:{type:'json_object'},max_tokens:1200,messages:[
+        {role:'system',content:policy},
+        {role:'user',content:JSON.stringify(payload)}
+      ]})
+    });
+    if(!response.ok)throw Error('ENTRY_REVIEW_HTTP_'+response.status);
+    const raw=await response.json(),msg=raw?.choices?.[0]?.message?.content;
+    if(typeof msg!=='string'||!msg.trim())throw Error('ENTRY_REVIEW_EMPTY');
+    const review=parseDecision(msg);
+    if(review.symbol!==market.symbol||!['LONG','SHORT','WAIT'].includes(review.action))
+      throw Error('ENTRY_REVIEW_INVALID_ACTION_OR_SYMBOL');
+    if(review.action===proposal.action)metrics.entryReviewConfirmed++;
+    else metrics.entryReviewRejected++;
+    metrics.lastEntryReview={at:Date.now(),symbol:market.symbol,proposed:proposal.action,
+      result:review.action,reason:review.reason.slice(0,200)};
+    return review;
+  }catch(e){
+    metrics.entryReviewFailed++;
+    rememberError('AI_ENTRY_REVIEW',e);
+    metrics.lastEntryReview={at:Date.now(),symbol:market.symbol,proposed:proposal.action,
+      result:'UNAVAILABLE',reason:String(e?.message||e).slice(0,140)};
+    return null;
+  }
+}
+
 // Independent AI review of each proposed close, with immutable entry thesis,
 // cost-aware mark-to-market and fresh cross-timeframe evidence. Never invent
 // a fixed stop-loss or take-profit. The review is advisory when unavailable.
@@ -440,7 +500,17 @@ async function cycle(){
                 const fresh=await collectMarket(d.symbol);
                 if(before.trend1m!==fresh.trend1m||before.trend5m!==fresh.trend5m||
                     Math.abs(fresh.markPrice/before.markPrice-1)>0.005)continue;
-                paperOpen(state,fresh,d,Date.now());
+                const entryReview=await reviewProposedEntry(d,fresh);
+                const entryResolution=resolveAIEntry(d,entryReview);
+                if(!entryResolution.execute)continue;
+                if(!state.settings.enabled||state.settings.emergencyStop)break;
+                // Refresh once more after the second AI call, and reject stale plans.
+                const latest=await collectMarket(d.symbol);
+                if(before.trend1m!==latest.trend1m||before.trend5m!==latest.trend5m||
+                    Math.abs(latest.markPrice/before.markPrice-1)>0.005)continue;
+                if(state.positions.some(p=>p.symbol===d.symbol)||
+                    state.positions.length>=MAX_PAPER_POSITIONS)continue;
+                paperOpen(state,latest,d,Date.now());
               }
             }
           }

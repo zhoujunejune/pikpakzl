@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {newState,paperOpen,paperMark,DEFAULT_SETTINGS,PAPER_FEE_RATE,PAPER_SLIPPAGE_RATE} from './engine.mjs';
-import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit} from './decision-context.mjs';
+import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit,resolveAIEntry} from './decision-context.mjs';
 const NOW=Date.parse('2026-11-11T14:00:00Z');
 const trade=(symbol,netPnl,reason='AI_CLOSE')=>({symbol,netPnl,paper:true,exitReason:reason,
   side:'LONG',horizon:'MEDIUM',openedAt:NOW-600000,closedAt:NOW,
@@ -79,4 +79,18 @@ test('position context preserves original AI entry thesis and selected timeframe
   assert.equal(r.entryHorizon,'LONG');
   assert.equal(r.lastExitReview.action,'HOLD');
   assert.equal(r.latestAIHoldReason,p.lastHoldReason);
+});
+
+test('independent entry review must agree: conflicts, WAIT or outage never open',()=>{
+ const proposal={action:'LONG',symbol:'SOLUSDT',reason:'短中长周期同方向且成本可覆盖'};
+ assert.deepEqual(resolveAIEntry(proposal,{action:'LONG',symbol:'SOLUSDT'}),
+  {execute:true,status:'TWO_AI_ENTRIES_AGREE'});
+ assert.equal(resolveAIEntry(proposal,{action:'SHORT',symbol:'SOLUSDT'}).execute,false);
+ assert.equal(resolveAIEntry(proposal,{action:'WAIT',symbol:'SOLUSDT'}).execute,false);
+ assert.deepEqual(resolveAIEntry(proposal,null),
+  {execute:false,status:'ENTRY_REVIEW_UNAVAILABLE_WAIT'});
+ assert.throws(()=>resolveAIEntry({action:'WAIT',symbol:'SOLUSDT'},null),
+  /NOT_AN_AI_ENTRY_PROPOSAL/);
+ assert.throws(()=>resolveAIEntry(proposal,{action:'LONG',symbol:'BTCUSDT'}),
+  /INVALID_AI_ENTRY_REVIEW/);
 });

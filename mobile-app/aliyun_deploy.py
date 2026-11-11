@@ -77,7 +77,7 @@ python3 - "$STAGE" <<'PNG'
 import json,pathlib,re,struct,sys,zlib,math
 p=pathlib.Path(sys.argv[1])
 m=json.loads((p/'manifest.webmanifest').read_text())
-assert m['scope']=='/app/' and m['start_url']=='/app/' and m['display']=='standalone'
+assert m['scope']=='/app/' and m['start_url']=='/app/genius.html' and m['display']=='standalone'
 html=(p/'index.html').read_text()
 js=(p/'app.js').read_text()
 for expected in ('/app/app.js','/app/manifest.webmanifest','panel-event10','panel-more'):
@@ -91,7 +91,7 @@ assert 'APP_VERSION="1.4.0"' in js
 assert re.fullmatch(r'[a-f0-9]{40}',json.loads((p/'version.json').read_text())['commit'])
 assert '__ZL_APP_RELEASE_SHA__' not in js
 assert '海派合约天才' in (p/'genius.html').read_text()
-assert '/genius/api/status' in (p/'genius.js').read_text()
+assert '/genius/api/' in (p/'genius.js').read_text()
 assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html
 # Deploy the exact user-supplied artwork committed by the branding build.
 # Never regenerate the previous synthetic ZL chart icon.

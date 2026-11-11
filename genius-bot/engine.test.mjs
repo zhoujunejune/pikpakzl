@@ -16,12 +16,17 @@ const answer=(action='LONG',symbol='BTCUSDT')=>({
  action,symbol,confidence:.8,horizon:'MEDIUM',
  reason:'根据多个周期的行情趋势判断模拟交易方向并持续研究持仓'});
 test('paper-only, three positions maximum, exact settings schema',()=>{
- assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V146_PAPER_100X');
+ assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V147_CONTROL_FIX');
  assert.equal(MAX_PAPER_POSITIONS,3);
  assert.equal(DEFAULT_SETTINGS.enabled,false);
  assert.equal(validateSettings({...DEFAULT_SETTINGS}).leverage,2);
  assert.equal(validateSettings({...DEFAULT_SETTINGS,leverage:100}).leverage,100);
  assert.equal(validateSettings({...DEFAULT_SETTINGS,leverage:1}).leverage,1);
+ // A 30 USDT simulated margin must be valid on a 200 USDT paper account.
+ assert.equal(validateSettings({...DEFAULT_SETTINGS,leverage:50,marginUsdt:30}).marginUsdt,30);
+ assert.equal(validateSettings({...DEFAULT_SETTINGS,marginUsdt:100}).marginUsdt,100);
+ assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,paperBalance:10,marginUsdt:30}),
+   /MARGIN_EXCEEDS_PAPER_START_BALANCE/);
  assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:101}),/INVALID_leverage/);
  assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:0}),/INVALID_leverage/);
  assert.throws(()=>validateSettings({...DEFAULT_SETTINGS,leverage:125}),/INVALID_leverage/);
@@ -129,4 +134,15 @@ test('cumulative simulation PnL deducts entry and estimated exit fees and slippa
  assert.equal(paperMark(state,{...market(),markPrice:50300},NOW,'AI_CLOSE').ok,true);
  assert.ok(state.realizedNetPnl!==0);
  assert.equal(paperPnlSummary(state,[],NOW).estimatedCumulativePnl,state.realizedNetPnl);
+});
+
+test('AI toggle can be switched independently of trade sizing on a paper account',()=>{
+ const start={...DEFAULT_SETTINGS,enabled:true,leverage:50,marginUsdt:30};
+ const closed=validateSettings({...start,enabled:false,emergencyStop:false});
+ assert.equal(closed.enabled,false);
+ assert.equal(closed.marginUsdt,30);
+ assert.equal(closed.leverage,50);
+ const opened=validateSettings({...closed,enabled:true});
+ assert.equal(opened.enabled,true);
+ assert.equal(opened.marginUsdt,30);
 });

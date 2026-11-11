@@ -137,7 +137,7 @@ test("海派事件合约 v1.3.8 retains only EVENT10 with no Guardian API or nav
  assert.ok(src.includes('api("/event10/api/status",9000,controller.signal)'));
  assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
  assert.ok(src.includes('navigate(["event10","stats","records","more"].includes(initial)?initial:"event10")'));
- assert.ok(src.includes('APP_VERSION="1.3.8"'));
+ assert.ok(src.includes('APP_VERSION="1.3.9"'));
  assert.equal(manifest.name,"海派事件合约");
 });
 test("app independently discovers current strategy from live status, verifies ledger only when available",()=>{

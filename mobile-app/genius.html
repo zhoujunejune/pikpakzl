@@ -1,22 +1,45 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#e9f5ff"><title>海派合约天才</title>
 <style>
-:root{color-scheme:light;--bg:#e9f5ff;--blue:#2389d3;--text:#143555;--muted:#64809a;--line:#dceaf4;--card:#fff;--good:#15815e;--bad:#bf4a58}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#d9edff,#eff7ff 440px);color:var(--text);font:15px/1.55 system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif}.shell{max-width:780px;margin:auto;padding:22px 17px 48px}.header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:22px}.brand{display:flex;gap:11px;align-items:center}.brand img{width:55px;height:55px;border-radius:14px}.brand b{font-size:20px;display:block}.brand span{font-size:12px;color:var(--muted)}.tag{font-size:11px;border-radius:999px;padding:5px 10px;background:#eef5fa;border:1px solid #d4e7f4;white-space:nowrap}.card{background:var(--card);border:1px solid #e0edf7;box-shadow:0 6px 26px #2b64910b;border-radius:20px;padding:18px;margin:14px 0}.hero{background:linear-gradient(140deg,#fff,#eaf6ff);border:1px solid #d5e9f8}.mini{font-size:12px;color:var(--muted)}h1{font-size:25px;line-height:1.25;margin:12px 0 8px}h2{font-size:17px;margin:0 0 12px}.price{font-size:30px;font-weight:780;font-variant-numeric:tabular-nums;margin:12px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat{padding:12px;border:1px solid #deecf6;border-radius:14px;background:#f8fcff}.stat span{display:block;font-size:12px;color:var(--muted)}.stat b{font-size:21px;font-variant-numeric:tabular-nums}.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #edf3f8}.row:last-child{border-bottom:none}.row span{color:var(--muted);font-size:13px}.row strong{text-align:right}.buttons{display:flex;gap:10px;margin-top:14px}.btn{appearance:none;border:1px solid #b9d4e9;color:#235d8b;background:#fff;border-radius:11px;padding:11px 14px;font-weight:650;font-size:14px;cursor:pointer;flex:1}.btn.main{background:var(--blue);border-color:var(--blue);color:white}.btn.danger{background:#fff0f1;border-color:#e9b8bf;color:#a83344}.btn:disabled{opacity:.5;cursor:not-allowed}.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.field input,.field select{width:100%;min-height:43px;padding:8px 10px;border:1px solid #cfe1ef;border-radius:10px;background:#fbfdff;font:inherit;color:var(--text)}.note{padding:11px;background:#f1f8ff;border-radius:12px;color:#52758f;font-size:12px;margin-top:12px}.warn{background:#fff7e9;color:#86663e}.status{font-size:13px;color:var(--muted)}.good{color:var(--good)}.bad{color:var(--bad)}.pill{display:inline-block;border-radius:100px;padding:3px 9px;background:#edf5fa;color:#587995;font-size:12px}.history{display:grid;gap:9px}.history>div{border:1px solid var(--line);padding:11px;border-radius:12px}.history small{display:block;color:var(--muted)}a{color:#247fc2}@media(max-width:380px){.fields{grid-template-columns:1fr}.price{font-size:26px}.brand b{font-size:18px}}
+:root{color-scheme:light;--bg:#edf7ff;--blue:#248bd5;--text:#163955;--muted:#66849c;--line:#dceaf4;--card:#fff;--good:#188367;--bad:#be5260}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#e1f1ff,#f2f9ff 440px);color:var(--text);font:15px/1.52 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.shell{max-width:780px;margin:auto;padding:18px 16px 46px}.header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}.brand{display:flex;gap:11px;align-items:center}.brand img{width:50px;height:50px;border-radius:13px}.brand b{font-size:19px;display:block}.brand span{font-size:12px;color:var(--muted)}.tag{font-size:11px;border-radius:999px;padding:4px 9px;background:#eef5fa;border:1px solid #d4e7f4}
+.card{background:#fff;border:1px solid #dfebf5;box-shadow:0 6px 26px #2b64910b;border-radius:20px;padding:18px;margin:13px 0}.hero{background:linear-gradient(145deg,#fff,#eaf6ff)}
+h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 0 12px}.mini{font-size:12px;color:var(--muted)}.price{font-size:30px;font-weight:750;font-variant-numeric:tabular-nums;margin:10px 0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #edf3f8}.row:last-child{border-bottom:none}.row span{color:var(--muted);font-size:13px}.row strong{text-align:right;overflow-wrap:anywhere}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat{padding:12px;border:1px solid #deecf6;border-radius:14px;background:#f9fcff}.stat span{display:block;font-size:12px;color:var(--muted)}.stat b{font-size:20px;font-variant-numeric:tabular-nums}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.field label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}.field input{width:100%;min-height:46px;padding:9px 11px;border:1px solid #cfe1ef;border-radius:11px;background:#fbfdff;font:inherit;color:var(--text)}
+.buttons{display:flex;gap:10px;margin-top:14px}.btn{appearance:none;border:1px solid #b9d4e9;color:#235d8b;background:#fff;border-radius:12px;padding:12px 14px;font-weight:650;font-size:14px;cursor:pointer;flex:1}.btn.main{background:var(--blue);border-color:var(--blue);color:white}.btn.danger{background:#fff2f2;border-color:#f0c7cb;color:#a83e51}.btn:disabled{opacity:.5}
+.pill{display:inline-block;border-radius:99px;padding:3px 9px;background:#eaf4fa;color:#527790;font-size:12px}.note{padding:11px;background:#eff8ff;border-radius:12px;color:#52758f;font-size:12px;margin-top:12px}.warn{background:#fff8ec;color:#826341}.status{font-size:13px;color:var(--muted);margin-top:11px;min-height:18px}.history{display:grid;gap:9px}.history>div{border:1px solid var(--line);padding:11px;border-radius:12px}.history small{display:block;color:var(--muted)}a{color:#247fc2}
+@media(max-width:380px){.price{font-size:27px}.brand b{font-size:18px}.field label{font-size:12px}}
 </style></head><body><main class="shell">
-<header class="header"><div class="brand"><img src="/app/icon-192.png" alt="海派合约天才图标"><div><b>海派合约天才</b><span>DeepSeek · 永续合约智能模拟</span></div></div><span class="tag">v1.4.0</span></header>
-<section class="card hero"><div class="row"><strong>BTC / ETH / SOL · U本位永续合约</strong><span class="pill" id="connection">正在连接</span></div><h1>AI 自动分析 · 模拟执行</h1><p class="mini">根据实时公开行情调用 DeepSeek 分析 LONG / SHORT / WAIT，模拟开仓、止盈止损和交易记录。<strong>不会发出真实币安订单。</strong></p><div class="price" id="markPrice">—</div><div class="row"><span>最新分析</span><strong id="aiDecision">尚无分析</strong></div><div class="row"><span>分析模型</span><strong id="aiModel">DeepSeek · 未连接</strong></div><div class="row"><span>引擎状态</span><strong id="engineState">未启动</strong></div><div class="note warn">模拟交易没有真实成交、资金费率、强平或滑点保障，结果不能用于证明实盘盈利。真实资金自动下单始终关闭。</div></section>
+<header class="header"><div class="brand"><img src="/app/icon-192.png" alt="海派合约天才图标"><div><b>海派合约天才</b><span>DeepSeek · 全自动行情分析</span></div></div><span class="tag">自主研究版</span></header>
+<section class="card hero">
+ <div class="row"><strong>BTC / ETH / SOL · AI 自选机会</strong><span class="pill" id="connection">正在连接</span></div>
+ <h1>AI 自主分析</h1>
+ <p class="mini">实时采集币安公开永续合约行情，AI 自主判断开仓、持有、平仓和模拟止盈止损。无需手动制定交易策略。</p>
+ <div class="price" id="markPrice">行情待更新</div>
+ <div class="row"><span>行情接收</span><strong id="marketStream">正在检查</strong></div>
+ <div class="row"><span>AI 最新决策</span><strong id="aiDecision">尚无分析</strong></div>
+ <div class="row"><span>AI 分析状态</span><strong id="engineState">尚未启动</strong></div>
+ <div class="row"><span>最近分析时间</span><strong id="lastAnalysis">—</strong></div>
+ <div class="note warn">这是模拟交易版本，AI 不会向币安发出真实订单。连续行情不代表 AI 每秒重新推理，模型分析按后台节奏执行。</div>
+</section>
+<section class="card">
+ <h2>AI 自动分析</h2>
+ <p class="mini">开启后由后台持续获取行情，自主选择 BTC、ETH 或 SOL 的模拟机会；平仓和止盈止损由 AI 判断，另设不可关闭的安全熔断。</p>
+ <div class="buttons"><button id="toggle" class="btn main">开启 AI 自动分析</button></div>
+ <h2 style="margin-top:24px">只需设置两项</h2>
+ <div class="fields">
+  <div class="field"><label for="leverage">杠杆倍数（1—10 倍）</label><input id="leverage" type="number" min="1" max="10" step="1" inputmode="numeric"></div>
+  <div class="field"><label for="marginUsdt">每笔开仓金额（USDT）</label><input id="marginUsdt" type="number" min="1" max="20" step="0.5" inputmode="decimal"></div>
+ </div>
+ <div class="buttons"><button id="save" class="btn">保存这两项</button></div>
+ <div class="status" id="saveStatus" role="status" aria-live="polite">正在加载…</div>
+ <button id="stop" class="btn danger" style="width:100%;margin-top:13px">紧急停止 AI 模拟并请求平仓</button>
+</section>
 <section class="grid"><div class="stat"><span>模拟账户余额</span><b id="balance">—</b></div><div class="stat"><span>已结束模拟交易</span><b id="tradeCount">—</b></div></section>
-<section class="card"><h2>交易参数 · 可调整</h2><div class="fields">
-<div class="field"><label for="symbol">交易币种</label><select id="symbol"><option value="BTCUSDT">BTCUSDT</option><option value="ETHUSDT">ETHUSDT</option><option value="SOLUSDT">SOLUSDT</option></select></div>
-<div class="field"><label for="paperBalance">模拟资金 USDT（10—10000）</label><input id="paperBalance" type="number" min="10" max="10000" step="1" inputmode="decimal"></div>
-<div class="field"><label for="leverage">杠杆（1—10倍）</label><input id="leverage" type="number" min="1" max="10" step="1" inputmode="numeric"></div>
-<div class="field"><label for="marginUsdt">单笔保证金 USDT（1—100）</label><input id="marginUsdt" type="number" min="1" max="100" step="0.5" inputmode="decimal"></div>
-<div class="field"><label for="takeProfitPct">止盈（价格%）</label><input id="takeProfitPct" type="number" min="0.2" max="5" step="0.1" inputmode="decimal"></div>
-<div class="field"><label for="stopLossPct">止损（价格%）</label><input id="stopLossPct" type="number" min="0.2" max="3" step="0.1" inputmode="decimal"></div>
-<div class="field"><label for="maxDailyLossUsdt">每日模拟最大亏损 USDT</label><input id="maxDailyLossUsdt" type="number" min="1" max="200" step="1" inputmode="decimal"></div>
-<div class="field"><label for="cooldownMinutes">开仓冷却时间（分钟）</label><input id="cooldownMinutes" type="number" min="5" max="1440" step="1" inputmode="numeric"></div>
-</div><p class="mini">单笔保证金还不能超过模拟初始资金的10%；风险超出每日限额时会拒绝保存。运行中可修改参数，但不允许带仓切换币种或模拟资金。</p><div class="buttons"><button id="save" class="btn">保存参数</button><button id="toggle" class="btn main">启用自动模拟</button></div><button id="stop" class="btn danger" style="width:100%;margin-top:10px">紧急停止模拟并请求平仓</button><div class="status" id="saveStatus" role="status" aria-live="polite" style="margin-top:12px">设置尚未加载</div></section>
-<section class="card"><h2>当前模拟持仓</h2><div id="position" class="mini">暂无模拟持仓</div></section>
-<section class="card"><h2>最近模拟交易记录</h2><div class="history" id="history"><p class="mini">正在读取记录…</p></div></section>
-<section class="card"><h2>应用说明</h2><p class="mini">数据来源：币安公开U本位永续合约行情；方向判断：DeepSeek V4.1-Flash 高强度思考（需要服务端有效 API 密钥）；本程序只模拟执行，费用、滑点为估算。后台没有实盘交易开关。</p><p class="mini"><a href="/app/">查看旧版10分钟事件合约研究页面</a> · <a href="/genius/api/status" target="_blank" rel="noopener">查看引擎状态</a></p></section>
+<section class="card"><h2>AI 当前模拟持仓</h2><div id="position" class="mini">暂无模拟持仓</div></section>
+<section class="card"><h2>最近模拟交易</h2><div class="history" id="history"><p class="mini">正在读取…</p></div></section>
+<section class="card"><h2>运行说明</h2><p class="mini">行情订阅采用 WebSocket，断线时尝试重连并使用公开 REST 行情补偿。AI 推理可能超时或返回 WAIT；无有效行情和有效决策时不会新开仓。本页面仅是模拟研究，不提供实盘自动下单。</p><p class="mini"><a href="/app/">旧版十分钟事件合约研究</a> · <a href="/genius/api/status" target="_blank" rel="noopener">查看引擎状态</a></p></section>
 </main><script src="/app/genius.js" defer></script></body></html>

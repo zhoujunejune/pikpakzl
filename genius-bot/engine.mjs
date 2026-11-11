@@ -2,8 +2,7 @@
 // Financial research software, not a real-money order executor.
 export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V142_AI_EXIT_ONLY';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
-  symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5,
-  maxDailyLossUsdt:5,cooldownMinutes:1});
+  symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
 const finite = Number.isFinite;
 const round=(n,p=6)=>Number(n.toFixed(p));
 export function validateSettings(value){
@@ -14,12 +13,12 @@ export function validateSettings(value){
   for(const name of ['enabled','emergencyStop'])if(typeof s[name]!=='boolean')throw Error('INVALID_'+name);
   if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol))throw Error('UNSUPPORTED_SYMBOL');
   const ranges={paperBalance:[10,10000],leverage:[1,10],marginUsdt:[1,100],
-    maxDailyLossUsdt:[1,200],cooldownMinutes:[1,1440]};
+    };
   for(const [name,[min,max]] of Object.entries(ranges)){
     if(typeof s[name]!=='number'||!finite(s[name])||s[name]<min||s[name]>max)
       throw Error('INVALID_'+name);
   }
-  if(!Number.isInteger(s.leverage)||!Number.isInteger(s.cooldownMinutes))throw Error('INVALID_INTEGER_SETTING');
+  if(!Number.isInteger(s.leverage))throw Error('INVALID_INTEGER_SETTING');
   if(s.marginUsdt>s.paperBalance*0.1)throw Error('MARGIN_OVER_TEN_PERCENT_OF_PAPER_BALANCE');
   return s;
 }
@@ -82,9 +81,7 @@ export function rollDay(state,now){
 export function paperOpen(state,market,decision,now=Date.now()){
   const s=state.settings;
   if(!s.enabled||s.emergencyStop||state.position)return {ok:false,reason:'NOT_ARMED_OR_ALREADY_OPEN'};
-  if(decision.action==='WAIT'||decision.confidence<0.6)return {ok:false,reason:'AI_WAIT_OR_LOW_SCORE'};
-  if(state.lastActionAt&&now-state.lastActionAt<s.cooldownMinutes*60000)return {ok:false,reason:'COOLDOWN'};
-  if(state.dayStart-state.balance>=s.maxDailyLossUsdt)return {ok:false,reason:'DAILY_LOSS_LIMIT'};
+  if(!['LONG','SHORT'].includes(decision.action))return {ok:false,reason:'AI_DID_NOT_REQUEST_ENTRY'};
   if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(market.symbol)||decision.symbol&&market.symbol!==decision.symbol||now-market.checkedAt>5000)throw Error('STALE_OR_MISMATCHED_MARKET');
   // A numerical self-confidence from an LLM is not a calibrated win probability.
   const side=decision.action==='LONG'?'LONG':'SHORT',sign=side==='LONG'?1:-1;

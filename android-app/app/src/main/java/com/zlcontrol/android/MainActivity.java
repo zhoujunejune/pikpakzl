@@ -54,7 +54,8 @@ import java.util.List;
  */
 public final class MainActivity extends Activity {
     private static final String HOST="prediction.47-237-188-69.sslip.io";
-    private static final String START_URL="https://"+HOST+"/app/";
+    private static final String START_URL="https://"+HOST+"/app/genius.html";
+    private static final String EVENT10_URL="https://"+HOST+"/app/#event10";
     private static final int NOTIFICATION_REQUEST=734;
     public static final String ACTION_OPEN_BINANCE="com.zlcontrol.android.OPEN_BINANCE_MANUAL";
     public static final String ACTION_VIEW_EVENT10="com.zlcontrol.android.VIEW_EVENT10";
@@ -318,7 +319,7 @@ public final class MainActivity extends Activity {
         boolean fromSignal=launchIntent!=null&&
             (ACTION_OPEN_BINANCE.equals(launchIntent.getAction())||
              ACTION_VIEW_EVENT10.equals(launchIntent.getAction()));
-        webView.loadUrl(START_URL+(fromSignal?"#event10":""));
+        webView.loadUrl(fromSignal?EVENT10_URL:START_URL);
         if(launchIntent!=null&&ACTION_OPEN_BINANCE.equals(launchIntent.getAction()))
             statusHandler.post(this::launchBinance);
     }
@@ -328,7 +329,7 @@ public final class MainActivity extends Activity {
         if(intent==null)return;
         if(ACTION_OPEN_BINANCE.equals(intent.getAction()))launchBinance();
         else if(ACTION_VIEW_EVENT10.equals(intent.getAction())&&webView!=null)
-            webView.loadUrl(START_URL+"#event10");
+            webView.loadUrl(EVENT10_URL);
     }
     private void launchBinance(){
         // Only launch Binance's installed official app; never inject orders,
@@ -607,7 +608,7 @@ public final class MainActivity extends Activity {
         mascotLp.bottomMargin=dp(10);
         layout.addView(mascot,mascotLp);
         TextView subtitle=new TextView(this);
-        subtitle.setText("欢迎来到海派信号站");
+        subtitle.setText("欢迎来到海派合约天才");
         subtitle.setTextSize(17);
         subtitle.setTypeface(null,android.graphics.Typeface.BOLD);
         subtitle.setTextColor(Color.rgb(21,61,95));

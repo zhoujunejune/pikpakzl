@@ -90,9 +90,10 @@ a{color:#247fc2}
  <div class="buttons"><button id="toggle" class="btn main">开启 AI 自动分析</button></div>
  <h2 style="margin-top:24px">只需设置两项</h2>
  <div class="fields">
-  <div class="field"><label for="leverage">杠杆倍数（1—10 倍）</label><input id="leverage" type="number" min="1" max="10" step="1" inputmode="numeric"></div>
+  <div class="field"><label for="leverage">杠杆倍数（1—100 倍）</label><input id="leverage" type="number" min="1" max="100" step="1" inputmode="numeric"></div>
   <div class="field"><label for="marginUsdt">每笔开仓金额（USDT）</label><input id="marginUsdt" type="number" min="1" max="20" step="0.5" inputmode="decimal"></div>
  </div>
+ <p class="mini" style="margin:9px 0 0">仅模拟：100倍杠杆下，约1%的反向价格波动就可能耗尽保证金；当前模拟器未完整模拟真实强平及资金费。</p>
  <div class="buttons"><button id="save" class="btn">保存这两项</button></div>
  <div class="status" id="saveStatus" role="status" aria-live="polite">正在加载…</div>
  <button id="stop" class="btn danger" style="width:100%;margin-top:13px">紧急停止 AI 模拟并请求平仓</button>

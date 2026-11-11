@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V141_AUTONOMOUS';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V142_AI_EXIT_ONLY';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5,
   takeProfitPct:1.2,stopLossPct:0.8,maxDailyLossUsdt:5,cooldownMinutes:1});
@@ -35,13 +35,6 @@ export function parseDecision(payload){
   if(d.symbol!=null&&!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(d.symbol))throw Error('INVALID_AI_SYMBOL');
   const out={action:d.action,reason:d.reason,confidence:round(d.confidence,3)};
   if(d.symbol)out.symbol=d.symbol;
-  for(const k of ['takeProfitPct','stopLossPct']){
-    if(d[k]!=null){
-      const max=k==='stopLossPct'?3:5;
-      if(typeof d[k]!=='number'||!finite(d[k])||d[k]<0.2||d[k]>max)throw Error('INVALID_AI_'+k);
-      out[k]=round(d[k],3);
-    }
-  }
   return out;
 }
 export function ema(values,period){
@@ -99,49 +92,31 @@ export function paperOpen(state,market,decision,now=Date.now()){
   const entry=round(market.markPrice*(1+sign*0.0003),6); // pessimistic paper slippage
   const qty=round(s.marginUsdt*s.leverage/entry,8),openFee=round(qty*entry*0.0005,6);
   if(qty<=0||s.marginUsdt+openFee>state.balance)return {ok:false,reason:'INSUFFICIENT_PAPER_FUNDS'};
-  const riskCapPct=Math.max(0.2,Math.min(3,100*s.maxDailyLossUsdt/(s.marginUsdt*s.leverage)));
-  const stopPct=Math.min(decision.stopLossPct??s.stopLossPct,riskCapPct);
-  const tpPct=decision.takeProfitPct??s.takeProfitPct;
-  const stop=round(entry*(1-sign*stopPct/100),6);
-  const takeProfit=round(entry*(1+sign*tpPct/100),6);
+  // Entry is never assigned a fixed stop/take-profit trigger. AI decides when to close.
   state.balance=round(state.balance-openFee,6);
   state.position={id:'paper-'+now,symbol:market.symbol,side,qty,marginUsdt:s.marginUsdt,leverage:s.leverage,
-    entry,stop,takeProfit,openedAt:now,openFee,source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
+    entry,openedAt:now,openFee,source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
   state.lastActionAt=now;
   return {ok:true,position:state.position};
 }
-export function paperMark(state,market,now=Date.now(),forceClose=false){
+/** Close a simulated position only on a completed AI CLOSE decision or an explicit emergency stop.
+ * WebSocket price ticks NEVER trigger automatic take-profit/stop-loss exits.
+ */
+export function paperMark(state,market,now=Date.now(),closeReason=null){
   const p=state.position;
   if(!p)return {ok:false,reason:'NO_POSITION'};
   if(market.symbol!==p.symbol||now-market.checkedAt>10000)throw Error('MARKET_NOT_FRESH');
-  const sign=p.side==='LONG'?1:-1,price=market.markPrice;
-  const stopHit=sign*(price-p.stop)<=0,tpHit=sign*(price-p.takeProfit)>=0;
-  if(!stopHit&&!tpHit&&!forceClose)return {ok:false,reason:'STILL_OPEN'};
-  const close=round(price*(1-sign*0.0003),6); // adverse simulated slippage
+  if(closeReason!=='AI_CLOSE'&&closeReason!=='EMERGENCY_STOP')return {ok:false,reason:'AI_HOLD'};
+  const sign=p.side==='LONG'?1:-1;
+  const close=round(market.markPrice*(1-sign*0.0003),6); // simulation slippage only
   const gross=round(sign*(close-p.entry)*p.qty,6),fee=round(close*p.qty*0.0005,6);
   const net=round(gross-p.openFee-fee,6);
   state.balance=round(state.balance+gross-fee,6);
-  const trade={...p,close,closedAt:now,exitReason:forceClose==='AI_CLOSE'?'AI_CLOSE':forceClose?'EMERGENCY_STOP':stopHit?'STOP_LOSS':'TAKE_PROFIT',
+  // Legacy stop/takeProfit values from old paper positions are stripped from new history.
+  const {stop,takeProfit,...cleanPosition}=p;
+  const trade={...cleanPosition,close,closedAt:now,exitReason:closeReason,
     grossPnl:gross,netPnl:net,closeFee:fee,paper:true};
   state.closed.unshift(trade);state.closed=state.closed.slice(0,500);
   state.position=null;state.lastActionAt=now;
   return {ok:true,trade};
-}
-/** Model may tighten/adjust exit targets; absolute per-trade hard-loss limit remains server-owned. */
-export function paperAdjustStops(state,market,decision){
-  const p=state.position;
-  if(!p||p.symbol!==market.symbol)return {ok:false,reason:'NO_MATCHING_POSITION'};
-  if(!['HOLD','WAIT'].includes(decision.action))return {ok:false,reason:'NOT_HOLD_DECISION'};
-  const sign=p.side==='LONG'?1:-1;
-  const maxRisk=Math.max(0.2,Math.min(3,100*state.settings.maxDailyLossUsdt/(p.marginUsdt*p.leverage)));
-  if(decision.stopLossPct!==undefined){
-    const stopPct=Math.min(decision.stopLossPct,maxRisk);
-    const newStop=round(p.entry*(1-sign*stopPct/100),6);
-    // AI may tighten protection, but never widen a previously accepted stop.
-    p.stop=sign>0?Math.max(p.stop,newStop):Math.min(p.stop,newStop);
-  }
-  if(decision.takeProfitPct!==undefined){
-    p.takeProfit=round(p.entry*(1+sign*decision.takeProfitPct/100),6);
-  }
-  return {ok:true,stop:p.stop,takeProfit:p.takeProfit};
 }

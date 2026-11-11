@@ -7,6 +7,7 @@ import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarke
   newState,rollDay,paperOpen,paperMark,parsePortfolioPlan,normalizePaperPositions,
   paperFloatingPnL,paperPnlSummary,MAX_PAPER_POSITIONS} from './engine.mjs';
 import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
+import {summarizeClosedTrades,estimatedEntryCosts,assessPositions} from './decision-context.mjs';
 import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
 const PORT=Number(process.env.GENIUS_PORT||13023),HOST='127.0.0.1';
@@ -240,12 +241,29 @@ function timeframesOf(symbol){
 async function collectMarkets(){
   const results=await Promise.allSettled(SYMBOLS.map(s=>collectMarket(s)));
   const valid=results.flatMap(x=>x.status==='fulfilled'?[x.value]:[]);
-  if(!valid.length)throw Error('ALL_MARKETS_UNAVAILABLE');
+  results.forEach((r,i)=>{if(r.status==='rejected')rememberError('MARKET_'+SYMBOLS[i],r.reason);});
+  if(!valid.length){
+    const details=results.map((r,i)=>SYMBOLS[i]+':'+String(r.reason?.message||r.reason).slice(0,42)).join(' | ');
+    throw Error('ALL_MARKETS_UNAVAILABLE: '+details.slice(0,190));
+  }
   if(state.settings.enabled){
     await Promise.all(valid.map(x=>loadHigherTimeframes(x.symbol)));
   }
   return valid;
 }
+const DECISION_POLICY=[
+  '你是多币种永续合约模拟研究AI。只返回JSON对象：{"decisions":[{"action":"HOLD","symbol":"ETHUSDT","horizon":"MEDIUM","confidence":0.7,"reason":"至少6字的具体中文分析原因"}]}。',
+  '每个币种最多一条，支持BTCUSDT、ETHUSDT、SOLUSDT。无仓位可LONG/SHORT/WAIT，持有仓位必须HOLD或CLOSE；每个持仓必须给出决定。',
+  '短线SHORT、中线MEDIUM、长线LONG由你自主选择；比较1m、5m、15m、1h、4h、日线、周线和实时成交盘口。',
+  '开仓前要分析交易费与滑点、市场波动潜力、预期净收益和风险收益比。若预期波动不足以覆盖模拟成本、证据不足或周期明显冲突，可以WAIT，不要为了多交易而入场。',
+  '评估持仓应依据该仓选定的周期：短周期噪声不应自动导致中长线平仓。比较趋势是否失效、持仓结构与风险暴露、浮动盈亏和预计平仓后的净盈亏，独立决定HOLD或CLOSE。',
+  '亏损不意味着必须立刻平仓，盈利也不意味着必须立即止盈；当趋势失效或风险收益显著恶化时，可主动CLOSE。不要仅为避免实现亏损而长期死扛。',
+  '结合recentClosedTradeReview识别同一币种、同一周期反复小亏、交易费侵蚀或过早平仓的问题；交易历史只是少量模拟样本，不是训练结果，不意味着未来必定盈利。',
+  'reason必须具体说明关键周期信号和净收益/风险考虑，若CLOSE需说明趋势失效、风险变化或获利兑现依据。不得把未知行情当作真实值；已有持仓缺少对应最新市场价格不能CLOSE。',
+  '新增开仓只允许higherTimeframesComplete=true的币种。单币种不可重复持仓，最多三笔。',
+  '每笔止盈、止损和平仓都只由你实时自主决定，没有固定价格/百分比自动止盈止损；紧急停止仅供用户手动操作。不要保证盈利。仅模拟交易，不进行币安真实下单。'
+].join('');
+
 async function deepseekDecision(markets,positions){
   const key=process.env.DEEPSEEK_API_KEY||'';
   if(!key){state.aiStatus='KEY_NOT_CONFIGURED';return null;}
@@ -255,25 +273,22 @@ async function deepseekDecision(markets,positions){
     high20m:m.high20m,low20m:m.low20m,micro:marketMicro(m.symbol),
     higherTimeframes:timeframesOf(m.symbol).frames,
     higherTimeframesComplete:timeframesOf(m.symbol).complete}));
-  const snapshots=markets.map(m=>({symbol:m.symbol,markPrice:m.markPrice,checkedAt:m.checkedAt}));
   const payload={
-    task:'Manage all current PAPER positions and identify opportunities in still-unheld instruments. '+
-      'Return one HOLD/CLOSE decision for EACH held symbol, and optional LONG/SHORT/WAIT for each unheld symbol.',
-    maxPositions:MAX_PAPER_POSITIONS,positions:positions.map(p=>({
-      symbol:p.symbol,side:p.side,entry:p.entry,qty:p.qty,
-      unrealizedPnlUsdt:paperFloatingPnL([p],snapshots).total,
-      horizon:p.horizon||'UNSPECIFIED',heldSeconds:Math.floor((Date.now()-p.openedAt)/1000),
-      openedAt:p.openedAt})),markets:marketViews,
-    rules:'Paper only; only BTC/ETH/SOL and at most one position per symbol, three total. '+
-      'No fixed stop-loss/take-profit. AI explicitly chooses CLOSE or HOLD for held positions. '+
-      'Do not assume risk-free profit.'};
+    task:'Manage all PAPER positions and evaluate optional entries. Always provide a HOLD/CLOSE decision for EACH held symbol; optional LONG/SHORT/WAIT for each unheld symbol.',
+    maxPositions:MAX_PAPER_POSITIONS,
+    paperTradingCostModel:estimatedEntryCosts(state.settings),
+    recentClosedTradeReview:summarizeClosedTrades(state.closed),
+    positions:assessPositions(positions,markets,Date.now()),
+    markets:marketViews,
+    rules:'PAPER ONLY: no real orders; independent AI-managed exits, no fixed stop loss or take profit; unknown prices are not zero PnL; no risk-free assumptions.'
+  };
   lastModelCallAt=Date.now();metrics.aiAttempts++;state.aiStatus='THINKING';
   const response=await fetch('https://api.deepseek.com/chat/completions',{
     method:'POST',signal:AbortSignal.timeout(27000),
     headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
     body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
       response_format:{type:'json_object'},max_tokens:2400,messages:[
-      {role:'system',content:'你是多币种永续合约模拟研究AI。只输出JSON对象，格式为{"decisions":[{"action":"HOLD","symbol":"ETHUSDT","horizon":"MEDIUM","confidence":0.7,"reason":"中文具体原因至少6字"}]}。每个币种最多一条，BTCUSDT、ETHUSDT、SOLUSDT；无仓币种可以LONG、SHORT、WAIT；已有持仓的每个币种必须输出HOLD或CLOSE（不能开反方向仓）；短线SHORT、中线MEDIUM、长线LONG由你自主选择。请综合秒级成交与盘口以及1m、5m、15m、1h、4h、日线、周线趋势，考虑浮盈亏、持仓时间和总组合敞口。已有持仓和新增机会都应检查。最多三笔、同币种不可重复；已持有仓位如果缺少市场价格不能决定CLOSE。新增开仓仅当higherTimeframesComplete为true。每笔止盈、止损和平仓都由AI根据实时综合分析自主给出CLOSE，没有任何固定价格自动平仓；紧急停止是用户手动操作。不要保证盈利。仅模拟交易，绝不进行真实币安下单。'},
+      {role:'system',content:DECISION_POLICY},
       {role:'user',content:JSON.stringify(payload)}]})});
   if(!response.ok)throw Error('DEEPSEEK_HTTP_'+response.status);
   const obj=await response.json(),msg=obj?.choices?.[0]?.message?.content;
@@ -383,6 +398,7 @@ function publicSnapshot(){
             change20BarsPct:v.change20BarsPct,lastClosedAt:v.lastClosedAt}]))}]))},
     floatingPnl:paperFloatingPnL(state.positions,state.marketSnapshots||[]),
     pnlSummary:paperPnlSummary(state,state.marketSnapshots||[]),
+    recentTradeQuality:summarizeClosedTrades(state.closed),
     lastError:state.lastError,marketError,totalClosed:state.closed.length,
     cycleCount:state.cycleCount||0,tradingSafety:'NO_REAL_ORDERS_NO_API_KEY_IN_CLIENT',
     paperLimitations:'Paper-only estimates; no real execution, funding, liquidation, depth or real exchange-side protective orders.'};

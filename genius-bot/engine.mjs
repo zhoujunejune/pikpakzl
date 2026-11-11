@@ -1,6 +1,8 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V147_CONTROL_FIX';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V148_COST_REVIEW';
+export const PAPER_FEE_RATE = 0.0005;
+export const PAPER_SLIPPAGE_RATE = 0.0003;
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
 const finite = Number.isFinite;
@@ -127,8 +129,8 @@ export function paperOpen(state,market,decision,now=Date.now()){
   const locked=positions.reduce((v,p)=>v+p.marginUsdt,0);
   if(locked+s.marginUsdt>state.balance)return {ok:false,reason:'INSUFFICIENT_FREE_PAPER_MARGIN'};
   const side=decision.action,sign=side==='LONG'?1:-1;
-  const entry=round(market.markPrice*(1+sign*0.0003),6);
-  const qty=round(s.marginUsdt*s.leverage/entry,8),openFee=round(qty*entry*0.0005,6);
+  const entry=round(market.markPrice*(1+sign*PAPER_SLIPPAGE_RATE),6);
+  const qty=round(s.marginUsdt*s.leverage/entry,8),openFee=round(qty*entry*PAPER_FEE_RATE,6);
   if(qty<=0||s.marginUsdt+openFee>state.balance-locked)return {ok:false,reason:'INSUFFICIENT_PAPER_FUNDS'};
   state.balance=round(state.balance-openFee,6);
   const position={id:'paper-'+now+'-'+market.symbol,symbol:market.symbol,side,qty,
@@ -148,8 +150,8 @@ export function paperMark(state,market,now=Date.now(),closeReason=null,aiReason=
   if(now-market.checkedAt>10000)throw Error('MARKET_NOT_FRESH');
   if(closeReason!=='AI_CLOSE'&&closeReason!=='EMERGENCY_STOP')return {ok:false,reason:'AI_HOLD'};
   const sign=p.side==='LONG'?1:-1;
-  const close=round(market.markPrice*(1-sign*0.0003),6);
-  const gross=round(sign*(close-p.entry)*p.qty,6),fee=round(close*p.qty*0.0005,6);
+  const close=round(market.markPrice*(1-sign*PAPER_SLIPPAGE_RATE),6);
+  const gross=round(sign*(close-p.entry)*p.qty,6),fee=round(close*p.qty*PAPER_FEE_RATE,6);
   const net=round(gross-p.openFee-fee,6);
   state.balance=round(state.balance+gross-fee,6);
   const {stop,takeProfit,...cleanPosition}=p;
@@ -189,9 +191,9 @@ export function paperPnlSummary(state,snapshots=[],now=Date.now()){
       x.markPrice>0&&Number.isFinite(x.checkedAt)&&now-x.checkedAt<10000);
     if(!quote){complete=false;continue;}
     const sign=p.side==='LONG'?1:-1;
-    const simulatedClose=round(quote.markPrice*(1-sign*0.0003),6);
+    const simulatedClose=round(quote.markPrice*(1-sign*PAPER_SLIPPAGE_RATE),6);
     const gross=sign*(simulatedClose-p.entry)*p.qty;
-    const closeFee=simulatedClose*p.qty*0.0005;
+    const closeFee=simulatedClose*p.qty*PAPER_FEE_RATE;
     estimatedOpenNet+=gross-p.openFee-closeFee;
   }
   return {realizedNetPnl:round(state.realizedNetPnl),

@@ -34,12 +34,15 @@ function setup({withPositions=positions.slice(0,1),historyFails=true}={}){
   'aiLatency','aiTrigger','microWindow','recentError','aiDecision','balance','tradeCount',
   'toggle','positionState','positionTrack','positionDots','positionEmpty',
   'positionCount','positionTotalPnl','positionPage',
+  'cumulativePnl','realizedPnl','unrealizedPnl','cumulativePnlNote',
   'leverage','marginUsdt','saveStatus','save','stop','history','multiTrend'];
  const elements=Object.fromEntries(ids.map(id=>[id,el()]));
  let status={ok:true,mode:'PAPER_ONLY',realTradingEnabled:false,aiModel:'deepseek-flash',
   aiConfigured:true,aiStatus:'SUCCESS',settings:{enabled:true,emergencyStop:false,
     leverage:2,marginUsdt:5},paperBalance:199,totalClosed:13,
   positions:withPositions,position:withPositions[0]||null,
+  pnlSummary:{realizedNetPnl:-3.25,openGrossPnl:0.5,
+    estimatedOpenNetPnl:0.42,estimatedCumulativePnl:-2.83,complete:true},
   marketSnapshots:[
    {symbol:'BTCUSDT',markPrice:50500,checkedAt:NOW},
    {symbol:'ETHUSDT',markPrice:3270,checkedAt:NOW},
@@ -108,4 +111,15 @@ test('position carousel remains above main analysis and paper-only is explicit',
  assert.match(html,/id="positionTrack"/);
  assert.match(html,/id="positionTotalPnl"/);
  assert.match(source,/api\('status'\)\.then\(renderStatus\)/);
+});
+
+test('cumulative PnL is distinct from realized and live floating PnL and formatted as negative',async()=>{
+ const {elements}=setup({withPositions:positions.slice(0,1),historyFails:true});
+ await settle();
+ assert.match(elements.realizedPnl.textContent,/-3.25 USDT/);
+ assert.match(elements.unrealizedPnl.textContent,/\+0.50 USDT/);
+ assert.match(elements.cumulativePnl.textContent,/-2.83 USDT/);
+ assert.match(elements.cumulativePnlNote.textContent,/模拟开平仓手续费/);
+ assert.match(html,/模拟交易累计盈亏/);
+ assert.ok(html.indexOf('id="cumulativePnlCard"')<html.indexOf('class="card hero"'));
 });

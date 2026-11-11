@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V146_PAPER_100X';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V147_CONTROL_FIX';
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
   symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
 const finite = Number.isFinite;
@@ -19,7 +19,9 @@ export function validateSettings(value){
       throw Error('INVALID_'+name);
   }
   if(!Number.isInteger(s.leverage))throw Error('INVALID_INTEGER_SETTING');
-  if(s.marginUsdt>s.paperBalance*0.1)throw Error('MARGIN_OVER_TEN_PERCENT_OF_PAPER_BALANCE');
+  // Simulated margin size may exceed 10% of initial paper capital. Opening is
+  // separately blocked when there are insufficient *available* paper funds.
+  if(s.marginUsdt>s.paperBalance)throw Error('MARGIN_EXCEEDS_PAPER_START_BALANCE');
   return s;
 }
 export function parseDecision(payload){

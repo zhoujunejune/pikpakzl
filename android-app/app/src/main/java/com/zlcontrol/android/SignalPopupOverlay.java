@@ -121,7 +121,7 @@ final class SignalPopupOverlay {
                 TextView head=line("实时信号提醒",16,navy,true);
                 head.setGravity(Gravity.LEFT);
                 heading.addView(head);
-                TextView sub=line("海派事件合约 · V19",11,secondary,false);
+                TextView sub=line("海派事件合约 · V20",11,secondary,false);
                 sub.setGravity(Gravity.LEFT);
                 heading.addView(sub);
                 header.addView(heading,new LinearLayout.LayoutParams(0,-2,1f));
@@ -157,7 +157,7 @@ final class SignalPopupOverlay {
                 TextView directionEn=line(displayedDirection,17,accent,true);
                 directionEn.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);
                 introduction.addView(directionEn,new LinearLayout.LayoutParams(-1,dp(22)));
-                TextView model=line("V19 信号已触发",11,secondary,false);
+                TextView model=line("V20 信号已触发",11,secondary,false);
                 model.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);
                 introduction.addView(model,new LinearLayout.LayoutParams(-1,dp(21)));
 
@@ -181,7 +181,7 @@ final class SignalPopupOverlay {
                 info.setOrientation(LinearLayout.VERTICAL);
                 info.setBackground(tile(Color.rgb(250,253,255),Color.rgb(223,237,249),16));
                 String original="UP".equals(originalDirection)?"买涨 UP":"买跌 DOWN";
-                info.addView(detail("V19 原始信号",original,
+                info.addView(detail("V20 原始信号",original,
                     "UP".equals(originalDirection)?Color.rgb(9,153,140):Color.rgb(220,93,106)));
                 info.addView(detail("反向模式",reversed?"已开启":"已关闭",navy));
                 String signalTime=new SimpleDateFormat("HH:mm:ss",Locale.CHINA)

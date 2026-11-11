@@ -29,7 +29,7 @@ function el(tag='div'){
   classList:{toggle(){}}
  };
 }
-function setup({withPositions=positions.slice(0,1),historyFails=true}={}){
+function setup({withPositions=positions.slice(0,1),historyFails=true,historyRecords=[]}={}){
  const ids=['connection','marketStream','markPrice','engineState','lastAnalysis','marketLag',
   'aiLatency','aiTrigger','microWindow','recentError','aiDecision','balance','tradeCount',
   'toggle','positionState','positionTrack','positionDots','positionEmpty',
@@ -53,7 +53,7 @@ function setup({withPositions=positions.slice(0,1),historyFails=true}={}){
   if(url.endsWith('/status'))return {ok:true,json:async()=>status};
   if(url.endsWith('/history')){
     if(historyFails)throw Error('simulated history service unavailable');
-    return {ok:true,json:async()=>({ok:true,records:[]})};
+    return {ok:true,json:async()=>({ok:true,records:historyRecords})};
   }
   throw Error('unexpected endpoint');
  };
@@ -122,4 +122,32 @@ test('cumulative PnL is distinct from realized and live floating PnL and formatt
  assert.match(elements.cumulativePnlNote.textContent,/模拟开平仓手续费/);
  assert.match(html,/模拟交易累计盈亏/);
  assert.ok(html.indexOf('id="cumulativePnlCard"')<html.indexOf('class="card hero"'));
+});
+
+test('closed trade history is compact, excludes model explanations, and preserves internal scroll',async()=>{
+ const records=[
+  {symbol:'SOLUSDT',side:'LONG',netPnl:-0.16,
+   openedAt:Date.parse('2026-11-11T13:22:00Z'),closedAt:Date.parse('2026-11-11T13:24:45Z'),
+   aiExitReason:'这是一段非常长的AI研究推理分析文字，不应该出现在简洁的历史列表中'},
+  {symbol:'ETHUSDT',side:'SHORT',netPnl:0.38,
+   openedAt:Date.parse('2026-11-11T13:10:00Z'),closedAt:Date.parse('2026-11-11T13:14:00Z'),
+   aiExitReason:'另一条多余的平仓原因'}
+ ];
+ const {elements,runRefresh}=setup({withPositions:[],historyFails:false,historyRecords:records});
+ await settle();
+ const history=elements.history;
+ assert.equal(history.children.length,2);
+ const first=history.children[0];
+ assert.match(first.children[0].textContent,/盈亏 -0\\.16 USDT/);
+ assert.match(first.children[1].children[0].textContent,/开仓：2026/);
+ assert.match(first.children[1].children[1].textContent,/平仓：2026/);
+ assert.equal(first.children.length,2);
+ assert.doesNotMatch(first.textContent+first.children[0].textContent+first.children[1].children.map(x=>x.textContent).join(''),/研究推理|多余|AI 自主平仓/);
+ assert.match(history.children[1].children[0].textContent,/\\+0\\.38 USDT/);
+ history.scrollTop=130;
+ await runRefresh();
+ assert.equal(history.scrollTop,130,'internal scroll position must not reset on polling');
+ assert.match(html,/height:288px;overflow-y:auto/);
+ assert.match(html,/id="history" role="region" tabindex="0"/);
+ assert.match(html,/仅显示盈亏及开仓、平仓时间/);
 });

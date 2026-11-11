@@ -74,8 +74,13 @@ jobs:
               invoke_id=job.body.invoke_id)).body.invocation_result
             if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):continue
             msg=base64.b64decode(r.output or '').decode('utf8','replace')
+            print('HAIPAI_GENIUS_REMOTE_STATUS='+str(r.invocation_status),flush=True)
+            print('HAIPAI_GENIUS_REMOTE_EXIT='+str(r.exit_code),flush=True)
             for line in msg.splitlines():
               if line.startswith('HAIPAI_GENIUS_'):print(line,flush=True)
+              if any(word in line for word in ('SyntaxError','IndentationError','AssertionError','No such file','Failed to','File "<stdin>"','bash: line','systemctl:')):
+                if not any(word in line for word in ('base64.b64decode','DEEPSEEK_API_KEY=','TOKEN_HERE')):
+                  print('HAIPAI_GENIUS_REMOTE_DIAGNOSTIC='+line[-180:],flush=True)
             assert str(r.invocation_status)=='Success' and int(r.exit_code)==0,'CONFIGURATION_FAILED'
             assert 'HAIPAI_GENIUS_DEEPSEEK_CONFIGURED=true' in msg
             break

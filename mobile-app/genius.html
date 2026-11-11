@@ -10,7 +10,15 @@ h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat{padding:12px;border:1px solid #deecf6;border-radius:14px;background:#f9fcff}.stat span{display:block;font-size:12px;color:var(--muted)}.stat b{font-size:20px;font-variant-numeric:tabular-nums}
 .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.field label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}.field input{width:100%;min-height:46px;padding:9px 11px;border:1px solid #cfe1ef;border-radius:11px;background:#fbfdff;font:inherit;color:var(--text)}
 .buttons{display:flex;gap:10px;margin-top:14px}.btn{appearance:none;border:1px solid #b9d4e9;color:#235d8b;background:#fff;border-radius:12px;padding:12px 14px;font-weight:650;font-size:14px;cursor:pointer;flex:1}.btn.main{background:var(--blue);border-color:var(--blue);color:white}.btn.danger{background:#fff2f2;border-color:#f0c7cb;color:#a83e51}.btn:disabled{opacity:.5}
-.pill{display:inline-block;border-radius:99px;padding:3px 9px;background:#eaf4fa;color:#527790;font-size:12px}.note{padding:11px;background:#eff8ff;border-radius:12px;color:#52758f;font-size:12px;margin-top:12px}.warn{background:#fff8ec;color:#826341}.status{font-size:13px;color:var(--muted);margin-top:11px;min-height:18px}.history{display:grid;gap:9px}.history>div{border:1px solid var(--line);padding:11px;border-radius:12px}.history small{display:block;color:var(--muted)}a{color:#247fc2}
+.pill{display:inline-block;border-radius:99px;padding:3px 9px;background:#eaf4fa;color:#527790;font-size:12px}.note{padding:11px;background:#eff8ff;border-radius:12px;color:#52758f;font-size:12px;margin-top:12px}.warn{background:#fff8ec;color:#826341}.status{font-size:13px;color:var(--muted);margin-top:11px;min-height:18px}.history{display:grid;align-content:start;gap:7px;height:288px;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;padding:2px 4px 2px 0;scrollbar-gutter:stable}
+.history>div{border:1px solid var(--line);padding:9px 12px;border-radius:11px;background:#fbfdff}
+.history strong{display:block;font-size:15px;line-height:1.35;font-variant-numeric:tabular-nums}
+.history small{display:block;color:var(--muted);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
+.history .trade-times{margin-top:4px}
+.history .pnl-up{color:var(--good)}
+.history .pnl-down{color:var(--bad)}
+.history-hint{font-size:12px;color:var(--muted);margin:-3px 0 10px}
+a{color:#247fc2}
 .position-card{border:1px solid #a6d4ee;background:linear-gradient(145deg,#fff,#f1f9ff);margin-top:8px}
 .position-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:12px 0}
 .position-summary>div{background:#f4faff;border:1px solid #deebf5;border-radius:12px;padding:10px}
@@ -91,6 +99,6 @@ h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 
 </section>
 <section class="grid"><div class="stat"><span>模拟账户余额</span><b id="balance">—</b></div><div class="stat"><span>已结束模拟交易</span><b id="tradeCount">—</b></div></section>
 
-<section class="card"><h2>最近模拟交易</h2><div class="history" id="history"><p class="mini">正在读取…</p></div></section>
+<section class="card" id="historyCard"><h2>最近模拟交易</h2><p class="history-hint">仅显示盈亏及开仓、平仓时间 · 在下方区域内上下滑动</p><div class="history" id="history" role="region" tabindex="0" aria-label="最近100笔模拟交易，内部上下滚动"><p class="mini">正在读取…</p></div></section>
 <section class="card"><h2>运行说明</h2><p class="mini">行情订阅采用 WebSocket，断线时尝试重连并使用公开 REST 行情补偿。AI 推理可能超时或返回 WAIT；无有效行情和有效决策时不会新开仓。本页面仅是模拟研究，不提供实盘自动下单。</p><p class="mini"><a href="/app/">旧版十分钟事件合约研究</a> · <a href="/genius/api/status" target="_blank" rel="noopener">查看引擎状态</a></p></section>
 </main><script src="/app/genius.js" defer></script></body></html>

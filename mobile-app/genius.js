@@ -28,7 +28,7 @@ function renderStatus(s){
  const position=$('position');position.replaceChildren();
  if(s.position){const p=s.position;position.append(textLine('币种 / 方向',p.symbol+' / '+p.side),
   textLine('模拟开仓价格',num(p.entry)),textLine('开仓金额 / 杠杆',money(p.marginUsdt)+' / '+p.leverage+'倍'),
-  textLine('AI 目标止盈价',num(p.takeProfit)),textLine('保护止损价',num(p.stop)),textLine('开仓时间',time(p.openedAt)));
+  textLine('平仓方式','AI 判断（无固定止盈/止损）'),textLine('开仓时间',time(p.openedAt)));
  }else position.textContent='暂无模拟持仓 · AI 正在寻找可用机会';
  if(!settings){settings=s.settings;setForm(settings);}
  if(!saving&&s.lastError)put('saveStatus','行情或 AI 异常：'+s.lastError+'；暂停新增模拟开仓。');
@@ -42,7 +42,7 @@ async function refresh(){
   for(const r of h.records.slice(0,20)){
    const d=document.createElement('div');const head=document.createElement('strong');
    head.textContent=r.symbol+' '+r.side+' · '+(r.netPnl>=0?'+':'')+money(r.netPnl);
-   const detail=document.createElement('small');detail.textContent=time(r.closedAt)+' · '+r.exitReason+' · 模拟';
+   const detail=document.createElement('small');const type=r.exitReason==='AI_CLOSE'?'AI 自主平仓':r.exitReason==='EMERGENCY_STOP'?'手动紧急停止':r.exitReason;detail.textContent=time(r.closedAt)+' · '+type+(r.aiExitReason?' · '+r.aiExitReason:'')+' · 模拟';
    d.append(head,detail);root.append(d);
   }
  }catch(e){put('connection','服务未连接');put('saveStatus','读取失败：'+e.message);}finally{updating=false;}

@@ -17,7 +17,7 @@ h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 
 <section class="card hero">
  <div class="row"><strong>BTC / ETH / SOL · AI 自选机会</strong><span class="pill" id="connection">正在连接</span></div>
  <h1>AI 自主分析</h1>
- <p class="mini">实时采集币安公开永续合约行情，AI 自主判断模拟开仓、继续持有或主动平仓。程序不再设置固定止盈价或止损价。</p>
+ <p class="mini">实时采集 BTC、ETH、SOL 行情，结合秒级成交、分钟线、小时线、日线和周线，让 AI 自主选择短线、中线或长线模拟持仓。平仓由 AI 决定，无固定止盈止损。</p>
  <div class="price" id="markPrice">行情待更新</div>
  <div class="row"><span>行情接收</span><strong id="marketStream">正在检查</strong></div>
  <div class="row"><span>AI 最新决策</span><strong id="aiDecision">尚无分析</strong></div>
@@ -26,6 +26,7 @@ h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 
  <div class="row"><span>行情网络延迟</span><strong id="marketLag">—</strong></div>
  <div class="row"><span>最近 AI 分析耗时</span><strong id="aiLatency">—</strong></div>
  <div class="row"><span>AI 分析触发</span><strong id="aiTrigger">—</strong></div>
+ <div class="row"><span>中长线趋势（15m / 1h / 4h / 日 / 周）</span><strong id="multiTrend">正在加载…</strong></div>
  <div class="row"><span>成交数据窗口</span><strong id="microWindow">—</strong></div>
  <div class="row"><span>最近异常记录</span><strong id="recentError">无记录</strong></div>
  <div class="note warn">这是模拟交易版本，不会向币安发出真实订单。AI 分析可能超时、报错或失联；没有价格保护止损，失联时模拟仓位可能一直持有。</div>

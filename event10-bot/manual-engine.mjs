@@ -294,7 +294,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   let busyStart=false,busySettle=false,lastError=null;
   // Rule-only engine: no AI service, API call, inference, or AI required gate.
   // Historical AI records are retained for already issued T+600 settlements.
-  let entryObservation=null; // V20 in-memory one-minute entry improvement probe; no trade execution.\n  const aiStats={calls:0,reviewed:0,fallbacks:0,rejected:0,lastStatus:"DISABLED",lastAt:null};
+  let entryObservation=null; // V20 in-memory one-minute entry improvement probe; no trade execution.
+  const aiStats={calls:0,reviewed:0,fallbacks:0,rejected:0,lastStatus:"DISABLED",lastAt:null};
   const aiConfigured=false,aiModel=null,aiInProgress=null;
   let lastDataError=null,lastDataErrorAt=null,lastSuccessfulScanAt=null;
   let lastCheck=null,inFlightStart=null;

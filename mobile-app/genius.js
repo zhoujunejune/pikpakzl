@@ -29,14 +29,17 @@ function renderStatus(s){
  put('microWindow',micro?activeSymbol+' · 10秒 '+(micro.changePct>=0?'+':'')+micro.changePct+'% · 主动买入 '+Math.round(micro.buyRatio*100)+'%':'等待逐笔成交');
  const err=met.errors?.[0];
  put('recentError',err?time(err.at)+' · '+err.kind+' · '+err.detail:'无记录');
+ const horizonLabels={SHORT:'短线',MEDIUM:'中线',LONG:'长线',UNSPECIFIED:'待确定'};
  const actions={LONG:'看涨开仓',SHORT:'看跌开仓',HOLD:'继续持有',CLOSE:'AI 主动平仓',WAIT:'暂不操作'};
- put('aiDecision',s.lastDecision?((s.lastDecision.symbol||'全市场')+' · '+(actions[s.lastDecision.action]||s.lastDecision.action)+' · '+s.lastDecision.reason):'尚无有效 AI 决策');
+ put('aiDecision',s.lastDecision?((s.lastDecision.symbol||'全市场')+' · '+(actions[s.lastDecision.action]||s.lastDecision.action)+' · '+(horizonLabels[s.lastDecision.horizon]||'')+' · '+s.lastDecision.reason):'尚无有效 AI 决策');
+ const activeHigher=met.perSymbol?.[activeSymbol];
+ put('multiTrend',activeHigher?.higherComplete?['15m','1h','4h','1d','1w'].map(k=>k+':'+({UP:'涨',DOWN:'跌',MIXED:'震荡'}[activeHigher.higher?.[k]?.bias]||'待更新')).join(' · '):'高周期行情待补齐');
  put('balance',money(s.paperBalance));put('tradeCount',s.totalClosed);
  $('toggle').textContent=active?'关闭 AI 自动分析':'开启 AI 自动分析';
  const position=$('position');position.replaceChildren();
  if(s.position){const p=s.position;position.append(textLine('币种 / 方向',p.symbol+' / '+p.side),
   textLine('模拟开仓价格',num(p.entry)),textLine('开仓金额 / 杠杆',money(p.marginUsdt)+' / '+p.leverage+'倍'),
-  textLine('平仓方式','AI 判断（无固定止盈/止损）'),textLine('开仓时间',time(p.openedAt)));
+  textLine('AI 持仓周期',horizonLabels[p.horizon]||'待确定'),textLine('平仓方式','AI 判断（无固定止盈/止损）'),textLine('开仓时间',time(p.openedAt)));
  }else position.textContent='暂无模拟持仓 · AI 正在寻找可用机会';
  if(!settings){settings=s.settings;setForm(settings);}
  if(!saving&&s.lastError)put('saveStatus','行情或 AI 异常：'+s.lastError+'；暂停新增模拟开仓。');

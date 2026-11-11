@@ -16,7 +16,7 @@ const answer=(action='LONG',symbol='BTCUSDT')=>({
  action,symbol,confidence:.8,horizon:'MEDIUM',
  reason:'根据多个周期的行情趋势判断模拟交易方向并持续研究持仓'});
 test('paper-only, three positions maximum, exact settings schema',()=>{
- assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V150_DUAL_AI_ENTRY_EXIT');
+ assert.equal(ENGINE_VERSION,'HAIPAI_GENIUS_PAPER_V151_OPPORTUNITY_RESCOUT');
  assert.equal(MAX_PAPER_POSITIONS,3);
  assert.equal(DEFAULT_SETTINGS.enabled,false);
  assert.equal(validateSettings({...DEFAULT_SETTINGS}).leverage,2);

@@ -55,3 +55,29 @@ export function shouldAnalyze({now=Date.now(),lastAt=0,holding=false,change10sPc
   const urgent=finite(change10sPct)&&Math.abs(change10sPct)>=(holding?.12:.25);
   return elapsed>=(holding?16000:25000)||(urgent&&elapsed>=(holding?9000:12000));
 }
+
+
+/** Re-fetch closed candles shortly after the next bar becomes available.
+ * Binance's latest incomplete bar must never be promoted to "closed".
+ * Throttle the boundary retries so a temporarily delayed exchange does not
+ * generate unbounded REST requests. */
+export function shouldRefreshClosedCandles(cached,now=Date.now()){
+  if(!cached||!Number.isFinite(cached.savedAt))return true;
+  const cacheAge=now-cached.savedAt;
+  if(cacheAge<0||cacheAge>=15000)return true;
+  if(cacheAge<3500)return false;
+  for(const [key,periodMs] of [['one',60000],['five',300000]]){
+    const last=cached[key]?.at(-1);
+    if(!last||!Number.isSafeInteger(last.startMs))return true;
+    if(now-(last.startMs+periodMs)>periodMs+1500)return true;
+  }
+  return false;
+}
+
+/** Opportunistic second view only after persistent all-WAIT output. This
+ * never creates an order by itself; a separate AI must confirm the direction. */
+export function shouldScoutOpportunities({enabled=true,heldCount=0,decisions,waitStreak=0}){
+  return enabled&&heldCount===0&&Array.isArray(decisions)&&decisions.length>0&&
+    decisions.every(d=>d.action==='WAIT')&&Number.isInteger(waitStreak)&&
+    waitStreak>0&&waitStreak%3===0;
+}

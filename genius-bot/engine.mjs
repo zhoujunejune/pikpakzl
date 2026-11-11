@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V150_DUAL_AI_ENTRY_EXIT';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V151_OPPORTUNITY_RESCOUT';
 export const PAPER_FEE_RATE = 0.0005;
 export const PAPER_SLIPPAGE_RATE = 0.0003;
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
@@ -140,7 +140,7 @@ export function paperOpen(state,market,decision,now=Date.now()){
     entrySignals:{trend1m:market.trend1m||null,trend5m:market.trend5m||null,
       momentum3mPct:Number.isFinite(market.momentum3mPct)?market.momentum3mPct:null,
       at:now},
-    source:'DEEPSEEK_PAPER_ONLY',reason:decision.reason};
+    source:'DEEPSEEK_PAPER_ONLY',strategyVersion:ENGINE_VERSION,reason:decision.reason};
   positions.push(position);
   state.lastActionAt=now;
   return {ok:true,position};

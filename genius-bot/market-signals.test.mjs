@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
+import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze,shouldRefreshClosedCandles,shouldScoutOpportunities} from './market-signals.mjs';
 const NOW=Date.parse('2026-11-11T11:00:00Z');
 test('1s aggregation and price windows preserve bounded buys/sells',()=>{
  const buckets=[];
@@ -30,4 +30,28 @@ test('event-triggered AI analysis is paced and prioritizes open positions',()=>{
  assert.equal(shouldAnalyze({...common,holding:true,lastAt:NOW-16000,change10sPct:0}),true);
  assert.equal(shouldAnalyze({...common,holding:false,lastAt:NOW-25000,change10sPct:0}),true);
  assert.equal(shouldAnalyze({...common,enabled:false,lastAt:0}),false);
+});
+
+
+test('closed candle cache refreshes near minute and five-minute boundaries without runaway retries',()=>{
+ const now=Date.parse('2026-11-11T11:02:08Z');
+ const data={savedAt:now-5000,one:[{startMs:Date.parse('2026-11-11T11:00:00Z')}],
+   five:[{startMs:Date.parse('2026-11-11T10:55:00Z')}]};
+ assert.equal(shouldRefreshClosedCandles(data,now),true);
+ const justFetched={...data,savedAt:now-1000};
+ assert.equal(shouldRefreshClosedCandles(justFetched,now),false);
+ const upToDate={savedAt:now-4000,one:[{startMs:Date.parse('2026-11-11T11:01:00Z')}],
+   five:[{startMs:Date.parse('2026-11-11T11:00:00Z')}]};
+ assert.equal(shouldRefreshClosedCandles(upToDate,now),false);
+ assert.equal(shouldRefreshClosedCandles({...upToDate,savedAt:now-16000},now),true);
+ assert.equal(shouldRefreshClosedCandles(null,now),true);
+});
+test('a scout can only reconsider a sustained all-WAIT scan, never replace held-position decisions',()=>{
+ const idle=[{action:'WAIT',symbol:'BTCUSDT'},{action:'WAIT',symbol:'ETHUSDT'}];
+ assert.equal(shouldScoutOpportunities({decisions:idle,waitStreak:2}),false);
+ assert.equal(shouldScoutOpportunities({decisions:idle,waitStreak:3}),true);
+ assert.equal(shouldScoutOpportunities({decisions:idle,waitStreak:4}),false);
+ assert.equal(shouldScoutOpportunities({decisions:idle,waitStreak:6,heldCount:1}),false);
+ assert.equal(shouldScoutOpportunities({decisions:[{action:'LONG'}],waitStreak:3}),false);
+ assert.equal(shouldScoutOpportunities({decisions:idle,waitStreak:3,enabled:false}),false);
 });

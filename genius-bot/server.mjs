@@ -6,7 +6,7 @@ import path from 'node:path';
 import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarket,
   newState,rollDay,paperOpen,paperMark,parsePortfolioPlan,normalizePaperPositions,
   paperFloatingPnL,paperPnlSummary,MAX_PAPER_POSITIONS} from './engine.mjs';
-import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze} from './market-signals.mjs';
+import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze,shouldRefreshClosedCandles,shouldScoutOpportunities} from './market-signals.mjs';
 import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit,resolveAIEntry} from './decision-context.mjs';
 import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
@@ -29,7 +29,9 @@ const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0
   wsLagMs:null,bookRestFallbacks:0,bookWsState:'CONNECTING',bookWsMessages:0,aiAttempts:0,aiSuccess:0,aiFailure:0,aiDurationMs:null,aiLastFinishedAt:0,
   lastTrigger:'NONE',marketRestFallbacks:0,higherRequests:0,higherFailures:0,timeframeSnapshots:0,
   exitReviewCalls:0,exitReviewConfirmed:0,exitReviewRejected:0,exitReviewFailed:0,lastExitReview:null,
-  entryReviewCalls:0,entryReviewConfirmed:0,entryReviewRejected:0,entryReviewFailed:0,lastEntryReview:null,errors:[]};
+  entryReviewCalls:0,entryReviewConfirmed:0,entryReviewRejected:0,entryReviewFailed:0,lastEntryReview:null,
+  consecutiveAllWait:0,scoutCalls:0,scoutSuccess:0,scoutEntriesProposed:0,scoutFailure:0,lastScout:null,
+  candleBoundaryRefreshes:0,errors:[]};
 let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
 let socket=null,reconnectTimer=null,bookSocket=null,bookReconnectTimer=null,bookWsLastAt=0;
 
@@ -189,7 +191,8 @@ function marketMicro(symbol,now=Date.now()){
 async function collectMarket(symbol,now=Date.now()){
   if(!SYMBOLS.includes(symbol))throw Error('UNSUPPORTED_SYMBOL');
   let cached=candleCache.get(symbol);
-  if(!cached||now-cached.savedAt>15000){
+  if(shouldRefreshClosedCandles(cached,now)){
+    if(cached&&now-cached.savedAt<=15000)metrics.candleBoundaryRefreshes++;
     const ss=encodeURIComponent(symbol);
     const [one,five]=await Promise.all([
       getJson(BASE+'/fapi/v1/klines?symbol='+ss+'&interval=1m&limit=65'),
@@ -257,14 +260,73 @@ const DECISION_POLICY=[
   '你是多币种永续合约模拟研究AI。只返回JSON对象：{"decisions":[{"action":"HOLD","symbol":"ETHUSDT","horizon":"MEDIUM","confidence":0.7,"reason":"至少6字的具体中文分析原因"}]}。',
   '每个币种最多一条，支持BTCUSDT、ETHUSDT、SOLUSDT。无仓位可LONG/SHORT/WAIT，持有仓位必须HOLD或CLOSE；每个持仓必须给出决定。',
   '短线SHORT、中线MEDIUM、长线LONG由你自主选择；比较1m、5m、15m、1h、4h、日线、周线和实时成交盘口。',
-  '开仓前要分析交易费与滑点、市场波动潜力、预期净收益和风险收益比。若预期波动不足以覆盖模拟成本、证据不足或周期明显冲突，可以WAIT，不要为了多交易而入场。',
+  '你必须主动扫描三类机会：短期顺势动量(1m/5m/15m)、中线趋势延续(1h/4h)、长期趋势(日/周)。每种机会分别判断方向、风险收益比与净收益空间；短线反弹与长线下跌不必然互相否决，可选择适当SHORT周期研究，但不得无视反转和追高风险。',
+  '开仓前要分析交易费与滑点、市场波动潜力、预期净收益和风险收益比。0.16%是模型的估算往返盈亏平衡波动，不是每次都不能突破的固定行情阈值。短周期预期可实现波动足够覆盖成本时，不要仅因为4h/日线方向不一致就永远WAIT。',
   '评估持仓应依据entryHorizon原始开仓周期及entryThesis开仓依据：短周期噪声不应自动导致中长线平仓。比较开仓逻辑是否被新事实推翻、持仓结构与风险暴露、浮动盈亏及预计平仓后的净盈亏，独立决定HOLD或CLOSE。',
   '亏损不意味着必须立刻平仓，盈利也不意味着必须立即止盈；当趋势失效或风险收益显著恶化时，可主动CLOSE。不要仅为避免实现亏损而长期死扛。',
   '结合recentClosedTradeReview识别同一币种、同一周期反复小亏、交易费侵蚀或过早平仓的问题；交易历史只是少量模拟样本，不是训练结果，不意味着未来必定盈利。',
   'reason必须具体说明关键周期信号和净收益/风险考虑。提出CLOSE前，先对照entryThesis、entryHorizon和latestAIHoldReason，说明什么新的市场证据让继续HOLD不如CLOSE；如果只是秒级噪声或手续费造成的小额浮亏，优先重新考虑持有而不是反复止损。明确判断获利兑现机会，不要只会亏损平仓。但趋势真的失效时可以果断CLOSE，不要死扛。不得把未知行情当作真实值；已有持仓缺少对应最新价格不能CLOSE。',
-  '新增开仓只允许higherTimeframesComplete=true的币种。单币种不可重复持仓，最多三笔。',
+  '新增开仓只允许higherTimeframesComplete=true的币种。单币种不可重复持仓，最多三笔。RSI超买/超卖是风险提示，不是单独否决强势趋势的理由；综合量价、盘口、波动及周期冲突。无真实优势则WAIT，不能为了数量编造信号，也不要因追求近乎完美条件长期放弃所有可行机会。',
   '每笔止盈、止损和平仓都只由你实时自主决定，没有固定价格/百分比自动止盈止损；紧急停止仅供用户手动操作。不要保证盈利。仅模拟交易，不进行币安真实下单。'
 ].join('');
+
+// Re-examine a persistent all-WAIT market from a distinct trade-horizon lens.
+// The scout cannot open positions: every proposal still passes independent
+// direction review and fresh-market checks.
+async function scoutAlternativeOpportunities(markets){
+  metrics.scoutCalls++;
+  const key=process.env.DEEPSEEK_API_KEY||'';
+  if(!key)return null;
+  const snapshot=markets.map(m=>({
+    symbol:m.symbol,markPrice:m.markPrice,checkedAt:m.checkedAt,
+    trend1m:m.trend1m,trend5m:m.trend5m,momentum3mPct:m.momentum3mPct,
+    volumeRatio:m.volumeRatio,pricePosition20mPct:m.pricePosition20mPct,
+    micro:marketMicro(m.symbol),
+    higherTimeframes:timeframesOf(m.symbol).frames,
+    higherTimeframesComplete:timeframesOf(m.symbol).complete
+  }));
+  const policy='你是永续合约模拟交易机会侦察AI，所有主要AI判断都为WAIT后进行独立复核。'
+    +'仅返回JSON对象{"decisions":[{"symbol":"BTCUSDT","action":"WAIT","horizon":"SHORT","confidence":0.5,"reason":"不少于六字的详细中文理由"}]}。'
+    +'每个币种最多一条，可LONG、SHORT、WAIT，候选周期可SHORT/MEDIUM/LONG，最多3个币种。'
+    +'主动比较趋势延续、超卖反弹、短期回调结束、强动量突破机会。较大周期反向不自动否决短线机会，'
+    +'高RSI不单独否决趋势；但必须核查秒级主动成交、盘口、波动空间、模拟费率与滑点。'
+    +'若缺少一致的可执行方向或净收益空间仍返回WAIT。不能为达到交易次数制造信号或承诺高胜率。'
+    +'仅研究模拟交易，不允许真实订单。';
+  const body={paperOnly:true,sizing:estimatedEntryCosts(state.settings),
+    recentLosses:summarizeClosedTrades(state.closed,20),markets:snapshot};
+  try{
+    const response=await fetch('https://api.deepseek.com/chat/completions',{
+      method:'POST',signal:AbortSignal.timeout(27000),
+      headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
+      body:JSON.stringify({model:MODEL,thinking:{type:'enabled'},reasoning_effort:'high',
+        response_format:{type:'json_object'},max_tokens:1800,messages:[
+        {role:'system',content:policy},
+        {role:'user',content:JSON.stringify(body)}
+      ]})
+    });
+    if(!response.ok)throw Error('SCOUT_HTTP_'+response.status);
+    const raw=await response.json();
+    const answer=raw?.choices?.[0]?.message?.content;
+    if(typeof answer!=='string'||!answer.trim())throw Error('SCOUT_EMPTY');
+    const decisions=parsePortfolioPlan(answer);
+    for(const d of decisions){
+      if(!['WAIT','LONG','SHORT'].includes(d.action)||
+          !markets.some(m=>m.symbol===d.symbol))
+        throw Error('SCOUT_INVALID_SYMBOL_OR_ACTION');
+    }
+    metrics.scoutSuccess++;
+    const entries=decisions.filter(d=>['LONG','SHORT'].includes(d.action));
+    metrics.scoutEntriesProposed+=entries.length;
+    metrics.lastScout={at:Date.now(),entries:entries.map(d=>({symbol:d.symbol,action:d.action})),
+      summary:decisions.map(d=>({symbol:d.symbol,action:d.action,reason:d.reason.slice(0,120)}))};
+    return decisions;
+  }catch(e){
+    metrics.scoutFailure++;
+    rememberError('AI_OPPORTUNITY_SCOUT',e);
+    metrics.lastScout={at:Date.now(),error:String(e.message||e).slice(0,150)};
+    return null;
+  }
+}
 
 async function deepseekDecision(markets,positions){
   const key=process.env.DEEPSEEK_API_KEY||'';
@@ -336,7 +398,7 @@ async function reviewProposedEntry(proposal,market){
   };
   const policy='你是独立的永续合约模拟开仓复核AI，只输出单个JSON对象：{"action":"WAIT","symbol":"BTCUSDT","confidence":0.65,"horizon":"MEDIUM","reason":"至少六字的具体中文理由"}。'
     +'action只允许LONG、SHORT或WAIT，必须选择请求中的同一币种。不要盲从最初的开仓建议；重新评估短中长周期趋势、行情质量、'
-    +'预期波动空间能否覆盖模型手续费与滑点、净收益风险比、持仓组合和近期失败交易。方向证据不足或成本不合理时自主选择WAIT，'
+    +'预期波动空间能否覆盖模型手续费与滑点、净收益风险比、持仓组合和近期失败交易。开仓方向以所选交易周期为主，日线趋势冲突不必然否定明确短周期机会，RSI极值也并非单项否决。方向证据不足或成本不合理时自主选择WAIT，'
     +'确认方向和净收益逻辑时可自主选择LONG或SHORT。不保证盈利，不使用固定胜率承诺。只做模拟交易，不调用真实交易接口。';
   try{
     const response=await fetch('https://api.deepseek.com/chat/completions',{
@@ -455,12 +517,21 @@ async function cycle(){
           const beforePositions=[...state.positions];
           const decisions=await deepseekDecision(markets,beforePositions);
           if(decisions){
-            state.lastDecisions=decisions.map(d=>({...d,at:Date.now(),model:MODEL}));
+            const allWait=beforePositions.length===0&&decisions.every(d=>d.action==='WAIT');
+            metrics.consecutiveAllWait=allWait?metrics.consecutiveAllWait+1:0;
+            let chosen=decisions;
+            if(shouldScoutOpportunities({enabled:state.settings.enabled,
+              heldCount:beforePositions.length,decisions,
+              waitStreak:metrics.consecutiveAllWait})){
+              const alternate=await scoutAlternativeOpportunities(markets);
+              if(alternate?.some(d=>['LONG','SHORT'].includes(d.action)))chosen=alternate;
+            }
+            state.lastDecisions=chosen.map(d=>({...d,at:Date.now(),model:MODEL}));
             state.lastDecision=state.lastDecisions[0];
             // UI controls may change while awaiting DeepSeek. NEVER execute an obsolete plan.
             if(state.settings.enabled&&!state.settings.emergencyStop){
               // Apply closes first, then entries; each symbol is unique and positions <=3.
-              for(const d of decisions.filter(d=>d.action==='CLOSE')){
+              for(const d of chosen.filter(d=>d.action==='CLOSE')){
                 const original=beforePositions.find(p=>p.symbol===d.symbol);
                 if(!original)continue;
                 const current=state.positions.find(p=>p.symbol===d.symbol);
@@ -482,7 +553,7 @@ async function cycle(){
                 paperMark(state,latest,Date.now(),'AI_CLOSE',
                   (d.reason+'；复核：'+(review?.reason||'复核不可用，原AI决策')).slice(0,300));
               }
-              for(const d of decisions.filter(d=>d.action==='HOLD')){
+              for(const d of chosen.filter(d=>d.action==='HOLD')){
                 const current=state.positions.find(p=>p.symbol===d.symbol);
                 if(current){
                   // Keep the original investment horizon: transient AI flips do not
@@ -491,7 +562,7 @@ async function cycle(){
                   current.lastHoldReason=d.reason;
                 }
               }
-              for(const d of decisions.filter(d=>['LONG','SHORT'].includes(d.action))){
+              for(const d of chosen.filter(d=>['LONG','SHORT'].includes(d.action))){
                 if(!state.settings.enabled||state.settings.emergencyStop)break;
                 if(state.positions.some(p=>p.symbol===d.symbol)||
                     state.positions.length>=MAX_PAPER_POSITIONS)continue;

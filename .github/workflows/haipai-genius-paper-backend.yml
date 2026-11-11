@@ -51,6 +51,10 @@ jobs:
           assert 'exitReviewCalls' in src
           assert 'reviewProposedEntry(' in src and 'resolveAIEntry(d,entryReview)' in src
           assert 'entryReviewCalls' in src
+          assert 'scoutAlternativeOpportunities(' in src
+          assert 'shouldScoutOpportunities({' in src
+          assert 'shouldRefreshClosedCandles(cached,now)' in src
+          assert 'candleBoundaryRefreshes' in src
           print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')
           PY
   deploy:
@@ -121,7 +125,7 @@ jobs:
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
           assert 1<=obj['settings']['leverage']<=100
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V150_DUAL_AI_ENTRY_EXIT'
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V151_OPPORTUNITY_RESCOUT'
           positions=obj.get('positions')
           pnl=obj.get('pnlSummary') or {}
           assert isinstance(pnl.get('realizedNetPnl'),(int,float))

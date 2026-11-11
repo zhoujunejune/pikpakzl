@@ -6,7 +6,7 @@ const html=read("./index.html"),js=read("./app.js");
 const main=read("../android-app/app/src/main/java/com/zlcontrol/android/MainActivity.java");
 const overlay=read("../android-app/app/src/main/java/com/zlcontrol/android/SignalPopupOverlay.java");
 const alert=read("../android-app/app/src/main/java/com/zlcontrol/android/SignalAlertService.java");
-test("white and light-blue UI preserves SpongeBob and Patrick art and real V19 status slots",()=>{
+test("white and light-blue UI preserves SpongeBob and Patrick art and real V20 status slots",()=>{
  assert.ok(html.includes("color-scheme:light"));
  assert.ok(html.includes("#e9f5ff"));
  assert.ok(html.includes('alt="海绵宝宝和派大星"'));
@@ -31,7 +31,7 @@ test("navigation exposes four real panels and historical signal pagination stays
  assert.ok(js.includes('eventHistoryFingerprint'));
 });
 test("signal popup retains notification directions and a dedicated stop-alarm action",()=>{
- for(const part of ["买涨","买跌","UP","DOWN","V19 原始信号","反向模式",
+ for(const part of ["买涨","买跌","UP","DOWN","V20 原始信号","反向模式",
    "信号时间","提醒延迟","haipai_up","haipai_down","确认并打开币安",
    "关闭提醒","R.drawable.sea_friends_icon", "SignalAlertService.ACTION_SILENCE"]){
    assert.ok(overlay.includes(part),part);

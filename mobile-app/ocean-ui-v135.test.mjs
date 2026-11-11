@@ -44,7 +44,7 @@ test("Android login is a new visual skin on top of original HTTP Basic Auth and 
  assert.ok(main.includes("void onReceivedHttpAuthRequest("));
  assert.ok(main.includes("handler.proceed(sessionUsername,sessionPassword)"));
  assert.ok(main.includes("SecureStore.saveLogin(this,sessionUsername,sessionPassword)"));
- assert.ok(main.includes('subtitle.setText("欢迎来到海派信号站")'));
+ assert.ok(main.includes('subtitle.setText("欢迎来到海派合约天才")'));
  assert.ok(main.includes("R.drawable.sea_friends_icon"));
  assert.ok(main.includes("ImageView mascot=new ImageView(this)"));
  assert.ok(main.includes('manage.setText("提醒管理 ▾")'));

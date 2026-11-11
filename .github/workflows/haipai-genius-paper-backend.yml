@@ -36,6 +36,8 @@ jobs:
           assert 'paperAdjustStops' not in src and 'STOP_LOSS' not in src
           assert "'127.0.0.1'" in src
           assert 'DEFAULT_SETTINGS' in Path('genius-bot/engine.mjs').read_text()
+          assert 'parsePortfolioPlan(' in src and 'MAX_PAPER_POSITIONS' in src
+          assert 'positions:state.positions' in src
           print('GENIUS_PAPER_ONLY_PREDEPLOY_OK=true')
           PY
   deploy:
@@ -105,7 +107,15 @@ jobs:
           assert obj['mode']=='PAPER_ONLY' and obj['realTradingEnabled'] is False
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V143_MULTI_HORIZON'
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V144_MULTIPOSITION'
+          positions=obj.get('positions')
+          assert isinstance(positions,list) and len(positions)<=3
+          assert len({p['symbol'] for p in positions})==len(positions)
+          assert all(p['symbol'] in ('BTCUSDT','ETHUSDT','SOLUSDT') for p in positions)
+          assert all(p['source']=='DEEPSEEK_PAPER_ONLY' for p in positions)
+          assert obj.get('positionCount')==len(positions)
+          assert obj.get('position')==(positions[0] if positions else None)
+          assert isinstance(obj.get('floatingPnl'),dict)
           assert 'higherRequests' in obj.get('metrics',{})
           assert obj['position'] is None or all(k not in obj['position'] for k in ('stop','takeProfit'))
           print('HAIPAI_GENIUS_PRODUCTION_PAPER_ONLY_VERIFIED=true')

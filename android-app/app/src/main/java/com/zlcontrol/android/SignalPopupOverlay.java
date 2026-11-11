@@ -121,7 +121,7 @@ final class SignalPopupOverlay {
                 TextView head=line("实时信号提醒",16,navy,true);
                 head.setGravity(Gravity.LEFT);
                 heading.addView(head);
-                TextView sub=line("海派事件合约 · V20",11,secondary,false);
+                TextView sub=line("海派合约天才 · V20旧事件信号",11,secondary,false);
                 sub.setGravity(Gravity.LEFT);
                 heading.addView(sub);
                 header.addView(heading,new LinearLayout.LayoutParams(0,-2,1f));

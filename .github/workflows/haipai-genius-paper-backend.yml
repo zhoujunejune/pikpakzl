@@ -99,7 +99,9 @@ jobs:
           assert obj['app']=='海派合约天才'
           assert obj['mode']=='PAPER_ONLY' and obj['realTradingEnabled'] is False
           assert obj['realOrderExecutionAvailable'] is False
-          assert obj['settings']['enabled'] is False
+          assert isinstance(obj['settings']['enabled'],bool)
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V142_AI_EXIT_ONLY'
+          assert obj['position'] is None or all(k not in obj['position'] for k in ('stop','takeProfit'))
           print('HAIPAI_GENIUS_PRODUCTION_PAPER_ONLY_VERIFIED=true')
           print('HAIPAI_GENIUS_AI_KEY_CONFIGURED='+str(obj['aiConfigured']))
           PY

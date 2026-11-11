@@ -36,6 +36,7 @@ jobs:
           assert 'paperAdjustStops' not in src and 'STOP_LOSS' not in src
           assert "'127.0.0.1'" in src
           assert 'DEFAULT_SETTINGS' in Path('genius-bot/engine.mjs').read_text()
+          assert 'leverage:[1,100]' in Path('genius-bot/engine.mjs').read_text()
           assert 'parsePortfolioPlan(' in src and 'MAX_PAPER_POSITIONS' in src
           assert 'positions:state.positions' in src
           assert 'pnlSummary:paperPnlSummary(' in src
@@ -108,7 +109,8 @@ jobs:
           assert obj['mode']=='PAPER_ONLY' and obj['realTradingEnabled'] is False
           assert obj['realOrderExecutionAvailable'] is False
           assert isinstance(obj['settings']['enabled'],bool)
-          assert obj['version']=='HAIPAI_GENIUS_PAPER_V145_CUMULATIVE_PNL'
+          assert 1<=obj['settings']['leverage']<=100
+          assert obj['version']=='HAIPAI_GENIUS_PAPER_V146_PAPER_100X'
           positions=obj.get('positions')
           pnl=obj.get('pnlSummary') or {}
           assert isinstance(pnl.get('realizedNetPnl'),(int,float))

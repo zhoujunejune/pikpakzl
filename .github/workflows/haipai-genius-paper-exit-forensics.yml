@@ -83,5 +83,7 @@ jobs:
           print('GENIUS_CURRENT_MARKETS='+json.dumps([{k:q.get(k) for k in ('symbol','markPrice','checkedAt')} for q in (status.get('marketSnapshots') or [])],ensure_ascii=False))
           print('GENIUS_CURRENT_ERRORS='+json.dumps((metrics.get('errors') or [])[:8],ensure_ascii=False))
           print('GENIUS_CURRENT_HORIZON_COMPLETENESS='+json.dumps({s:(metrics.get('perSymbol') or {}).get(s,{}).get('higherComplete') for s in ('BTCUSDT','ETHUSDT','SOLUSDT')},ensure_ascii=False))
+          print('GENIUS_CURRENT_WAIT_STREAK='+str(metrics.get('consecutiveAllWait')))
+          print('GENIUS_CURRENT_SCOUT_METRICS='+json.dumps({k:metrics.get(k) for k in ('scoutCalls','scoutSuccess','scoutEntriesProposed','scoutFailure','lastScout','candleBoundaryRefreshes')},ensure_ascii=False))
           print('GENIUS_DIAGNOSTIC_READ_ONLY=true')
           PY

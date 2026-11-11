@@ -85,6 +85,18 @@ jobs:
           print('GENIUS_CURRENT_HORIZON_COMPLETENESS='+json.dumps({s:(metrics.get('perSymbol') or {}).get(s,{}).get('higherComplete') for s in ('BTCUSDT','ETHUSDT','SOLUSDT')},ensure_ascii=False))
           print('GENIUS_CURRENT_WAIT_STREAK='+str(metrics.get('consecutiveAllWait')))
           print('GENIUS_CURRENT_SCOUT_METRICS='+json.dumps({k:metrics.get(k) for k in ('scoutCalls','scoutSuccess','scoutEntriesProposed','scoutFailure','lastScout','candleBoundaryRefreshes')},ensure_ascii=False))
+          # One delayed read-only snapshot to see whether the new WAIT scout actually triggers.
+          import time
+          time.sleep(32)
+          follow=get('status')
+          follow_metrics=follow.get('metrics') or {}
+          print('GENIUS_FOLLOWUP_VERSION='+str(follow.get('version')))
+          print('GENIUS_FOLLOWUP_WAIT_STREAK='+str(follow_metrics.get('consecutiveAllWait')))
+          print('GENIUS_FOLLOWUP_SCOUT='+json.dumps({k:follow_metrics.get(k) for k in ('scoutCalls','scoutSuccess','scoutEntriesProposed','scoutFailure','lastScout')},ensure_ascii=False))
+          print('GENIUS_FOLLOWUP_ENTRY_REVIEWS='+json.dumps({k:follow_metrics.get(k) for k in ('entryReviewCalls','entryReviewConfirmed','entryReviewRejected','entryReviewFailed','lastEntryReview')},ensure_ascii=False))
+          print('GENIUS_FOLLOWUP_AI='+json.dumps({k:follow_metrics.get(k) for k in ('aiAttempts','aiSuccess','aiFailure')},ensure_ascii=False))
+          print('GENIUS_FOLLOWUP_POSITIONS='+str(len(follow.get('positions') or [])))
+          print('GENIUS_FOLLOWUP_LATEST_DECISIONS='+json.dumps([{k:d.get(k) for k in ('symbol','action')} for d in (follow.get('lastDecisions') or [])],ensure_ascii=False))
           print('GENIUS_V152_LIVE_AUDIT=true')
           print('GENIUS_DIAGNOSTIC_READ_ONLY=true')
           PY

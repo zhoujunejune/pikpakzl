@@ -35,10 +35,10 @@ th{color:#a9c6e7}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
 <h1>海派事件合约 · BTC 十分钟纯规则信号</h1>
-<p class="sub">BTCUSDT · V21 实时指数价方向 · 每12秒检查 · 任意滚动10分钟最多3条</p>
+<p class="sub">BTCUSDT · V22 六周期趋势分析 · Supertrend + EMA · 12秒检查 · 每10分钟最多3条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V21每12秒用新鲜BTC指数价重新判断涨跌，重点比较前后两次实时指数变化，不再以趋势、RSI、成交量、区间位置或改善价拦截。仅做研究信号，不自动下单。</div>
+V22综合已收盘1、2、5、10、15、30分钟K线的Supertrend、EMA、MACD、RSI、量能，并持续参考最新BTC指数价。信号数量限制不变：滚动10分钟最多3条；只做研究信号，不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则方向</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -50,10 +50,10 @@ V21每12秒用新鲜BTC指数价重新判断涨跌，重点比较前后两次实
   <strong id="quickConfidence" class="signal-price">方向：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
- <div id="quickReason" class="signal-reason">使用新鲜指数报价及最近已收盘K线，实时比较价格变化；数据错误、完全平盘或10分钟3条满额则不发新信号。</div>
+ <div id="quickReason" class="signal-reason">综合六个K线周期趋势与当前BTC指数价；数据过期、综合分数持平或滚动10分钟3条已满则不发新信号。</div>
  <p class="sub">后台每12秒检查一次实时指数价；滚动10分钟最多3条（手动自动共用），没有固定冷却时间。每条仍核验600秒后价格，不能保证命中率。</p>
  <p class="sub" id="quickTimestamp">方向由原规则给出；不调用AI，也不会再因AI超时取消信号。</p>
-<p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
+<p class="sub" id="feedFreshness" aria-live="polite">正在核实1/2/5/10/15/30分钟K线和实时指数报价…</p>
 </div>
 <p class="sub">自动每12秒扫描实时指数价；任意滚动10分钟最多3条。每条单独锁定指数代理价并在600秒后核验。</p>
 </section>
@@ -76,7 +76,7 @@ V21每12秒用新鲜BTC指数价重新判断涨跌，重点比较前后两次实
 <p class="sub" id="aiStatus" aria-live="polite">AI 调用：已停止，纯规则判断。</p>
 <div id="analysisDetail" class="sub" style="padding:10px 2px"></div>
 <div class="row" style="margin-top:12px"><h2>本轮辅助行情数据覆盖情况</h2><button type="button" class="secondary" id="checkDataSources">检查实时数据接口</button></div>
-<p id="featureSummary" class="sub">基于已收盘1分钟和5分钟K线、实时指数报价生成高频趋势研究信号；缺数据不会强制猜方向。</p>
+<p id="featureSummary" class="sub">采用币安已收盘1/5/15/30分钟K线，按真实1分钟K线合成2/10分钟；多周期趋势综合评分，当前指数价实时参与判断。</p>
 <div id="featureHealth" class="grid" aria-live="polite"></div>
 <p class="sub">币安USD-M公开指数代理，不等于事件合约实际开仓Strike或官方到期结算。</p>
 <p class="sub" id="dataQuality">数据口径：币安 BTC 公开行情代理，不是事件合约官方指数；命中仅按同一公开行情来源比较。</p>
@@ -123,7 +123,7 @@ V21每12秒用新鲜BTC指数价重新判断涨跌，重点比较前后两次实
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112";
+const SIGNAL_VERSION="EVENT10_MULTI_TF_SUPERTREND_V22_20261112";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -249,18 +249,18 @@ function display(d){
  const names={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"3分钟动量",structure:"K线形态",volume:"成交量",rsi:"RSI范围",persistence15m:"15分钟趋势",bounceGuard:"反弹风险",FILTERED_NO_EDGE:"多项筛选",V17_MIN_SIGNAL_GAP:"10分钟间隔",V16_RECENT_LOSSES_PAUSE:"连续失误暂停",DATA_ERROR:"数据过期"};
  $("scanAudit").textContent=audit?"最近1小时检查 "+audit.checks+" 次，产生方向 "+((audit.strictSignals||0)+(audit.standardSignals||0))+" 条，无信号 "+audit.noSignal+" 次，数据异常 "+audit.dataErrors+" 次。":"扫描审计暂未就绪";
  $("gateStats").textContent=audit&&Object.keys(audit.byReason||{}).length?"未通过条件："+Object.entries(audit.byReason).sort((a,b)=>b[1]-a[1]).map(([k,v])=>(names[k]||k)+" "+v+"次").join("、")+"。":"本小时暂未累计拒绝原因。";
-  // Display verified scan freshness; direction is minute-scanned, not per tick.
+  // Display last valid 12s scan with verified candle and index timestamps.
   const verifiedAt=d.lastSuccessfulScanAt;
-  const audit=d.lastCheck||{};
-  const ev=audit.evidence||{};
+  const latestAudit=d.lastCheck||{};
+  const ev=latestAudit.evidence||{};
   const age=typeof verifiedAt==="number"?Date.now()-verifiedAt:Infinity;
   const bar1=Number.isFinite(ev.lastClosed1mAt)?ev.lastClosed1mAt+60000:null;
   const bar5=Number.isFinite(ev.lastClosed5mAt)?ev.lastClosed5mAt+300000:null;
-  const indexAge=Number.isFinite(audit.openAgeMs)?audit.openAgeMs:null;
-  const fresh=age>=0&&age<=90000&&bar1!==null&&bar5!==null&&indexAge!==null&&audit.status!=="DATA_ERROR";
-  $("feedFreshness").textContent=audit.status==="DATA_ERROR"?
-    "行情异常："+(audit.error||"K线/指数校验未通过")+"；不采用过期数据，不给方向。":
-    fresh?"最近有效行情校验："+when(verifiedAt)+" ｜ 1分钟K线收盘："+when(bar1)+" ｜ 5分钟K线收盘："+when(bar5)+" ｜ 当轮指数报价延迟："+indexAge+"毫秒；行情持续更新，方向每分钟扫描。":
+  const indexAge=Number.isFinite(latestAudit.openAgeMs)?latestAudit.openAgeMs:null;
+  const fresh=age>=0&&age<=90000&&bar1!==null&&bar5!==null&&indexAge!==null&&latestAudit.status!=="DATA_ERROR";
+  $("feedFreshness").textContent=latestAudit.status==="DATA_ERROR"?
+    "行情异常："+(latestAudit.error||"K线/指数校验未通过")+"；不采用过期数据，不给方向。":
+    fresh?"最近有效行情校验："+when(verifiedAt)+" ｜ 1分钟K线收盘："+when(bar1)+" ｜ 5分钟K线收盘："+when(bar5)+" ｜ 当轮指数报价延迟："+indexAge+"毫秒；指数价每12秒检查。":
     "最新行情校验状态待确认："+(Number.isFinite(verifiedAt)?"距上次通过约"+Math.max(0,Math.round(age/1000))+"秒":"尚无有效扫描")+"；未确认时不声明数据实时。";
   $("feedFreshness").className="sub "+(fresh?"good":"yellow");
  const recent=isCurrentStrategyRecord(d.lastCheck)?d.lastCheck:null;
@@ -273,7 +273,7 @@ function display(d){
  $("engine").textContent=d.configured?"方向分析已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
- $("aiStatus").textContent="信号来源：V20点位优化纯规则 · AI调用已停止。"
+ $("aiStatus").textContent="信号来源：V22六周期Supertrend + EMA/MACD/RSI综合评分 · 不调用AI。"
 
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";
@@ -301,25 +301,37 @@ function display(d){
   $("result").className=s.proxyHit===true?"good":s.proxyHit===false?"bad":"yellow";
   $("reason").textContent=s.reason||s.error||"等待条件检查";
   const detail=$("analysisDetail");detail.replaceChildren();
-  const rule=s.ruleChecks||s;
-   const desc=document.createElement("p");
-   desc.textContent="近3分钟净涨跌："+(
-     Number.isFinite(rule.change3mPct)?rule.change3mPct.toFixed(5)+"%":"—")+
-     " · 1m/5m趋势共振 · 形态、量比与RSI全部确认";
-   detail.append(desc);
-   $("dataQuality").textContent="指标来自币安BTC现货已收盘1m/5m K线；锁定与600秒后核验来自币安U本位合约指数价。两者并非完全同一价格口径，也不等于事件合约官方Strike或结算。";
+  const rule=d.lastCheck?.evidence?.timeframes?d.lastCheck:(s.ruleChecks||s);
+  const evidence=rule.evidence||{};
+  const desc=document.createElement("p");
+  desc.textContent="六周期综合趋势分数："+(
+    Number.isFinite(evidence.trendScore)?evidence.trendScore.toFixed(3):"—")+
+    " · 已验证周期 "+(evidence.timeframeCoverage??"—")+"/6"+
+    " · 当前指数价："+price(evidence.currentIndexPrice);
+  detail.append(desc);
+  for(const tf of ["1m","2m","5m","10m","15m","30m"]){
+    const v=evidence.timeframes?.[tf],line=document.createElement("p");
+    if(!v?.available)line.textContent=tf+"：行情不可用（"+(v?.reason||"暂未取得")+"）";
+    else line.textContent=tf+"："+(v.trend==="UP"?"偏多":v.trend==="DOWN"?"偏空":"中性")+
+      " · Supertrend "+(v.supertrend?.direction==="UP"?"多":v.supertrend?.direction==="DOWN"?"空":"—")+
+      " · EMA"+v.emaFastPeriod+"/"+v.emaSlowPeriod+
+      " · RSI "+(v.rsi14??"—")+" · MACD柱 "+(v.macdHistogram??"—")+
+      " · 量比 "+(v.volumeRatio??"—");
+    detail.append(line);
+  }
+  $("dataQuality").textContent="1/5/15/30分钟来源于币安BTC现货已收盘K线；2/10分钟按真实1分钟K线聚合。锁定与600秒核验使用币安U本位合约指数价，并非事件合约官方成交Strike或结算。";
  }else{
   $("quickPhase").textContent="等待检测";$("quickDirection").textContent="尚无信号";
   $("quickDirection").className="signal-direction yellow";
   $("quickConfidence").textContent="方向：—";$("confidence").textContent="—";
   $("quickOpen").textContent="参考价：—";
-  $("quickReason").textContent="趋势、动量必须一致；形态、成交量与RSI全部确认。仍允许NO_SIGNAL，不承诺更高命中率。";
-  $("quickTimestamp").textContent="每分钟自动检测，条件不足或数据异常不出方向。";
+  $("quickReason").textContent="六周期趋势与实时指数价合并分析，最多每10分钟发布3条；异常行情不输出方向。";
+  $("quickTimestamp").textContent="每12秒自动检查，不保证未来10分钟命中。";
   for(const id of ["openPrice","direction","openedAt","expiresAt","closePrice","latency","result","remaining"]){
     $(id).textContent="—";
   }
   $("reason").textContent="新策略尚无信号，旧数据不参与统计。";
-  $("dataQuality").textContent="新策略使用60根连续已收盘1分钟K线、40根连续已收盘5分钟K线和实时指数报价。";
+  $("dataQuality").textContent="新策略核对1/2/5/10/15/30分钟已收盘K线和新鲜指数价。";
   $("analysisDetail").replaceChildren();$("phase").textContent="等待多周期趋势检测";
  }
  showSources(d.lastDataProbe?.availability||d.lastFeatureCoverage||null);
@@ -362,7 +374,7 @@ async function refresh(){
     d.active?"已出有效方向，等待UTC参考周期结束核对指数。":
     d.lastCheck?.status==="DATA_ERROR"?"行情数据异常，本次不产生方向；可重新检测。":
     d.lastCheck?.status==="NO_SIGNAL"?"检查完成：当前没有符合策略的方向优势。":
-    "每分钟检查实时行情；条件符合、距上次信号至少10分钟，才给出看涨或看跌。";
+    "每12秒读取新鲜指数价并结合六周期趋势，滚动10分钟最多3条看涨或看跌信号。";
  }catch(e){
   if(epoch===refreshEpoch&&!inflight){
    $("engine").textContent="状态接口异常";$("engine").className="status bad";

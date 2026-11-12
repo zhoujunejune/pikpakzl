@@ -40,6 +40,9 @@ test("emerging countertrend with 1m+2m reversal against 5m is not auto-followed"
  const r=scoring({"1m":5.2,"2m":5.2,"5m":-5.2,"10m":-5.2,"15m":-5.2,"30m":-5.2},1.6);
  assert.equal(r.direction,null);
  assert.equal(r.decisionReason,"V23_EARLY_REVERSAL_UNCONFIRMED");
+ const slow=scoring({"1m":5.2,"2m":5.2,"5m":-5.2,"10m":-5.2,"15m":-5.2,"30m":-5.2},0.1);
+ assert.equal(slow.direction,null);
+ assert.equal(slow.decisionReason,"V23_EARLY_REVERSAL_UNCONFIRMED");
 });
 test("strong live adverse tick pauses instead of blindly following a stale trend",()=>{
  const r=scoring({"1m":-5.2,"2m":-5.2,"5m":-5.2,"10m":-5.2,"15m":-5.2,"30m":-5.2},5.6);

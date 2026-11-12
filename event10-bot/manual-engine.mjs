@@ -149,6 +149,11 @@ function slimSignal(h) {
     signalId:h.id,eventTag:h.ruleChecks?.eventTag??h.eventTag??null,
     signalQuality:h.ruleChecks?.quality??h.signalQuality??null,
     change3mPct:h.ruleChecks?.change3mPct??h.change3mPct??null,requestId:h.id,
+    twoMinuteBarAt:evidence.timeframes?.["2m"]?.lastClosedAt??null,
+    trendScore:evidence.trendScore??null,
+    trendDecisionReason:evidence.trendDecisionReason??null,
+    liveIndexDelta:evidence.liveIndexDelta??null,
+    shortTermDirection:evidence.shortTermDirection??null,
     volumeRatio:Number.isFinite(evidence.volumeRatio)?evidence.volumeRatio:null,
     rsi14:Number.isFinite(evidence.rsi14)?evidence.rsi14:null,
     leadPct:Number.isFinite(evidence.signedLeadPct)?Math.abs(evidence.signedLeadPct):null,
@@ -284,7 +289,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     };
     return {lastHour:aggregate(scanAudit.filter(x=>x.at>=clock()-3600000&&x.at<=clock()+1000)),
       last24Hours:aggregate(scanAudit),lastScanAt:scanAudit.at(-1)?.at??null,
-      note:"V21每12秒读取新鲜指数价；价格持平、数据无效或滚动10分钟3条满额时不发布。"};
+      note:"V23每12秒扫描；逆向转折未确认、相似信号重复、数据无效或滚动10分钟3条满额时不发布。"};
   }
 
   // Only pending/last 500 full sessions remain hot; the signal ledger retains all.
@@ -314,8 +319,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10", mode:"MULTI_TF_SUPERTREND_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_V22_MULTITF_SUPERTREND",aiMandatory:false,
+    return {ok:true,bot:"EVENT10", mode:"REVERSAL_AWARE_10M_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_V23_REVERSAL_AWARE_10M",aiMandatory:false,
       aiReviewConfigured:false,aiReviewModel:null,aiLearningMode:"DISABLED",
       aiReviewStats:{...aiStats},aiInProgress:null,
       aiLearningProfile:null,
@@ -331,10 +336,13 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:aiStats.calls,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
-      enrichmentVersion:"EVENT10_MULTITF_SUPERTREND_V22",
+      enrichmentVersion:"EVENT10_REVERSAL_AWARE_10M_V23",
        autoIntervalMs:12_000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/12_000)+1)*12_000,
       multiTimeframeIntervals:["1m","2m","5m","10m","15m","30m"],
+      minDuplicateSameDirectionMs:120000,
+      requiresNewCompleted2mBarForRepeat:true,
+      maxSignalsPerTenMinutes:MAX_SIGNALS_PER_10M,
       lastTimeframeAnalysis:lastCheck?.evidence?.timeframes||null,
       lastTrendScore:lastCheck?.evidence?.trendScore??null,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
@@ -431,14 +439,48 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         rule.reason="滚动10分钟已有3条有效方向；后台继续分析实时指数价，额度释放后立即恢复。";
         rule.evidence.recentTenMinuteSignals=recentSignals.length;
       }
-      // V22 multi-timeframe direction plus current live index; no AI or orders.
+      // V23 de-duplicate highly correlated bets. A real new same-side signal
+      // needs a new completed 2-minute bar and >=120s since the previous one,
+      // not just another 12-second API snapshot. Uses the persistent ledger,
+      // so app restarts and manual clicks cannot evade these checks.
+      if(rule.direction){
+        const same=recentSignals.filter(h=>h.direction===rule.direction)
+          .sort((a,b)=>b.openedAt-a.openedAt)[0];
+        const currentBar=rule.evidence?.timeframes?.["2m"]?.lastClosedAt;
+        const previousBar=same?.twoMinuteBarAt??same?.ruleChecks?.evidence?.timeframes?.["2m"]?.lastClosedAt;
+        const repeated=!!same&&(
+          decisionAt-same.openedAt<120000||
+          (Number.isFinite(currentBar)&&Number.isFinite(previousBar)&&currentBar<=previousBar));
+        if(repeated){
+          rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
+          rule.quality="NO_SIGNAL";rule.eventTag="V23_DUPLICATE_TREND";
+          rule.reason="同向信号与上一条行情高度重合；仍每12秒分析，等待至少120秒和新收盘2分钟K线。";
+          rule.evidence.duplicateOf=same.id;rule.evidence.nextEligibleAt=same.openedAt+120000;
+        }
+      }
+      // A sudden 12-second flip is noise unless the live index has moved
+      // enough from the prior lock price. Opposite directions remain allowed.
+      if(rule.direction){
+        const prior=recentSignals.slice().sort((a,b)=>b.openedAt-a.openedAt)[0];
+        const quote=Number(filtered.indexQuote?.price);
+        const differenceBps=prior&&Number.isFinite(prior.openPrice)&&prior.openPrice>0?
+          Math.abs(quote/prior.openPrice-1)*10000:null;
+        if(prior&&prior.direction!==rule.direction&&decisionAt-prior.openedAt<60000&&
+          (differenceBps===null||differenceBps<3)){
+          rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
+          rule.quality="NO_SIGNAL";rule.eventTag="V23_UNCONFIRMED_QUICK_FLIP";
+          rule.reason="距离上一条反向信号太近且指数变化不足3bps，避免短线噪声反复改方向。";
+          rule.evidence.previousSignalId=prior.id;
+        }
+      }
+      // V23 validated multi-timeframe direction plus fresh index; no AI or orders.
       // Use the same fresh index quote at rule evaluation time; the full
       // 600-second proxy verification window begins when the signal is recorded.
       const aiReview=null;
       const publishAt=decisionAt;
       const publishIndex=filtered.indexQuote;
       if(rule.direction){
-        rule.eventTag="V21_RULE_"+rule.direction;
+        rule.eventTag="V23_RULE_"+rule.direction;
         rule.evidence.indicatorSnapshotAt=decisionAt;
         rule.evidence.finalPublishedAt=publishAt;
         rule.evidence.liveIndexPrice=publishIndex.price;
@@ -476,7 +518,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_V22_MULTITF_SUPERTREND",
+        model:"PURE_SIGNAL_V23_REVERSAL_AWARE_10M",
         aiReview:null,attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
@@ -534,6 +576,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+         h.decisionReviewVersion==="EVENT10_MULTI_TF_SUPERTREND_V22_20261112"||
          h.decisionReviewVersion==="EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112"||
          h.decisionReviewVersion==="EVENT10_ENTRY_POSITION_V20_20261111"||
          h.decisionReviewVersion==="EVENT10_PURE_RULE_V19_20261107"||
@@ -577,7 +620,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_MULTI_TF_SUPERTREND_V22_20261112","EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

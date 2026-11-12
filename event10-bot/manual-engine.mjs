@@ -7,7 +7,9 @@ import {confirmedPriceStructure} from "./price-structure.mjs";
 import {collectIndependentSpotCandles} from "./readonly-candles.mjs";
 
 export const HORIZON_MS = 600_000;
-export const MIN_SIGNAL_GAP_MS = 600_000; // At most one actionable signal per 10m; prevent overlapping observations.
+export const MIN_SIGNAL_GAP_MS = 0;
+export const MAX_SIGNALS_PER_10M = 3;
+export const SIGNAL_WINDOW_MS = 600_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
 const round = (v,n=5)=>Number(v.toFixed(n));
@@ -282,7 +284,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     };
     return {lastHour:aggregate(scanAudit.filter(x=>x.at>=clock()-3600000&&x.at<=clock()+1000)),
       last24Hours:aggregate(scanAudit),lastScanAt:scanAudit.at(-1)?.at??null,
-      note:"一次无信号可能有多个未通过条件；自动同一分钟重试只计一次，手动独立统计。"};
+      note:"V21每12秒读取新鲜指数价；价格持平、数据无效或滚动10分钟3条满额时不发布。"};
   }
 
   // Only pending/last 500 full sessions remain hot; the signal ledger retains all.
@@ -294,7 +296,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   let busyStart=false,busySettle=false,lastError=null;
   // Rule-only engine: no AI service, API call, inference, or AI required gate.
   // Historical AI records are retained for already issued T+600 settlements.
-  let entryObservation=null; // V20 in-memory one-minute entry improvement probe; no trade execution.
+  let previousIndexSnapshot=null; // refreshed every scan, even when published-signal quota is full
   const aiStats={calls:0,reviewed:0,fallbacks:0,rejected:0,lastStatus:"DISABLED",lastAt:null};
   const aiConfigured=false,aiModel=null,aiInProgress=null;
   let lastDataError=null,lastDataErrorAt=null,lastSuccessfulScanAt=null;
@@ -311,8 +313,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10", mode:"PACED_V19_PURE_RULE_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_V20_ENTRY_POSITION",aiMandatory:false,
+    return {ok:true,bot:"EVENT10", mode:"LIVE_INDEX_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_V21_LIVE_INDEX",aiMandatory:false,
       aiReviewConfigured:false,aiReviewModel:null,aiLearningMode:"DISABLED",
       aiReviewStats:{...aiStats},aiInProgress:null,
       aiLearningProfile:null,
@@ -321,14 +323,16 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       officialEventContractResultsAvailable:false,
       priceSource:"BINANCE_USDM_SIGNAL_CAPTURED_INDEX_TPLUS600_PROXY_NOT_ORDER_STRIKE",
       horizonMs:HORIZON_MS,minSignalGapMs:MIN_SIGNAL_GAP_MS,
+       maxSignalsPerTenMinutes:MAX_SIGNALS_PER_10M,
+       rollingSignalWindowMs:SIGNAL_WINDOW_MS,livePriceUsedForDirection:true,
        overlappingObservationsAllowed:true,activeSignalCount:history.filter(x=>
          x.decisionReviewVersion===RULE_VERSION&&x.status==="PREDICTED"&&
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:aiStats.calls,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
-      enrichmentVersion:"EVENT10_PACED_V19_PURE_RULE",
-       autoIntervalMs:60000,lastAutoCheckAt,
-       nextAutoCheckAt:(Math.floor(clock()/60000)+1)*60000,
+      enrichmentVersion:"EVENT10_LIVE_INDEX_V21",
+       autoIntervalMs:12_000,lastAutoCheckAt,
+       nextAutoCheckAt:(Math.floor(clock()/12_000)+1)*12_000,
       decisionReviewVersion:RULE_VERSION,explanationLanguage:"zh-CN",
       thinkingMode:"disabled",reasoningEffort:null,
       lastReasoningObserved:null,lastReasoningTokenCount:null,
@@ -395,70 +399,31 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       }
       const reference={observedAt:decisionAt};
       const rule=evaluatePureSignal({feed,reference,
-        indexSnapshot:filtered.indexQuote,orderBook:filtered.orderBook,
-        aggressiveFlow:filtered.aggressiveFlow,futuresMinute:filtered.futuresMinute,trigger:id.startsWith("auto-")?"AUTO":"MANUAL"});
+        indexSnapshot:filtered.indexQuote,previousIndexSnapshot,
+        trigger:id.startsWith("auto-")?"AUTO":"MANUAL"});
+      previousIndexSnapshot=filtered.indexQuote;
       // Clear stale-feed error after BOTH latest closed bars and the index
       // quote have passed the fresh-data validation in evaluatePureSignal.
       lastSuccessfulScanAt=clock();lastError=null;
-      // One operator-actionable signal per ten minutes, across manual/auto
-      // triggers and process restarts. Legacy V14 directions also enforce
-      // their original full 10m window during this version cutover.
-      const existingSignals=Array.from(signalLedger.all.values()).filter(h=>
+      // Only publication cap: maximum three genuine directions in ANY rolling
+      // ten minutes, covering manual/auto and persisted previous-version signals.
+      const recentSignals=Array.from(signalLedger.all.values()).filter(h=>
         ["UP","DOWN"].includes(h.direction)&&Number.isFinite(h.openedAt)&&
-        h.openedAt<=decisionAt&&h.openedAt+MIN_SIGNAL_GAP_MS>decisionAt);
-      if(rule.direction&&existingSignals.length){
-        const cooldownUntil=Math.max(...existingSignals.map(h=>h.openedAt+MIN_SIGNAL_GAP_MS));
+        h.openedAt<=decisionAt&&h.openedAt>decisionAt-SIGNAL_WINDOW_MS);
+      if(rule.direction&&recentSignals.length>=MAX_SIGNALS_PER_10M){
         rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-        rule.quality="COOLDOWN";rule.eventTag="V17_MIN_SIGNAL_GAP";
-        rule.conditions=null;
-        rule.reason="距离上次有效信号不足10分钟；避免同一观察期重复通知和连续追单。";
-        rule.evidence.quality="COOLDOWN";rule.evidence.cooldownUntil=cooldownUntil;
+        rule.quality="CAP_REACHED";rule.eventTag="V21_ROLLING_10M_CAP";
+        rule.reason="滚动10分钟已有3条有效方向；后台继续分析实时指数价，额度释放后立即恢复。";
+        rule.evidence.recentTenMinuteSignals=recentSignals.length;
       }
-      // V20 confirms a candidate only after the quoted index entry price improves
-      // within 15–60 seconds. The final 600-second clock starts only on publication.
-      // This observation does not place orders and never backdates the open price.
-      const quote=filtered.indexQuote?.price;
-      if(entryObservation&&
-          (decisionAt-entryObservation.firstAt>60000||
-           (rule.direction&&entryObservation.direction!==rule.direction))){
-        entryObservation=null;
-      }
-      if(rule.direction&&!existingSignals.length){
-        if(!entryObservation){
-          entryObservation={firstAt:decisionAt,firstPrice:quote,direction:rule.direction};
-          rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-          rule.eventTag="V20_ENTRY_OBSERVING";rule.quality="NO_SIGNAL";
-          rule.reason="候选趋势和点位有效；正在观察最多60秒，等待更合适的指数锁定价。";
-        }else{
-          const elapsed=decisionAt-entryObservation.firstAt;
-          const improvementBps=(rule.direction==="UP"?
-              entryObservation.firstPrice-quote:quote-entryObservation.firstPrice)/
-              entryObservation.firstPrice*10000;
-          if(elapsed>=15000&&elapsed<=60000&&improvementBps>=0.5){
-            rule.eventTag="V20_ENTRY_IMPROVED_"+rule.direction;
-            rule.reason="V20：完成入场价格改善观察；指数锁定价从最终发布时刻开始计时600秒。";
-            rule.evidence.entryObservation={
-              elapsedMs:elapsed,improvementBps:Number(improvementBps.toFixed(3)),
-              initialIndexPrice:entryObservation.firstPrice};
-            entryObservation=null;
-          }else{
-            rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-            rule.eventTag="V20_ENTRY_WAIT";rule.quality="NO_SIGNAL";
-            rule.reason="等待指数锁定价改善至少0.5bps，候选最多观察60秒，不强制出信号。";
-            rule.evidence.entryObservation={
-              elapsedMs:elapsed,improvementBps:Number(improvementBps.toFixed(3)),
-              initialIndexPrice:entryObservation.firstPrice};
-          }
-        }
-      }
-      // V20 trend + price entry rules alone determine published UP/DOWN; no AI.
+      // V21 live index direction only; no AI, order, or further entry filters.
       // Use the same fresh index quote at rule evaluation time; the full
       // 600-second proxy verification window begins when the signal is recorded.
       const aiReview=null;
       const publishAt=decisionAt;
       const publishIndex=filtered.indexQuote;
       if(rule.direction){
-        rule.eventTag="V20_RULE_"+rule.direction;
+        rule.eventTag="V21_RULE_"+rule.direction;
         rule.evidence.indicatorSnapshotAt=decisionAt;
         rule.evidence.finalPublishedAt=publishAt;
         rule.evidence.liveIndexPrice=publishIndex.price;
@@ -496,7 +461,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_V20_ENTRY_POSITION",
+        model:"PURE_SIGNAL_V21_LIVE_INDEX",
         aiReview:null,attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
@@ -526,22 +491,19 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   async function tick(){
     if(busySettle||clock()-lastCheckAt<1100)return;
     lastCheckAt=clock();
-    // Every minute is checked; there are no forced baseline directions.
-    // Space three attempts over ~30s so delayed closed candles can catch up.
-    // Stable slot IDs prevent duplicates; no extra accepted directions are fabricated.
-    const nowMs=clock(),slotStart=Math.floor(nowMs/60000)*60000;
-    const slotId="auto-1m-"+slotStart;
-    const previous=autoAttempts.get(slotStart)||{count:0,lastAt:0};
-    if(nowMs-slotStart<45000&&!busyStart&&!inFlightStart&&
-       !signalLedger.all.has(slotId)&&previous.count<3&&
-       (previous.count===0||nowMs-previous.lastAt>=14000)){
-      autoAttempts.set(slotStart,{count:previous.count+1,lastAt:nowMs});
+    // Re-examine fresh BTC index price every 12s, with a unique slot ID.
+    // No fixed time gap; the rolling 10m cap is the only publication limiter.
+    const nowMs=clock(),slotStart=Math.floor(nowMs/12_000)*12_000;
+    const slotId="auto-12s-"+slotStart;
+    if(!busyStart&&!inFlightStart&&!autoAttempts.has(slotStart)&&
+       !signalLedger.all.has(slotId)){
+      autoAttempts.set(slotStart,true);
       lastAutoCheckAt=nowMs;
       void start(slotId).catch(error=>{
         lastError="AUTO_SLOT_"+String(error?.message||error).slice(0,100);
       });
     }
-    for(const key of autoAttempts.keys())if(key<slotStart-60000)autoAttempts.delete(key);
+    for(const key of autoAttempts.keys())if(key<slotStart-60_000)autoAttempts.delete(key);
     const expiring=history.filter(h=>
       h.status==="PREDICTED" && h.proxyHit===null && h.proxyOutcome===null &&
       clock()>=h.expiresAt && !h.settlementStatus);
@@ -557,6 +519,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+         h.decisionReviewVersion==="EVENT10_ENTRY_POSITION_V20_20261111"||
          h.decisionReviewVersion==="EVENT10_PURE_RULE_V19_20261107"||
         h.decisionReviewVersion==="EVENT10_AI_REQUIRED_LEARNING_V18_20261106"||
         h.decisionReviewVersion==="EVENT10_AI_FEEDBACK_V17_20261106"||
@@ -598,7 +561,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

@@ -35,10 +35,10 @@ th{color:#a9c6e7}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
 <h1>海派事件合约 · BTC 十分钟纯规则信号</h1>
-<p class="sub">BTCUSDT · V20 入场点位优化信号 · 趋势同向 + 点位区间 + 最长60秒观察 · 每10分钟最多1条</p>
+<p class="sub">BTCUSDT · V21 实时指数价方向 · 每12秒检查 · 任意滚动10分钟最多3条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V20沿用V19指标生成候选，仅在趋势同向、量能与点位合格且候选入场价改善时发布信号；不调用AI。所有指数模拟结算均非官方事件合约结算。不自动下单。</div>
+V21每12秒用新鲜BTC指数价重新判断涨跌，重点比较前后两次实时指数变化，不再以趋势、RSI、成交量、区间位置或改善价拦截。仅做研究信号，不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则方向</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -50,12 +50,12 @@ V20沿用V19指标生成候选，仅在趋势同向、量能与点位合格且�
   <strong id="quickConfidence" class="signal-price">方向：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
- <div id="quickReason" class="signal-reason">需要60根已收盘1分钟K线、40根已收盘5分钟K线和新鲜指数报价；无优势返回NO_SIGNAL。</div>
- <p class="sub">后台每分钟检查；满足信号条件且距离上条信号至少10分钟才记录。连续失误不会触发20分钟停发。真实行情检验与600秒核验保持不变，不能保证高胜率。</p>
+ <div id="quickReason" class="signal-reason">使用新鲜指数报价及最近已收盘K线，实时比较价格变化；数据错误、完全平盘或10分钟3条满额则不发新信号。</div>
+ <p class="sub">后台每12秒检查一次实时指数价；滚动10分钟最多3条（手动自动共用），没有固定冷却时间。每条仍核验600秒后价格，不能保证命中率。</p>
  <p class="sub" id="quickTimestamp">方向由原规则给出；不调用AI，也不会再因AI超时取消信号。</p>
 <p class="sub" id="feedFreshness" aria-live="polite">正在核实最新1分钟/5分钟K线和币安指数报价时间戳…</p>
 </div>
-<p class="sub">自动每分钟扫描；有效方向之间最少间隔10分钟（含手动、自动）。每条信号单独锁定指数代理价并在600秒后核验。</p>
+<p class="sub">自动每12秒扫描实时指数价；任意滚动10分钟最多3条。每条单独锁定指数代理价并在600秒后核验。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -123,7 +123,7 @@ V20沿用V19指标生成候选，仅在趋势同向、量能与点位合格且�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_ENTRY_POSITION_V20_20261111";
+const SIGNAL_VERSION="EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";

@@ -1,3 +1,4 @@
+# 2026-11-12: user reports sparse EVENT10 V20 signals after EVENT10-only restore; inspect last hour/24h rejects, preserve live state.
 # V18 AI-completion-required read-only production audit; no trades, never expose API keys.
 # Post V17 deployment: verify retired Guardian units remain stopped.
 # Live V17 independent candle source and AI review production confirmation.

@@ -21,13 +21,19 @@ export function checkedKlines(payload,interval,asOf){
 export async function collectIndependentSpotCandles({fetcher=fetch,now=Date.now,timeoutMs=2400}={}){
  const requests=BASES.map(async(base)=>{
    const receivedAt=now();
-   const values=await Promise.all(Object.entries(LENGTHS).map(async([interval,limit])=>{
+   const get=async(interval,limit)=>{
      const response=await fetcher(base+"/api/v3/klines?symbol=BTCUSDT&interval="+interval+"&limit="+limit,
        {headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeoutMs)});
-     if(!response.ok)throw Error("PUBLIC_CANDLE_HTTP_"+response.status);
+     if(!response.ok)throw Error("PUBLIC_CANDLE_HTTP_"+interval+"_"+response.status);
      return [interval,checkedKlines(await response.json(),interval,now())];
-   }));
-   const candles=Object.fromEntries(values);
+   };
+   // Preserve signal availability if an OPTIONAL higher-timeframe endpoint
+   // fails: unavailable 15m/30m are explicitly reported, never synthesized.
+   const required=Promise.all([get("1m",LENGTHS["1m"]),get("5m",LENGTHS["5m"])]);
+   const optional=Promise.all(["15m","30m"].map(interval=>
+     get(interval,LENGTHS[interval]).catch(()=>null)));
+   const [core,high]=await Promise.all([required,optional]);
+   const candles=Object.fromEntries([...core,...high.filter(Boolean)]);
    return {ok:true,readOnly:true,symbol:"BTCUSDT",
      marketSource:"BINANCE_SPOT_PUBLIC_REST_MULTI_TF",receivedAt,
      latest:{marketFeedConnected:true,eventMs:now(),lastPrice:candles["1m"].at(-1).close},

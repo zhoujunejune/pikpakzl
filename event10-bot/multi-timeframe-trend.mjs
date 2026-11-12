@@ -139,7 +139,7 @@ export function selectTenMinuteDirection(timeframes,liveBps=null){
  let reason="V23_NORMALIZED_TREND";
  // A 1m + 2m reversal with a confirming index tick is not six independent
  // votes for the older direction. Wait for new evidence before publishing.
- if(one!==0&&one===two&&one!==five&&liveDirection===one)
+ if(one!==0&&one===two&&one!==five&&liveDirection!==-one)
    reason="V23_EARLY_REVERSAL_UNCONFIRMED";
  else if(candidate!==0&&one!==0&&two===one&&candidate!==one&&
     liveDirection===one)

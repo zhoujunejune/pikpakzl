@@ -35,10 +35,10 @@ th{color:#a9c6e7}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
 <h1>海派事件合约 · BTC 十分钟纯规则信号</h1>
-<p class="sub">BTCUSDT · V22 六周期趋势分析 · Supertrend + EMA · 12秒检查 · 每10分钟最多3条</p>
+<p class="sub">BTCUSDT · V23 反转识别 · 10分钟方向评分 · 12秒检查 · 每10分钟最多3条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V22综合已收盘1、2、5、10、15、30分钟K线的Supertrend、EMA、MACD、RSI、量能，并持续参考最新BTC指数价。信号数量限制不变：滚动10分钟最多3条；只做研究信号，不自动下单。</div>
+V23把六周期指标归一化，重点分析1/2/5分钟与最新指数价，遇到早期反转先等待确认；同向信号需新的已收盘2分钟K线，避免连续复制。12秒持续扫描，滚动10分钟最多3条，只做信号，不自动下单。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则方向</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -50,12 +50,12 @@ V22综合已收盘1、2、5、10、15、30分钟K线的Supertrend、EMA、MACD�
   <strong id="quickConfidence" class="signal-price">方向：—</strong>
   <span class="signal-price" id="quickOpen">锁定参考价：—</span>
  </div>
- <div id="quickReason" class="signal-reason">综合六个K线周期趋势与当前BTC指数价；数据过期、综合分数持平或滚动10分钟3条已满则不发新信号。</div>
- <p class="sub">后台每12秒检查一次实时指数价；滚动10分钟最多3条（手动自动共用），没有固定冷却时间。每条仍核验600秒后价格，不能保证命中率。</p>
+ <div id="quickReason" class="signal-reason">综合六周期K线及实时价格；早期反转、重复信号、数据过期或每10分钟已达3条时不发新信号。</div>
+ <p class="sub">后台每12秒检查实时指数价；滚动10分钟最多3条（手动自动共用）。同向信号至少相隔120秒，且须有新2分钟已收盘K线；每条均在600秒后核验。</p>
  <p class="sub" id="quickTimestamp">方向由原规则给出；不调用AI，也不会再因AI超时取消信号。</p>
 <p class="sub" id="feedFreshness" aria-live="polite">正在核实1/2/5/10/15/30分钟K线和实时指数报价…</p>
 </div>
-<p class="sub">自动每12秒扫描实时指数价；任意滚动10分钟最多3条。每条单独锁定指数代理价并在600秒后核验。</p>
+<p class="sub">自动每12秒扫描；防止同一行情12秒连发3条。滚动10分钟最多3条，每条独立锁定指数代理价并在600秒后核验。</p>
 </section>
 <section class="card">
 <div class="row"><h2>完整分析详情（本轮 / 最近一轮）</h2><span class="status" id="phase">未开始</span></div>
@@ -123,7 +123,7 @@ V22综合已收盘1、2、5、10、15、30分钟K线的Supertrend、EMA、MACD�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_MULTI_TF_SUPERTREND_V22_20261112";
+const SIGNAL_VERSION="EVENT10_REVERSAL_AWARE_10M_V23_20261113";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -273,7 +273,7 @@ function display(d){
  $("engine").textContent=d.configured?"方向分析已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
- $("aiStatus").textContent="信号来源：V22六周期Supertrend + EMA/MACD/RSI综合评分 · 不调用AI。"
+ $("aiStatus").textContent="信号来源：V23归一化六周期趋势 + 实时价格反转识别 · 不调用AI。"
 
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";

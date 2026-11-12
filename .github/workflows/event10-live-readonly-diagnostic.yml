@@ -1,3 +1,4 @@
+# 2026-11-13: audit user-observed V22 low hit-rate with per-signal trend vs live-price contradictions.
 # 2026-11-12: user reports sparse EVENT10 V20 signals after EVENT10-only restore; inspect last hour/24h rejects, preserve live state.
 # V18 AI-completion-required read-only production audit; no trades, never expose API keys.
 # Post V17 deployment: verify retired Guardian units remain stopped.
@@ -54,7 +55,8 @@ jobs:
               except Exception as e:
                   return {'ok':False,'diagnosticError':type(e).__name__+':'+str(e)[:100]}
           s=read('http://127.0.0.1:13020/api/status')
-          l=read('http://127.0.0.1:13020/api/signals?limit=50&offset=0')
+          l=read('http://127.0.0.1:13020/api/signals?limit=100&offset=0')
+          h=read('http://127.0.0.1:13020/api/history')
           f=read('http://127.0.0.1:13003/api/shadow-market-data')
           import os,subprocess,pathlib,re
           try:
@@ -134,6 +136,38 @@ jobs:
           print('DIAG_RECENT_SIGNAL_ROWS',json.dumps([
               {k:item.get(k) for k in ('id','strategyVersion','direction','signalQuality','openedAt','expiresAt','openPrice','closePrice','proxyHit','proxyOutcome','change3mPct','volumeRatio','rsi14','eventTag','checks','settlementStatus')}
               for item in l.get('records',[])[:25]],ensure_ascii=False),flush=True)
+          # V22 direction error attribution: collect only compact, read-only
+          # current-version observations, never secrets or order data.
+          hr=[x for x in (h.get('records') or []) if x.get('decisionReviewVersion')==s.get('decisionReviewVersion')]
+          hr.sort(key=lambda x:x.get('openedAt') or 0)
+          brief=[]
+          for x in hr[-40:]:
+              e=((x.get('ruleChecks') or {}).get('evidence') or {})
+              tf=e.get('timeframes') or {}
+              brief.append({
+                't':x.get('openedAt'),'dir':x.get('direction'),
+                'hit':x.get('proxyHit'),'status':x.get('settlementStatus'),
+                'p0':x.get('openPrice'),'p1':x.get('closePrice'),
+                'changePct':x.get('returnPct'),
+                'score':e.get('trendScore'),'liveDir':e.get('currentPriceDirection'),
+                'liveDelta':e.get('liveIndexDelta'),
+                'votes':{name:(v or {}).get('trend') for name,v in tf.items()},
+                'supertrend':{name:((v or {}).get('supertrend') or {}).get('direction') for name,v in tf.items()}})
+          settledBrief=[x for x in brief if isinstance(x.get('hit'),bool)]
+          conflicts=[x for x in settledBrief if x.get('liveDir') and x['liveDir']!=x.get('dir')]
+          def metric(a):
+              return {'n':len(a),'hits':sum(x['hit'] is True for x in a),
+                'ratePct':round(100*sum(x['hit'] is True for x in a)/len(a),2) if a else None}
+          print('DIAG_V22_ATTRIBUTION',json.dumps({
+            'historyCount':len(hr),'last40Settled':metric(settledBrief),
+            'longVsLiveConflict':metric(conflicts),
+            'alignedLive':metric([x for x in settledBrief if x.get('liveDir')==x.get('dir')]),
+            'first3MinutesCluster':sum(
+              x['t']-brief[i-1]['t']<180000
+              for i,x in enumerate(brief) if i and isinstance(x.get('t'),(int,float)) and
+                isinstance(brief[i-1].get('t'),(int,float))),
+            'last20':brief[-20:]
+          },ensure_ascii=False),flush=True)
           print('DIAG_FEED_OK',f.get('ok'),flush=True)
           print('DIAG_FEED_CONNECTED',(f.get('latest') or {}).get('marketFeedConnected'),flush=True)
           print('DIAG_FEED_ERROR',str(f.get('errors') or f.get('diagnosticError') or '')[:220],flush=True)

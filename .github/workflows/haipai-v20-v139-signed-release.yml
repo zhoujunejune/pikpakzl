@@ -1,10 +1,5 @@
 name: 海派事件合约 Android v1.3.9 V20 signed release
 on:
-  push:
-    branches: [feature/zl-futures-bot-v1]
-    paths:
-      - '.github/workflows/haipai-v20-v139-signed-release.yml'
-      - 'android-app/app/build.gradle'
   workflow_dispatch:
 permissions:
   contents: write

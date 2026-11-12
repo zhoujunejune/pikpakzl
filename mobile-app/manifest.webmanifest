@@ -1,9 +1,9 @@
 {
   "id": "/app/",
-  "name": "海派合约天才",
-  "short_name": "海派合约天才",
-  "description": "海派合约天才：DeepSeek 永续合约行情分析、模拟自动交易及风控设置（实盘关闭）。",
-  "start_url": "/app/genius.html",
+  "name": "海派事件合约",
+  "short_name": "海派事件合约",
+  "description": "仅提供 BTC 十分钟事件合约信号、提醒、记录与统计，不做普通合约自动交易。",
+  "start_url": "/app/#event10",
   "scope": "/app/",
   "display": "standalone",
   "background_color": "#e9f5ff",

@@ -51,7 +51,7 @@ test -r "$CADDY"
 # The five-minute Guardian service is intentionally retired, not a deployment dependency.
 test "$trade_before" = 0 || { echo "MOBILE_APP_RETIRED_GUARDIAN_UNEXPECTEDLY_RUNNING=true"; exit 44; }
 test "$event_before" != 0
-for file in index.html app.js genius.html genius.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png;do
+for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png;do
   curl -fsSL --retry 3 --max-time 30 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/COMMIT_SHA/mobile-app/$file" -o "$STAGE/$file"
 done
 test -s "$STAGE/index.html" && test -s "$STAGE/app.js"
@@ -77,7 +77,7 @@ python3 - "$STAGE" <<'PNG'
 import json,pathlib,re,struct,sys,zlib,math
 p=pathlib.Path(sys.argv[1])
 m=json.loads((p/'manifest.webmanifest').read_text())
-assert m['scope']=='/app/' and m['start_url']=='/app/genius.html' and m['display']=='standalone'
+assert m['scope']=='/app/' and m['start_url']=='/app/#event10' and m['name']=='海派事件合约' and m['display']=='standalone'
 html=(p/'index.html').read_text()
 js=(p/'app.js').read_text()
 for expected in ('/app/app.js','/app/manifest.webmanifest','panel-event10','panel-more'):
@@ -90,8 +90,7 @@ assert '/guardian/api/status' not in js and 'function guardian(' not in js
 assert 'APP_VERSION="1.4.0"' in js
 assert re.fullmatch(r'[a-f0-9]{40}',json.loads((p/'version.json').read_text())['commit'])
 assert '__ZL_APP_RELEASE_SHA__' not in js
-assert '海派合约天才' in (p/'genius.html').read_text()
-assert '/genius/api/' in (p/'genius.js').read_text()
+assert '/app/genius.html' not in html and '海派合约天才' not in html
 assert 'checkHotUpdate' in js and 'hotUpdateBanner' in html
 # Deploy the exact user-supplied artwork committed by the branding build.
 # Never regenerate the previous synthetic ZL chart icon.
@@ -157,9 +156,11 @@ Path(sys.argv[2]).write_text(result)
 print('MOBILE_CADDY_STATIC_ROUTE_STAGED=true')
 CADDY_PATCH
 install -d -o root -g root -m 0755 "$APP"
-for file in index.html app.js genius.html genius.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png version.json;do
+for file in index.html app.js manifest.webmanifest sw.js icon.svg icon-192.png icon-512.png version.json;do
   install -o root -g root -m 0644 "$STAGE/$file" "$APP/$file"
 done
+# Old unrelated HTML is removed, backup and simulated-trade state stay intact.
+rm -f "$APP/genius.html" "$APP/genius.js"
 cp "$STAGE/Caddyfile.staged" "$CADDY"
 changed=1
 checkpoint=VALIDATE_CADDY
@@ -190,7 +191,19 @@ test "$trade_before" = "$(systemctl show zl-prediction-trade -p MainPID --value)
 echo MOBILE_APP_GUARDIAN_REMAINS_STOPPED=true
 test "$event_before" = "$(systemctl show zl-event10-deepseek -p MainPID --value)"
 systemctl is-active --quiet caddy
+checkpoint=RETIRE_UNRELATED_PAPER_BOT
+# Retire ordinary-perpetual simulation; leave all historical data untouched.
+if systemctl list-unit-files --no-legend haipai-genius-paper.service 2>/dev/null | grep -q '^haipai-genius-paper.service ';then
+  systemctl disable --now haipai-genius-paper.service
+fi
+if systemctl is-active --quiet haipai-genius-paper.service;then
+  echo MOBILE_APP_UNRELATED_PAPER_STILL_RUNNING=true
+  exit 46
+fi
+test "$event_before" = "$(systemctl show zl-event10-deepseek -p MainPID --value)"
+echo MOBILE_APP_UNRELATED_PAPER_DISABLED=true
 checkpoint=COMPLETE
+echo MOBILE_APP_EVENT10_ONLY=true
 echo MOBILE_APP_PWA_RELEASED=true
 echo MOBILE_APP_TRADING_ENGINES_UNCHANGED=true
 echo MOBILE_APP_HTTPS_URL="https://$HOST/app/"

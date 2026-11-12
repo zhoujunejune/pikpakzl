@@ -54,7 +54,7 @@ import java.util.List;
  */
 public final class MainActivity extends Activity {
     private static final String HOST="prediction.47-237-188-69.sslip.io";
-    private static final String START_URL="https://"+HOST+"/app/genius.html";
+    private static final String START_URL="https://"+HOST+"/app/#event10";
     private static final String EVENT10_URL="https://"+HOST+"/app/#event10";
     private static final int NOTIFICATION_REQUEST=734;
     public static final String ACTION_OPEN_BINANCE="com.zlcontrol.android.OPEN_BINANCE_MANUAL";
@@ -312,8 +312,7 @@ public final class MainActivity extends Activity {
                 super.onPageFinished(view,url);
                 if(url!=null&&url.startsWith("https://"+HOST+"/"))cachedCredentialRetry=0;
                 if(alarmContainer!=null&&url!=null&&isTrusted(Uri.parse(url))){
-                    boolean genius="/app/genius.html".equals(Uri.parse(url).getPath());
-                    alarmContainer.setVisibility(genius?View.GONE:View.VISIBLE);
+                    alarmContainer.setVisibility(View.VISIBLE);
                 }
             }
             @Override public void onReceivedSslError(WebView view,SslErrorHandler handler,SslError error){
@@ -617,7 +616,7 @@ public final class MainActivity extends Activity {
         mascotLp.bottomMargin=dp(10);
         layout.addView(mascot,mascotLp);
         TextView subtitle=new TextView(this);
-        subtitle.setText("欢迎来到海派合约天才");
+        subtitle.setText("欢迎来到海派事件合约");
         subtitle.setTextSize(17);
         subtitle.setTypeface(null,android.graphics.Typeface.BOLD);
         subtitle.setTextColor(Color.rgb(21,61,95));

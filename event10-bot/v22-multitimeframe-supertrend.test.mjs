@@ -54,7 +54,8 @@ test("six real closed-candle timeframes with aligned synthetic 2m/10m and supert
  assert.equal(a.direction,"UP");
 });
 test("2m and 10m aggregation drops incomplete candles, never includes future minute",()=>{
- const one=rows(BASE,"1m",25,60000);
+ const one=rows(BASE,"1m",25,60000).map(x=>({t:x.startMs,o:x.open,
+   h:x.high,l:x.low,c:x.close,v:x.volume}));
  const t2=aggregateBars(one,2),t10=aggregateBars(one,10);
  assert.ok(t2.length>=10&&t10.length>=2);
  for(const tf of [t2,t10]){

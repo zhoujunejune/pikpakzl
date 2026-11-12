@@ -24,7 +24,7 @@ jobs:
           node --input-type=module - <<'JS'
           import fs from 'node:fs';
           const html=fs.readFileSync('event10-bot/panel.html','utf8');
-          const scripts=[...html.matchAll(/<script(?:\\s[^>]*)?>([\\s\\S]*?)<\\/script>/g)];
+          const scripts=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)];
           if(!scripts.length)throw Error('NO_EVENT10_PANEL_SCRIPT');
           for(const block of scripts)new Function(block[1]);
           JS

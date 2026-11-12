@@ -1,6 +1,6 @@
 // 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
 // Financial research software, not a real-money order executor.
-export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V153_HYBRID_CANDIDATES';
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V154_BILLING_BACKOFF';
 export const PAPER_FEE_RATE = 0.0005;
 export const PAPER_SLIPPAGE_RATE = 0.0003;
 export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,

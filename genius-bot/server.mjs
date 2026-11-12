@@ -8,6 +8,7 @@ import {ENGINE_VERSION,DEFAULT_SETTINGS,validateSettings,parseDecision,makeMarke
   paperFloatingPnL,paperPnlSummary,MAX_PAPER_POSITIONS} from './engine.mjs';
 import {ingestTrade,summarizeTrades,bookSummary,shouldAnalyze,shouldRefreshClosedCandles,shouldScoutOpportunities} from './market-signals.mjs';
 import {deriveOpportunityCandidates} from './opportunity-candidates.mjs';
+import {createAiBillingGate} from './ai-billing.mjs';
 import {summarizeClosedTrades,estimatedEntryCosts,assessPositions,resolveAIExit,resolveAIEntry} from './decision-context.mjs';
 import {TIMEFRAMES,summarizeTimeframe,higherTimeframesComplete} from './timeframes.mjs';
 
@@ -34,6 +35,15 @@ const metrics={wsMessages:0,markEvents:0,aggTrades:0,bookEvents:0,wsReconnects:0
   consecutiveAllWait:0,scoutCalls:0,scoutSuccess:0,scoutEntriesProposed:0,scoutFailure:0,lastScout:null,
   candleBoundaryRefreshes:0,marketCandidates:0,candidateReviewCalls:0,candidateAIApproved:0,
   candidateAIRejected:0,lastMarketCandidate:null,errors:[]};
+const aiBilling=createAiBillingGate();
+function checkDeepSeekHttp(response){
+  if(response.status===402){
+    aiBilling.noteHttpStatus(402,Date.now());
+    rememberError('AI_BILLING','DEEPSEEK_HTTP_402_INSUFFICIENT_BALANCE');
+    throw Error('DEEPSEEK_HTTP_402');
+  }
+  if(response.ok)aiBilling.noteSuccess(Date.now());
+}
 let busy=false,marketError=null,wsState='CONNECTING',lastSocketAt=0,lastModelCallAt=0,wsOpenedAt=0;
 let socket=null,reconnectTimer=null,bookSocket=null,bookReconnectTimer=null,bookWsLastAt=0;
 
@@ -278,7 +288,7 @@ const DECISION_POLICY=[
 async function scoutAlternativeOpportunities(markets){
   metrics.scoutCalls++;
   const key=process.env.DEEPSEEK_API_KEY||'';
-  if(!key)return null;
+  if(!key||!aiBilling.canCall())return null;
   const snapshot=markets.map(m=>({
     symbol:m.symbol,markPrice:m.markPrice,checkedAt:m.checkedAt,
     trend1m:m.trend1m,trend5m:m.trend5m,momentum3mPct:m.momentum3mPct,
@@ -306,6 +316,7 @@ async function scoutAlternativeOpportunities(markets){
         {role:'user',content:JSON.stringify(body)}
       ]})
     });
+    checkDeepSeekHttp(response);
     if(!response.ok)throw Error('SCOUT_HTTP_'+response.status);
     const raw=await response.json();
     const answer=raw?.choices?.[0]?.message?.content;
@@ -333,6 +344,7 @@ async function scoutAlternativeOpportunities(markets){
 async function deepseekDecision(markets,positions){
   const key=process.env.DEEPSEEK_API_KEY||'';
   if(!key){state.aiStatus='KEY_NOT_CONFIGURED';return null;}
+  if(!aiBilling.canCall()){state.aiStatus='INSUFFICIENT_API_BALANCE';return null;}
   const marketViews=markets.map(m=>({symbol:m.symbol,markPrice:m.markPrice,checkedAt:m.checkedAt,
     trend1m:m.trend1m,trend5m:m.trend5m,momentum3mPct:m.momentum3mPct,
     volumeRatio:m.volumeRatio,pricePosition20mPct:m.pricePosition20mPct,
@@ -356,6 +368,7 @@ async function deepseekDecision(markets,positions){
       response_format:{type:'json_object'},max_tokens:5600,messages:[
       {role:'system',content:DECISION_POLICY},
       {role:'user',content:JSON.stringify(payload)}]})});
+  checkDeepSeekHttp(response);
   if(!response.ok)throw Error('DEEPSEEK_HTTP_'+response.status);
   const obj=await response.json(),msg=obj?.choices?.[0]?.message?.content;
   if(typeof msg!=='string'||!msg.trim())throw Error('DEEPSEEK_EMPTY_DECISION_'+String(obj?.choices?.[0]?.finish_reason||'UNKNOWN'));
@@ -378,6 +391,7 @@ async function deepseekDecision(markets,positions){
 async function reviewProposedEntry(proposal,market){
   metrics.entryReviewCalls++;
   const key=process.env.DEEPSEEK_API_KEY||'';
+  if(!aiBilling.canCall())return null;
   if(!key||!timeframesOf(market.symbol).complete){
     metrics.entryReviewFailed++;
     rememberError('AI_ENTRY_REVIEW',!key?'AI_ENTRY_REVIEW_MISSING_KEY':'AI_ENTRY_REVIEW_HIGHER_INCOMPLETE');
@@ -412,6 +426,7 @@ async function reviewProposedEntry(proposal,market){
         {role:'user',content:JSON.stringify(payload)}
       ]})
     });
+    checkDeepSeekHttp(response);
     if(!response.ok)throw Error('ENTRY_REVIEW_HTTP_'+response.status);
     const raw=await response.json(),msg=raw?.choices?.[0]?.message?.content;
     if(typeof msg!=='string'||!msg.trim())throw Error('ENTRY_REVIEW_EMPTY_'+String(raw?.choices?.[0]?.finish_reason||'UNKNOWN'));
@@ -438,6 +453,7 @@ async function reviewProposedEntry(proposal,market){
 async function reviewProposedClose(proposal,position,market){
   metrics.exitReviewCalls++;
   const key=process.env.DEEPSEEK_API_KEY||'';
+  if(!aiBilling.canCall())return null;
   const context=assessPositions([position],[market],Date.now())[0];
   if(!key||!context?.marketDataFresh){
     metrics.exitReviewFailed++;
@@ -472,6 +488,7 @@ async function reviewProposedClose(proposal,position,market){
         {role:'user',content:JSON.stringify(payload)}
       ]})
     });
+    checkDeepSeekHttp(response);
     if(!response.ok)throw Error('EXIT_REVIEW_HTTP_'+response.status);
     const raw=await response.json(),msg=raw?.choices?.[0]?.message?.content;
     if(typeof msg!=='string'||!msg.trim())throw Error('EXIT_REVIEW_EMPTY_'+String(raw?.choices?.[0]?.finish_reason||'UNKNOWN'));
@@ -509,6 +526,7 @@ async function cycle(){
       state.aiStatus='EMERGENCY_STOP';
     }else if(state.settings.enabled){
       if(!process.env.DEEPSEEK_API_KEY)state.aiStatus='KEY_NOT_CONFIGURED';
+      else if(aiBilling.isBlocked())state.aiStatus='INSUFFICIENT_API_BALANCE';
       else {
         const holding=state.positions.length>0;
         const largestMove=Math.max(0,...SYMBOLS.map(sym=>
@@ -632,6 +650,7 @@ async function cycle(){
         }
       }
     }else state.aiStatus='PAUSED';
+    if(state.settings.enabled&&aiBilling.isBlocked())state.aiStatus='INSUFFICIENT_API_BALANCE';
     state.cycleCount=(state.cycleCount||0)+1;state.lastError=null;store();
   }catch(e){
     marketError=String(e?.message||e).slice(0,150);state.lastError=marketError;
@@ -640,7 +659,7 @@ async function cycle(){
       metrics.aiFailure++;metrics.aiDurationMs=lastModelCallAt?Date.now()-lastModelCallAt:null;
       rememberError('AI_OR_DECISION',e);
     }else rememberError('MARKET_OR_CYCLE',e);
-    state.aiStatus='ERROR_OR_MARKET_UNAVAILABLE';store();
+    state.aiStatus=aiBilling.isBlocked()?'INSUFFICIENT_API_BALANCE':'ERROR_OR_MARKET_UNAVAILABLE';store();
   }finally{busy=false;}
 }
 function publicSnapshot(){
@@ -648,6 +667,7 @@ function publicSnapshot(){
   return {ok:true,app:'海派合约天才',version:ENGINE_VERSION,mode:'PAPER_ONLY',
     realTradingEnabled:false,realOrderExecutionAvailable:false,aiModel:MODEL,
     aiConfigured:Boolean(process.env.DEEPSEEK_API_KEY),aiStatus:state.aiStatus,
+    aiBilling:aiBilling.snapshot(),
     settings:state.settings,paperBalance:state.balance,paperDayStart:state.dayStart,
     positions:state.positions,position:state.positions[0]||null,positionCount:state.positions.length,
     lastDecision:state.lastDecision,lastDecisions:state.lastDecisions||[],lastMarket:state.lastMarket,

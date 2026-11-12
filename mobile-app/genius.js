@@ -136,7 +136,8 @@ function renderStatus(s){
  const m=first?s.marketSnapshots?.find(x=>x.symbol===first.symbol):s.lastMarket;
  put('markPrice',m?.markPrice?(m.symbol+'  '+num(m.markPrice)+' USDT'):'行情待更新');
  const active=Boolean(s.settings?.enabled&&!s.settings?.emergencyStop);
- put('engineState',s.settings?.emergencyStop?'紧急停止':active?'AI 自动分析已开启 · '+s.aiStatus:'AI 自动分析已关闭');
+ const billingBlocked=active&&(s.aiBilling?.blocked===true||s.aiStatus==='INSUFFICIENT_API_BALANCE');
+ put('engineState',s.settings?.emergencyStop?'紧急停止':billingBlocked?'DeepSeek API余额不足 · AI模拟开仓暂停':active?'AI 自动分析已开启 · '+s.aiStatus:'AI 自动分析已关闭');
  put('lastAnalysis',time(s.lastDecision?.at||s.lastModelCallAt));
  const met=s.metrics||{},activeSymbol=first?.symbol||s.lastMarket?.symbol||'BTCUSDT';
  const micro=met.perSymbol?.[activeSymbol]?.trades?.w10;
@@ -145,9 +146,9 @@ function renderStatus(s){
  put('aiTrigger',met.lastTrigger==='PRICE_EVENT'?'行情异动':met.lastTrigger==='SCHEDULED'?'定时检查':'尚未触发');
  put('microWindow',micro?activeSymbol+' · 10秒 '+(micro.changePct>=0?'+':'')+micro.changePct+'% · 主动买入 '+Math.round(micro.buyRatio*100)+'%':'等待逐笔成交');
  const err=met.errors?.[0];
- put('recentError',err?time(err.at)+' · '+err.kind+' · '+err.detail:'无记录');
+ put('recentError',billingBlocked?'DeepSeek API 402：余额不足；已暂停无效重试，请检查API账户余额。':err?time(err.at)+' · '+err.kind+' · '+err.detail:'无记录');
  const actions={LONG:'看涨开仓',SHORT:'看跌开仓',HOLD:'继续持有',CLOSE:'AI 主动平仓',WAIT:'暂不操作'};
- put('aiDecision',s.lastDecision?((s.lastDecision.symbol||'全市场')+' · '+(actions[s.lastDecision.action]||s.lastDecision.action)+' · '+(horizonLabels[s.lastDecision.horizon]||'')+' · '+s.lastDecision.reason):'尚无有效 AI 决策');
+ put('aiDecision',billingBlocked?'DeepSeek API余额不足，请在DeepSeek开发平台检查余额并充值。程序将每5分钟自动尝试恢复；余额不足期间不会产生新的AI模拟订单。':s.lastDecision?((s.lastDecision.symbol||'全市场')+' · '+(actions[s.lastDecision.action]||s.lastDecision.action)+' · '+(horizonLabels[s.lastDecision.horizon]||'')+' · '+s.lastDecision.reason):'尚无有效 AI 决策');
  const activeHigher=met.perSymbol?.[activeSymbol];
  put('multiTrend',activeHigher?.higherComplete?['15m','1h','4h','1d','1w'].map(k=>k+':'+({UP:'涨',DOWN:'跌',MIXED:'震荡'}[activeHigher.higher?.[k]?.bias]||'待更新')).join(' · '):'高周期行情待补齐');
  put('balance',money(s.paperBalance));put('tradeCount',s.totalClosed);

@@ -1,4 +1,4 @@
-name: EVENT10 V21 12s live-index triple-signal production release
+name: EVENT10 V22 six-timeframe Supertrend production release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -15,9 +15,18 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - run: |
+          node --check event10-bot/multi-timeframe-trend.mjs
+          node --check event10-bot/readonly-candles.mjs
           node --check event10-bot/pure-signal.mjs
           node --check event10-bot/manual-engine.mjs
-          node --test event10-bot/v21-live-index-triple.test.mjs event10-bot/alert-watch.test.mjs
+          node --test event10-bot/v22-multitimeframe-supertrend.test.mjs event10-bot/alert-watch.test.mjs
+          node --input-type=module - <<'JS'
+          import fs from 'node:fs';
+          const html=fs.readFileSync('event10-bot/panel.html','utf8');
+          const scripts=[...html.matchAll(/<script(?:\\s[^>]*)?>([\\s\\S]*?)<\\/script>/g)];
+          if(!scripts.length)throw Error('NO_EVENT10_PANEL_SCRIPT');
+          for(const block of scripts)new Function(block[1]);
+          JS
   deploy:
     needs: test
     runs-on: ubuntu-latest
@@ -44,7 +53,7 @@ jobs:
               region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
           remote=f"""#!/bin/bash
           set -Eeuo pipefail
-          stage=$(mktemp -d /tmp/event10-v21-XXXXXXXX)
+          stage=$(mktemp -d /tmp/event10-v22-XXXXXXXX)
           trap 'rm -rf "$stage"' EXIT
           curl -fsSL --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/aliyun_high_selectivity_only.py" -o "$stage/deploy.py"
           python3 -m py_compile "$stage/deploy.py"
@@ -52,7 +61,7 @@ jobs:
           """
           res=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
               instance_id='b67374069bb3457ba6a3a2ede9305d3f',
-              name='event10-v21-live-price-three-signal',
+              name='event10-v22-multitimeframe-supertrend',
               type='RunShellScript',working_user='root',command_content=remote,timeout=370))
           for _ in range(160):
               time.sleep(2)
@@ -82,10 +91,11 @@ jobs:
               with urllib.request.urlopen(req,timeout=20) as r:return json.load(r)
           s=get('/event10/api/status')
           l=get('/event10/api/signals?limit=1&offset=0')
-          assert s['decisionReviewVersion']=='EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112'
+          assert s['decisionReviewVersion']=='EVENT10_MULTI_TF_SUPERTREND_V22_20261112'
           assert l['version']==s['decisionReviewVersion']
-          assert s['providerModel']=='PURE_SIGNAL_V21_LIVE_INDEX'
+          assert s['providerModel']=='PURE_SIGNAL_V22_MULTITF_SUPERTREND'
           assert s['autoTradingEnabled'] is False and s['modelCalls']==0
           assert s['minSignalGapMs']==0 and s['maxSignalsPerTenMinutes']==3 and s['autoIntervalMs']==12000 and s['livePriceUsedForDirection'] is True
-          print('V21_TRIPLE_LIVE_INDEX_PRODUCTION_VERIFIED=true',flush=True)
+          assert s['multiTimeframeIntervals']==['1m','2m','5m','10m','15m','30m']
+          print('V22_MULTITIMEFRAME_PRODUCTION_VERIFIED=true',flush=True)
           PY

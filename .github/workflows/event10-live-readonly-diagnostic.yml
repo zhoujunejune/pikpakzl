@@ -1,3 +1,4 @@
+# 2026-11-13: post-release V23 no-order live-health verification; read-only, no changes on host.
 # 2026-11-13: audit user-observed V22 low hit-rate with per-signal trend vs live-price contradictions.
 # 2026-11-12: user reports sparse EVENT10 V20 signals after EVENT10-only restore; inspect last hour/24h rejects, preserve live state.
 # V18 AI-completion-required read-only production audit; no trades, never expose API keys.

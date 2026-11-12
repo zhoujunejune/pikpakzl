@@ -102,6 +102,14 @@ jobs:
               'up':c.get('upChecks'), 'down':c.get('downChecks'),
               'change3mPct':c.get('change3mPct')
           },ensure_ascii=False),flush=True)
+          print('DIAG_V22_TIMEFRAMES',json.dumps({
+            'version':s.get('decisionReviewVersion'),
+            'latestStatus':(s.get('lastCheck') or {}).get('status'),
+            'coverage':((s.get('lastCheck') or {}).get('evidence') or {}).get('timeframeCoverage'),
+            'trendScore':((s.get('lastCheck') or {}).get('evidence') or {}).get('trendScore'),
+            'timeframes':{k:{'available':v.get('available'),'trend':v.get('trend'),'reason':v.get('reason')}
+              for k,v in ((((s.get('lastCheck') or {}).get('evidence') or {}).get('timeframes')) or {}).items()}
+          },ensure_ascii=False),flush=True)
           print('DIAG_MIN_SIGNAL_GAP_MS',s.get('minSignalGapMs'),flush=True)
           print('DIAG_SCAN_SUMMARY',json.dumps((s.get('scanDiagnostics') or {}).get('lastHour') or {},ensure_ascii=False),flush=True)
           print('DIAG_SCAN_24H',json.dumps((s.get('scanDiagnostics') or {}).get('last24Hours') or {},ensure_ascii=False),flush=True)

@@ -1,7 +1,9 @@
 // EVENT10 V22 read-only multi-timeframe trend evidence. No orders or model calls.
 // Binance spot CLOSED candles; 2m/10m are strictly aligned aggregates of 1m.
 const MS={ "1m":60000,"2m":120000,"5m":300000,"10m":600000,"15m":900000,"30m":1800000 };
-const WEIGHTS={"1m":1.0,"2m":1.25,"5m":1.75,"10m":2.0,"15m":1.65,"30m":1.2};
+// V23: weights sum to one; the 10-minute outcome needs fresh 1/2/5m evidence.
+// 15m and 30m are background context rather than six repeated vetoes.
+export const TEN_MINUTE_WEIGHTS=Object.freeze({"1m":0.22,"2m":0.27,"5m":0.28,"10m":0.13,"15m":0.07,"30m":0.03});
 const round=(x,n=5)=>Number(x.toFixed(n));
 const sign=n=>n>0?1:n<0?-1:0;
 const direction=n=>n>0?"UP":n<0?"DOWN":null;
@@ -113,6 +115,50 @@ export function summarizeTimeframe(bars,label){
    volumeRatio:volumeRatio===null?null:round(volumeRatio,3),
    lastClosedAt:bars.at(-1).t,close:close.at(-1)};
 }
+// V23 direction arbitration: normalize correlated indicator votes and explicitly
+// distinguish emerging reversals from already-established long-term trends.
+// This is NOT a trained probabilistic classifier; its score is never a win rate.
+export function selectTenMinuteDirection(timeframes,liveBps=null){
+ let weighted=0,observedWeight=0;
+ const norm={},sides={};
+ for(const [tf,weight] of Object.entries(TEN_MINUTE_WEIGHTS)){
+   const v=timeframes?.[tf];
+   if(!v?.available||!finite(v.vote))continue;
+   const normalized=Math.max(-1,Math.min(1,v.vote/5.2));
+   norm[tf]=round(normalized,4);
+   sides[tf]=sign(normalized);
+   weighted+=weight*normalized;observedWeight+=weight;
+ }
+ if(!observedWeight)throw Error("NO_VERIFIED_MULTITIMEFRAME_HISTORY");
+ const baseline=weighted/observedWeight;
+ // 12-second index changes below 0.8bp are normal noise, not an independent trend.
+ const liveDirection=finite(liveBps)&&Math.abs(liveBps)>=0.8?sign(liveBps):0;
+ const combined=0.82*baseline+0.18*liveDirection;
+ const candidate=sign(combined),one=sides["1m"]||0,two=sides["2m"]||0,
+   five=sides["5m"]||0;
+ let reason="V23_NORMALIZED_TREND";
+ // A 1m + 2m reversal with a confirming index tick is not six independent
+ // votes for the older direction. Wait for new evidence before publishing.
+ if(one!==0&&one===two&&one!==five&&liveDirection===one)
+   reason="V23_EARLY_REVERSAL_UNCONFIRMED";
+ else if(candidate!==0&&one!==0&&two===one&&candidate!==one&&
+    liveDirection===one)
+   reason="V23_SHORT_TERM_REVERSAL_CONFLICT";
+ else if(candidate!==0&&liveDirection===-candidate&&
+    finite(liveBps)&&Math.abs(liveBps)>=4)
+   reason="V23_STRONG_LIVE_PRICE_CONFLICT";
+ else if(Math.abs(combined)<0.20)
+   reason="V23_SCORE_TOO_WEAK";
+ const accepted=reason==="V23_NORMALIZED_TREND";
+ return {direction:accepted?direction(candidate):null,decisionReason:reason,
+   trendScore:round(combined,4),weightedTimeframeScore:round(baseline,4),
+   currentPriceDirection:direction(liveDirection),
+   liveIndexChangeBps:finite(liveBps)?round(liveBps,4):null,
+   normalizedVotes:norm,shortTermDirection:direction(sign((norm["1m"]||0)+(norm["2m"]||0))),
+   longContextDirection:direction(sign((norm["15m"]||0)+(norm["30m"]||0))),
+   timeframeWeightCoverage:round(observedWeight,4),
+   noCalibratedConfidence:true};
+}
 export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot,indexAt}){
  if(feed?.ok!==true||feed?.readOnly!==true||feed?.symbol!=="BTCUSDT"||
     feed?.latest?.marketFeedConnected===false)throw Error("UNVERIFIED_BTCUSDT_FEED");
@@ -123,32 +169,21 @@ export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot
  const mapping={"1m":one.bars,"2m":aggregateBars(one.bars,2),
    "5m":five.bars,"10m":aggregateBars(one.bars,10),
    "15m":fifteen.bars,"30m":thirty.bars};
- const timeframes={};let weighted=0,weightTotal=0;
+ const timeframes={};
  for(const tf of Object.keys(mapping)){
-   // Do not score a stale or incomplete source, even if old rows look plausible.
    const failure=tf==="5m"?five.error:tf==="15m"?fifteen.error:tf==="30m"?thirty.error:null;
-   const value=failure?{interval:tf,available:false,reason:failure,bars:0}:
-      summarizeTimeframe(mapping[tf],tf);
-   timeframes[tf]=value;
-   if(value.available){weighted+=WEIGHTS[tf]*value.vote;weightTotal+=WEIGHTS[tf];}
+   timeframes[tf]=failure?{interval:tf,available:false,reason:failure,bars:0}:
+     summarizeTimeframe(mapping[tf],tf);
  }
- if(!weightTotal)throw Error("NO_VERIFIED_MULTITIMEFRAME_HISTORY");
  const prev=Number(previousIndexSnapshot?.price),prevAt=Number(previousIndexSnapshot?.observedAt);
  const validPrev=finite(prev)&&prev>0&&Number.isSafeInteger(prevAt)&&prevAt<indexAt&&
    indexAt-prevAt<=30000;
- const liveDelta=validPrev?indexPrice-prev:0;
- const oneClose=one.bars.at(-1).c,priorClose=one.bars.at(-2).c;
- const shortDirection=sign(liveDelta)||(sign(indexPrice-oneClose))||sign(oneClose-priorClose);
- // Current index price matters, but short-term noise cannot erase all larger trends.
- const liveContribution=1.8*shortDirection;
- const finalScore=weighted+liveContribution;
- const finalDirection=direction(finalScore)||direction(shortDirection);
- return {direction:finalDirection,trendScore:round(finalScore,3),
-   weightedTimeframeScore:round(weighted,3),
-   currentPriceDirection:direction(shortDirection),
-   liveIndexDelta:validPrev?round(liveDelta,5):null,
-   currentIndexPrice:indexPrice,indexAt,
-   timeframes,timeframeCoverage:Object.values(timeframes).filter(t=>t.available).length,
+ const liveDelta=validPrev?indexPrice-prev:null;
+ const liveBps=validPrev?(indexPrice/prev-1)*10000:null;
+ const result=selectTenMinuteDirection(timeframes,liveBps);
+ return {...result,liveIndexDelta:validPrev?round(liveDelta,5):null,
+   currentIndexPrice:indexPrice,indexAt,timeframes,
+   timeframeCoverage:Object.values(timeframes).filter(t=>t.available).length,
    timeframeCount:6,aggregationSource:"CLOSED_BINANCE_SPOT_1M_ALIGNED_2M_10M",
    confidenceCalibrated:false};
 }

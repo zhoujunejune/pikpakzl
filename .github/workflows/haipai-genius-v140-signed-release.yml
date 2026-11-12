@@ -1,4 +1,4 @@
-name: 海派事件合约 Android v1.4.2 EVENT10-only signed stable release
+name: 海派事件合约 Android v1.4.2 EVENT10-only restored signed release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]

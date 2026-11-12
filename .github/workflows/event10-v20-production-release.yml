@@ -1,3 +1,4 @@
+# V22 retest: normalize aligned 1m aggregation fixture before guarded production cutover.
 name: EVENT10 V22 six-timeframe Supertrend production release
 on:
   push:

@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
+import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,assessTrendConflict,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
-import {createEngine,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
+import {createEngine,renewedAfterSettledMiss,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
 const json=x=>({ok:true,json:async()=>x});
 const temp=()=>path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-v23-")),"sessions.json");
@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_EMA_DECAY_REENTRY_V27_20261113");
+ assert.equal(RULE_VERSION,"EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -366,4 +366,70 @@ test("V27: confirmed 600s same-side loss must requalify before repeating, opposi
  assert.equal(afterExpiry.direction,"UP");
  const priorWin=await attempt("UP",true);
  assert.equal(priorWin.direction,"UP");
+});
+
+test("V28: do not chase against 5m+30m, or weak 5m+short conflict; symmetric UP/DOWN",()=>{
+ const tf=(side,opposite)=>Object.fromEntries(
+   ["1m","2m","5m","10m","15m","30m"].map(name=>[name,
+    {available:true,trend:opposite.includes(name)?(side==="UP"?"DOWN":"UP"):side}]));
+ for(const side of ["UP","DOWN"]){
+   const selection={trendScore:side==="UP"?0.22:-0.22,
+     decisionReason:"V23_NORMALIZED_TREND"};
+   const actual=assessTrendConflict(side,selection,tf(side,["5m","30m"]),
+     {"1m":{available:true,direction:side}},{threeMinuteBps:0.5});
+   assert.equal(actual.ready,false,side);
+   assert.equal(actual.reason,"V28_CONFLICTED_MULTITIMEFRAME_ENTRY");
+   assert.equal(assessTrendConflict(side,{...selection,trendScore:0.8},
+     tf(side,[]),{"1m":{available:true,direction:side}},
+     {threeMinuteBps:10}).ready,true,side);
+   const weakFive=assessTrendConflict(side,selection,tf(side,["5m"]),
+     {"1m":{available:true,direction:side}},{threeMinuteBps:0});
+   assert.equal(weakFive.ready,false,side);
+ }
+});
+test("V28: price-confirmed 1m/2m early reversal is still permitted when old 5m/30m oppose",()=>{
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1,against=side==="UP"?"DOWN":"UP";
+   const timeframes={"1m":{available:true,trend:side},"2m":{available:true,trend:side},
+    "5m":{available:true,trend:against},"10m":{available:true,trend:against},
+    "15m":{available:true,trend:against},"30m":{available:true,trend:against}};
+   const decision={trendScore:d*0.25,decisionReason:"V24_CONFIRMED_EARLY_REVERSAL"};
+   assert.equal(assessTrendConflict(side,decision,timeframes,
+     {"1m":{available:true,direction:side}},{threeMinuteBps:d*12}).ready,true);
+   assert.equal(assessTrendConflict(side,decision,timeframes,
+     {"1m":{available:true,direction:side}},{threeMinuteBps:d*1}).ready,false);
+ }
+});
+test("V28: both hourly and 2h extremes plus closed 3m/5m exhaustion stop late UP/DOWN chases",()=>{
+ const mk=(hour,two,atr=8)=>({available:true,spotClose:70000,atr1mBps:atr,
+    ranges:{"60m":{available:true,position:hour},
+     "2h":{available:true,position:two},
+     "4h":{available:true,changeBps:0},"24h":{available:true,changeBps:0}}});
+ const up=assessEntryTiming("UP",mk(.956,.967),{threeMinuteBps:1.754,fiveMinuteBps:24.564});
+ assert.equal(up.ready,false);
+ assert.equal(up.reason,"V28_DOUBLE_HORIZON_PRICE_EXHAUSTION");
+ const down=assessEntryTiming("DOWN",mk(.064,0),{threeMinuteBps:-34.78,fiveMinuteBps:-50.86});
+ assert.equal(down.ready,false);
+ assert.equal(down.reason,"V28_DOUBLE_HORIZON_PRICE_EXHAUSTION");
+ // Identical move in middle of the range is not a reason to halt.
+ assert.equal(assessEntryTiming("UP",mk(.51,.55),{threeMinuteBps:1.754,fiveMinuteBps:24.564}).ready,true);
+ assert.equal(assessEntryTiming("DOWN",mk(.43,.44),{threeMinuteBps:-34.78,fiveMinuteBps:-50.86}).ready,true);
+ // Missing optional 2h range must never be invented.
+ assert.equal(assessEntryTiming("UP",mk(.97,.5),{threeMinuteBps:1.754,fiveMinuteBps:24.564}).ready,true);
+});
+test("V28: loss-reentry reads persisted twoMinuteBarAt and requires NEW verified 2m bar + EMA renewal",()=>{
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1;
+   const previous={proxyHit:false,twoMinuteBarAt:120000};
+   const rule={evidence:{timeframes:{"2m":{lastClosedAt:240000}},
+      spotPriceAction:{threeMinuteBps:d*8},
+      emaEntry:{"1m":{direction:side,spreadChangeBps:d*.55},
+                "2m":{direction:side,ema9SlopeBps:d*.75}}}};
+   assert.equal(renewedAfterSettledMiss(rule,previous,side),true,side);
+   assert.equal(renewedAfterSettledMiss(rule,{...previous,twoMinuteBarAt:240000},side),false);
+   assert.equal(renewedAfterSettledMiss(rule,{...previous,twoMinuteBarAt:null},side),false);
+   assert.equal(renewedAfterSettledMiss(rule,{...previous,proxyHit:null},side),false);
+   assert.equal(renewedAfterSettledMiss(rule,{...previous,proxyHit:true},side),false);
+   assert.equal(renewedAfterSettledMiss(rule,previous,side==="UP"?"DOWN":"UP"),false);
+ }
 });

@@ -270,9 +270,6 @@ function event(e,ledger){
  const audit=e.scanDiagnostics?.lastHour;
  const produced=(audit?.strictSignals||0)+(audit?.standardSignals||0);
  put("eScanAudit",audit?"最近1小时检查 "+audit.checks+"次，产生方向信号 "+produced+"条，无信号 "+audit.noSignal+"次，数据异常 "+audit.dataErrors+"次。":"当前暂无扫描统计。");
- const reasons={trend5m:"5分钟趋势",trend1m:"1分钟趋势",momentum:"动量",structure:"K线结构",volume:"成交量",rsi:"RSI",persistence15m:"15分钟趋势",bounceGuard:"看跌反弹风险",V11_MIN_SIGNAL_GAP:"4分钟信号间隔"};
- const reasonList=Object.entries(audit?.byReason||{}).sort((a,b)=>b[1]-a[1]).slice(0,6);
- put("eScanGates",reasonList.length?"未通过的主要条件："+reasonList.map(([k,v])=>(reasons[k]||k)+" "+v+"次").join("、")+"（一次检测可有多项不通过）":"本小时暂无拒绝原因。");
  const lastScan=e.lastSuccessfulScanAt,elapsed=Number.isFinite(lastScan)?Math.round((Date.now()-lastScan)/1000):null;
  put("eFreshness",elapsed!==null&&elapsed>=0&&elapsed<=90?"最近有效行情扫描 "+elapsed+"秒前 · "+stamp(lastScan):"行情扫描新鲜度未确认；请检查后台连接");
 
@@ -298,7 +295,7 @@ function eventError(error){
  state.eventHistoryError="状态读取失败，已加载记录仍然保留";
  drawEventHistory();
  pill("eStatus","bad","暂不可用");
- for(const id of ["eSignal","ePhase","eCounts","eProxyAccuracy","eProxyAccuracyDetail","eHomeTotal","eLastTen","eLastTenDetail","eScanAudit","eScanGates","eFreshness","eAiReview"])put(id,"不可用");
+ for(const id of ["eSignal","ePhase","eCounts","eProxyAccuracy","eProxyAccuracyDetail","eHomeTotal","eLastTen","eLastTenDetail","eScanAudit","eFreshness","eAiReview"])put(id,"不可用");
  $("eHero").dataset.direction="WAIT";
  put("eReason","EVENT10状态读取失败："+String(error).slice(0,130)+"。请进入原信号控制台核实。");
  if(!state.eventRecords.length){

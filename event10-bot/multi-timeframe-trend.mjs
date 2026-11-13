@@ -118,7 +118,20 @@ export function summarizeTimeframe(bars,label){
 // V23 direction arbitration: normalize correlated indicator votes and explicitly
 // distinguish emerging reversals from already-established long-term trends.
 // This is NOT a trained probabilistic classifier; its score is never a win rate.
-export function selectTenMinuteDirection(timeframes,liveBps=null){
+// V24: compare price movement strictly within CLOSED spot 1m candles.
+// Never subtract a USD-M index quote from a spot candle close (different price basis).
+export function closedSpotPriceAction(bars){
+ if(!Array.isArray(bars)||bars.length<6)return {available:false};
+ const last=bars.at(-1).c;
+ const returnsBps=n=>round((last/bars.at(-1-n).c-1)*10000,4);
+ const recent=bars.slice(-3);
+ return {available:true,source:"VERIFIED_CLOSED_SPOT_1M_SAME_BASIS",
+   oneMinuteBps:returnsBps(1),threeMinuteBps:returnsBps(3),fiveMinuteBps:returnsBps(5),
+   upCloses:recent.filter(x=>x.c>x.o).length,
+   downCloses:recent.filter(x=>x.c<x.o).length,
+   lastCloseAt:bars.at(-1).t+60000};
+}
+export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=null){
  let weighted=0,observedWeight=0;
  const norm={},sides={};
  for(const [tf,weight] of Object.entries(TEN_MINUTE_WEIGHTS)){
@@ -136,10 +149,23 @@ export function selectTenMinuteDirection(timeframes,liveBps=null){
  const combined=0.82*baseline+0.18*liveDirection;
  const candidate=sign(combined),one=sides["1m"]||0,two=sides["2m"]||0,
    five=sides["5m"]||0;
- let reason="V23_NORMALIZED_TREND";
+ const p3=priceAction?.threeMinuteBps,p5=priceAction?.fiveMinuteBps;
+ const upCloses=priceAction?.upCloses??0,downCloses=priceAction?.downCloses??0;
+ // Confirm an emerging turn only with a meaningful, same-market CLOSED 3m move,
+ // both 1m/2m votes and the new index-tick direction. Mirror UP and DOWN.
+ const earlyTurn=one!==0&&one===two&&one!==five&&one===liveDirection&&
+   finite(p3)&&((one>0&&p3>=8&&upCloses>=2)||
+                   (one<0&&p3<=-8&&downCloses>=2));
+ // Avoid blindly chasing a six-timeframe trend against a clear 3m+5m reversal.
+ const adverseAction=finite(p3)&&finite(p5)&&(
+   (candidate<0&&p3>=6&&p5>=10&&upCloses>=2)||
+   (candidate>0&&p3<=-6&&p5<=-10&&downCloses>=2));
+ let reason="V23_NORMALIZED_TREND",selected=candidate;
  // A 1m + 2m reversal with a confirming index tick is not six independent
  // votes for the older direction. Wait for new evidence before publishing.
- if(one!==0&&one===two&&one!==five&&liveDirection!==-one)
+ if(earlyTurn){
+   reason="V24_CONFIRMED_EARLY_REVERSAL";selected=one;
+ }else if(one!==0&&one===two&&one!==five&&liveDirection!==-one)
    reason="V23_EARLY_REVERSAL_UNCONFIRMED";
  else if(candidate!==0&&one!==0&&two===one&&candidate!==one&&
     liveDirection===one)
@@ -147,10 +173,12 @@ export function selectTenMinuteDirection(timeframes,liveBps=null){
  else if(candidate!==0&&liveDirection===-candidate&&
     finite(liveBps)&&Math.abs(liveBps)>=4)
    reason="V23_STRONG_LIVE_PRICE_CONFLICT";
+ else if(adverseAction)
+   reason="V24_SPOT_REVERSAL_CONFLICT";
  else if(Math.abs(combined)<0.20)
    reason="V23_SCORE_TOO_WEAK";
- const accepted=reason==="V23_NORMALIZED_TREND";
- return {direction:accepted?direction(candidate):null,decisionReason:reason,
+ const accepted=reason==="V23_NORMALIZED_TREND"||reason==="V24_CONFIRMED_EARLY_REVERSAL";
+ return {direction:accepted?direction(selected):null,decisionReason:reason,
    trendScore:round(combined,4),weightedTimeframeScore:round(baseline,4),
    currentPriceDirection:direction(liveDirection),
    liveIndexChangeBps:finite(liveBps)?round(liveBps,4):null,
@@ -180,8 +208,9 @@ export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot
    indexAt-prevAt<=30000;
  const liveDelta=validPrev?indexPrice-prev:null;
  const liveBps=validPrev?(indexPrice/prev-1)*10000:null;
- const result=selectTenMinuteDirection(timeframes,liveBps);
- return {...result,liveIndexDelta:validPrev?round(liveDelta,5):null,
+ const spotPriceAction=closedSpotPriceAction(one.bars);
+ const result=selectTenMinuteDirection(timeframes,liveBps,spotPriceAction);
+ return {...result,spotPriceAction,liveIndexDelta:validPrev?round(liveDelta,5):null,
    currentIndexPrice:indexPrice,indexAt,timeframes,
    timeframeCoverage:Object.values(timeframes).filter(t=>t.available).length,
    timeframeCount:6,aggregationSource:"CLOSED_BINANCE_SPOT_1M_ALIGNED_2M_10M",

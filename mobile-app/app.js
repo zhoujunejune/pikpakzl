@@ -3,7 +3,7 @@
 const APP_DEPLOY_SHA="__ZL_APP_RELEASE_SHA__"; // Replaced with immutable commit SHA at Alibaba deployment.
 const APP_VERSION="1.4.0"; // Stable signal + on-device manual real-trade journal.
 const $=id=>document.getElementById(id);
-const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',homeHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null,eventEpoch:0,eventFetchController:null,eventRetryTimer:null,eventRetryDelayMs:1200,eventLastResumeAt:0,eventLifecycle:"foreground"};
+const state={busy:false,manualBusy:false,lastEvent:[],eventRecords:[],eventTotal:0,eventPageSize:25,eventHistoryBusy:false,eventHistorySignature:'',homeHistorySignature:'',eventHistoryError:null,eventRefreshBusy:false,eventOnline:false,eventLedgerOnline:false,eventLedgerLastSyncAt:0,eventLedgerSettledCount:null,eventLastStatus:null,eventLastStatusAt:null,eventLastError:null,eventEpoch:0,eventFetchController:null,eventRetryTimer:null,eventRetryDelayMs:1200,eventLastResumeAt:0,eventLifecycle:"foreground"};
 let EVENT10_FREQ_OPTIMIZED_VERSION=null; // Adopt only the version confirmed by both live APIs.
 function put(id,value){
  const el=$(id);if(el)el.textContent=value===null||value===undefined||value===""?"—":String(value);
@@ -211,6 +211,8 @@ function updateEventHistory(ledger){
  const count=Number.isInteger(ledger.total)&&ledger.total>=0?ledger.total:0;
  state.eventTotal=Math.max(count,state.eventRecords.length);
  state.eventHistoryError=null;
+ state.eventLedgerLastSyncAt=Date.now();
+ state.eventLedgerSettledCount=Number.isInteger(ledger.stats?.proxySettled)?ledger.stats.proxySettled:null;
  drawEventHistory();
  return true;
 }
@@ -282,12 +284,12 @@ function event(e,ledger){
  if(currentLedger){
   updateEventHistory(ledger);
  }else if(state.eventRecords.length){
-  state.eventHistoryError="无法刷新，已加载记录仍然可看";
-  drawEventHistory();
- }else{
-  put("eTotal","新版记录接口暂不可用");
-  put("eRecordStatus","服务暂不可用，已存记录不会丢失");
-  $("eRecords").replaceChildren(node("div","mini","记录暂时无法读取，请稍后重试"));
+  // A status refresh must not replace valid history with a temporary warning.
+  if(state.eventHistoryError)drawEventHistory();
+ }else if(!state.eventLedgerOnline){
+  put("eTotal","正在同步当前策略信号记录");
+  put("eRecordStatus","等待记录同步；不会将连接不稳误判为无信号");
+  $("eRecords").replaceChildren(node("div","mini","正在同步当前版本记录…"));
  }
  $("manualCheck").disabled=e.configured!==true||state.manualBusy;
 }
@@ -332,6 +334,16 @@ function clearEventRetry(){
  state.eventRetryTimer=null;
  state.eventRetryDelayMs=1200;
 }
+// Avoid fetching full history every 3s when unchanged. A new signal or
+// settlement still triggers immediate history synchronization.
+function needsEventLedgerFetch(service,now=Date.now()){
+ const stats=service?.stats||{};
+ const total=stats.validDirections??stats.total;
+ const settled=stats.proxySettled;
+ return !state.eventLedgerOnline||now-state.eventLedgerLastSyncAt>=15000||
+   (Number.isInteger(total)&&total!==state.eventTotal)||
+   (Number.isInteger(settled)&&settled!==state.eventLedgerSettledCount);
+}
 function scheduleEventRetry(){
  if(document.hidden||state.eventRetryTimer!==null)return;
  const delay=state.eventRetryDelayMs;
@@ -362,6 +374,7 @@ async function refreshEvent10Only(){
     state.eventRecords=[];state.lastEvent=[];state.eventTotal=0;
     state.eventHistorySignature="";state.homeHistorySignature="";state.eventHistoryError=null;
     state.eventLedgerOnline=false;
+    state.eventLedgerLastSyncAt=0;state.eventLedgerSettledCount=null;
    }
    state.eventOnline=true;state.eventLastError=null;
    state.eventLastStatus=service;state.eventLastStatusAt=Date.now();
@@ -382,6 +395,10 @@ async function refreshEvent10Only(){
    scheduleEventRetry();
   }
   if(!service||outdated())return;
+  if(!needsEventLedgerFetch(service)){
+   refreshConnectionBadge();
+   return;
+  }
   try{
    const ledger=await api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000,controller.signal);
    if(outdated())return;
@@ -608,7 +625,10 @@ $("manualCheck").addEventListener("click",async()=>{
 function foregroundResume(source="foreground"){
  if(document.hidden)return;
  const now=Date.now();
- if(now-state.eventLastResumeAt<500)return;
+ if(now-state.eventLastResumeAt<1000)return;
+ // Multiple focus/pageshow events must not abort an already-healthy request.
+ if(state.eventLifecycle!=="background"&&source!=="native-onResume"&&
+    state.eventRefreshBusy&&state.eventLastStatusAt&&now-state.eventLastStatusAt<30000)return;
  state.eventLastResumeAt=now;
  state.eventLifecycle=source;
  refreshTradeJournal();

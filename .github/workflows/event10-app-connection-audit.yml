@@ -1,3 +1,4 @@
+# Read-only 2026-11-13 app WebView timeout triage; never mutate public endpoints.
 name: EVENT10 app/API public connectivity and live status audit
 on:
   push:

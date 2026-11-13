@@ -258,6 +258,102 @@ jobs:
              'aiMandatory':status.get('aiMandatory'),
              'autoTradingEnabled':status.get('autoTradingEnabled')
           },ensure_ascii=False),flush=True)
+
+          # V27: enrich settled proxy outcomes with the ORIGINAL decision
+          # evidence persisted at signal time. Read-only, no backfilled future inputs.
+          try:
+              req=urllib.request.Request(base+'/event10/api/history',headers={
+                  'Authorization':authorization,'Accept':'application/json','Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=25) as resp:
+                  saved=json.loads(resp.read(16000000)).get('records',[])
+              original={x['id']:x for x in saved if isinstance(x,dict) and
+                 x.get('decisionReviewVersion')==version and isinstance(x.get('id'),str)}
+              detailed=[]
+              for j,x in enumerate(settled):
+                  full=original.get(x.get('id')) or {}
+                  e=((full.get('ruleChecks') or {}).get('evidence') or {})
+                  frames=e.get('timeframes') or {}
+                  price=e.get('spotPriceAction') or {}
+                  ema=e.get('emaEntry') or {}
+                  timing=e.get('entryTiming') or {}
+                  h=(e.get('entryHorizons') or {}).get('ranges') or {}
+                  prior=settled[j-1] if j else None
+                  prev_gap=(x.get('openedAt')-prior.get('openedAt'))/60000 if prior else None
+                  def frame(n):return (frames.get(n) or {}).get('trend')
+                  def num(n):
+                      return round(n,3) if isinstance(n,(int,float)) else None
+                  d={
+                      'at':clock(x.get('openedAt')),'id':x.get('id'),'side':x.get('direction'),
+                      'hit':x.get('proxyHit'),'outcomeBps':num(bps(x)),
+                      'trendScore':num(e.get('trendScore')),
+                      'liveMoveBps':num(e.get('liveIndexChangeBps')),
+                      'p3Bps':num(price.get('threeMinuteBps')),
+                      'p5Bps':num(price.get('fiveMinuteBps')),
+                      'ema1mDirection':(ema.get('1m') or {}).get('direction'),
+                      'ema2mDirection':(ema.get('2m') or {}).get('direction'),
+                      'ema1mSpreadChange':num((ema.get('1m') or {}).get('spreadChangeBps')),
+                      'ema1mAccel':num((ema.get('1m') or {}).get('ema9AccelerationBps')),
+                      'ema2mSlope':num((ema.get('2m') or {}).get('ema9SlopeBps')),
+                      'pricePos60m':num((h.get('60m') or {}).get('position')),
+                      'pricePos2h':num((h.get('2h') or {}).get('position')),
+                      'pricePos24h':num((h.get('24h') or {}).get('position')),
+                      'entryType':(e.get('emaTiming') or {}).get('entryType'),
+                      'farAgainst':timing.get('farTrendAgainst'),
+                      'tf1m':frame('1m'),'tf2m':frame('2m'),'tf5m':frame('5m'),
+                      'tf10m':frame('10m'),'tf15m':frame('15m'),'tf30m':frame('30m'),
+                      'previousMinutes':num(prev_gap),
+                      'priorSide':prior.get('direction') if prior else None,
+                      'priorHit':prior.get('proxyHit') if prior else None
+                  }
+                  detailed.append(d)
+              print('V27_FEATURE_META',json.dumps({'totalSettled':len(settled),
+                  'joinedOriginalEvidence':sum(x.get('trendScore') is not None for x in detailed),
+                  'savedSessions':len(original)},ensure_ascii=False),flush=True)
+              def cohort(title,predicate):
+                  rows=[(x,y) for x,y in zip(settled,detailed) if predicate(y)]
+                  if not rows:return
+                  wins=sum(x.get('proxyHit') is True for x,_ in rows)
+                  n=len(rows)
+                  move=[abs(bps(x)) for x,_ in rows if bps(x) is not None]
+                  print('V27_FEATURE_COHORT',json.dumps({'group':title,'n':n,'hits':wins,
+                    'misses':n-wins,'ratePct':round(100*wins/n,2),
+                    'medianAbsOutcomeBps':round(sorted(move)[len(move)//2],2) if move else None},
+                    ensure_ascii=False),flush=True)
+              for side in ('UP','DOWN'):
+                  cohort('side='+side,lambda y:y['side']==side)
+              for n in ('1m','2m','5m','10m','15m','30m'):
+                  cohort(n+'Agrees',lambda y,n=n:y['tf'+n]==y['side'])
+                  cohort(n+'Disagrees',lambda y,n=n:y['tf'+n] in ('UP','DOWN') and y['tf'+n]!=y['side'])
+              for key in ('farAgainst',):
+                  cohort(key+'=True',lambda y,key=key:y[key] is True)
+                  cohort(key+'=False',lambda y,key=key:y[key] is False)
+              for name in ('ema1mDirection','ema2mDirection'):
+                  cohort(name+'=aligned',lambda y,name=name:y[name]==y['side'])
+                  cohort(name+'=opposite',lambda y,name=name:y[name] in ('UP','DOWN') and y[name]!=y['side'])
+              for kind in ('CROSSOVER_CONFIRMATION','EMA_PULLBACK_CONTINUATION','TREND_CONTINUATION'):
+                  cohort('entryType='+kind,lambda y,kind=kind:y['entryType']==kind)
+              for cutoff in (3,5,10):
+                  cohort('previousSignalWithin'+str(cutoff)+'m',
+                    lambda y,cutoff=cutoff:y['previousMinutes'] is not None and 0<=y['previousMinutes']<=cutoff)
+              for side in ('UP','DOWN'):
+                  sign=1 if side=='UP' else -1
+                  cohort(side+'_opposite3mPriceAction',
+                     lambda y,side=side,sign=sign:y['side']==side and
+                     y['p3Bps'] is not None and sign*y['p3Bps']<0)
+                  cohort(side+'_same3mPriceAction',
+                     lambda y,side=side,sign=sign:y['side']==side and
+                     y['p3Bps'] is not None and sign*y['p3Bps']>=0)
+                  cohort(side+'_liveTickOpposes',
+                     lambda y,side=side,sign=sign:y['side']==side and
+                     y['liveMoveBps'] is not None and sign*y['liveMoveBps']<=-0.8)
+              for b in [('low',0,0.15),('middle',0.15,0.85),('high',0.85,1.01)]:
+                  cohort('60mPricePosition='+b[0],lambda y,b=b:y['pricePos60m'] is not None and b[1]<=y['pricePos60m']<b[2])
+              for y in sorted([y for y in detailed if y['hit'] is False],
+                  key=lambda y:abs(y['outcomeBps'] or 0),reverse=True)[:9]:
+                  print('V27_MISS_DETAIL',json.dumps(y,ensure_ascii=False),flush=True)
+              print('V27_JOIN_COMPLETED=true',flush=True)
+          except Exception as ex:
+              print('V27_FEATURE_JOIN_ERROR',type(ex).__name__,str(ex)[:110],flush=True)
           print('ATTRIBUTION_COMPLETE=true',flush=True)
           print('CONTRARIAN_READONLY_COMPLETED=true',flush=True)
           print('TEN_ROUND_CHECK_COMPLETED=true',flush=True)

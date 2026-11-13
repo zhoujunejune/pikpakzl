@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
+import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
 import {createEngine,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_PRICE_ACTION_V24_20261113");
+ assert.equal(RULE_VERSION,"EVENT10_MULTI_HORIZON_ENTRY_V25_20261113");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -171,4 +171,63 @@ test("V24: price return is measured inside closed spot only, not index/spot basi
  assert.ok(r.change3mPct<0.02);
  assert.equal(r.evidence.spotPriceAction.source,"VERIFIED_CLOSED_SPOT_1M_SAME_BASIS");
  assert.equal(r.evidence.referenceIsActualEventContractStrike,false);
+});
+
+test("V25: context checks actual closed spot 6m/15m/60m/2h/4h/24h ranges",()=>{
+ const f=fixture(BASE);
+ const r=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
+   indexSnapshot:{price:70005,observedAt:BASE-100}});
+ assert.equal(r.strategyVersion,RULE_VERSION);
+ assert.equal(r.evidence.entryHorizons.source,"CLOSED_BINANCE_SPOT_HORIZON_CONTEXT");
+ for(const label of ["6m","15m","60m","2h","4h","24h"]){
+   const h=r.evidence.entryHorizons.ranges[label];
+   assert.equal(h.available,true,label);
+   assert.ok(h.high>=h.low,label);
+   assert.ok(h.position>=0&&h.position<=1,label);
+   assert.ok(h.lastClosedAt<=BASE,label);
+ }
+ assert.equal(r.evidence.entryReady,true);
+ assert.equal(r.evidence.waitForEntryImprovement,false);
+ assert.equal(r.evidence.referenceIsActualEventContractStrike,false);
+});
+test("V25: symmetric short-window entry wait near hourly or two-hour extreme",()=>{
+ const ctx={available:true,spotClose:70000,atr1mBps:3,
+   ranges:{"60m":{available:true,position:0.07},
+     "2h":{available:true,position:0.09},
+     "4h":{available:true,position:0.31,changeBps:40},
+     "24h":{available:true,position:0.40,changeBps:100}}};
+ const down=assessEntryTiming("DOWN",ctx,{threeMinuteBps:4});
+ assert.equal(down.ready,false);
+ assert.equal(down.reason,"V25_ENTRY_EDGE_REVERSAL_OR_EXHAUSTION");
+ const stretched=assessEntryTiming("DOWN",ctx,{threeMinuteBps:-26});
+ assert.equal(stretched.ready,false);
+ const normal=assessEntryTiming("DOWN",ctx,{threeMinuteBps:-6});
+ assert.equal(normal.ready,true);
+ const upCtx={...ctx,ranges:{...ctx.ranges,"60m":{available:true,position:0.93}}};
+ const up=assessEntryTiming("UP",upCtx,{threeMinuteBps:-4});
+ assert.equal(up.ready,false);
+ const upNormal=assessEntryTiming("UP",upCtx,{threeMinuteBps:5});
+ assert.equal(upNormal.ready,true);
+});
+test("V25: missing optional long 30m candles does not fabricate a 24h context or disable 1m/5m decisions",()=>{
+ const f=fixture(BASE);
+ delete f.candles["30m"];
+ const r=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
+   indexSnapshot:{price:70005,observedAt:BASE-100}});
+ assert.equal(r.evidence.entryHorizons.ranges["4h"].available,false);
+ assert.equal(r.evidence.entryHorizons.ranges["24h"].available,false);
+ assert.equal(r.evidence.entryHorizons.ranges["60m"].available,true);
+ assert.equal(r.evidence.entryHorizons.ranges["2h"].available,true);
+ assert.equal(r.direction,"UP");
+});
+test("V25: directional range filter uses only supplied closed-candle horizons, without inventing index basis",()=>{
+ const f=fixture(BASE);
+ const one=f.candles["1m"].map(b=>({t:b.startMs,o:b.open,h:b.high,l:b.low,c:b.close,v:b.volume}));
+ const five=f.candles["5m"].map(b=>({t:b.startMs,o:b.open,h:b.high,l:b.low,c:b.close,v:b.volume}));
+ const thirty=f.candles["30m"].map(b=>({t:b.startMs,o:b.open,h:b.high,l:b.low,c:b.close,v:b.volume}));
+ const ctx=analyzeEntryHorizons({one,five,thirty});
+ assert.equal(ctx.source,"CLOSED_BINANCE_SPOT_HORIZON_CONTEXT");
+ assert.equal(ctx.spotClose,one.at(-1).c);
+ assert.equal(ctx.asOf,one.at(-1).t+60000);
+ assert.ok(ctx.ranges["24h"].lastClosedAt<=BASE);
 });

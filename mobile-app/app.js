@@ -135,6 +135,12 @@ async function api(url,timeout=6500,lifecycleSignal=null){
 function eventVersion(r){
  return r?.strategyVersion||r?.decisionReviewVersion||r?.ruleChecks?.strategyVersion||null;
 }
+// Derive visible strategy names ONLY from the authenticated backend version
+// used to filter the current signal history, never hard-code a V-number.
+function eventStrategyLabel(version){
+ const match=typeof version==="string"?version.match(/^EVENT10_[A-Z0-9_]+_V([0-9]+)_[0-9]{8}$/):null;
+ return match?"V"+match[1]:"当前策略";
+}
 function currentEventRecord(e){
  if(e?.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION)return e.active;
  return [e?.lastCheck,e?.lastSession]
@@ -244,11 +250,15 @@ function event(e,ledger){
  const stats=(currentLedger?ledger?.stats:e?.stats)||{};
  const records=currentLedger?mergeEventRecords(ledger):[];
  const active=!!e.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION;
+ const strategyLabel=eventStrategyLabel(e.decisionReviewVersion);
+ put("eStrategyTitle","当前策略表现 · "+strategyLabel);
+ put("eStatsStrategy","只统计"+strategyLabel+"已发布的方向信号 · 非真实交易收益");
+ put("tradeJournalStrategyNote","按北京时间统计最近30个有记录的日期；本机交易次数与"+strategyLabel+"信号胜率独立。");
  const direction=s?.direction==="UP"||s?.direction==="DOWN"?s.direction:null;
  put("eSignal",direction?dir(direction):"等待新信号");
  $("eHero").dataset.direction=direction||"WAIT";
- put("ePhase",direction?"V20 点位优化 · "+(s?.status||"方向已确认"):
-   "V20 点位优化 · "+(e.configured?"正在监控 BTC 行情":"服务未就绪"));
+ put("ePhase",direction?strategyLabel+" 实时信号 · "+(s?.status||"方向已确认"):
+   strategyLabel+" 实时信号 · "+(e.configured?"正在监控 BTC 行情":"服务未就绪"));
  const validDirections=stats.validDirections??stats.total??"—";
  put("eCounts",validDirections+" / "+(stats.proxySettled??"—"));
  const accuracy=pct(stats.proxyHits,stats.proxySettled);
@@ -266,7 +276,9 @@ function event(e,ledger){
  const lastScan=e.lastSuccessfulScanAt,elapsed=Number.isFinite(lastScan)?Math.round((Date.now()-lastScan)/1000):null;
  put("eFreshness",elapsed!==null&&elapsed>=0&&elapsed<=90?"最近有效行情扫描 "+elapsed+"秒前 · "+stamp(lastScan):"行情扫描新鲜度未确认；请检查后台连接");
 
- put("eAiReview","信号来源：纯规则 V20 · 不调用AI · 趋势同向、入场点位筛选与短时价格改善确认；代理结算非官方结果。");
+ const liveRuleSummary=typeof e.scanDiagnostics?.note==="string"&&e.scanDiagnostics.note.length<300?
+   e.scanDiagnostics.note:"基于当前生产策略的行情与入场点判断";
+ put("eAiReview","信号来源：纯规则 "+strategyLabel+" · 不调用AI · "+liveRuleSummary+"；代理结算非官方结果。");
  put("eReason",s?.direction?(s?.reason||"方向已确认；10分钟后核验。"):
    (s?.reason||"当前没有符合规则的方向信号。"));
  pill("eStatus",e.configured===true?"good":"bad",active?"信号待核对":e.configured===true?(currentLedger?"已连接":"已连接·记录同步中"):"服务未就绪");
@@ -628,7 +640,7 @@ navigate(["event10","stats","records","more"].includes(initial)?initial:"event10
 void refresh();
 void checkHotUpdate();
 setInterval(()=>void refresh(),10000);
-// Date changes at Beijing midnight; no change to the remote V20 model or signal polling.
+// Beijing midnight resets only local manual trade counters; the strategy version comes from the live EVENT10 status.
 setInterval(()=>{if(!document.hidden)refreshTradeJournal();},60000);
 // On the 10-minute screen, show server-confirmed signals in around 3s while visible.
 // Native Android notification service works independently when this page is hidden.

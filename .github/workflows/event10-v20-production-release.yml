@@ -1,5 +1,5 @@
-# V25: multi-horizon closed-spot support/resistance, symmetric entry-timing guard, preserve V24 settlements; no-order release.
-name: EVENT10 V25 multi-horizon entry guarded production release
+# V26: 1/2/5m EMA9/21 cross/slope/overextension entry checks with V25 multi-horizon support; no orders.
+name: EVENT10 V26 EMA9-21 entry guarded production release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -55,7 +55,7 @@ jobs:
               region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
           remote=f"""#!/bin/bash
           set -Eeuo pipefail
-          stage=$(mktemp -d /tmp/event10-v25-XXXXXXXX)
+          stage=$(mktemp -d /tmp/event10-v26-XXXXXXXX)
           trap 'rm -rf "$stage"' EXIT
           curl -fsSL --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/aliyun_high_selectivity_only.py" -o "$stage/deploy.py"
           python3 -m py_compile "$stage/deploy.py"
@@ -63,7 +63,7 @@ jobs:
           """
           res=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
               instance_id='b67374069bb3457ba6a3a2ede9305d3f',
-              name='event10-v25-multihorizon-entry-10m',
+              name='event10-v26-ema921-entry-10m',
               type='RunShellScript',working_user='root',command_content=remote,timeout=370))
           for _ in range(160):
               time.sleep(2)
@@ -93,12 +93,12 @@ jobs:
               with urllib.request.urlopen(req,timeout=20) as r:return json.load(r)
           s=get('/event10/api/status')
           l=get('/event10/api/signals?limit=1&offset=0')
-          assert s['decisionReviewVersion']=='EVENT10_MULTI_HORIZON_ENTRY_V25_20261113'
+          assert s['decisionReviewVersion']=='EVENT10_EMA_921_ENTRY_V26_20261113'
           assert l['version']==s['decisionReviewVersion']
-          assert s['providerModel']=='PURE_SIGNAL_V25_MULTI_HORIZON_ENTRY'
+          assert s['providerModel']=='PURE_SIGNAL_V26_EMA_921_ENTRY'
           assert s['autoTradingEnabled'] is False and s['modelCalls']==0
           assert s['minSignalGapMs']==0 and s['maxSignalsPerTenMinutes']==3 and s['autoIntervalMs']==12000 and s['livePriceUsedForDirection'] is True
           assert s['multiTimeframeIntervals']==['1m','2m','5m','10m','15m','30m']
           assert s['minDuplicateSameDirectionMs']==120000 and s['requiresNewCompleted2mBarForRepeat'] is True
-          print('V25_MULTI_HORIZON_PRODUCTION_VERIFIED=true',flush=True)
+          print('V26_EMA_921_PRODUCTION_VERIFIED=true',flush=True)
           PY

@@ -12,6 +12,21 @@ export const MAX_SIGNALS_PER_10M = 3;
 export const SIGNAL_WINDOW_MS = 600_000;
 export const SOURCE = "BINANCE_BTC_PUBLIC_MARKET_PROXY_NOT_OFFICIAL_EVENT_INDEX";
 const finite = Number.isFinite;
+// A failed 600s proxy signal cannot be "renewed" by replaying its own 2m bar.
+// The permanent ledger uses twoMinuteBarAt, not nested ruleChecks.
+export function renewedAfterSettledMiss(rule,previous,side){
+ if(side!=="UP"&&side!=="DOWN"||previous?.proxyHit!==false)return false;
+ const d=side==="UP"?1:-1,e=rule?.evidence?.emaEntry||{};
+ const pa=rule?.evidence?.spotPriceAction;
+ const bar=rule?.evidence?.timeframes?.["2m"]?.lastClosedAt;
+ const oldBar=previous?.twoMinuteBarAt??
+   previous?.ruleChecks?.evidence?.timeframes?.["2m"]?.lastClosedAt;
+ return Number.isFinite(pa?.threeMinuteBps)&&d*pa.threeMinuteBps>=5&&
+   e["1m"]?.direction===side&&e["2m"]?.direction===side&&
+   d*e["1m"]?.spreadChangeBps>=0.25&&d*e["2m"]?.ema9SlopeBps>=0.3&&
+   Number.isFinite(bar)&&Number.isFinite(oldBar)&&bar>oldBar;
+}
+const round = (v,n=5)=>Number(v.toFixed(n));
 const round = (v,n=5)=>Number(v.toFixed(n));
 
 export function checkedTick(data, now, maxAgeMs=6000) {
@@ -470,21 +485,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             h.closeObservedAt>decisionAt-360000)
           .sort((a,b)=>b.closeObservedAt-a.closeObservedAt)[0];
         if(latestResolvedSame?.proxyHit===false){
-          const d=rule.direction==="UP"?1:-1;
-          const e=rule.evidence?.emaEntry||{};
-          const pa=rule.evidence?.spotPriceAction;
-          const bar=rule.evidence?.timeframes?.["2m"]?.lastClosedAt;
-          // Append-only ledger stores this field directly (not ruleChecks).
-          // Use the persistent source before falling back to unslimmed sessions.
-          const oldBar=latestResolvedSame?.twoMinuteBarAt??
-            latestResolvedSame?.ruleChecks?.evidence?.timeframes?.["2m"]?.lastClosedAt;
-          const renewed=Number.isFinite(pa?.threeMinuteBps)&&
-            d*pa.threeMinuteBps>=5&&
-            e["1m"]?.direction===rule.direction&&e["2m"]?.direction===rule.direction&&
-            d*e["1m"]?.spreadChangeBps>=0.25&&
-            d*e["2m"]?.ema9SlopeBps>=0.3&&
-            Number.isFinite(bar)&&Number.isFinite(oldBar)&&bar>oldBar;
-          if(!renewed){
+          if(!renewedAfterSettledMiss(rule,latestResolvedSame,rule.direction)){
             rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
             rule.quality="NO_SIGNAL";rule.eventTag="V27_PREVIOUS_LOSS_REENTRY_WAIT";
             rule.reason="同方向最近一次600秒代理结算未命中，等待新2分钟K线与EMA动量重新确认；不会限制反方向信号。";

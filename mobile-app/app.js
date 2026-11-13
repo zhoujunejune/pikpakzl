@@ -309,16 +309,47 @@ function eventError(error){
 }
 // Only EVENT10 status contributes to the App connection indicator.
 function refreshConnectionBadge(){
- $("healthDot").className="dot "+(state.eventOnline?"up":"down");
- put("healthText",state.eventOnline?"已连接":"连接异常");
- put("eMiniConnection",state.eventOnline?"● 已连接":"● 连接异常");
+ const partial=!state.eventOnline&&state.eventLedgerOnline;
+ $("healthDot").className="dot "+(state.eventOnline?"up":partial?"":"down");
+ put("healthText",state.eventOnline?"已连接":partial?"记录可用·实时重连":"连接异常");
+ put("eMiniConnection",state.eventOnline?"● 已连接":partial?"● 记录可用·实时重连":"● 连接异常");
  const live=$("eConnectionDetail");
  if(live){
   const t=state.eventLastStatusAt;
   live.textContent=state.eventOnline?
    ("实时信号接口正常 · 最近成功 "+stamp(t)+(state.eventLedgerOnline?"":" · 历史接口稍后重试")):
+   partial?"实时状态暂不可用，已核实的信号记录仍可查看；不代表实时信号":
    ("无法读取最新信号"+(state.eventLastError?"："+state.eventLastError:"")+"；不会将连接故障误判为无信号");
  }
+}
+function renderVerifiedLedgerFallback(ledger){
+ const version=ledger?.version;
+ if(ledger?.ok!==true||!Array.isArray(ledger.records)||
+    typeof version!=="string"||!/^EVENT10_[A-Z0-9_]{8,100}$/.test(version))
+   return false;
+ if(version!==EVENT10_FREQ_OPTIMIZED_VERSION){
+  EVENT10_FREQ_OPTIMIZED_VERSION=version;
+  state.eventRecords=[];state.lastEvent=[];state.eventTotal=0;
+  state.eventHistorySignature="";state.homeHistorySignature="";state.eventHistoryError=null;
+ }
+ const label=eventStrategyLabel(version),stats=ledger.stats||{};
+ state.eventLedgerOnline=true;state.eventOnline=false;
+ updateEventHistory(ledger);
+ put("eStrategyTitle","当前策略表现 · "+label);
+ put("eStatsStrategy","只统计"+label+"已发布的方向信号 · 非真实交易收益");
+ put("eCounts",(stats.validDirections??stats.total??"—")+" / "+(stats.proxySettled??"—"));
+ const accuracy=pct(stats.proxyHits,stats.proxySettled);
+ const fallbackPct=typeof stats.proxyAccuracyPct==="number"?stats.proxyAccuracyPct.toFixed(1)+"%":"—";
+ put("eProxyAccuracy",accuracy==="—"?fallbackPct:accuracy);
+ put("eProxyAccuracyDetail",accuracy==="—"?fallbackPct:accuracy);
+ put("eSignal","实时方向暂不可用");
+ put("ePhase",label+" 已保存记录 · 实时状态重连中");
+ put("eReason","实时状态接口暂不可用；仅显示该策略已保存记录，不代表当前入场方向。");
+ put("eAiReview","信号来源：纯规则 "+label+" · 历史数据已核实；实时状态仍待恢复。");
+ put("eScanAudit","实时扫描概况暂不可用，历史胜率仍可核对。");
+ pill("eStatus","","仅历史记录可用");
+ refreshConnectionBadge();
+ return true;
 }
 // Cancel stale requests when Android suspends the page. This also unblocks
 // the next foreground request instead of waiting for the old 9s/11s timeout.
@@ -361,6 +392,10 @@ async function refreshEvent10Only(){
  state.eventRefreshBusy=true;
  let service=null,serviceError=null;
  const outdated=()=>epoch!==state.eventEpoch||controller.signal.aborted||document.hidden;
+ // First-load ledger fetch is independent of the larger live-status response.
+ const earlyLedger=!state.eventLastStatus?
+   api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000,controller.signal)
+    .catch(()=>null):null;
  try{
   // Live status is primary; optional history must not block current signals.
   try{
@@ -394,14 +429,23 @@ async function refreshEvent10Only(){
    refreshConnectionBadge();
    scheduleEventRetry();
   }
-  if(!service||outdated())return;
+  if(outdated())return;
+  if(!service){
+   if(earlyLedger){
+    const ledger=await earlyLedger;
+    if(!outdated()&&ledger)renderVerifiedLedgerFallback(ledger);
+   }
+   return;
+  }
   if(!needsEventLedgerFetch(service)){
    refreshConnectionBadge();
    return;
   }
   try{
-   const ledger=await api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000,controller.signal);
+   const ledger=earlyLedger?await earlyLedger:
+     await api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000,controller.signal);
    if(outdated())return;
+   if(!ledger)throw Error("信号记录接口请求失败");
    if(ledger?.version!==EVENT10_FREQ_OPTIMIZED_VERSION||!Array.isArray(ledger.records))
     throw Error("历史接口策略版本不一致");
    state.eventLedgerOnline=true;

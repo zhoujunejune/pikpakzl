@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guarded EVENT10-only V23 reversal-aware signal-only deployment on existing Aliyun host.
+"""Guarded EVENT10-only V24 price-action reversal signal-only deployment on existing Aliyun host.
 Does NOT touch five-minute bots, futures bots, Caddy, credentials or live orders.
 """
 import base64
@@ -21,8 +21,8 @@ NODE="/opt/zl-prediction-node/bin/node"
 # Persistent last-in-order systemd EnvironmentFile override. Never touch the API key file.
 MODEL_ENV=pathlib.Path("/etc/zl-event10/ai-model-flash.env")
 MODEL_DROPIN=pathlib.Path("/etc/systemd/system/zl-event10-deepseek.service.d/99-zl-ai-flash.conf")
-LEGACY_VERSIONS={"EVENT10_MULTI_TF_SUPERTREND_V22_20261112","EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
-TARGET="EVENT10_REVERSAL_AWARE_10M_V23_20261113"
+LEGACY_VERSIONS={"EVENT10_REVERSAL_AWARE_10M_V23_20261113","EVENT10_MULTI_TF_SUPERTREND_V22_20261112","EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FORCED_CONTRARIAN_12M_V1_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031","EVENT10_LATE_INDEX_LEAD_RETRACE_V2_20261030","EVENT10_PURE_EMA_VOLUME_DEPTH_RSI_V1_20261029","EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031","EVENT10_FREQ_OPTIMIZED_6GATES_V2_20261101","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101"}
+TARGET="EVENT10_PRICE_ACTION_V24_20261113"
 URL="https://raw.githubusercontent.com/zhoujunejune/pikpakzl/"
 FILES=("pure-signal.mjs","multi-timeframe-trend.mjs","pure-signal-v19.mjs","manual-engine.mjs","v7-reversal-review.mjs","panel.html","v23-reversal-quality.test.mjs","v7-reversal-review.test.mjs","readonly-candles.mjs","server.mjs","alert-watch.test.mjs")
 OTHER_UNITS=("zl-prediction-trade","zl-prediction-v2","zl-prediction-v3","zl-prediction-guardian-analysis","zl-prediction-fast5","zl-prediction-fast5-stats","zl-prediction-risk-exits","zl-prediction-redis","zl-prediction-official-reference","zl-prediction-ui-visibility","zl-futures-bot-paper","zl-event10-trade-stream","caddy")
@@ -145,7 +145,7 @@ def main():
                     if snap.get("decisionReviewVersion")==TARGET and \
                        snap.get("aiReviewConfigured") is False and \
                        snap.get("aiMandatory") is False and \
-                       snap.get("providerModel")=="PURE_SIGNAL_V23_REVERSAL_AWARE_10M" and \
+                       snap.get("providerModel")=="PURE_SIGNAL_V24_SPOT_PRICE_ACTION" and \
                        snap.get("aiReviewModel") is None and \
                        snap.get("thinkingMode")=="disabled" and \
                        snap.get("modelCalls")==0 and \
@@ -200,7 +200,7 @@ def main():
             print("EVENT10_HS_AI_REASONING_EFFORT="+str(status().get("reasoningEffort")),flush=True)
             print("EVENT10_HS_HISTORY_PRESERVED="+str(len(after["records"])),flush=True)
             print("EVENT10_HS_NO_REAL_ORDER_API=true",flush=True)
-            print("EVENT10_HS_V23_DUPLICATE_POLICY=NEW_2M_BAR_AND_120S",flush=True)
+            print("EVENT10_HS_V24_DUPLICATE_POLICY=NEW_2M_BAR_AND_120S",flush=True)
             print("EVENT10_HS_OTHER_SERVICE_PIDS_UNCHANGED=true",flush=True)
             print("EVENT10_HS_BACKUP="+str(backup),flush=True)
             try:

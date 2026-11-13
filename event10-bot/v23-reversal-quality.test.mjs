@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
+import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
 import {createEngine,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_MULTI_HORIZON_ENTRY_V25_20261113");
+ assert.equal(RULE_VERSION,"EVENT10_EMA_921_ENTRY_V26_20261113");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -230,4 +230,72 @@ test("V25: directional range filter uses only supplied closed-candle horizons, w
  assert.equal(ctx.spotClose,one.at(-1).c);
  assert.equal(ctx.asOf,one.at(-1).t+60000);
  assert.ok(ctx.ranges["24h"].lastClosedAt<=BASE);
+});
+
+test("V26: EMA9/21 is evaluated from completed spot 1m, 2m and 5m bars",()=>{
+ const f=fixture(BASE),r=evaluatePureSignal({feed:f,
+   reference:{observedAt:BASE},indexSnapshot:{price:70005,observedAt:BASE-100}});
+ assert.equal(r.strategyVersion,RULE_VERSION);
+ for(const k of ["1m","2m","5m"]){
+   const e=r.evidence.emaEntry[k];
+   assert.equal(e.available,true,k);
+   assert.equal(e.source,"VERIFIED_CLOSED_SPOT_EMA_9_21");
+   assert.ok(Number.isFinite(e.ema9)&&Number.isFinite(e.ema21),k);
+   assert.ok(Number.isFinite(e.spreadBps),k);
+   assert.ok(Number.isFinite(e.ema9SlopeBps),k);
+   assert.ok(e.lastClosedAt<=BASE,k);
+ }
+ assert.equal(r.evidence.emaTiming.ready,true);
+ assert.equal(r.evidence.entryReady,true);
+ assert.equal(r.evidence.referenceIsActualEventContractStrike,false);
+});
+test("V26: EMA9/21 cross and widening spread are computed from actual closed bars",()=>{
+ const make=(trend)=>Array.from({length:40},(_,i)=>{
+   const v=70000+trend*i*2;
+   return {t:i*60000,c:v,o:v-trend,h:v+2,l:v-2,v:10};
+ });
+ const up=ema921EntrySnapshot(make(1),"1m"),down=ema921EntrySnapshot(make(-1),"1m");
+ assert.equal(up.direction,"UP");assert.ok(up.spreadBps>0);
+ assert.ok(up.ema9SlopeBps>0);assert.ok(up.closeDistanceEma9Bps>0);
+ assert.equal(down.direction,"DOWN");assert.ok(down.spreadBps<0);
+ assert.ok(down.ema9SlopeBps<0);assert.ok(down.closeDistanceEma9Bps<0);
+ const flat=make(0).map(x=>({...x,h:x.h+2,l:x.l-2}));
+ const rising=flat.map((x,i)=>i<28?x:{...x,c:x.c+(i-27)*14,h:x.h+(i-27)*14});
+ const turns=rising.map((_,i)=>ema921EntrySnapshot(rising.slice(0,i+1),"1m"))
+    .filter(x=>x.available&&x.crossover==="GOLDEN");
+ assert.equal(turns.length,1);
+});
+test("V26: opposing short EMA slopes and adverse 3-minute return defer entry in both directions",()=>{
+ const mk=(dir,slope,dist)=>({available:true,direction:dir,ema9SlopeBps:slope,
+   closeDistanceEma9Bps:dist,crossover:null});
+ const context={atr1mBps:5,ranges:{"15m":{position:0.5},"60m":{position:0.5}}};
+ const againstUP={"1m":mk("DOWN",-2,-2),"2m":mk("DOWN",-1,-3),"5m":mk("DOWN",-1,-2)};
+ const u=assessEmaEntry("UP",againstUP,context,{threeMinuteBps:-9});
+ assert.equal(u.ready,false);assert.equal(u.reason,"V26_EMA_AGAINST_ENTRY");
+ const againstDOWN={"1m":mk("UP",2,2),"2m":mk("UP",1,3),"5m":mk("UP",1,2)};
+ const d=assessEmaEntry("DOWN",againstDOWN,context,{threeMinuteBps:9});
+ assert.equal(d.ready,false);assert.equal(d.reason,"V26_EMA_AGAINST_ENTRY");
+ assert.equal(assessEmaEntry("DOWN",againstDOWN,context,{threeMinuteBps:-5}).ready,true);
+});
+test("V26: EMA distance guard blocks only a stretched edge, not all trend continuation",()=>{
+ const mk=(direction,dist)=>({available:true,direction,ema9SlopeBps:3,
+   closeDistanceEma9Bps:dist,crossover:null});
+ const snapshots={"1m":mk("UP",32),"2m":mk("UP",26),"5m":mk("UP",10)};
+ const extremes={atr1mBps:5,ranges:{"15m":{position:0.93},"60m":{position:0.96}}};
+ const middle={...extremes,ranges:{"15m":{position:0.55},"60m":{position:0.55}}};
+ const stretched=assessEmaEntry("UP",snapshots,extremes,{threeMinuteBps:24});
+ assert.equal(stretched.ready,false);assert.equal(stretched.reason,"V26_EMA_OVEREXTENDED_ENTRY");
+ assert.equal(assessEmaEntry("UP",snapshots,middle,{threeMinuteBps:24}).ready,true);
+ assert.equal(assessEmaEntry("UP",snapshots,extremes,{threeMinuteBps:6}).ready,true);
+ const pullback={"1m":mk("UP",1),"2m":mk("UP",2),"5m":mk("UP",3)};
+ assert.equal(assessEmaEntry("UP",pullback,middle,{threeMinuteBps:3}).entryType,"EMA_PULLBACK_CONTINUATION");
+});
+test("V26: missing optional 30m context never disables verified EMA9/21 entry features",()=>{
+ const f=fixture(BASE);delete f.candles["30m"];
+ const r=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
+   indexSnapshot:{price:70005,observedAt:BASE-100}});
+ assert.equal(r.evidence.emaEntry["1m"].available,true);
+ assert.equal(r.evidence.emaEntry["2m"].available,true);
+ assert.equal(r.evidence.emaEntry["5m"].available,true);
+ assert.equal(r.evidence.entryReady,true);
 });

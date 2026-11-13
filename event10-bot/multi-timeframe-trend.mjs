@@ -159,7 +159,23 @@ export function assessEmaEntry(side,snapshots,ctx,priceAction){
    d*b.closeDistanceEma9Bps>Math.max(8,1.4*atr) &&
    finite(p3)&&d*p3>Math.max(14,2*atr)&&nearEdge;
  const adverse=(oppose||freshOppositeCross)&&against;
- const ready=!adverse&&!extended;
+ // V27: EMA9/21 separation AND EMA9 acceleration must both weaken before
+ // treating an early opposite move as likely exhaustion. The 2m confirmation
+ // or a confirmed adverse 3m spot move is independent of the 1m noise.
+ const weakeningFast=d*a.spreadChangeBps<=-0.45 &&
+   d*a.ema9AccelerationBps<=-0.45;
+ const weakening2m=d*b.spreadChangeBps<=-0.3 ||
+   d*b.ema9SlopeBps<=-0.5;
+ const nearTermAdverse=finite(p3)&&d*p3<=-3;
+ const earlyWeakening=weakeningFast&&(weakening2m||nearTermAdverse)&&
+   finite(p3)&&d*p3<2;
+ // The most recent closed 3m move against the old trend plus a
+ // newly opposing EMA slope is sufficient to pause a late 10m chase;
+ // do not require BOTH 1m and 2m crossovers to finish first.
+ const reboundVsTrend=nearTermAdverse&&
+   (d*a.ema9SlopeBps<=-0.35||d*a.spreadChangeBps<=-0.55)&&
+   (d*b.ema9SlopeBps<=0||d*b.spreadChangeBps<=0);
+ const ready=!adverse&&!extended&&!earlyWeakening&&!reboundVsTrend;
  const crossAligned=a.crossover===(d===1?"GOLDEN":"DEATH") &&
     b.direction===side&&d*b.ema9SlopeBps>0;
  const pullback=d*a.closeDistanceEma9Bps>=-Math.max(2,0.5*atr)&&
@@ -169,9 +185,13 @@ export function assessEmaEntry(side,snapshots,ctx,priceAction){
  const entryType=!ready?"WAIT":crossAligned?"CROSSOVER_CONFIRMATION":
    pullback?"EMA_PULLBACK_CONTINUATION":"TREND_CONTINUATION";
  return {ready,reason:adverse?"V26_EMA_AGAINST_ENTRY":
-   extended?"V26_EMA_OVEREXTENDED_ENTRY":"V26_EMA_ENTRY_OK",
+   extended?"V26_EMA_OVEREXTENDED_ENTRY":
+   earlyWeakening?"V27_EMA_MOMENTUM_DECAY":
+   reboundVsTrend?"V27_EMA_EARLY_COUNTERMOVE":"V27_EMA_ENTRY_OK",
    entryType,opposingShortEmas:oppose,recentOpposingCross:!!freshOppositeCross,
-   overextended:!!extended,shortEmaAligned:a.direction===side&&b.direction===side,
+   overextended:!!extended,momentumDecaying:!!earlyWeakening,
+   confirmedCountermove:!!reboundVsTrend,
+   shortEmaAligned:a.direction===side&&b.direction===side,
    atr1mBps:round(atr,4)};
 }
 // V23 direction arbitration: normalize correlated indicator votes and explicitly

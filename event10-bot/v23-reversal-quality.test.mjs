@@ -338,3 +338,32 @@ test("V27: small adverse 3m move plus EMA trend weakening protects early UP and 
    assert.equal(result.reason,"V27_EMA_EARLY_COUNTERMOVE",side);
  }
 });
+
+test("V27: confirmed 600s same-side loss must requalify before repeating, opposite side remains free",async()=>{
+ const now=BASE+720000,price=70007;
+ async function attempt(previousDirection,previousHit=false,settledAgo=120000){
+   const file=temp(),ledger=path.join(path.dirname(file),"rule-signals-v1.ndjson");
+   const closed=now-settledAgo;
+   const previous={id:"legacy-known-outcome",strategyVersion:"EVENT10_EMA_921_ENTRY_V26_20261113",
+     direction:previousDirection,openedAt:closed-600000,expiresAt:closed,
+     closeObservedAt:closed,proxyHit:previousHit,status:"SETTLED",
+     settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY",openPrice:70000,
+     twoMinuteBarAt:closed-720000};
+   fs.writeFileSync(ledger,JSON.stringify({kind:"SIGNAL",signal:previous})+"\n");
+   const engine=createEngine({clock:()=>now,
+     env:{EVENT10_STATE_FILE:file},
+     fetcher:async url=>url.includes("shadow-market-data")?json(fixture(now)):
+       url.includes("premiumIndex")?json({symbol:"BTCUSDT",indexPrice:String(price),time:now-100}):
+       Promise.reject(Error("UNEXPECTED_URL"))});
+   return engine.start("manual-v27-reentry-test");
+ }
+ const blocked=await attempt("UP",false);
+ assert.equal(blocked.direction,null);
+ assert.equal(blocked.eventTag,"V27_PREVIOUS_LOSS_REENTRY_WAIT");
+ const opposite=await attempt("DOWN",false);
+ assert.equal(opposite.direction,"UP");
+ const afterExpiry=await attempt("UP",false,420000);
+ assert.equal(afterExpiry.direction,"UP");
+ const priorWin=await attempt("UP",true);
+ assert.equal(priorWin.direction,"UP");
+});

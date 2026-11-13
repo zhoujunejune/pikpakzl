@@ -1,8 +1,8 @@
-// V26 EVENT10: 1m/2m/5m EMA9/21 entry timing plus near/far trends; no orders or AI.
+// V27 EVENT10: EMA slope acceleration and spread contraction warnings plus last settled miss reentry checks; no orders or AI.
 // 2m and 10m are time-aligned aggregates of verified closed 1m spot candles.
 import {parseBinanceIndexQuote,collectRuleFeatures as getIndexQuote} from "./pure-signal-v19.mjs";
 import {analyzeMultiTimeframes} from "./multi-timeframe-trend.mjs";
-export const RULE_VERSION="EVENT10_EMA_921_ENTRY_V26_20261113";
+export const RULE_VERSION="EVENT10_EMA_DECAY_REENTRY_V27_20261113";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=12_000;
 export {parseBinanceIndexQuote};
@@ -35,10 +35,10 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,previousIndexSn
  return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",
     quality:direction?"STANDARD_RESEARCH":"NO_SIGNAL",
-    eventTag:direction?"V26_10M_"+direction:analysis.decisionReason,
+    eventTag:direction?"V27_10M_"+direction:analysis.decisionReason,
     reason:direction?summary+"；已收盘3分钟变化="+(priceAction.threeMinuteBps/100).toFixed(4)+"%；多空评分="+analysis.trendScore+
       "，输出"+(direction==="UP"?"看涨":"看跌")+"；600秒后独立核验。":
-      summary+"；"+({V26_EMA_AGAINST_ENTRY:"1分钟与2分钟EMA9/21逆向且斜率与3分钟价格共同确认，当前不追趋势。",V26_EMA_OVEREXTENDED_ENTRY:"价格偏离EMA9且处于区间极值，等待回踩或回弹后再出信号。",V25_ENTRY_EDGE_REVERSAL_OR_EXHAUSTION:"当前价格接近近期区间高低点且伴随短线反转或过度延伸，等更合适的入场位置。",V24_SPOT_REVERSAL_CONFLICT:"已收盘现货3/5分钟价格连续逆向，暂不追原趋势。",V23_EARLY_REVERSAL_UNCONFIRMED:"短周期出现逆向转折，等待进一步确认。",V23_SHORT_TERM_REVERSAL_CONFLICT:"实时走势与短周期方向冲突，暂不追原趋势。",V23_STRONG_LIVE_PRICE_CONFLICT:"当前指数价格逆向波动明显，暂不追原趋势。",V23_SCORE_TOO_WEAK:"多空优势不足，暂不发布。"}[analysis.decisionReason]||"当前未形成可靠方向。"),
+      summary+"；"+({V27_EMA_MOMENTUM_DECAY:"EMA9斜率加速度下降且EMA9/21间距收窄，短线动量可能衰竭，暂缓同向信号。",V27_EMA_EARLY_COUNTERMOVE:"短期价格逆向变化且EMA动量转弱，暂停追随旧趋势。",V26_EMA_AGAINST_ENTRY:"1分钟与2分钟EMA9/21逆向且斜率与3分钟价格共同确认，当前不追趋势。",V26_EMA_OVEREXTENDED_ENTRY:"价格偏离EMA9且处于区间极值，等待回踩或回弹后再出信号。",V25_ENTRY_EDGE_REVERSAL_OR_EXHAUSTION:"当前价格接近近期区间高低点且伴随短线反转或过度延伸，等更合适的入场位置。",V24_SPOT_REVERSAL_CONFLICT:"已收盘现货3/5分钟价格连续逆向，暂不追原趋势。",V23_EARLY_REVERSAL_UNCONFIRMED:"短周期出现逆向转折，等待进一步确认。",V23_SHORT_TERM_REVERSAL_CONFLICT:"实时走势与短周期方向冲突，暂不追原趋势。",V23_STRONG_LIVE_PRICE_CONFLICT:"当前指数价格逆向波动明显，暂不追原趋势。",V23_SCORE_TOO_WEAK:"多空优势不足，暂不发布。"}[analysis.decisionReason]||"当前未形成可靠方向。"),
     confidence:null,change1mPct:round(priceAction.oneMinuteBps/100,5),
     change3mPct:round(priceAction.threeMinuteBps/100,5),
     snapshotAt:at,cycleStartAt:Math.floor(at/AUTO_SLOT_MS)*AUTO_SLOT_MS,
@@ -73,9 +73,9 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,previousIndexSn
 export async function collectRuleFeatures(args={}){
  const f=await getIndexQuote(args);
  return {...f,caveats:[
-   "V26每12秒检查指数价，1m/2m/5m EMA9/21斜率、金叉死叉及价格偏离，保留6m至24h趋势环境，每10分钟最多3条。",
-   "EMA金叉死叉与短周期收盘价涨跌交叉确认，价格远离EMA9且处于区间极端位置时等待；远近周期趋势及V24反转判断保留。",
+   "V27继续每12秒扫描：结合EMA9斜率加速度、EMA9/21间距变化、短期反转及6m至24h价格位置，每10分钟最多3条。",
+   "短期EMA间距收缩和加速度衰退时主动暂停追单；上一条同方向600秒代理验证失败后，需新2m K线和EMA恢复确认。",
    "2/10分钟K线只由闭合的1分钟真实K线按对齐时间聚合；缺失的高周期明确标记，不补造。",
-   "不采用单一EMA金叉作为强制方向信号，仍允许趋势延续；V26未经独立实盘结算验证，不保证提升命中率。",
+   "保留相反方向信号和趋势延续路径，不推断正式币安事件结算；V27仍需样本外验证，不保证提升胜率。",
    "纯信号研究，无自动下单；公开指数代理非事件合约实际开仓价或结算。"]};
 }

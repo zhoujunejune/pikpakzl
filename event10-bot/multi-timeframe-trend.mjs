@@ -360,7 +360,9 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
  const confirmedTurn=earlyTurn&&trend("1m")===side&&trend("2m")===side&&
    finite(spot3)&&d*spot3>=8;
  const repeatedDisagreement=(fiveAgainst&&(longAgainst||shortAgainst||emaOpposed||weak))||
-   (longAgainst&&(shortAgainst||emaOpposed||oppositeSpot));
+   (longAgainst&&(shortAgainst||emaOpposed||oppositeSpot))||
+   (longAgainst&&against("15m")&&finite(spot3)&&d*spot3<6)||
+   (emaOpposed&&(shortAgainst||oppositeSpot||weak));
  const ready=confirmedTurn||!repeatedDisagreement;
  return {ready,reason:ready?"V28_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
    conflicts,confirmedTurn,fiveAgainst,longAgainst,shortAgainst,

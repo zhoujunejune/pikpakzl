@@ -67,8 +67,9 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,previousIndexSn
       confidenceCalibrated:false,
       possibleIndexVsSpotBasis:true,
       referenceSource:indexSnapshot.source||"BINANCE_USDM_BTCUSDT_INDEX_PRICE",
-      referenceIsActualEventContractStrike:false,entryReady:entry.ready&&emaTiming.ready,
-      waitForEntryImprovement:!(entry.ready&&emaTiming.ready)}};
+      referenceIsActualEventContractStrike:false,
+      entryReady:entry.ready&&emaTiming.ready&&analysis.trendConflict.ready,
+      waitForEntryImprovement:!(entry.ready&&emaTiming.ready&&analysis.trendConflict.ready)}};
 }
 export async function collectRuleFeatures(args={}){
  const f=await getIndexQuote(args);

@@ -115,6 +115,65 @@ export function summarizeTimeframe(bars,label){
    volumeRatio:volumeRatio===null?null:round(volumeRatio,3),
    lastClosedAt:bars.at(-1).t,close:close.at(-1)};
 }
+// V26 EMA9/21 entry diagnostics are computed ONLY from completed Binance spot candles.
+// They complement (rather than replace) the V25 multi-horizon and V24 reversal gates.
+export function ema921EntrySnapshot(bars,label="1m"){
+ if(!Array.isArray(bars)||bars.length<25)return {available:false,interval:label,reason:"INSUFFICIENT_CLOSED_BARS"};
+ const closes=bars.map(b=>b.c);
+ const fast=emaSeries(closes,9),slow=emaSeries(closes,21);
+ const i=closes.length-1,a=fast[i],b=slow[i],pa=fast[i-1],pb=slow[i-1],ppa=fast[i-2];
+ if(![a,b,pa,pb,ppa,closes[i]].every(finite)||closes[i]<=0)
+   return {available:false,interval:label,reason:"EMA_NOT_READY"};
+ const price=closes[i],spread=(a/b-1)*10000,priorSpread=(pa/pb-1)*10000;
+ const trend=direction(spread),oldTrend=direction(priorSpread);
+ const cross=trend!==oldTrend?trend==="UP"?"GOLDEN":"DEATH":null;
+ const slope=(a/pa-1)*10000,priorSlope=(pa/ppa-1)*10000;
+ return {available:true,interval:label,source:"VERIFIED_CLOSED_SPOT_EMA_9_21",
+   ema9:round(a,3),ema21:round(b,3),
+   direction:trend,crossover:cross,
+   spreadBps:round(spread,4),spreadChangeBps:round(spread-priorSpread,4),
+   widening:Math.abs(spread)>Math.abs(priorSpread),
+   ema9SlopeBps:round(slope,4),ema9AccelerationBps:round(slope-priorSlope,4),
+   closeDistanceEma9Bps:round((price/a-1)*10000,4),
+   lastClosedAt:bars[i].t+(MS[label]||60000)};
+}
+export function assessEmaEntry(side,snapshots,ctx,priceAction){
+ if(side!=="UP"&&side!=="DOWN")return {ready:false,reason:"NO_DIRECTION"};
+ const a=snapshots?.["1m"],b=snapshots?.["2m"],c=snapshots?.["5m"];
+ if(!a?.available||!b?.available||!c?.available)
+   return {ready:true,reason:"V26_EMA_PARTIAL_NO_EXTRA_VETO",entryType:"UNCONFIRMED"};
+ const d=side==="UP"?1:-1;
+ const p3=priceAction?.threeMinuteBps;
+ const against=finite(p3)&&d*p3<=-3;
+ const oppose=a.direction!==side&&b.direction!==side &&
+   d*a.ema9SlopeBps<0&&d*b.ema9SlopeBps<0;
+ const freshOppositeCross=(a.crossover&&(a.crossover===(d===1?"DEATH":"GOLDEN"))) &&
+   b.direction!==side;
+ const nearEdge=side==="UP"?
+   (ctx?.ranges?.["15m"]?.position>=0.86||ctx?.ranges?.["60m"]?.position>=0.92):
+   (ctx?.ranges?.["15m"]?.position<=0.14||ctx?.ranges?.["60m"]?.position<=0.08);
+ // The ATR-scaled chase limit requires confirmation from 2m EMA and closed
+ // 3m price movement. It must not block every strong trend or every new cross.
+ const atr=ctx?.atr1mBps||0;
+ const extended=d*a.closeDistanceEma9Bps>Math.max(10,2.2*atr) &&
+   d*b.closeDistanceEma9Bps>Math.max(8,1.4*atr) &&
+   finite(p3)&&d*p3>Math.max(14,2*atr)&&nearEdge;
+ const adverse=(oppose||freshOppositeCross)&&against;
+ const ready=!adverse&&!extended;
+ const crossAligned=a.crossover===(d===1?"GOLDEN":"DEATH") &&
+    b.direction===side&&d*b.ema9SlopeBps>0;
+ const pullback=d*a.closeDistanceEma9Bps>=-Math.max(2,0.5*atr)&&
+   d*a.closeDistanceEma9Bps<=Math.max(6,1.2*atr) &&
+   b.direction===side&&d*b.ema9SlopeBps>0 &&
+   c.direction===side;
+ const entryType=!ready?"WAIT":crossAligned?"CROSSOVER_CONFIRMATION":
+   pullback?"EMA_PULLBACK_CONTINUATION":"TREND_CONTINUATION";
+ return {ready,reason:adverse?"V26_EMA_AGAINST_ENTRY":
+   extended?"V26_EMA_OVEREXTENDED_ENTRY":"V26_EMA_ENTRY_OK",
+   entryType,opposingShortEmas:oppose,recentOpposingCross:!!freshOppositeCross,
+   overextended:!!extended,shortEmaAligned:a.direction===side&&b.direction===side,
+   atr1mBps:round(atr,4)};
+}
 // V23 direction arbitration: normalize correlated indicator votes and explicitly
 // distinguish emerging reversals from already-established long-term trends.
 // This is NOT a trained probabilistic classifier; its score is never a win rate.
@@ -273,10 +332,15 @@ export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot
  const entryHorizons=analyzeEntryHorizons({one:one.bars,five:five.bars,thirty:thirty.bars});
  const result=selectTenMinuteDirection(timeframes,liveBps,spotPriceAction);
  const entryTiming=assessEntryTiming(result.direction,entryHorizons,spotPriceAction);
- const holdForEntry=!!result.direction&&!entryTiming.ready;
- return {...result,direction:holdForEntry?null:result.direction,
-   decisionReason:holdForEntry?entryTiming.reason:result.decisionReason,
-   entryTiming,entryHorizons,spotPriceAction,liveIndexDelta:validPrev?round(liveDelta,5):null,
+ const emaEntry={"1m":ema921EntrySnapshot(one.bars,"1m"),
+   "2m":ema921EntrySnapshot(mapping["2m"],"2m"),
+   "5m":ema921EntrySnapshot(five.bars,"5m")};
+ const emaTiming=assessEmaEntry(result.direction,emaEntry,entryHorizons,spotPriceAction);
+ const holdForHorizon=!!result.direction&&!entryTiming.ready;
+ const holdForEma=!!result.direction&&!emaTiming.ready;
+ return {...result,direction:(holdForHorizon||holdForEma)?null:result.direction,
+   decisionReason:holdForHorizon?entryTiming.reason:holdForEma?emaTiming.reason:result.decisionReason,
+   entryTiming,entryHorizons,emaEntry,emaTiming,spotPriceAction,liveIndexDelta:validPrev?round(liveDelta,5):null,
    currentIndexPrice:indexPrice,indexAt,timeframes,
    timeframeCoverage:Object.values(timeframes).filter(t=>t.available).length,
    timeframeCount:6,aggregationSource:"CLOSED_BINANCE_SPOT_1M_ALIGNED_2M_10M",

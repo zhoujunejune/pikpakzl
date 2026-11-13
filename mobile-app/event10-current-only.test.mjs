@@ -166,7 +166,7 @@ test("a slow signal-history endpoint must not hide currently available pure-rule
  assert.ok(src.includes('state.eventOnline=true;state.eventLastError=null;'));
  assert.ok(src.includes('state.eventLastStatus=service'));
  assert.ok(src.includes('event(state.eventLastStatus,null)'));
- assert.ok(src.includes('put("eMiniConnection",state.eventOnline?"● 已连接":"● 连接异常")'));
+ assert.ok(src.includes('state.eventOnline?"● 已连接":partial?"● 记录可用·实时重连":"● 连接异常"'));
  assert.ok(!src.includes('if(!currentLedger)throw Error("新策略历史接口未就绪'));
 });
 
@@ -187,4 +187,46 @@ test("current strategy label comes from actual EVENT10 backend version, not stal
  assert.ok(src.includes('put("ePhase",direction?strategyLabel'));
  assert.ok(!html.includes("V20"),"html must not mention stale strategy");
  assert.ok(!src.includes("V20"),"javascript must not mention stale strategy");
+});
+
+test("slow connection: current history stays visible and stale history is requested at most every 15s",()=>{
+ assert.ok(src.includes("function needsEventLedgerFetch(service,now=Date.now()){"));
+ assert.ok(src.includes("now-state.eventLedgerLastSyncAt>=15000"));
+ assert.ok(src.includes("settled!==state.eventLedgerSettledCount"));
+ assert.ok(src.includes('if(!needsEventLedgerFetch(service)){'));
+ assert.ok(src.includes('if(state.eventHistoryError)drawEventHistory();'));
+ assert.ok(!src.includes('state.eventHistoryError="无法刷新，已加载记录仍然可看"'));
+});
+test("slow first launch: verified current ledger is visible if live status times out, never presented as live signal",()=>{
+ assert.ok(src.includes("function renderVerifiedLedgerFallback(ledger){"));
+ assert.ok(src.includes("const earlyLedger=!state.eventLastStatus?"));
+ assert.ok(src.includes("if(!outdated()&&ledger)renderVerifiedLedgerFallback(ledger);"));
+ const start=src.indexOf("function renderVerifiedLedgerFallback(ledger){");
+ const end=src.indexOf("// Cancel stale requests",start);
+ assert.ok(start>=0&&end>start);
+ const fragment=src.slice(start,end);
+ const ui={};
+ const sandbox={
+   state:{eventRecords:[],eventTotal:0,eventLedgerOnline:false,eventOnline:false,
+     eventHistorySignature:"",homeHistorySignature:"",eventHistoryError:null},
+   put:(id,value)=>{ui[id]=value;},
+   pct:(n,d)=>d?((n/d)*100).toFixed(1)+"%":"—",
+   eventStrategyLabel:v=>{const m=v.match(/_V(\d+)_\d{8}$/);return m?"V"+m[1]:"当前策略";},
+   updateEventHistory:(ledger)=>{sandbox.state.eventRecords=ledger.records;sandbox.state.eventTotal=ledger.total;},
+   pill:(id,tone,value)=>{ui[id]=value;},refreshConnectionBadge:()=>{}
+ };
+ const ctx=vm.createContext(sandbox);
+ const runner=vm.runInContext(
+  'let EVENT10_FREQ_OPTIMIZED_VERSION=null;'+fragment+
+  '\n({fallback:renderVerifiedLedgerFallback,current:()=>EVENT10_FREQ_OPTIMIZED_VERSION})',ctx);
+ const valid={ok:true,version:"EVENT10_EMA_DECAY_REENTRY_V27_20261113",total:6,
+   records:[],stats:{validDirections:6,proxySettled:4,proxyHits:2,proxyAccuracyPct:50}};
+ assert.equal(runner.fallback(valid),true);
+ assert.equal(runner.current(),valid.version);
+ assert.equal(ui.eCounts,"6 / 4");
+ assert.equal(ui.eProxyAccuracy,"50.0%");
+ assert.equal(ui.eSignal,"实时方向暂不可用");
+ assert.equal(sandbox.state.eventOnline,false);
+ assert.equal(runner.fallback({...valid,version:"OLD_VERSION"}),false);
+ assert.equal(runner.current(),valid.version);
 });

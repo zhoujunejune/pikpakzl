@@ -27,7 +27,6 @@ export function renewedAfterSettledMiss(rule,previous,side){
    Number.isFinite(bar)&&Number.isFinite(oldBar)&&bar>oldBar;
 }
 const round = (v,n=5)=>Number(v.toFixed(n));
-const round = (v,n=5)=>Number(v.toFixed(n));
 
 export function checkedTick(data, now, maxAgeMs=6000) {
   if (data?.ok!==true || data?.readOnly!==true || data?.symbol!=="BTCUSDT" ||

@@ -118,6 +118,67 @@ export function summarizeTimeframe(bars,label){
 // V23 direction arbitration: normalize correlated indicator votes and explicitly
 // distinguish emerging reversals from already-established long-term trends.
 // This is NOT a trained probabilistic classifier; its score is never a win rate.
+// V25: compare near/medium/far CLOSED SPOT horizons (6m through 24h).
+// All ranges and returns stay on the SAME spot market basis as their candles.
+// A stale or unavailable OPTIONAL 30m history never fabricates a long view.
+export function horizonStructure(bars,period,spotPrice){
+ if(!Array.isArray(bars)||bars.length<period||!finite(spotPrice)||spotPrice<=0)
+   return {available:false};
+ const sample=bars.slice(-period),first=sample[0],last=sample.at(-1);
+ const high=Math.max(...sample.map(x=>x.h)),low=Math.min(...sample.map(x=>x.l));
+ if(!finite(high)||!finite(low)||high<=low)return {available:false};
+ return {available:true,bars:period,high:round(high,3),low:round(low,3),
+   position:round(Math.max(0,Math.min(1,(spotPrice-low)/(high-low))),4),
+   changeBps:round((last.c/first.o-1)*10000,4),
+   toSupportBps:round((spotPrice-low)/spotPrice*10000,3),
+   toResistanceBps:round((high-spotPrice)/spotPrice*10000,3),
+   lastClosedAt:last.t};
+}
+export function analyzeEntryHorizons({one,five,thirty}){
+ if(!one?.length)return {available:false,reason:"NO_1M_HISTORY"};
+ const spot=one.at(-1).c,oneRange=one.slice(-15);
+ const trueRanges=oneRange.slice(1).map((b,i)=>Math.max(
+   b.h-b.l,Math.abs(b.h-oneRange[i].c),Math.abs(b.l-oneRange[i].c)));
+ const atrBps=round(trueRanges.reduce((a,b)=>a+b,0)/Math.max(1,trueRanges.length)/spot*10000,4);
+ return {available:true,source:"CLOSED_BINANCE_SPOT_HORIZON_CONTEXT",
+   asOf:one.at(-1).t+60000,spotClose:spot,atr1mBps:atrBps,
+   ranges:{
+     "6m":horizonStructure(one,6,spot),
+     "15m":horizonStructure(one,15,spot),
+     "60m":horizonStructure(one,60,spot),
+     "2h":horizonStructure(five,24,spot),
+     "4h":horizonStructure(thirty,8,spot),
+     "24h":horizonStructure(thirty,48,spot)
+   }};
+}
+// Only veto an entry when BOTH a recent price extreme AND independent
+// short-horizon exhaustion/reversal agree. No blanket bias toward DOWN.
+export function assessEntryTiming(side,ctx,priceAction){
+ if(side!=="UP"&&side!=="DOWN")return {ready:false,reason:"NO_DIRECTION"};
+ if(!ctx?.available)return {ready:false,reason:"MISSING_ENTRY_CONTEXT"};
+ const ranges=ctx.ranges||{},hour=ranges["60m"],two=ranges["2h"],
+   four=ranges["4h"],day=ranges["24h"];
+ const p3=priceAction?.threeMinuteBps;
+ if(!finite(p3))return {ready:false,reason:"MISSING_3M_PRICE_ACTION"};
+ const nearSupport=(hour?.available&&hour.position<=0.12)||
+   (two?.available&&two.position<=0.08);
+ const nearResistance=(hour?.available&&hour.position>=0.88)||
+   (two?.available&&two.position>=0.92);
+ const extended=Math.max(18,2.5*(ctx.atr1mBps||0));
+ const bounce=side==="DOWN"?p3>=3:p3<=-3;
+ const exhaustion=side==="DOWN"?p3<=-extended:p3>=extended;
+ const edge=side==="DOWN"?nearSupport:nearResistance;
+ // Longer 4h/24h bias is context, not an unconditional 10m predictor.
+ const farAgainst=!!(four?.available&&day?.available&&
+   ((side==="DOWN"&&four.changeBps>12&&day.changeBps>25)||
+    (side==="UP"&&four.changeBps< -12&&day.changeBps< -25)));
+ const reversalAtEdge=edge&&(bounce||exhaustion);
+ return {ready:!reversalAtEdge,
+   reason:reversalAtEdge?"V25_ENTRY_EDGE_REVERSAL_OR_EXHAUSTION":"V25_ENTRY_POSITION_OK",
+   nearSupport,nearResistance,shortMove3mBps:round(p3,4),
+   overextensionBps:round(extended,4),farTrendAgainst:farAgainst,
+   longContextCaution:farAgainst,referenceSpotPrice:ctx.spotClose};
+}
 // V24: compare price movement strictly within CLOSED spot 1m candles.
 // Never subtract a USD-M index quote from a spot candle close (different price basis).
 export function closedSpotPriceAction(bars){
@@ -209,8 +270,13 @@ export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot
  const liveDelta=validPrev?indexPrice-prev:null;
  const liveBps=validPrev?(indexPrice/prev-1)*10000:null;
  const spotPriceAction=closedSpotPriceAction(one.bars);
+ const entryHorizons=analyzeEntryHorizons({one:one.bars,five:five.bars,thirty:thirty.bars});
  const result=selectTenMinuteDirection(timeframes,liveBps,spotPriceAction);
- return {...result,spotPriceAction,liveIndexDelta:validPrev?round(liveDelta,5):null,
+ const entryTiming=assessEntryTiming(result.direction,entryHorizons,spotPriceAction);
+ const holdForEntry=!!result.direction&&!entryTiming.ready;
+ return {...result,direction:holdForEntry?null:result.direction,
+   decisionReason:holdForEntry?entryTiming.reason:result.decisionReason,
+   entryTiming,entryHorizons,spotPriceAction,liveIndexDelta:validPrev?round(liveDelta,5):null,
    currentIndexPrice:indexPrice,indexAt,timeframes,
    timeframeCoverage:Object.values(timeframes).filter(t=>t.available).length,
    timeframeCount:6,aggregationSource:"CLOSED_BINANCE_SPOT_1M_ALIGNED_2M_10M",

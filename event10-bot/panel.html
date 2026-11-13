@@ -35,10 +35,10 @@ th{color:#a9c6e7}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
 <h1>海派事件合约 · BTC 十分钟纯规则信号</h1>
-<p class="sub">BTCUSDT · V24 价格反转识别 · 10分钟方向评分 · 12秒检查 · 每10分钟最多3条</p>
+<p class="sub">BTCUSDT · V25 远近周期与入场判断 · 10分钟方向评分 · 12秒检查 · 每10分钟最多3条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V24使用六周期指标与同一现货市场已收盘3/5分钟价格变化交叉核对：趋势与真实短线变化相反时避免追单；确认短周期转折后才改变方向。仍每12秒扫描，滚动10分钟最多3条，只做信号，不自动下单。</div>
+V25增加6分钟、15分钟、1小时、2小时、4小时及24小时的已收盘现货区间位置分析，结合原有六周期趋势识别近期支撑阻力和短线过度延伸，不在明显不利的入场位置追涨追跌。每12秒扫描，10分钟最多3条，只做信号。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则方向</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -123,7 +123,7 @@ V24使用六周期指标与同一现货市场已收盘3/5分钟价格变化交�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_PRICE_ACTION_V24_20261113";
+const SIGNAL_VERSION="EVENT10_MULTI_HORIZON_ENTRY_V25_20261113";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -273,7 +273,7 @@ function display(d){
  $("engine").textContent=d.configured?"方向分析已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
- $("aiStatus").textContent="信号来源：V24六周期趋势 + 同市场3/5分钟已收盘价格反转识别 · 不调用AI。"
+ $("aiStatus").textContent="信号来源：V25六周期趋势 + 6分钟至24小时区间与入场点位评估 · 不调用AI。"
 
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";

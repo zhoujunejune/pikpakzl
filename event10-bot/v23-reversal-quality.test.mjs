@@ -408,7 +408,7 @@ test("V28: both hourly and 2h extremes plus closed 3m/5m exhaustion stop late UP
  const up=assessEntryTiming("UP",mk(.956,.967),{threeMinuteBps:1.754,fiveMinuteBps:24.564});
  assert.equal(up.ready,false);
  assert.equal(up.reason,"V28_DOUBLE_HORIZON_PRICE_EXHAUSTION");
- const down=assessEntryTiming("DOWN",mk(.064,0),{threeMinuteBps:-34.78,fiveMinuteBps:-50.86});
+ const down=assessEntryTiming("DOWN",mk(.064,0,16),{threeMinuteBps:-34.78,fiveMinuteBps:-50.86});
  assert.equal(down.ready,false);
  assert.equal(down.reason,"V28_DOUBLE_HORIZON_PRICE_EXHAUSTION");
  // Identical move in middle of the range is not a reason to halt.

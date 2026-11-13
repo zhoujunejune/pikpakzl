@@ -237,7 +237,7 @@ export function assessEntryTiming(side,ctx,priceAction){
  if(!ctx?.available)return {ready:false,reason:"MISSING_ENTRY_CONTEXT"};
  const ranges=ctx.ranges||{},hour=ranges["60m"],two=ranges["2h"],
    four=ranges["4h"],day=ranges["24h"];
- const p3=priceAction?.threeMinuteBps;
+ const p3=priceAction?.threeMinuteBps,p5=priceAction?.fiveMinuteBps;
  if(!finite(p3))return {ready:false,reason:"MISSING_3M_PRICE_ACTION"};
  const nearSupport=(hour?.available&&hour.position<=0.12)||
    (two?.available&&two.position<=0.08);
@@ -252,11 +252,23 @@ export function assessEntryTiming(side,ctx,priceAction){
    ((side==="DOWN"&&four.changeBps>12&&day.changeBps>25)||
     (side==="UP"&&four.changeBps< -12&&day.changeBps< -25)));
  const reversalAtEdge=edge&&(bounce||exhaustion);
- return {ready:!reversalAtEdge,
-   reason:reversalAtEdge?"V25_ENTRY_EDGE_REVERSAL_OR_EXHAUSTION":"V25_ENTRY_POSITION_OK",
+ // V28: no late 10m chase at BOTH 1h AND 2h extremes when a completed
+ // 3m/5m spot swing shows acceleration exhaustion or strong displacement.
+ // Only same-market CLOSED SPOT bars contribute to the trigger.
+ const hourExtreme=hour?.available&&(side==="UP"?hour.position>=0.93:hour.position<=0.07);
+ const twoExtreme=two?.available&&(side==="UP"?two.position>=0.93:two.position<=0.07);
+ const d=side==="UP"?1:-1;
+ const p3Ahead=d*p3,p5Ahead=finite(p5)?d*p5:null;
+ const exhaustedAtDoubleEdge=!!(hourExtreme&&twoExtreme&&finite(p5Ahead)&&
+   ((p3Ahead>=Math.max(12,1.15*(ctx.atr1mBps||0))&&p5Ahead>=16)||
+     (p5Ahead>=20&&p3Ahead<p5Ahead*0.5)));
+ const ready=!reversalAtEdge&&!exhaustedAtDoubleEdge;
+ return {ready,
+   reason:reversalAtEdge?"V25_ENTRY_EDGE_REVERSAL_OR_EXHAUSTION":
+     exhaustedAtDoubleEdge?"V28_DOUBLE_HORIZON_PRICE_EXHAUSTION":"V28_ENTRY_POSITION_OK",
    nearSupport,nearResistance,shortMove3mBps:round(p3,4),
    overextensionBps:round(extended,4),farTrendAgainst:farAgainst,
-   longContextCaution:farAgainst,referenceSpotPrice:ctx.spotClose};
+   exhaustedAtDoubleEdge,longContextCaution:farAgainst,referenceSpotPrice:ctx.spotClose};
 }
 // V24: compare price movement strictly within CLOSED spot 1m candles.
 // Never subtract a USD-M index quote from a spot candle close (different price basis).
@@ -327,6 +339,33 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    timeframeWeightCoverage:round(observedWeight,4),
    noCalibratedConfidence:true};
 }
+// V28: veto weak, internally conflicting continuation signals while keeping
+// a clearly confirmed emerging 1m/2m reversal path available in BOTH directions.
+// The 30m/5m conflicts only act as vetoes when at least another indicator warns.
+export function assessTrendConflict(side,selected,timeframes,emaEntry,priceAction){
+ if(side!=="UP"&&side!=="DOWN")return {ready:false,reason:"NO_DIRECTION"};
+ const d=side==="UP"?1:-1;
+ const trend=name=>timeframes?.[name]?.available?timeframes[name].trend:null;
+ const against=name=>trend(name)!==null&&trend(name)!==side;
+ const conflicts=["1m","2m","5m","10m","15m","30m"].filter(against);
+ const fiveAgainst=against("5m"),longAgainst=against("30m"),
+   shortAgainst=against("1m")||against("2m");
+ const emaOpposed=emaEntry?.["1m"]?.available&&emaEntry["1m"].direction!==side;
+ const spot3=priceAction?.threeMinuteBps;
+ const oppositeSpot=finite(spot3)&&d*spot3<=-2;
+ const weak=finite(selected?.trendScore)&&Math.abs(selected.trendScore)<0.48;
+ const earlyTurn=selected?.decisionReason==="V24_CONFIRMED_EARLY_REVERSAL";
+ // A real early turn must still be demonstrable in spot candles and aligned
+ // with the actual 1m and 2m votes, not merely a 12s index-price fluctuation.
+ const confirmedTurn=earlyTurn&&trend("1m")===side&&trend("2m")===side&&
+   finite(spot3)&&d*spot3>=8;
+ const repeatedDisagreement=(fiveAgainst&&(longAgainst||shortAgainst||emaOpposed||weak))||
+   (longAgainst&&(shortAgainst||emaOpposed||oppositeSpot));
+ const ready=confirmedTurn||!repeatedDisagreement;
+ return {ready,reason:ready?"V28_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
+   conflicts,confirmedTurn,fiveAgainst,longAgainst,shortAgainst,
+   emaOpposed,oppositeSpot,weak};
+}
 export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot,indexAt}){
  if(feed?.ok!==true||feed?.readOnly!==true||feed?.symbol!=="BTCUSDT"||
     feed?.latest?.marketFeedConnected===false)throw Error("UNVERIFIED_BTCUSDT_FEED");
@@ -356,11 +395,14 @@ export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot
    "2m":ema921EntrySnapshot(mapping["2m"],"2m"),
    "5m":ema921EntrySnapshot(five.bars,"5m")};
  const emaTiming=assessEmaEntry(result.direction,emaEntry,entryHorizons,spotPriceAction);
+ const trendConflict=assessTrendConflict(result.direction,result,timeframes,emaEntry,spotPriceAction);
  const holdForHorizon=!!result.direction&&!entryTiming.ready;
  const holdForEma=!!result.direction&&!emaTiming.ready;
- return {...result,direction:(holdForHorizon||holdForEma)?null:result.direction,
-   decisionReason:holdForHorizon?entryTiming.reason:holdForEma?emaTiming.reason:result.decisionReason,
-   entryTiming,entryHorizons,emaEntry,emaTiming,spotPriceAction,liveIndexDelta:validPrev?round(liveDelta,5):null,
+ const holdForConflict=!!result.direction&&!trendConflict.ready;
+ return {...result,direction:(holdForHorizon||holdForEma||holdForConflict)?null:result.direction,
+   decisionReason:holdForHorizon?entryTiming.reason:holdForEma?emaTiming.reason:
+     holdForConflict?trendConflict.reason:result.decisionReason,
+   entryTiming,entryHorizons,emaEntry,emaTiming,trendConflict,spotPriceAction,liveIndexDelta:validPrev?round(liveDelta,5):null,
    currentIndexPrice:indexPrice,indexAt,timeframes,
    timeframeCoverage:Object.values(timeframes).filter(t=>t.available).length,
    timeframeCount:6,aggregationSource:"CLOSED_BINANCE_SPOT_1M_ALIGNED_2M_10M",

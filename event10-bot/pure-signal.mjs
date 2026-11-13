@@ -1,8 +1,8 @@
-// V24 EVENT10: same-market 3m/5m price action confirms turns and blocks stale trends; no orders or AI.
+// V25 EVENT10: near 6m/15m, mid 60m/2h, far 4h/24h context and entry timing; no orders or AI.
 // 2m and 10m are time-aligned aggregates of verified closed 1m spot candles.
 import {parseBinanceIndexQuote,collectRuleFeatures as getIndexQuote} from "./pure-signal-v19.mjs";
 import {analyzeMultiTimeframes} from "./multi-timeframe-trend.mjs";
-export const RULE_VERSION="EVENT10_PRICE_ACTION_V24_20261113";
+export const RULE_VERSION="EVENT10_MULTI_HORIZON_ENTRY_V25_20261113";
 export const LATE_WINDOW_RULE_VERSION=RULE_VERSION;
 export const AUTO_SLOT_MS=12_000;
 export {parseBinanceIndexQuote};
@@ -17,12 +17,16 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,previousIndexSn
     previousIndexSnapshot,indexAt:ts});
  const direction=analysis.direction;
  const priceAction=analysis.spotPriceAction;
+ const entry=analysis.entryTiming, horizons=analysis.entryHorizons;
  const one=analysis.timeframes["1m"],five=analysis.timeframes["5m"];
  const short=analysis.timeframes["2m"],medium=analysis.timeframes["10m"],
    long=analysis.timeframes["15m"],background=analysis.timeframes["30m"];
  const label=v=>v?.trend==="UP"?"多":v?.trend==="DOWN"?"空":"待确认";
  const summary="1/2/5/10/15/30分钟="+[one,short,five,medium,long,background].map(label).join("/")+
-    "；Supertrend、EMA、MACD、RSI与量能综合判断，实时指数价="+index.toFixed(2);
+    "；Supertrend、EMA、MACD、RSI与量能综合判断，实时指数价="+index.toFixed(2)+
+    "；远近区间位置(1小时/4小时/24小时)="+
+    ["60m","4h","24h"].map(k=>horizons.ranges[k]?.available?
+      Math.round(horizons.ranges[k].position*100)+"%":"数据不足").join("/");
  const prev=Number(previousIndexSnapshot?.price);
  const validPrev=Number.isFinite(prev)&&prev>0&&
     Number.isSafeInteger(previousIndexSnapshot?.observedAt)&&
@@ -30,10 +34,10 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,previousIndexSn
  return {strategyVersion:RULE_VERSION,direction,signal:direction||"NO_SIGNAL",
     status:direction?"PREDICTED":"NO_SIGNAL",
     quality:direction?"STANDARD_RESEARCH":"NO_SIGNAL",
-    eventTag:direction?"V24_10M_"+direction:analysis.decisionReason,
+    eventTag:direction?"V25_10M_"+direction:analysis.decisionReason,
     reason:direction?summary+"；已收盘3分钟变化="+(priceAction.threeMinuteBps/100).toFixed(4)+"%；多空评分="+analysis.trendScore+
       "，输出"+(direction==="UP"?"看涨":"看跌")+"；600秒后独立核验。":
-      summary+"；"+({V24_SPOT_REVERSAL_CONFLICT:"已收盘现货3/5分钟价格连续逆向，暂不追原趋势。",V23_EARLY_REVERSAL_UNCONFIRMED:"短周期出现逆向转折，等待进一步确认。",V23_SHORT_TERM_REVERSAL_CONFLICT:"实时走势与短周期方向冲突，暂不追原趋势。",V23_STRONG_LIVE_PRICE_CONFLICT:"当前指数价格逆向波动明显，暂不追原趋势。",V23_SCORE_TOO_WEAK:"多空优势不足，暂不发布。"}[analysis.decisionReason]||"当前未形成可靠方向。"),
+      summary+"；"+({V25_ENTRY_EDGE_REVERSAL_OR_EXHAUSTION:"当前价格接近近期区间高低点且伴随短线反转或过度延伸，等更合适的入场位置。",V24_SPOT_REVERSAL_CONFLICT:"已收盘现货3/5分钟价格连续逆向，暂不追原趋势。",V23_EARLY_REVERSAL_UNCONFIRMED:"短周期出现逆向转折，等待进一步确认。",V23_SHORT_TERM_REVERSAL_CONFLICT:"实时走势与短周期方向冲突，暂不追原趋势。",V23_STRONG_LIVE_PRICE_CONFLICT:"当前指数价格逆向波动明显，暂不追原趋势。",V23_SCORE_TOO_WEAK:"多空优势不足，暂不发布。"}[analysis.decisionReason]||"当前未形成可靠方向。"),
     confidence:null,change1mPct:round(priceAction.oneMinuteBps/100,5),
     change3mPct:round(priceAction.threeMinuteBps/100,5),
     snapshotAt:at,cycleStartAt:Math.floor(at/AUTO_SLOT_MS)*AUTO_SLOT_MS,
@@ -51,6 +55,7 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,previousIndexSn
       comparisonSource:"MULTI_TIMEFRAME_SUPERTREND_EMA_MOMENTUM_PLUS_FRESH_INDEX",
       trendScore:analysis.trendScore,weightedTimeframeScore:analysis.weightedTimeframeScore,
       spotPriceAction:priceAction,
+      entryHorizons:horizons,entryTiming:entry,
       trendDecisionReason:analysis.decisionReason,normalizedVotes:analysis.normalizedVotes,
       shortTermDirection:analysis.shortTermDirection,longContextDirection:analysis.longContextDirection,
       timeframeWeightCoverage:analysis.timeframeWeightCoverage,
@@ -60,15 +65,15 @@ export function evaluatePureSignal({feed,reference,indexSnapshot,previousIndexSn
       confidenceCalibrated:false,
       possibleIndexVsSpotBasis:true,
       referenceSource:indexSnapshot.source||"BINANCE_USDM_BTCUSDT_INDEX_PRICE",
-      referenceIsActualEventContractStrike:false,entryReady:true,
-      waitForEntryImprovement:false}};
+      referenceIsActualEventContractStrike:false,entryReady:entry.ready,
+      waitForEntryImprovement:!entry.ready}};
 }
 export async function collectRuleFeatures(args={}){
  const f=await getIndexQuote(args);
  return {...f,caveats:[
-   "V24每12秒检查指数价与六周期趋势；增加同一现货市场3/5分钟已收盘价格变化；滚动10分钟最多3条。",
-   "反转需1/2分钟趋势、实时指数报价与3分钟已收盘价格变化共同验证；对明确逆向3/5分钟价格变化不追单。",
+   "V25每12秒检查指数价；6m/15m/60m/2h/4h/24h区间位置与原六周期趋势合并分析，每10分钟最多3条。",
+   "近周期寻找入场时机，中周期检验支撑阻力位置，远周期辅助判断趋势环境；同时保留V24反转检测。",
    "2/10分钟K线只由闭合的1分钟真实K线按对齐时间聚合；缺失的高周期明确标记，不补造。",
-   "相同走势不允许12秒内连续复制三次；V24尚未经过样本外验证，不承诺提升胜率。",
+   "区间极值与短期反转/过度延伸同时出现时延后发信号；V25未验证真实命中率，不承诺提升胜率。",
    "纯信号研究，无自动下单；公开指数代理非事件合约实际开仓价或结算。"]};
 }

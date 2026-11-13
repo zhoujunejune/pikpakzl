@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {selectTenMinuteDirection,aggregateBars,supertrend,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
+import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
 import {createEngine,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_REVERSAL_AWARE_10M_V23_20261113");
+ assert.equal(RULE_VERSION,"EVENT10_PRICE_ACTION_V24_20261113");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -130,4 +130,45 @@ test("new-version ledger retains per-signal trend evidence for later retrospecti
  assert.ok(Number.isSafeInteger(out.twoMinuteBarAt));
  assert.equal(typeof out.trendScore,"number");
  assert.equal(out.trendDecisionReason,"V23_NORMALIZED_TREND");
+});
+
+test("V24: clear closed spot price reversal blocks chasing stale DOWN and UP symmetrically",()=>{
+ const allDown=Object.fromEntries(Object.keys(TEN_MINUTE_WEIGHTS).map(k=>[k,-5.2]));
+ const down=scoring(allDown,0.2);
+ assert.equal(down.direction,"DOWN");
+ const trendDown=Object.fromEntries(Object.keys(allDown).map(k=>[k,{available:true,vote:-5.2}]));
+ const rejectedDown=selectTenMinuteDirection(trendDown,0.2,{
+   threeMinuteBps:12,fiveMinuteBps:18,upCloses:3,downCloses:0});
+ assert.equal(rejectedDown.direction,null);
+ assert.equal(rejectedDown.decisionReason,"V24_SPOT_REVERSAL_CONFLICT");
+ const trendUp=Object.fromEntries(Object.keys(allDown).map(k=>[k,{available:true,vote:5.2}]));
+ const rejectedUp=selectTenMinuteDirection(trendUp,-0.1,{
+   threeMinuteBps:-11,fiveMinuteBps:-16,upCloses:0,downCloses:2});
+ assert.equal(rejectedUp.direction,null);
+ assert.equal(rejectedUp.decisionReason,"V24_SPOT_REVERSAL_CONFLICT");
+});
+test("V24: 1m+2m+live-index confirm an emerging UP turn, not a forced reversal",()=>{
+ const votes={"1m":5.2,"2m":5.2,"5m":-5.2,"10m":-5.2,"15m":-5.2,"30m":-5.2};
+ const tf=Object.fromEntries(Object.entries(votes).map(([k,v])=>[k,{available:true,vote:v}]));
+ const waiting=selectTenMinuteDirection(tf,1.7,{threeMinuteBps:2,fiveMinuteBps:-8,upCloses:2,downCloses:1});
+ assert.equal(waiting.direction,null);
+ const confirmed=selectTenMinuteDirection(tf,1.7,{threeMinuteBps:12,fiveMinuteBps:-8,upCloses:3,downCloses:0});
+ assert.equal(confirmed.direction,"UP");
+ assert.equal(confirmed.decisionReason,"V24_CONFIRMED_EARLY_REVERSAL");
+ const opposite=selectTenMinuteDirection(tf,-1.7,{threeMinuteBps:12,fiveMinuteBps:-8,upCloses:3,downCloses:0});
+ assert.notEqual(opposite.direction,"UP");
+});
+test("V24: price return is measured inside closed spot only, not index/spot basis",()=>{
+ const now=BASE, f=fixture(now);
+ const bars=f.candles["1m"].map(b=>({t:b.startMs,o:b.open,c:b.close,h:b.high,l:b.low,v:b.volume}));
+ const p=closedSpotPriceAction(bars);
+ assert.equal(p.available,true);
+ assert.equal(p.source,"VERIFIED_CLOSED_SPOT_1M_SAME_BASIS");
+ assert.ok(p.threeMinuteBps>0&&p.threeMinuteBps<2);
+ const r=evaluatePureSignal({feed:f,reference:{observedAt:now},
+   indexSnapshot:{price:72000,observedAt:now-200},previousIndexSnapshot:null});
+ assert.equal(r.change3mPct,Number((p.threeMinuteBps/100).toFixed(5)));
+ assert.ok(r.change3mPct<0.02);
+ assert.equal(r.evidence.spotPriceAction.source,"VERIFIED_CLOSED_SPOT_1M_SAME_BASIS");
+ assert.equal(r.evidence.referenceIsActualEventContractStrike,false);
 });

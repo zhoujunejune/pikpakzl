@@ -10,7 +10,7 @@ const to=src.indexOf("function event(e,ledger){",from);
 assert.ok(from>0&&to>from,"current strategy filtering helpers must exist");
 const api=vm.runInNewContext(
   "const EVENT10_FREQ_OPTIMIZED_VERSION="+JSON.stringify(version)+";\n"+
-  src.slice(from,to)+"\n({eventVersion,currentEventRecord,mergeEventRecords})"
+  src.slice(from,to)+"\n({eventVersion,eventStrategyLabel,currentEventRecord,mergeEventRecords})"
 );
 
 const mk=(id,ver,at)=>({id,openedAt:at,direction:"UP",strategyVersion:ver,status:"PREDICTED"});
@@ -165,4 +165,23 @@ test("a slow signal-history endpoint must not hide currently available pure-rule
  assert.ok(src.includes('event(state.eventLastStatus,null)'));
  assert.ok(src.includes('put("eMiniConnection",state.eventOnline?"● 已连接":"● 连接异常")'));
  assert.ok(!src.includes('if(!currentLedger)throw Error("新策略历史接口未就绪'));
+});
+
+test("current strategy label comes from actual EVENT10 backend version, not stale V20 text",()=>{
+ const v27="EVENT10_EMA_DECAY_REENTRY_V27_20261113";
+ const v28="EVENT10_EMA_DECAY_REENTRY_V28_20261114";
+ assert.equal(api.eventStrategyLabel(v27),"V27");
+ assert.equal(api.eventStrategyLabel(v28),"V28");
+ assert.equal(api.eventStrategyLabel(version),"V1");
+ assert.equal(api.eventStrategyLabel(null),"当前策略");
+ assert.equal(api.eventStrategyLabel("garbage V40"),"当前策略");
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ assert.ok(html.includes('id="eStatsStrategy"'));
+ assert.ok(html.includes('id="eStrategyTitle"'));
+ assert.ok(html.includes('id="tradeJournalStrategyNote"'));
+ assert.ok(src.includes('put("eStatsStrategy","只统计"+strategyLabel'));
+ assert.ok(src.includes('put("eAiReview","信号来源：纯规则 "+strategyLabel'));
+ assert.ok(src.includes('put("ePhase",direction?strategyLabel'));
+ assert.ok(!html.includes("V20"),"html must not mention stale strategy");
+ assert.ok(!src.includes("V20"),"javascript must not mention stale strategy");
 });

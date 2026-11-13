@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_EMA_921_ENTRY_V26_20261113");
+ assert.equal(RULE_VERSION,"EVENT10_EMA_DECAY_REENTRY_V27_20261113");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -298,4 +298,43 @@ test("V26: missing optional 30m context never disables verified EMA9/21 entry fe
  assert.equal(r.evidence.emaEntry["2m"].available,true);
  assert.equal(r.evidence.emaEntry["5m"].available,true);
  assert.equal(r.evidence.entryReady,true);
+});
+
+test("V27: decaying EMA9 acceleration and contracting EMA9/21 spread pause late entry symmetrically",()=>{
+ const ctx={atr1mBps:4,ranges:{"15m":{available:true,position:0.52},
+   "60m":{available:true,position:0.53}}};
+ const mk=(side,spreadChange,acc,slope=1)=>({
+   available:true,direction:side,spreadChangeBps:spreadChange,
+   ema9AccelerationBps:acc,ema9SlopeBps:slope,
+   closeDistanceEma9Bps:2,crossover:null});
+ const up={"1m":mk("UP",-0.9,-0.8,0.4),"2m":mk("UP",-0.5,0.1,0.4),
+   "5m":mk("UP",0,0,0.4)};
+ const failUp=assessEmaEntry("UP",up,ctx,{threeMinuteBps:0.5});
+ assert.equal(failUp.ready,false);
+ assert.equal(failUp.reason,"V27_EMA_MOMENTUM_DECAY");
+ const down={"1m":mk("DOWN",0.9,0.8,-0.4),"2m":mk("DOWN",0.5,-0.1,-0.4),
+   "5m":mk("DOWN",0,0,-0.4)};
+ const failDown=assessEmaEntry("DOWN",down,ctx,{threeMinuteBps:-0.5});
+ assert.equal(failDown.ready,false);
+ assert.equal(failDown.reason,"V27_EMA_MOMENTUM_DECAY");
+ const healthy={"1m":mk("UP",0.8,0.6,1.6),"2m":mk("UP",0.6,0.4,1.1),
+   "5m":mk("UP",0.2,0.2,0.6)};
+ const good=assessEmaEntry("UP",healthy,ctx,{threeMinuteBps:6});
+ assert.equal(good.ready,true);
+ assert.equal(good.reason,"V27_EMA_ENTRY_OK");
+});
+test("V27: small adverse 3m move plus EMA trend weakening protects early UP and DOWN turns",()=>{
+ const ctx={atr1mBps:4,ranges:{"15m":{available:true,position:0.45},
+   "60m":{available:true,position:0.47}}};
+ const mk=(side,slope,change)=>({
+   available:true,direction:side,spreadChangeBps:change,
+   ema9AccelerationBps:0,ema9SlopeBps:slope,
+   closeDistanceEma9Bps:1,crossover:null});
+ for(const [side,d] of [["UP",1],["DOWN",-1]]){
+   const snap={"1m":mk(side,-d*0.8,-d*0.9),"2m":mk(side,d*0.2,-d*0.2),
+     "5m":mk(side,d*0.8,d*0.3)};
+   const result=assessEmaEntry(side,snap,ctx,{threeMinuteBps:-d*4});
+   assert.equal(result.ready,false,side);
+   assert.equal(result.reason,"V27_EMA_EARLY_COUNTERMOVE",side);
+ }
 });

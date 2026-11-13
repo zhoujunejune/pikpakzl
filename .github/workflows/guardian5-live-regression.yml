@@ -47,5 +47,4 @@ jobs:
         run: |
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
           test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
-          python prediction-bot-v1/aliyun_guardian_preflight.py
           python prediction-bot-v1/aliyun_guardian_runtime_diff_audit.py

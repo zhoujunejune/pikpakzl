@@ -1,3 +1,4 @@
+# Deploy current V32 frequency-first revision only after updated 36-case isolation passes. This release is signal-only.
 # V32: frequency-first verified closed 3m/5m spot with short/long votes and EMA, preserve long-trend veto and event10-only safety.
 # Release verification includes the tested updated signal-selection and countertrend checks; old builds cannot reach production.
 name: EVENT10 V32 frequency-first closed-spot guarded production release

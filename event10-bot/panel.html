@@ -35,7 +35,7 @@ th{color:#a9c6e7}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
 <h1>海派事件合约 · BTC 十分钟纯规则信号</h1>
-<p class="sub">BTCUSDT · V33 高出信号频率优先 · 12秒扫描 · 最多3条/10分钟</p>
+<p class="sub">BTCUSDT · V34 高频与自适应方向校准 · 12秒扫描 · 最多3条/10分钟</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
 V32频率优先：利用已收盘3分钟、5分钟价格变化与短中长周期的独立趋势判断，减少弱信号状态下过度等待；仍排除很小的3分钟波动、强逆向趋势、超涨超跌以及不可靠数据。同向至少2分钟和新2分钟K线；滚动10分钟最多3条。增加信号不代表提高胜率。</div>
@@ -123,7 +123,7 @@ V32频率优先：利用已收盘3分钟、5分钟价格变化与短中长周期
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114";
+const SIGNAL_VERSION="EVENT10_SETTLED_ADAPTIVE_V34_20261114";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -273,7 +273,7 @@ function display(d){
  $("engine").textContent=d.configured?"方向分析已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
- $("aiStatus").textContent="信号来源：V33 实时指数与3分钟已收盘价格及多周期方向 · 高频优先，不调用AI。"
+ $("aiStatus").textContent="信号来源：V34 保留V33高频信号资格，最近已结算同类信号明显失准时自适应调整多空方向；记录同价基线对照，不调用AI。"
 
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";

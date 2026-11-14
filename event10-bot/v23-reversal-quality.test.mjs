@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,assessTrendConflict,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
-import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
+import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,chooseSettledOnlyAdaptiveDirection,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
 const json=x=>({ok:true,json:async()=>x});
 const temp=()=>path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-v23-")),"sessions.json");
@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114");
+ assert.equal(RULE_VERSION,"EVENT10_SETTLED_ADAPTIVE_V34_20261114");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -666,4 +666,41 @@ test("V33: only verified short spot or scored timeframes yield a fallback direct
    assert.equal(chooseFrequencyPriorityDirection({direction:null,
       evidence:{...evidence,timeframes:{}}}),null);
  }
+});
+
+test("V34 settled-only adaptation: same signal, different direction only after enough realized outcomes",()=>{
+ const t=Date.parse("2026-11-14T12:00:00Z");
+ const make=(i,win,side="UP",base=side)=>({
+   id:"resolved-"+i,strategyVersion:"EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114",
+   openedAt:t-1200000-(i+1)*120000,closeObservedAt:t-(i+1)*120000,
+   direction:side,baseDirection:base,trendScore:side==="UP"?.4:-.4,
+   openPrice:70000,closePrice:side==="UP"?(win?70001:69999):(win?69999:70001),
+   proxyHit:win
+ });
+ const recent=[make(0,false),make(1,false),make(2,false),make(3,false),
+   make(4,true),make(5,true),make(6,false)];
+ const decide=(side,records=recent,now=t,score=side==="UP"?.3:-.3)=>
+   chooseSettledOnlyAdaptiveDirection({baseSide:side,trendScore:score,at:now,
+     signalHistory:records.values()});
+ const adapted=decide("UP");
+ assert.equal(adapted.flip,true);
+ assert.equal(adapted.side,"DOWN");
+ assert.equal(adapted.alignedSamples,7);
+ assert.equal(adapted.alignedHits,2);
+ assert.equal(decide("DOWN",recent,t,-.3).flip,true);
+ assert.equal(decide("UP",recent.slice(0,5)).flip,false);
+ assert.equal(decide("UP",recent,t,-.3).flip,false); // score already opposes
+ assert.equal(decide("UP",recent.map(x=>({...x,proxyHit:null}))).flip,false);
+ assert.equal(decide("UP",recent,t-300000).flip,false);
+ assert.equal(decide("UP",recent,t+7*3600000).flip,false);
+ assert.equal(decide("UP",recent.map(x=>({...x,
+   strategyVersion:"OTHER_BOT_BTC_V1"}))).flip,false);
+ // If a V34 signal was reversed, use its original/baseDirection to measure
+ // original-strategy hit. The observed published outcome is inverted.
+ const adaptLogged=recent.map((x,i)=>i===0?{...x,
+   strategyVersion:"EVENT10_SETTLED_ADAPTIVE_V34_20261114",
+   direction:"DOWN",baseDirection:"UP",closePrice:69999,proxyHit:true}:x);
+ assert.equal(decide("UP",adaptLogged).alignedHits,2);
+ // Hard stop on tied price, unverifiable labels or missing real prior closes
+ assert.equal(decide("UP",recent.map(x=>({...x,closePrice:x.openPrice}))).flip,false);
 });

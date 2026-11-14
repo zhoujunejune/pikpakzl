@@ -102,6 +102,20 @@ jobs:
                 'close':x.get('closePrice'),
                 'expirySampleLagMs':x.get('expirySampleLagMs')
               },ensure_ascii=False),flush=True)
+
+          for x in all_rows:
+              print('V35_BASE_OUTCOME',json.dumps({
+                 'id':x.get('id'),'t':x.get('openedAt'),'closeAt':x.get('closeObservedAt'),
+                 'model':x.get('strategyVersion'),'side':x.get('direction'),
+                 'base':x.get('baseDirection') or x.get('direction'),
+                 'flip':x.get('adaptiveFlipApplied') is True,
+                 'score':x.get('trendScore'),'originalHit':(
+                    x.get('closePrice')>x.get('openPrice') if
+                    (x.get('baseDirection') or x.get('direction'))=='UP' else
+                    x.get('closePrice')<x.get('openPrice')),
+                 'hit':x.get('proxyHit'),'open':x.get('openPrice'),
+                 'close':x.get('closePrice')
+              },ensure_ascii=False),flush=True)
           print('V33_SCORE_META',json.dumps({
              'n':len(all_rows),'hasScore':sum(type(x.get('trendScore')) in (float,int) for x in all_rows)
           },ensure_ascii=False),flush=True)

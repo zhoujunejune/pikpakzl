@@ -609,19 +609,21 @@ test("V31: 5/15/30m dominant recovery produces UP/DOWN when 10m and 1/2m lag, wi
  }
 });
 
-test("V32: live verified 3m move + two short trend votes can publish both sides without full timeframe consensus",()=>{
+test("V32: confirmed 3m+5m price, short vote and independent long vote allow both directions",()=>{
  for(const side of ["UP","DOWN"]){
    const d=side==="UP"?1:-1,opposite=side==="UP"?"DOWN":"UP";
-   const votes={"1m":d*5.2,"2m":d*5.2,"5m":-d*5.2,"10m":-d*5.2,
-     "15m":-d*5.2,"30m":-d*5.2};
+   const votes={"1m":d*5.2,"2m":-d*5.2,"5m":d*5.2,"10m":-d*5.2,
+     "15m":d*5.2,"30m":-d*5.2};
    const frames=Object.fromEntries(Object.entries(votes).map(([name,vote])=>[name,{available:true,vote}]));
-   const p={threeMinuteBps:d*3,fiveMinuteBps:d*4,upCloses:side==="UP"?2:1,downCloses:side==="DOWN"?2:1};
+   const p={threeMinuteBps:d*6,fiveMinuteBps:d*7,upCloses:side==="UP"?2:1,downCloses:side==="DOWN"?2:1};
    const r=selectTenMinuteDirection(frames,0,p);
    assert.equal(r.direction,side);
    assert.equal(r.decisionReason,"V32_FREQUENCY_CLOSED_SPOT");
    assert.equal(r.highFrequency,true);
    assert.equal(selectTenMinuteDirection(frames,-d*4,p).direction,null);
    assert.equal(selectTenMinuteDirection(frames,0,{...p,threeMinuteBps:0}).highFrequency,false);
+   assert.equal(selectTenMinuteDirection(frames,0,{...p,threeMinuteBps:d*2}).highFrequency,false);
+   assert.equal(selectTenMinuteDirection(frames,0,{...p,fiveMinuteBps:0}).highFrequency,false);
    const trends=Object.fromEntries(Object.entries(votes).map(([name,vote])=>
      [name,{available:true,trend:vote>0?"UP":"DOWN"}]));
    const ema={"1m":{available:true,direction:side},"2m":{available:true,direction:side}};
@@ -633,5 +635,13 @@ test("V32: live verified 3m move + two short trend votes can publish both sides 
       {"1m":{available:true,direction:opposite},"2m":{available:true,direction:opposite}},
       p,context,{ranges:{"60m":{available:true,position:.5}}});
    assert.equal(notConfirmed.frequencyReady,false);
+   const bothLongAgainst={...trends,"15m":{available:true,trend:opposite},
+      "30m":{available:true,trend:opposite}};
+   const longVeto=assessTrendConflict(side,r,bothLongAgainst,ema,p,context,
+      {ranges:{"60m":{available:true,position:.5}}});
+   assert.equal(longVeto.frequencyReady,false);
+   const farRisk=assessTrendConflict(side,r,bothLongAgainst,ema,p,
+      {farTrendAgainst:true},{ranges:{"60m":{available:true,position:.5}}});
+   assert.equal(farRisk.ready,false);
  }
 });

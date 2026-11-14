@@ -321,7 +321,7 @@ test("V27: decaying EMA9 acceleration and contracting EMA9/21 spread pause late 
    "5m":mk("UP",0.2,0.2,0.6)};
  const good=assessEmaEntry("UP",healthy,ctx,{threeMinuteBps:6});
  assert.equal(good.ready,true);
- assert.equal(good.reason,"V27_EMA_ENTRY_OK");
+ assert.equal(good.reason,"V29_EMA_ENTRY_OK");
 });
 test("V27: small adverse 3m move plus EMA trend weakening protects early UP and DOWN turns",()=>{
  const ctx={atr1mBps:4,ranges:{"15m":{available:true,position:0.45},

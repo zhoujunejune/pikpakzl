@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_COUNTERTREND_RECALIBRATE_V35_20261115");
+ assert.equal(RULE_VERSION,"EVENT10_FAILED_DOWNTREND_ADAPTIVE_V36_20261115");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -713,4 +713,26 @@ test("V35 uses only previously settled same-context UP against 15m/30m bearish t
  assert.equal(prior.flip,true);
  assert.equal(prior.matchingHits,1);
  assert.equal(decide({at:t+5*3600000}).flip,false);
+});
+
+test("V36: strong DOWN only changes direction after completed 3/4 comparable misses, never adds signal filters",()=>{
+ const t=Date.parse("2026-11-15T04:00:00Z");
+ const prior=[false,false,true,false].map((hit,i)=>({
+   id:"v36-old-"+i,strategyVersion:"EVENT10_COUNTERTREND_RECALIBRATE_V35_20261115",
+   openedAt:t-2200000+i*180000,closeObservedAt:t-1600000+i*180000,
+   baseDirection:"DOWN",direction:"DOWN",trendScore:-.6,
+   openPrice:70000,closePrice:hit?69980:70020,proxyHit:hit}));
+ const choose=(o={})=>chooseSettledOnlyAdaptiveDirection({
+   baseSide:"DOWN",trendScore:-.45,at:t,signalHistory:prior.values(),...o});
+ assert.equal(choose().side,"UP");
+ assert.equal(choose().matchingSamples,4);
+ assert.equal(choose().matchingHits,1);
+ assert.equal(choose({trendScore:-.29}).side,"DOWN");
+ assert.equal(choose({signalHistory:prior.slice(0,3).values()}).flip,false);
+ assert.equal(choose({signalHistory:prior.map(x=>({...x,closeObservedAt:t+1})).values()}).flip,false);
+ assert.equal(choose({signalHistory:prior.map(x=>({...x,closeObservedAt:t-5*3600000})).values()}).flip,false);
+ assert.equal(choose({signalHistory:prior.map(x=>({...x,proxyHit:null})).values()}).flip,false);
+ assert.equal(choose({signalHistory:prior.map(x=>({...x,strategyVersion:"UNKNOWN"})).values()}).flip,false);
+ assert.equal(choose({signalHistory:prior.map(x=>({...x,closePrice:69980,proxyHit:true})).values()}).flip,false);
+ assert.equal(MAX_SIGNALS_PER_10M,3);assert.equal(SIGNAL_WINDOW_MS,600000);
 });

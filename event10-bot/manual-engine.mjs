@@ -50,40 +50,49 @@ export function chooseFrequencyPriorityDirection(rule){
 }
 
 
-// V35: targeted settled-only correction for a failing UP bounce in a VERIFIED
-// 15m+30m DOWN regime. Do not extrapolate to healthy trend reversals or to
-// DOWN signals (which have materially different realized hit rates).
-// This changes only the final side, never when a signal is eligible.
+// V36: preserve V35 UP correction and add failed strong-DOWN correction.
+// Direction-only after V33 slot qualification: never veto or invent a signal.
+// Only compare historical outcomes fully settled BEFORE current lock timestamp.
 export function chooseSettledOnlyAdaptiveDirection({baseSide,trendScore,at,signalHistory,timeframes}={}){
- const baseline={side:baseSide,flip:false,reason:"BASELINE",pastSamples:0,
-   matchingSamples:0,matchingHits:0};
- if(baseSide!=="UP"||!Number.isFinite(trendScore)||trendScore>=0||
-   !Number.isFinite(at)||!signalHistory||
-   !["15m","30m"].every(k=>timeframes?.[k]?.available===true&&
-     timeframes[k].trend==="DOWN")){
-   return {...baseline,reason:"NOT_COUNTERTREND_UP"};
- }
- const relevant=Array.from(signalHistory).filter(x=>
-   ["EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114",
-    "EVENT10_SETTLED_ADAPTIVE_V34_20261114",
-    "EVENT10_COUNTERTREND_RECALIBRATE_V35_20261115"].includes(x?.strategyVersion)&&
+ const fallback={side:baseSide,flip:false,reason:"BASELINE",pastSamples:0,matchingSamples:0,matchingHits:0};
+ if(!["UP","DOWN"].includes(baseSide)||!Number.isFinite(trendScore)||
+   !Number.isFinite(at)||!signalHistory)return {...fallback,reason:"MISSING_HISTORY"};
+ const versions=new Set([
+   "EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114",
+   "EVENT10_SETTLED_ADAPTIVE_V34_20261114",
+   "EVENT10_COUNTERTREND_RECALIBRATE_V35_20261115",
+   "EVENT10_FAILED_DOWNTREND_ADAPTIVE_V36_20261115"]);
+ const known=Array.from(signalHistory).filter(x=>
+   versions.has(x?.strategyVersion)&&
    Number.isFinite(x.openedAt)&&x.openedAt<at&&
    Number.isFinite(x.closeObservedAt)&&x.closeObservedAt<=at&&
    at-x.closeObservedAt<=4*3600000&&
-   typeof x.proxyHit==="boolean"&&
-   Number.isFinite(x.trendScore)&&x.trendScore<0&&
+   typeof x.proxyHit==="boolean"&&Number.isFinite(x.trendScore)&&
    Number.isFinite(x.openPrice)&&Number.isFinite(x.closePrice)&&
-   x.openPrice>0&&x.closePrice!==x.openPrice&&
-   (x.baseDirection??x.direction)==="UP")
-   .sort((a,b)=>b.openedAt-a.openedAt||String(b.id).localeCompare(String(a.id)))
-   .slice(0,5);
- // At least five completed comparable outcomes. The 1/5 condition avoids
- // flipping countertrend UP signals during a genuinely successful bounce.
- const wins=relevant.filter(x=>x.closePrice>x.openPrice).length;
- const flip=relevant.length===5&&wins<=1;
- return {side:flip?"DOWN":baseSide,flip,
-   reason:flip?"COUNTERTREND_UP_FAILED_SETTLED":"BASELINE",
-   pastSamples:relevant.length,matchingSamples:relevant.length,matchingHits:wins};
+   x.openPrice>0&&x.closePrice!==x.openPrice)
+   .sort((x,y)=>y.openedAt-x.openedAt||String(y.id).localeCompare(String(x.id)));
+ if(baseSide==="UP"){
+   // Identical to V35's verified bearish background and 1/5 criterion.
+   if(trendScore>=0||!["15m","30m"].every(k=>
+     timeframes?.[k]?.available===true&&timeframes[k].trend==="DOWN"))
+     return {...fallback,reason:"NOT_COUNTERTREND_UP"};
+   const prior=known.filter(x=>x.trendScore<0&&
+     (x.baseDirection??x.direction)==="UP").slice(0,5);
+   const hits=prior.filter(x=>x.closePrice>x.openPrice).length;
+   const flip=prior.length===5&&hits<=1;
+   return {side:flip?"DOWN":"UP",flip,reason:flip?"COUNTERTREND_UP_FAILED_SETTLED":"BASELINE",
+     pastSamples:prior.length,matchingSamples:prior.length,matchingHits:hits};
+ }
+ // Previous DOWN failures in a strong-negative-score regime imply that
+ // the same trend score has been stale on the last 10-minute horizon.
+ // Switch only after >=3 misses in the LAST 4 comparable fully settled signals.
+ if(trendScore>=-0.30)return {...fallback,reason:"NOT_STRONG_NEGATIVE_SCORE"};
+ const prior=known.filter(x=>x.trendScore< -0.30&&
+   (x.baseDirection??x.direction)==="DOWN").slice(0,4);
+ const hits=prior.filter(x=>x.closePrice<x.openPrice).length;
+ const flip=prior.length===4&&hits<=1;
+ return {side:flip?"UP":"DOWN",flip,reason:flip?"STRONG_DOWN_FAILED_SETTLED":"BASELINE",
+   pastSamples:prior.length,matchingSamples:prior.length,matchingHits:hits};
 }
 
 export function checkedTick(data, now, maxAgeMs=6000) {
@@ -206,6 +215,7 @@ function slimSignal(h) {
     aiDirection:h.aiReview?.status==="AI_REVIEWED"?h.aiReview.direction:null,
     baseDirection:evidence.frequencyOriginalDirection??h.aiReview?.baseDirection??h.direction,
     adaptiveFlipApplied:evidence.adaptiveDirection?.flip===true,
+    v35EquivalentDirection:evidence.v35EquivalentDirection??null,
     adaptivePriorAlignedSamples:evidence.adaptiveDirection?.alignedSamples??null,
     aiStatus:h.aiReview?.status??"NOT_REQUESTED",
     aiModel:h.aiReview?.model??null,aiConfidence:h.aiReview?.confidence??null,
@@ -320,6 +330,9 @@ function openSignalLedger(file,sessionHistory) {
     const baseHits=comparable.filter(x=>scoreProxy(
       x.openPrice,x.closePrice,x.baseDirection).proxyHit===true).length;
     const publishedHits=comparable.filter(x=>x.proxyHit===true).length;
+     const v35Comparable=comparable.filter(x=>["UP","DOWN"].includes(x.v35EquivalentDirection));
+     const v35Wins=v35Comparable.filter(x=>scoreProxy(x.openPrice,x.closePrice,x.v35EquivalentDirection).proxyHit===true).length;
+     const v35Pct=v35Comparable.length?round(v35Wins*100/v35Comparable.length,2):null;
     const basePct=comparable.length?round(baseHits*100/comparable.length,2):null;
     const publishedPct=comparable.length?round(publishedHits*100/comparable.length,2):null;
     return {ok:true,version:RULE_VERSION,
@@ -332,7 +345,10 @@ function openSignalLedger(file,sessionHistory) {
         pairedComparison:{settledComparable:comparable.length,
           flippedSignals:ordered.filter(x=>x.adaptiveFlipApplied===true).length,
           adaptiveHitPct:publishedPct,v33SameTimestampBaselinePct:basePct,
-          differencePct:comparable.length?round(publishedPct-basePct,2):null}},
+          differencePct:comparable.length?round(publishedPct-basePct,2):null,
+           v35Comparable:v35Comparable.length,v35SameTimestampBaselinePct:v35Pct,
+           improvementVsV35Pct:v35Comparable.length?
+             round(v35Comparable.filter(x=>x.proxyHit===true).length*100/v35Comparable.length-v35Pct,2):null}},
       officialEventContractResultsAvailable:false,autoTradingEnabled:false};
   }
   return {all,add,settle,list};
@@ -377,7 +393,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     };
     return {lastHour:aggregate(scanAudit.filter(x=>x.at>=clock()-3600000&&x.at<=clock()+1000)),
       last24Hours:aggregate(scanAudit),lastScanAt:scanAudit.at(-1)?.at??null,
-      note:"V35维持V33的发信频率和限额；仅当15/30分钟偏空、最近5条同类已结算逆趋势看涨仅命中1条或更少时，将该类UP调整为DOWN；按原方向执行重复判断。"};
+      note:"V36只在已入围后做方向修正；保留V35逆势看涨纠偏，并对最近四条可比强看跌原始信号三次失误做逆向处理；仍按原始方向去重与限额。"};
   }
 
   // Only pending/last 500 full sessions remain hot; the signal ledger retains all.
@@ -407,8 +423,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10", mode:"COUNTERTREND_RECALIBRATE_V35_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_V35_COUNTERTREND_RECALIBRATE",aiMandatory:false,
+    return {ok:true,bot:"EVENT10", mode:"FAILED_DOWNTREND_ADAPTIVE_V36_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_V36_SETTLED_DIRECTION_ADAPTIVE",aiMandatory:false,
       aiReviewConfigured:false,aiReviewModel:null,aiLearningMode:"DISABLED",
       aiReviewStats:{...aiStats},aiInProgress:null,
       aiLearningProfile:null,
@@ -424,7 +440,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:aiStats.calls,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
-      enrichmentVersion:"EVENT10_COUNTERTREND_RECALIBRATE_10M_V35",
+      enrichmentVersion:"EVENT10_SETTLED_DIRECTION_ADAPTIVE_10M_V36",
        autoIntervalMs:12_000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/12_000)+1)*12_000,
       multiTimeframeIntervals:["1m","2m","5m","10m","15m","30m"],
@@ -595,12 +611,14 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
           signalHistory:signalLedger.all.values(),
           timeframes:rule.evidence?.timeframes});
         rule.evidence.adaptiveDirection={...adaptive,baseSide};
+         rule.evidence.v35EquivalentDirection=baseSide==="DOWN"?"DOWN":adaptive.side;
         if(adaptive.flip){
           rule.direction=adaptive.side;rule.signal=adaptive.side;
-          rule.reason="V35同频方向修正：15/30分钟偏空，过去"+
-            adaptive.matchingSamples+"条可比逆势看涨仅"+
-            adaptive.matchingHits+"条命中；本轮将看涨调整为看跌。"+
-            "信号名额、入场时间及原始方向均保留，实际胜率未获保证。";
+          rule.reason=baseSide==="DOWN"?
+            "V36强看跌连续失误纠偏：最近"+adaptive.matchingSamples+"条同类原始看跌仅"+
+            adaptive.matchingHits+"条正确；本次最终方向改为看涨，名额不变，命中不保证。":
+            "V36延续V35逆势看涨纠偏：最近"+adaptive.matchingSamples+"条同类原始看涨仅"+
+            adaptive.matchingHits+"条正确；本次最终方向改为看跌，名额不变，命中不保证。";
         }
       }
       // V23 validated multi-timeframe direction plus fresh index; no AI or orders.
@@ -610,7 +628,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const publishAt=decisionAt;
       const publishIndex=filtered.indexQuote;
       if(rule.direction){
-        rule.eventTag="V35_RULE_"+rule.direction;
+        rule.eventTag="V36_RULE_"+rule.direction;
         rule.evidence.indicatorSnapshotAt=decisionAt;
         rule.evidence.finalPublishedAt=publishAt;
         rule.evidence.liveIndexPrice=publishIndex.price;
@@ -648,7 +666,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_V35_COUNTERTREND_RECALIBRATE",
+        model:"PURE_SIGNAL_V36_SETTLED_DIRECTION_ADAPTIVE",
         aiReview:null,attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
@@ -706,7 +724,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
-         h.decisionReviewVersion==="EVENT10_SETTLED_ADAPTIVE_V34_20261114"||
+         h.decisionReviewVersion==="EVENT10_COUNTERTREND_RECALIBRATE_V35_20261115"||
+          h.decisionReviewVersion==="EVENT10_SETTLED_ADAPTIVE_V34_20261114"||
          h.decisionReviewVersion==="EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114"||
          h.decisionReviewVersion==="EVENT10_FREQUENCY_FIRST_V32_20261114"||
          h.decisionReviewVersion==="EVENT10_BALANCED_RECOVERY_V31_20261114"||
@@ -762,7 +781,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_SETTLED_ADAPTIVE_V34_20261114","EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114","EVENT10_FREQUENCY_FIRST_V32_20261114","EVENT10_BALANCED_RECOVERY_V31_20261114","EVENT10_VERIFIED_RESUMPTION_V30_20261114","EVENT10_LONG_REGIME_REQUALIFY_V29_20261114","EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113","EVENT10_EMA_DECAY_REENTRY_V27_20261113","EVENT10_EMA_921_ENTRY_V26_20261113","EVENT10_MULTI_HORIZON_ENTRY_V25_20261113","EVENT10_PRICE_ACTION_V24_20261113","EVENT10_REVERSAL_AWARE_10M_V23_20261113","EVENT10_MULTI_TF_SUPERTREND_V22_20261112","EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_COUNTERTREND_RECALIBRATE_V35_20261115","EVENT10_SETTLED_ADAPTIVE_V34_20261114","EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114","EVENT10_FREQUENCY_FIRST_V32_20261114","EVENT10_BALANCED_RECOVERY_V31_20261114","EVENT10_VERIFIED_RESUMPTION_V30_20261114","EVENT10_LONG_REGIME_REQUALIFY_V29_20261114","EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113","EVENT10_EMA_DECAY_REENTRY_V27_20261113","EVENT10_EMA_921_ENTRY_V26_20261113","EVENT10_MULTI_HORIZON_ENTRY_V25_20261113","EVENT10_PRICE_ACTION_V24_20261113","EVENT10_REVERSAL_AWARE_10M_V23_20261113","EVENT10_MULTI_TF_SUPERTREND_V22_20261112","EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

@@ -35,10 +35,10 @@ th{color:#a9c6e7}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
 <h1>海派事件合约 · BTC 十分钟纯规则信号</h1>
-<p class="sub">BTCUSDT · V28 多周期冲突与入场价格优化 · 10分钟方向评分 · 12秒检查 · 每10分钟最多3条</p>
+<p class="sub">BTCUSDT · V29 主趋势反向风险与入场优化 · 10分钟方向评分 · 12秒检查 · 每10分钟最多3条</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
-V28增加5/30分钟趋势冲突判断和1小时/2小时区间极端价格入场过滤，修复已结算同向失败后新2分钟K线确认的持久化字段读取。继续保留EMA9/21衰竭分析、独立已收盘现货行情，每12秒监测，最多3条/10分钟，只做信号。</div>
+V29修复短线反弹绕过4小时/24小时反向主趋势的漏洞；在24小时价格极端区间增加追单疲劳判断，使用已收盘3分钟价格与EMA动量共同检测反转。继续12秒实时检查，最多3条/10分钟，只做BTC方向信号。历史同样本筛选仅供参考，需新样本验证。</div>
 <section class="card">
 <div class="row"><h2>手动立即检测规则方向</h2><span class="status" id="engine">连接中</span></div>
 <button class="primary" id="start" type="button">立即检测趋势信号</button>
@@ -123,7 +123,7 @@ V28增加5/30分钟趋势冲突判断和1小时/2小时区间极端价格入场�
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113";
+const SIGNAL_VERSION="EVENT10_LONG_REGIME_REQUALIFY_V29_20261114";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -273,7 +273,7 @@ function display(d){
  $("engine").textContent=d.configured?"方向分析已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
- $("aiStatus").textContent="信号来源：V28 多周期冲突与极端入场风险过滤 + EMA9/21动量衰减 · 不调用AI。"
+ $("aiStatus").textContent="信号来源：V29 4小时/24小时趋势逆向重确认 + 24小时极值EMA风险过滤 · 不调用AI。"
 
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";

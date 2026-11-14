@@ -391,7 +391,7 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
  const shortSupport=[one,two,five].filter(x=>x===spotSide).length;
  const longSupport=["10m","15m","30m"].filter(tf=>sides[tf]===spotSide).length;
  const spot5Supports=finite(p5)&&spotSide*p5>=3;
- const liveReject=finite(liveBps)&&spotSide*liveBps<=-3;
+ const liveReject=finite(liveBps)&&spotSide*liveBps<=-0.8;
  const confirmedVotes=shortSupport>=2||(shortSupport>=1&&(longSupport>=1||spot5Supports));
  const highFrequency=!wasAccepted&&spotSide!==0&&!liveReject&&
    shortSupport>=1&&confirmedVotes;
@@ -487,8 +487,9 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
    e1?.available&&e2?.available&&e1.direction===side&&e2.direction===side&&
    finite(priceAction?.fiveMinuteBps)&&d*priceAction.fiveMinuteBps>=4&&
    !nearEdge);
- const farRequalified=!severeLongConflict||requalified||(
-   counterConfirmed&&finite(spot3)&&d*spot3>=4&&!nearEdge);
+ // A verified opposing 4h/24h regime remains a safety boundary.
+ // Frequency-first relaxes ordinary timeframes, not a proven severe long risk.
+ const farRequalified=!severeLongConflict||requalified;
  const frequencyReady=frequencyRequested&&alignedShort&&emaSupports&&
    counterConfirmed&&finite(spot3)&&d*spot3>=3&&farRequalified;
  const ready=frequencyReady||(!severeLongUnconfirmed&&

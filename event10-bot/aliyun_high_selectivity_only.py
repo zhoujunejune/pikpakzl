@@ -159,7 +159,7 @@ def main():
                     if snap.get("decisionReviewVersion")==TARGET and \
                        snap.get("aiReviewConfigured") is False and \
                        snap.get("aiMandatory") is False and \
-                       snap.get("providerModel")=="PURE_SIGNAL_V36_COUNTERTREND_RECALIBRATE" and \
+                       snap.get("providerModel")=="PURE_SIGNAL_V36_SETTLED_DIRECTION_ADAPTIVE" and \
                        snap.get("aiReviewModel") is None and \
                        snap.get("thinkingMode")=="disabled" and \
                        snap.get("modelCalls")==0 and \

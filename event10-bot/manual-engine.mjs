@@ -27,6 +27,28 @@ export function renewedAfterSettledMiss(rule,previous,side){
    Number.isFinite(bar)&&Number.isFinite(oldBar)&&bar>oldBar;
 }
 const round = (v,n=5)=>Number(v.toFixed(n));
+// V33 frequent directional signals use only authenticated fresh Binance
+// inputs already validated by evaluatePureSignal, not backfilled candles.
+export function chooseFrequencyPriorityDirection(rule){
+ if(rule?.direction)return null;
+ const e=rule?.evidence||{},p=e.spotPriceAction||{},tf=e.timeframes||{};
+ const p3=p.threeMinuteBps,p1=p.oneMinuteBps,score=e.trendScore;
+ let side=null,basis=null;
+ if(Number.isFinite(p3)&&Math.abs(p3)>=2){side=p3>0?"UP":"DOWN";basis="CLOSED_SPOT_3M";}
+ else if(Number.isFinite(p1)&&Math.abs(p1)>=1.5){side=p1>0?"UP":"DOWN";basis="CLOSED_SPOT_1M";}
+ else if(Number.isFinite(score)&&Math.abs(score)>=0.12){
+   side=score>0?"UP":"DOWN";basis="MULTI_TIMEFRAME_SCORE";
+ }
+ if(!side)return null;
+ const agreeing=["1m","2m","5m","10m","15m","30m"]
+   .filter(k=>tf[k]?.available===true&&tf[k].trend===side);
+ if(!agreeing.length)return null;
+ const live=e.liveIndexChangeBps;
+ if(Number.isFinite(live)&&(side==="UP"?live<=-4:live>=4))return null;
+ return {side,basis,agreeingTimeframes:agreeing.length,
+   closedSpot3mBps:Number.isFinite(p3)?p3:null};
+}
+
 
 export function checkedTick(data, now, maxAgeMs=6000) {
   if (data?.ok!==true || data?.readOnly!==true || data?.symbol!=="BTCUSDT" ||
@@ -438,6 +460,22 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const rule=evaluatePureSignal({feed,reference,
         indexSnapshot:filtered.indexQuote,previousIndexSnapshot,
         trigger:id.startsWith("auto-")?"AUTO":"MANUAL"});
+      // V33 high-frequency lane: after realtime source verification,
+      // permit a direction despite legacy overstrict trend/EMA gates.
+      // Rolling 3/10m publication cap and 120s closed-bar dedup still apply.
+      const frequent=chooseFrequencyPriorityDirection(rule);
+      if(frequent){
+        const prior=rule.evidence?.trendDecisionReason||rule.eventTag;
+        rule.direction=frequent.side;rule.signal=frequent.side;
+        rule.status="PREDICTED";rule.quality="STANDARD_RESEARCH";
+        rule.eventTag="V33_FREQ_PRIORITY_"+frequent.side;
+        rule.reason="V33高频优先："+frequent.basis+"与"+
+          frequent.agreeingTimeframes+"个时间尺度支持，给出"+
+          (frequent.side==="UP"?"看涨":"看跌")+"。频率优先，命中率不保证。";
+        rule.evidence.frequencyPriority=frequent;
+        rule.evidence.originalVetoReason=prior;
+        rule.evidence.frequencyOverridesConservativeGates=true;
+      }
       previousIndexSnapshot=filtered.indexQuote;
       // Clear stale-feed error after BOTH latest closed bars and the index
       // quote have passed the fresh-data validation in evaluatePureSignal.

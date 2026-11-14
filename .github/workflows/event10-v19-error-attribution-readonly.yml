@@ -306,6 +306,11 @@ jobs:
                       'priorSide':prior.get('direction') if prior else None,
                       'priorHit':prior.get('proxyHit') if prior else None
                   }
+                  conflict=e.get('trendConflict') or {}
+                  d['v28ConfirmedTurn']=conflict.get('confirmedTurn')
+                  d['v28Conflicts']=conflict.get('conflicts')
+                  d['v28DecisionReason']=e.get('trendDecisionReason')
+                  d['longContextCaution']=(e.get('entryTiming') or {}).get('longContextCaution')
                   detailed.append(d)
               print('V27_FEATURE_META',json.dumps({'totalSettled':len(settled),
                   'joinedOriginalEvidence':sum(x.get('trendScore') is not None for x in detailed),
@@ -325,9 +330,13 @@ jobs:
               for n in ('1m','2m','5m','10m','15m','30m'):
                   cohort(n+'Agrees',lambda y,n=n:y['tf'+n]==y['side'])
                   cohort(n+'Disagrees',lambda y,n=n:y['tf'+n] in ('UP','DOWN') and y['tf'+n]!=y['side'])
-              for key in ('farAgainst',):
+              for key in ('farAgainst','v28ConfirmedTurn'):
                   cohort(key+'=True',lambda y,key=key:y[key] is True)
                   cohort(key+'=False',lambda y,key=key:y[key] is False)
+              cohort('UP_longContextCaution',lambda y:y['side']=='UP' and y.get('longContextCaution') is True)
+              cohort('UP_30mAgainst',lambda y:y['side']=='UP' and y.get('tf30m')=='DOWN')
+              cohort('UP_earlyTurnOverride',lambda y:y['side']=='UP' and y.get('v28ConfirmedTurn') is True)
+              cohort('DOWN_earlyTurnOverride',lambda y:y['side']=='DOWN' and y.get('v28ConfirmedTurn') is True)
               for name in ('ema1mDirection','ema2mDirection'):
                   cohort(name+'=aligned',lambda y,name=name:y[name]==y['side'])
                   cohort(name+'=opposite',lambda y,name=name:y[name] in ('UP','DOWN') and y[name]!=y['side'])
@@ -349,6 +358,9 @@ jobs:
                      y['liveMoveBps'] is not None and sign*y['liveMoveBps']<=-0.8)
               for b in [('low',0,0.15),('middle',0.15,0.85),('high',0.85,1.01)]:
                   cohort('60mPricePosition='+b[0],lambda y,b=b:y['pricePos60m'] is not None and b[1]<=y['pricePos60m']<b[2])
+              for y in [y for y in detailed if y['hit'] is False and
+                 (y['v28ConfirmedTurn'] is True or y.get('farAgainst') is True)][-12:]:
+                  print('V28_CONFLICT_BYPASS_EXAMPLE',json.dumps(y,ensure_ascii=False),flush=True)
               for y in sorted([y for y in detailed if y['hit'] is False],
                   key=lambda y:abs(y['outcomeBps'] or 0),reverse=True)[:9]:
                   print('V27_MISS_DETAIL',json.dumps(y,ensure_ascii=False),flush=True)

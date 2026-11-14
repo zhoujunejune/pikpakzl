@@ -1,3 +1,4 @@
+# V34 re-release: allow normal 12-second scan busy windows to settle, keep every safety invariant.
 # Deploy V34 adaptive direction after authenticated source validation, same V33 frequency and no orders.
 # V34: preserve V33 published eligible slots; only past settled outcomes may change direction, not timing.
 # Release verification includes the tested updated signal-selection and countertrend checks; old builds cannot reach production.

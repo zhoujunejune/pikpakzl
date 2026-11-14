@@ -303,7 +303,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     };
     return {lastHour:aggregate(scanAudit.filter(x=>x.at>=clock()-3600000&&x.at<=clock()+1000)),
       last24Hours:aggregate(scanAudit),lastScanAt:scanAudit.at(-1)?.at??null,
-      note:"V31每12秒核对5/15/30分钟主趋势、闭合3/5分钟价格及EMA；有充分恢复证据才允许短中周期指标滞后时发布。滚动10分钟最多3条。"};
+      note:"V32频率优先：每12秒分析，闭合3分钟行情和两周期方向支持时允许发信；不再等6分钟，同向仍需120秒及新2分钟K线，每10分钟最多3条。"};
   }
 
   // Only pending/last 500 full sessions remain hot; the signal ledger retains all.
@@ -333,8 +333,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
   const status=()=>{
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
-    return {ok:true,bot:"EVENT10", mode:"BALANCED_RECOVERY_V31_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_V31_BALANCED_RECOVERY",aiMandatory:false,
+    return {ok:true,bot:"EVENT10", mode:"FREQUENCY_FIRST_V32_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
+      providerModel:"PURE_SIGNAL_V32_FREQUENCY_FIRST",aiMandatory:false,
       aiReviewConfigured:false,aiReviewModel:null,aiLearningMode:"DISABLED",
       aiReviewStats:{...aiStats},aiInProgress:null,
       aiLearningProfile:null,
@@ -350,7 +350,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
          !x.settlementStatus&&clock()<x.expiresAt).length,
        busyStart,busySettle,modelCalls:aiStats.calls,lastError,
        lastDataError,lastDataErrorAt,lastSuccessfulScanAt,scanDiagnostics:scanSummary(),
-      enrichmentVersion:"EVENT10_BALANCED_RECOVERY_10M_V31",
+      enrichmentVersion:"EVENT10_FREQUENCY_FIRST_10M_V32",
        autoIntervalMs:12_000,lastAutoCheckAt,
        nextAutoCheckAt:(Math.floor(clock()/12_000)+1)*12_000,
       multiTimeframeIntervals:["1m","2m","5m","10m","15m","30m"],
@@ -472,27 +472,9 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
           rule.evidence.duplicateOf=same.id;rule.evidence.nextEligibleAt=same.openedAt+120000;
         }
       }
-      // V27 isolated proxy-outcome guard: following a confirmed 600s
-      // same-side MISS, demand a fresh independent 2m candle and renewed
-      // EMA9/21 directional momentum before repeating within six minutes.
-      // Never read unexpired/pending outcomes; never block the opposite side.
-      if(rule.direction){
-        const latestResolvedSame=Array.from(signalLedger.all.values())
-          .filter(h=>h.direction===rule.direction&&
-            (h.proxyHit===true||h.proxyHit===false)&&
-            Number.isFinite(h.closeObservedAt)&&h.closeObservedAt<=decisionAt&&
-            h.closeObservedAt>decisionAt-360000)
-          .sort((a,b)=>b.closeObservedAt-a.closeObservedAt)[0];
-        if(latestResolvedSame?.proxyHit===false){
-          if(!renewedAfterSettledMiss(rule,latestResolvedSame,rule.direction)){
-            rule.direction=null;rule.signal="NO_SIGNAL";rule.status="NO_SIGNAL";
-            rule.quality="NO_SIGNAL";rule.eventTag="V27_PREVIOUS_LOSS_REENTRY_WAIT";
-            rule.reason="同方向最近一次600秒代理结算未命中，等待新2分钟K线与EMA动量重新确认；不会限制反方向信号。";
-            rule.evidence.previousMissId=latestResolvedSame.id;
-            rule.evidence.previousMissSettledAt=latestResolvedSame.closeObservedAt;
-          }
-        }
-      }
+      // V32 high-frequency mode: no additional six-minute same-side ban
+      // after a known 10m proxy loss. The independent 120-second
+      // same-side candle rule and rolling maximum 3 directions/10m remain.
       // A sudden 12-second flip is noise unless the live index has moved
       // enough from the prior lock price. Opposite directions remain allowed.
       if(rule.direction){
@@ -515,7 +497,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const publishAt=decisionAt;
       const publishIndex=filtered.indexQuote;
       if(rule.direction){
-        rule.eventTag="V31_RULE_"+rule.direction;
+        rule.eventTag="V32_RULE_"+rule.direction;
         rule.evidence.indicatorSnapshotAt=decisionAt;
         rule.evidence.finalPublishedAt=publishAt;
         rule.evidence.liveIndexPrice=publishIndex.price;
@@ -553,7 +535,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
         status:"PREDICTED",direction:rule.direction,
         ruleChecks:rule,eventTag:rule.eventTag,signalQuality:rule.quality,change3mPct:rule.change3mPct,
          signalCycleStartMs:rule.cycleStartAt,
-        model:"PURE_SIGNAL_V31_BALANCED_RECOVERY",
+        model:"PURE_SIGNAL_V32_FREQUENCY_FIRST",
         aiReview:null,attempts:0,confidence:null,reason:rule.reason,
         modelFinishedAt:clock(),modelLatencyMs:clock()-clickReceivedAt,
         thinkingRequested:false,reasoningEffort:null,
@@ -611,6 +593,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
       const pending=expiring.filter(h=>!h.settlementStatus);
       if(!pending.length)return;
       const indexSessions=pending.filter(h=>h.decisionReviewVersion===RULE_VERSION||
+         h.decisionReviewVersion==="EVENT10_BALANCED_RECOVERY_V31_20261114"||
          h.decisionReviewVersion==="EVENT10_VERIFIED_RESUMPTION_V30_20261114"||
          h.decisionReviewVersion==="EVENT10_LONG_REGIME_REQUALIFY_V29_20261114"||
          h.decisionReviewVersion==="EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113"||
@@ -663,7 +646,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             const score=scoreProxy(h.openPrice,price,h.direction);
             Object.assign(h,{closePrice:price,closeObservedAt:sampleAt,
               expirySampleLagMs:sampleAt-h.expiresAt,
-              settlementStatus:[RULE_VERSION,"EVENT10_VERIFIED_RESUMPTION_V30_20261114","EVENT10_LONG_REGIME_REQUALIFY_V29_20261114","EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113","EVENT10_EMA_DECAY_REENTRY_V27_20261113","EVENT10_EMA_921_ENTRY_V26_20261113","EVENT10_MULTI_HORIZON_ENTRY_V25_20261113","EVENT10_PRICE_ACTION_V24_20261113","EVENT10_REVERSAL_AWARE_10M_V23_20261113","EVENT10_MULTI_TF_SUPERTREND_V22_20261112","EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
+              settlementStatus:[RULE_VERSION,"EVENT10_BALANCED_RECOVERY_V31_20261114","EVENT10_VERIFIED_RESUMPTION_V30_20261114","EVENT10_LONG_REGIME_REQUALIFY_V29_20261114","EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113","EVENT10_EMA_DECAY_REENTRY_V27_20261113","EVENT10_EMA_921_ENTRY_V26_20261113","EVENT10_MULTI_HORIZON_ENTRY_V25_20261113","EVENT10_PRICE_ACTION_V24_20261113","EVENT10_REVERSAL_AWARE_10M_V23_20261113","EVENT10_MULTI_TF_SUPERTREND_V22_20261112","EVENT10_LIVE_INDEX_3_PER_10M_V21_20261112","EVENT10_ENTRY_POSITION_V20_20261111","EVENT10_PURE_RULE_V19_20261107","EVENT10_AI_REQUIRED_LEARNING_V18_20261106","EVENT10_AI_FEEDBACK_V17_20261106","EVENT10_EMA5_DIRECTION_V16_20261106","EVENT10_PACED_MOMENTUM_V15_20261106","EVENT10_FAST_MOMENTUM_V14_20261105","EVENT10_QUALITY_FILTER_V13_20261105","EVENT10_DUAL_EMA_FREQUENCY_V12_20261105","EVENT10_TIERED_V11_20261105","EVENT10_FREQUENCY_V10_20261104","EVENT10_TARGETED_MOMENTUM_V9_20261104","EVENT10_BALANCED_SIGNAL_V8_20261103","EVENT10_REVERSAL_GUARD_V7_20261103","EVENT10_FRESH_NONOVERLAP_V6_20261103","EVENT10_TREND_CONFIRMED_V5_20261103","EVENT10_HYBRID_3PH_V4_FRESH_20261102","EVENT10_HYBRID_3PH_V4_20261102","EVENT10_FREQ_2M_TREND_V3_20261102","EVENT10_BALANCED_TREND_5M_V2_20261102","EVENT10_SELECTIVE_TREND_V1_20261102","EVENT10_FREQ_OPTIMIZED_LIVE_6GATES_V3_20261101","EVENT10_SIGNAL_TPLUS10_INDEX_V3_20261031"].includes(h.decisionReviewVersion)?
                 "INDEX_SIGNAL_TPLUS10_PROXY_ONLY":"INDEX_CYCLE_PROXY_ONLY",
               ...score});persist();signalLedger.settle(h);
           }

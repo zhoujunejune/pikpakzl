@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_SETTLED_ADAPTIVE_V34_20261114");
+ assert.equal(RULE_VERSION,"EVENT10_COUNTERTREND_RECALIBRATE_V35_20261115");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -668,39 +668,49 @@ test("V33: only verified short spot or scored timeframes yield a fallback direct
  }
 });
 
-test("V34 settled-only adaptation: same signal, different direction only after enough realized outcomes",()=>{
- const t=Date.parse("2026-11-14T12:00:00Z");
- const make=(i,win,side="UP",base=side)=>({
-   id:"resolved-"+i,strategyVersion:"EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114",
+
+test("V35 uses only previously settled same-context UP against 15m/30m bearish trends",()=>{
+ const t=Date.parse("2026-11-15T02:00:00Z");
+ const downFrame={"15m":{available:true,trend:"DOWN"},"30m":{available:true,trend:"DOWN"}};
+ const make=(i,win)=>({
+   id:"resolved-"+i,strategyVersion:i%2?
+      "EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114":
+      "EVENT10_SETTLED_ADAPTIVE_V34_20261114",
    openedAt:t-1200000-(i+1)*120000,closeObservedAt:t-(i+1)*120000,
-   direction:side,baseDirection:base,trendScore:side==="UP"?.4:-.4,
-   openPrice:70000,closePrice:side==="UP"?(win?70001:69999):(win?69999:70001),
+   direction:"UP",baseDirection:"UP",trendScore:-.35,
+   openPrice:70000,closePrice:win?70002:69998,
    proxyHit:win
  });
- const recent=[make(0,false),make(1,false),make(2,false),make(3,false),
-   make(4,true),make(5,true),make(6,false)];
- const decide=(side,records=recent,now=t,score=side==="UP"?.3:-.3)=>
-   chooseSettledOnlyAdaptiveDirection({baseSide:side,trendScore:score,at:now,
-     signalHistory:records.values()});
- const adapted=decide("UP");
- assert.equal(adapted.flip,true);
- assert.equal(adapted.side,"DOWN");
- assert.equal(adapted.alignedSamples,7);
- assert.equal(adapted.alignedHits,2);
- assert.equal(decide("DOWN",recent,t,-.3).flip,true);
- assert.equal(decide("UP",recent.slice(0,5)).flip,false);
- assert.equal(decide("UP",recent,t,-.3).flip,false); // score already opposes
- assert.equal(decide("UP",recent.map(x=>({...x,proxyHit:null}))).flip,false);
- assert.equal(decide("UP",recent,t-300000).flip,false);
- assert.equal(decide("UP",recent,t+7*3600000).flip,false);
- assert.equal(decide("UP",recent.map(x=>({...x,
-   strategyVersion:"OTHER_BOT_BTC_V1"}))).flip,false);
- // If a V34 signal was reversed, use its original/baseDirection to measure
- // original-strategy hit. The observed published outcome is inverted.
- const adaptLogged=recent.map((x,i)=>i===0?{...x,
-   strategyVersion:"EVENT10_SETTLED_ADAPTIVE_V34_20261114",
-   direction:"DOWN",baseDirection:"UP",closePrice:69999,proxyHit:true}:x);
- assert.equal(decide("UP",adaptLogged).alignedHits,2);
- // Hard stop on tied price, unverifiable labels or missing real prior closes
- assert.equal(decide("UP",recent.map(x=>({...x,closePrice:x.openPrice}))).flip,false);
+ const past=[make(0,false),make(1,false),make(2,true),
+   make(3,false),make(4,false)];
+ const decide=(override={})=>chooseSettledOnlyAdaptiveDirection({
+   baseSide:"UP",trendScore:-.24,at:t,
+   signalHistory:past.values(),timeframes:downFrame,...override});
+ const flip=decide();
+ assert.equal(flip.flip,true);
+ assert.equal(flip.side,"DOWN");
+ assert.equal(flip.matchingSamples,5);
+ assert.equal(flip.matchingHits,1);
+ assert.equal(decide({baseSide:"DOWN"}).flip,false);
+ assert.equal(decide({trendScore:.2}).flip,false);
+ assert.equal(decide({timeframes:{"15m":{available:true,trend:"UP"},
+   "30m":{available:true,trend:"DOWN"}}}).flip,false);
+ assert.equal(decide({timeframes:{"15m":{available:false,trend:"DOWN"},
+   "30m":{available:true,trend:"DOWN"}}}).flip,false);
+ assert.equal(decide({signalHistory:past.slice(1).values()}).flip,false);
+ assert.equal(decide({signalHistory:[...past.slice(0,4),make(4,true)].values()}).flip,false);
+ assert.equal(decide({signalHistory:past.map(x=>({...x,closeObservedAt:t+1})).values()}).flip,false);
+ assert.equal(decide({signalHistory:past.map(x=>({...x,proxyHit:null})).values()}).flip,false);
+ assert.equal(decide({signalHistory:past.map(x=>({...x,closePrice:x.openPrice})).values()}).flip,false);
+ assert.equal(decide({signalHistory:past.map(x=>({...x,
+   strategyVersion:"NOT_EVENT10"})).values()}).flip,false);
+ // A V34/V35 flipped DOWN result must be re-evaluated for its ORIGINAL
+ // base-UP side from immutable opening/closing INDEX prices, not proxyHit.
+ const previouslyFlipped=[...past];
+ previouslyFlipped[0]={...past[0],direction:"DOWN",baseDirection:"UP",
+   proxyHit:true}; // published DOWN wins, original UP loses
+ const prior=decide({signalHistory:previouslyFlipped.values()});
+ assert.equal(prior.flip,true);
+ assert.equal(prior.matchingHits,1);
+ assert.equal(decide({at:t+5*3600000}).flip,false);
 });

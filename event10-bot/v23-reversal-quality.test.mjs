@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_BALANCED_RECOVERY_V31_20261114");
+ assert.equal(RULE_VERSION,"EVENT10_FREQUENCY_FIRST_V32_20261114");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -339,7 +339,7 @@ test("V27: small adverse 3m move plus EMA trend weakening protects early UP and 
  }
 });
 
-test("V27: confirmed 600s same-side loss must requalify before repeating, opposite side remains free",async()=>{
+test("V32: a settled miss adds no extra cooldown beyond new-bar duplicates",async()=>{
  const now=BASE+720000,price=70007;
  async function attempt(previousDirection,previousHit=false,settledAgo=120000){
    const file=temp(),ledger=path.join(path.dirname(file),"rule-signals-v1.ndjson");
@@ -358,8 +358,7 @@ test("V27: confirmed 600s same-side loss must requalify before repeating, opposi
    return engine.start("manual-v27-reentry-test");
  }
  const blocked=await attempt("UP",false);
- assert.equal(blocked.direction,null);
- assert.equal(blocked.eventTag,"V27_PREVIOUS_LOSS_REENTRY_WAIT");
+ assert.equal(blocked.direction,"UP");
  const opposite=await attempt("DOWN",false);
  assert.equal(opposite.direction,"UP");
  const afterExpiry=await attempt("UP",false,420000);
@@ -607,5 +606,32 @@ test("V31: 5/15/30m dominant recovery produces UP/DOWN when 10m and 1/2m lag, wi
    changed["30m"].vote=-d*5.2;
    assert.notEqual(selectTenMinuteDirection(changed,0,price).decisionReason,
      "V31_DOMINANT_TREND_SPOT_RECOVERY");
+ }
+});
+
+test("V32: live verified 3m move + two short trend votes can publish both sides without full timeframe consensus",()=>{
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1,opposite=side==="UP"?"DOWN":"UP";
+   const votes={"1m":d*5.2,"2m":d*5.2,"5m":-d*5.2,"10m":-d*5.2,
+     "15m":-d*5.2,"30m":-d*5.2};
+   const frames=Object.fromEntries(Object.entries(votes).map(([name,vote])=>[name,{available:true,vote}]));
+   const p={threeMinuteBps:d*3,fiveMinuteBps:d*4,upCloses:side==="UP"?2:1,downCloses:side==="DOWN"?2:1};
+   const r=selectTenMinuteDirection(frames,0,p);
+   assert.equal(r.direction,side);
+   assert.equal(r.decisionReason,"V32_FREQUENCY_CLOSED_SPOT");
+   assert.equal(r.highFrequency,true);
+   assert.equal(selectTenMinuteDirection(frames,-d*4,p).direction,null);
+   assert.equal(selectTenMinuteDirection(frames,0,{...p,threeMinuteBps:0}).highFrequency,false);
+   const trends=Object.fromEntries(Object.entries(votes).map(([name,vote])=>
+     [name,{available:true,trend:vote>0?"UP":"DOWN"}]));
+   const ema={"1m":{available:true,direction:side},"2m":{available:true,direction:side}};
+   const context={farTrendAgainst:false};
+   const permitted=assessTrendConflict(side,r,trends,ema,p,context,{ranges:{"60m":{available:true,position:.5}}});
+   assert.equal(permitted.frequencyReady,true);
+   assert.equal(permitted.ready,true);
+   const notConfirmed=assessTrendConflict(side,r,trends,
+      {"1m":{available:true,direction:opposite},"2m":{available:true,direction:opposite}},
+      p,context,{ranges:{"60m":{available:true,position:.5}}});
+   assert.equal(notConfirmed.frequencyReady,false);
  }
 });

@@ -384,13 +384,17 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
  // This raises opportunity count, not predicted hit probability.
  const wasAccepted=["V23_NORMALIZED_TREND","V24_CONFIRMED_EARLY_REVERSAL",
    "V30_TREND_RESUMPTION_SPOT_CONFIRMED","V31_DOMINANT_TREND_SPOT_RECOVERY"].includes(reason);
- const spotSide=finite(p3)&&Math.abs(p3)>=2?sign(p3):0;
+ // Require meaningful CLOSED spot movement, not a 2bp 3-minute wiggle.
+ // Short 1m+2m votes are correlated; one long vote alone must also have a
+ // confirming 5m close. Two independent higher-period votes can substitute.
+ const spotSide=finite(p3)&&Math.abs(p3)>=4?sign(p3):0;
  const shortSupport=[one,two,five].filter(x=>x===spotSide).length;
  const longSupport=["10m","15m","30m"].filter(tf=>sides[tf]===spotSide).length;
- const spot5Supports=finite(p5)&&spotSide*p5>=2;
+ const spot5Supports=finite(p5)&&spotSide*p5>=3;
  const liveReject=finite(liveBps)&&spotSide*liveBps<=-3;
+ const confirmedVotes=longSupport>=2||(longSupport>=1&&spot5Supports);
  const highFrequency=!wasAccepted&&spotSide!==0&&!liveReject&&
-   shortSupport>=1&&(shortSupport+longSupport>=2||spot5Supports);
+   shortSupport>=1&&confirmedVotes;
  if(highFrequency){reason="V32_FREQUENCY_CLOSED_SPOT";selected=spotSide;}
  const accepted=wasAccepted||highFrequency;
  return {direction:accepted?direction(selected):null,decisionReason:reason,
@@ -472,13 +476,13 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
  const alignedShort=trend("1m")===side||trend("2m")===side||trend("5m")===side;
  const emaSupports=e1?.available&&e2?.available&&
    (e1.direction===side||e2.direction===side);
- const farRequalified=!severeLongConflict||(
-   e1?.available&&e2?.available&&e1.direction===side&&e2.direction===side&&
-   inSafeHour&&finite(spot3)&&d*spot3>=4);
+ // Never let high-frequency acceptance bypass V29's stronger 4h/24h
+ // requalification: earlier loose alternative recreated failed countertrend UP.
+ const farRequalified=!severeLongConflict||requalified;
  const frequencyReady=frequencyRequested&&alignedShort&&emaSupports&&
-   finite(spot3)&&d*spot3>=2&&farRequalified;
- const ready=frequencyReady||(!severeLongUnconfirmed&&
-   (confirmedTurn||resumption||dominant||!repeatedDisagreement));
+   finite(spot3)&&d*spot3>=4&&farRequalified;
+ const ready=!severeLongUnconfirmed&&
+   (frequencyReady||confirmedTurn||resumption||dominant||!repeatedDisagreement);
  return {ready,reason:ready?"V32_TREND_CONTEXT_OK":
    severeLongUnconfirmed?"V29_UNCONFIRMED_4H_24H_COUNTERTREND":
    "V28_CONFLICTED_MULTITIMEFRAME_ENTRY",

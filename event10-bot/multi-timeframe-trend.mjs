@@ -325,11 +325,23 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    five=sides["5m"]||0;
  const p3=priceAction?.threeMinuteBps,p5=priceAction?.fiveMinuteBps;
  const upCloses=priceAction?.upCloses??0,downCloses=priceAction?.downCloses??0;
- // Confirm an emerging turn only with a meaningful, same-market CLOSED 3m move,
- // both 1m/2m votes and the new index-tick direction. Mirror UP and DOWN.
- const earlyTurn=one!==0&&one===two&&one!==five&&one===liveDirection&&
-   finite(p3)&&((one>0&&p3>=8&&upCloses>=2)||
-                   (one<0&&p3<=-8&&downCloses>=2));
+ // V30: a completed 3m+5m turn aligned with 10/15/30m need not depend
+ // on a 12-second tick being big enough to qualify; forbid opposing live move.
+ const closedReversal=one!==0&&one===two&&one!==five&&
+   sides["10m"]===one&&sides["15m"]===one&&sides["30m"]===one&&
+   liveDirection!==-one&&finite(p3)&&finite(p5)&&
+   one*p3>=10&&one*p5>=8&&(one>0?upCloses>=2:downCloses>=2);
+ const earlyTurn=one!==0&&one===two&&one!==five&&(
+   (one===liveDirection&&finite(p3)&&
+      (one>0?p3>=8&&upCloses>=2:p3<=-8&&downCloses>=2))||
+   closedReversal);
+ // A strong, VERIFIED underlying 5/10/15/30m trend can resume while 1m/2m
+ // indicators lag after a countertrend pullback. EMA must also confirm below.
+ const trendResumption=one!==0&&one===two&&one!==five&&
+   candidate===five&&sides["10m"]===five&&
+   sides["15m"]===five&&sides["30m"]===five&&
+   liveDirection!==-candidate&&finite(p3)&&finite(p5)&&
+   candidate*p3>=6&&candidate*p5>=8&&Math.abs(combined)>=0.15;
  // Avoid blindly chasing a six-timeframe trend against a clear 3m+5m reversal.
  const adverseAction=finite(p3)&&finite(p5)&&(
    (candidate<0&&p3>=6&&p5>=10&&upCloses>=2)||
@@ -339,6 +351,8 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
  // votes for the older direction. Wait for new evidence before publishing.
  if(earlyTurn){
    reason="V24_CONFIRMED_EARLY_REVERSAL";selected=one;
+ }else if(trendResumption){
+   reason="V30_TREND_RESUMPTION_SPOT_CONFIRMED";selected=candidate;
  }else if(one!==0&&one===two&&one!==five&&liveDirection!==-one)
    reason="V23_EARLY_REVERSAL_UNCONFIRMED";
  else if(candidate!==0&&one!==0&&two===one&&candidate!==one&&
@@ -351,7 +365,9 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    reason="V24_SPOT_REVERSAL_CONFLICT";
  else if(Math.abs(combined)<0.20)
    reason="V23_SCORE_TOO_WEAK";
- const accepted=reason==="V23_NORMALIZED_TREND"||reason==="V24_CONFIRMED_EARLY_REVERSAL";
+ const accepted=reason==="V23_NORMALIZED_TREND"||
+   reason==="V24_CONFIRMED_EARLY_REVERSAL"||
+   reason==="V30_TREND_RESUMPTION_SPOT_CONFIRMED";
  return {direction:accepted?direction(selected):null,decisionReason:reason,
    trendScore:round(combined,4),weightedTimeframeScore:round(baseline,4),
    currentPriceDirection:direction(liveDirection),
@@ -359,7 +375,7 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    normalizedVotes:norm,shortTermDirection:direction(sign((norm["1m"]||0)+(norm["2m"]||0))),
    longContextDirection:direction(sign((norm["15m"]||0)+(norm["30m"]||0))),
    timeframeWeightCoverage:round(observedWeight,4),
-   noCalibratedConfidence:true};
+   trendResumption,closedReversal,noCalibratedConfidence:true};
 }
 // V28: veto weak, internally conflicting continuation signals while keeping
 // a clearly confirmed emerging 1m/2m reversal path available in BOTH directions.
@@ -403,10 +419,20 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
      (!earlyTurn&&trend("5m")===side&&trend("10m")===side&&
        d*e1.ema9AccelerationBps>=0));
  const severeLongUnconfirmed=severeLongConflict&&!requalified;
- const ready=!severeLongUnconfirmed&&(confirmedTurn||!repeatedDisagreement);
+ // The resumption exception cannot bypass an adverse 4h/24h context,
+ // 24h price-exhaustion gate, or repeat/loss-reentry publication guards.
+ const resumption=selected?.decisionReason==="V30_TREND_RESUMPTION_SPOT_CONFIRMED"&&
+   !severeLongConflict&&
+   ["5m","10m","15m","30m"].every(name=>trend(name)===side)&&
+   e1?.available===true&&e2?.available===true&&
+   finite(priceAction?.threeMinuteBps)&&d*priceAction.threeMinuteBps>=6&&
+   finite(priceAction?.fiveMinuteBps)&&d*priceAction.fiveMinuteBps>=8&&
+   d*e1.spreadChangeBps>=0.25&&d*e1.ema9AccelerationBps>=0&&
+   d*e2.ema9SlopeBps>=-1;
+ const ready=!severeLongUnconfirmed&&(confirmedTurn||resumption||!repeatedDisagreement);
  return {ready,reason:severeLongUnconfirmed?"V29_UNCONFIRMED_4H_24H_COUNTERTREND":
-   ready?"V29_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
-   conflicts,confirmedTurn,fiveAgainst,longAgainst,shortAgainst,
+   ready?"V30_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
+   conflicts,confirmedTurn,resumption,fiveAgainst,longAgainst,shortAgainst,
    emaOpposed,oppositeSpot,weak,farAgainst,severeLongConflict,
    requalified,severeLongUnconfirmed};
 }

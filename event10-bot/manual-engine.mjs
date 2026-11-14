@@ -314,13 +314,27 @@ function openSignalLedger(file,sessionHistory) {
         accuracyPct:done.length?round(wins*100/done.length,2):null};
     }
     const percentage=n=>n.length?round(n.filter(x=>x.proxyHit===true).length*100/n.length,2):null;
+    // Compare V34 vs recorded V33-equivalent side at identical index prices
+    // and signal timestamps, without inventing any extra signals.
+    const comparable=settled.filter(x=>["UP","DOWN"].includes(x.baseDirection)&&
+      Number.isFinite(x.openPrice)&&Number.isFinite(x.closePrice)&&
+      x.openPrice>0&&x.closePrice!==x.openPrice);
+    const baseHits=comparable.filter(x=>scoreProxy(
+      x.openPrice,x.closePrice,x.baseDirection).proxyHit===true).length;
+    const publishedHits=comparable.filter(x=>x.proxyHit===true).length;
+    const basePct=comparable.length?round(baseHits*100/comparable.length,2):null;
+    const publishedPct=comparable.length?round(publishedHits*100/comparable.length,2):null;
     return {ok:true,version:RULE_VERSION,
       total:ordered.length,limit:take,offset:skip,records:ordered.slice(skip,skip+take),
       stats:{total:ordered.length,validDirections:ordered.length,
         proxySettled:settled.length,proxyHits:hits,proxyMisses:settled.length-hits,
         proxyAccuracyPct:settled.length?round(hits*100/settled.length,2):null,
         last5Pct:percentage(settled.slice(0,5)),
-        last10Pct:percentage(settled.slice(0,10)),byTier},
+        last10Pct:percentage(settled.slice(0,10)),byTier,
+        pairedComparison:{settledComparable:comparable.length,
+          flippedSignals:ordered.filter(x=>x.adaptiveFlipApplied===true).length,
+          adaptiveHitPct:publishedPct,v33SameTimestampBaselinePct:basePct,
+          differencePct:comparable.length?round(publishedPct-basePct,2):null}},
       officialEventContractResultsAvailable:false,autoTradingEnabled:false};
   }
   return {all,add,settle,list};

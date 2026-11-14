@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_CONFLICT_EDGE_REENTRY_V28_20261113");
+ assert.equal(RULE_VERSION,"EVENT10_LONG_REGIME_REQUALIFY_V29_20261114");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -432,4 +432,87 @@ test("V28: loss-reentry reads persisted twoMinuteBarAt and requires NEW verified
    assert.equal(renewedAfterSettledMiss(rule,{...previous,proxyHit:true},side),false);
    assert.equal(renewedAfterSettledMiss(rule,previous,side==="UP"?"DOWN":"UP"),false);
  }
+});
+
+test("V29: 4h/24h adverse regime never bypassed by 1m/2m early turn unless independently requalified",()=>{
+ const tf=(side)=>{
+   const opposite=side==="UP"?"DOWN":"UP";
+   return Object.fromEntries(["1m","2m","5m","10m","15m","30m"].map((name,i)=>
+     [name,{available:true,trend:i<2?side:opposite}]));
+ };
+ const ctx={ranges:{"60m":{available:true,position:.58}}};
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1;
+   const entryTiming={farTrendAgainst:true};
+   const ema={"1m":{available:true,direction:side,ema9AccelerationBps:d*.5},
+     "2m":{available:true,direction:side,ema9SlopeBps:d*2}};
+   const early={decisionReason:"V24_CONFIRMED_EARLY_REVERSAL",trendScore:d*(-.02)};
+   const bad=assessTrendConflict(side,early,tf(side),ema,{threeMinuteBps:d*18},entryTiming,ctx);
+   assert.equal(bad.confirmedTurn,true,side);
+   assert.equal(bad.ready,false,side);
+   assert.equal(bad.reason,"V29_UNCONFIRMED_4H_24H_COUNTERTREND",side);
+   const recovered=assessTrendConflict(side,{...early,trendScore:d*.2},tf(side),
+     ema,{threeMinuteBps:d*12.5},entryTiming,ctx);
+   assert.equal(recovered.ready,true,side);
+   assert.equal(recovered.requalified,true,side);
+   const staleEma=assessTrendConflict(side,{...early,trendScore:d*.2},tf(side),
+     {...ema,"2m":{...ema["2m"],direction:side==="UP"?"DOWN":"UP"}},
+     {threeMinuteBps:d*12.5},entryTiming,ctx);
+   assert.equal(staleEma.ready,false,side);
+   const nearTop=assessTrendConflict(side,{...early,trendScore:d*.2},tf(side),
+     ema,{threeMinuteBps:d*12.5},entryTiming,
+     {ranges:{"60m":{available:true,position:side==="UP"?.94:.06}}});
+   assert.equal(nearTop.ready,false,side);
+   const noLongRisk=assessTrendConflict(side,early,tf(side),ema,
+     {threeMinuteBps:d*12.5},{farTrendAgainst:false},ctx);
+   assert.equal(noLongRisk.ready,true,side);
+ }
+});
+test("V29: chronic 24h extreme chase and 3m EMA countermove veto risk in both directions",()=>{
+ const mk=(side,acc,spread=-1,emaDirection=side)=>({
+   available:true,direction:emaDirection,ema9SlopeBps:side==="UP"?1:-1,
+   ema9AccelerationBps:acc,spreadChangeBps:spread,
+   closeDistanceEma9Bps:2,crossover:null});
+ const wrap=(side,h,t,d)=>({
+   available:true,atr1mBps:8,ranges:{
+     "60m":{available:true,position:h},
+     "2h":{available:true,position:t},
+     "24h":{available:true,position:d},
+     "15m":{available:true,position:.5}
+   }
+ });
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1;
+   const ctx=wrap(side,side==="UP"?.86:.14,side==="UP"?.91:.09,side==="UP"?1:0);
+   const ema={"1m":mk(side,-d*5.7,-d*.4),"2m":mk(side,d*.1,0),
+     "5m":mk(side,d*.1,0)};
+   const late=assessEmaEntry(side,ema,ctx,{threeMinuteBps:d*19.4,fiveMinuteBps:d*23.3});
+   assert.equal(late.ready,false,side);
+   assert.equal(late.reason,"V29_24H_EXTREME_CHASE",side);
+   const middle={...ctx,ranges:{...ctx.ranges,
+     "24h":{available:true,position:.5}}};
+   assert.equal(assessEmaEntry(side,ema,middle,
+     {threeMinuteBps:d*19.4,fiveMinuteBps:d*23.3}).ready,true,side);
+   const wide=wrap(side,.5,.5,side==="UP"?.9:.1);
+   const peak=assessEmaEntry(side,ema,wide,{threeMinuteBps:d*76.8,fiveMinuteBps:d*78.1});
+   assert.equal(peak.ready,false,side);
+   assert.equal(peak.reason,"V29_24H_EXTREME_CHASE",side);
+   const moving={"1m":mk(side,-d*.82,-d*.333),"2m":mk(side,d*.3,0),
+     "5m":mk(side,d*.5,0)};
+   const counter=assessEmaEntry(side,moving,middle,
+     {threeMinuteBps:-d*16.6,fiveMinuteBps:-d*3.6});
+   assert.equal(counter.ready,false,side);
+   assert.equal(counter.reason,"V29_FAST_COUNTERMOVE_EMA_DECAY",side);
+   assert.equal(assessEmaEntry(side,moving,middle,
+     {threeMinuteBps:-d*2,fiveMinuteBps:0}).ready,true,side);
+ }
+});
+test("V29: no historical or unconfirmed 4h/24h context may fabricate an entry veto",()=>{
+ const good=fixture(BASE);
+ delete good.candles["30m"];
+ const out=evaluatePureSignal({feed:good,reference:{observedAt:BASE},
+    indexSnapshot:{price:70005,observedAt:BASE-100}});
+ assert.equal(out.direction,"UP");
+ assert.equal(out.evidence.trendConflict.severeLongConflict,false);
+ assert.equal(out.evidence.entryReady,true);
 });

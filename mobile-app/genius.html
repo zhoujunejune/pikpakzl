@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#e9f5ff"><title>海派合约天才</title>
+<style>
+:root{color-scheme:light;--bg:#edf7ff;--blue:#248bd5;--text:#163955;--muted:#66849c;--line:#dceaf4;--card:#fff;--good:#188367;--bad:#be5260}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#e1f1ff,#f2f9ff 440px);color:var(--text);font:15px/1.52 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.shell{max-width:780px;margin:auto;padding:18px 16px 46px}.header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}.brand{display:flex;gap:11px;align-items:center}.brand img{width:50px;height:50px;border-radius:13px}.brand b{font-size:19px;display:block}.brand span{font-size:12px;color:var(--muted)}.tag{font-size:11px;border-radius:999px;padding:4px 9px;background:#eef5fa;border:1px solid #d4e7f4}
+.card{background:#fff;border:1px solid #dfebf5;box-shadow:0 6px 26px #2b64910b;border-radius:20px;padding:18px;margin:13px 0}.hero{background:linear-gradient(145deg,#fff,#eaf6ff)}
+h1{font-size:23px;line-height:1.32;margin:12px 0 8px}h2{font-size:17px;margin:0 0 12px}.mini{font-size:12px;color:var(--muted)}.price{font-size:30px;font-weight:750;font-variant-numeric:tabular-nums;margin:10px 0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #edf3f8}.row:last-child{border-bottom:none}.row span{color:var(--muted);font-size:13px}.row strong{text-align:right;overflow-wrap:anywhere}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.stat{padding:12px;border:1px solid #deecf6;border-radius:14px;background:#f9fcff}.stat span{display:block;font-size:12px;color:var(--muted)}.stat b{font-size:20px;font-variant-numeric:tabular-nums}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.field label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}.field input{width:100%;min-height:46px;padding:9px 11px;border:1px solid #cfe1ef;border-radius:11px;background:#fbfdff;font:inherit;color:var(--text)}
+.buttons{display:flex;gap:10px;margin-top:14px}.btn{appearance:none;border:1px solid #b9d4e9;color:#235d8b;background:#fff;border-radius:12px;padding:12px 14px;font-weight:650;font-size:14px;cursor:pointer;flex:1}.btn.main{background:var(--blue);border-color:var(--blue);color:white}.btn.danger{background:#fff2f2;border-color:#f0c7cb;color:#a83e51}.btn:disabled{opacity:.5}
+.pill{display:inline-block;border-radius:99px;padding:3px 9px;background:#eaf4fa;color:#527790;font-size:12px}.note{padding:11px;background:#eff8ff;border-radius:12px;color:#52758f;font-size:12px;margin-top:12px}.warn{background:#fff8ec;color:#826341}.status{font-size:13px;color:var(--muted);margin-top:11px;min-height:18px}.history{display:grid;align-content:start;gap:7px;height:288px;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;padding:2px 4px 2px 0;scrollbar-gutter:stable}
+.history>div{border:1px solid var(--line);padding:9px 12px;border-radius:11px;background:#fbfdff}
+.history strong{display:block;font-size:15px;line-height:1.35;font-variant-numeric:tabular-nums}
+.history small{display:block;color:var(--muted);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
+.history .trade-times{margin-top:4px}
+.history .pnl-up{color:var(--good)}
+.history .pnl-down{color:var(--bad)}
+.history-hint{font-size:12px;color:var(--muted);margin:-3px 0 10px}
+a{color:#247fc2}
+.position-card{border:1px solid #a6d4ee;background:linear-gradient(145deg,#fff,#f1f9ff);margin-top:8px}
+.position-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:12px 0}
+.position-summary>div{background:#f4faff;border:1px solid #deebf5;border-radius:12px;padding:10px}
+.position-summary small{display:block;color:var(--muted);font-size:12px}
+.position-summary strong{font-size:18px;font-variant-numeric:tabular-nums}
+.position-scroll{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scroll-behavior:smooth;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.position-scroll::-webkit-scrollbar{display:none}
+.position-slide{flex:0 0 100%;min-width:0;scroll-snap-align:start;padding:0 1px}
+.position-slide .row:first-child strong{font-weight:800;color:#166ca3}
+.position-slide .row strong{font-variant-numeric:tabular-nums}
+.position-slide .row{padding:8px 0}
+.position-pagination{display:flex;justify-content:center;align-items:center;gap:9px;margin:12px 0 2px}
+.position-pagination button{width:9px;height:9px;min-width:9px;border:0;border-radius:99px;background:#b3d1e4;padding:0;cursor:pointer}
+.position-pagination button.is-active{background:#228bd5;width:18px}
+.position-counter{font-size:12px;color:var(--muted);text-align:center;margin:5px 0}
+.pnl-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.pnl-main{font-size:29px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin:6px 0 13px}
+.pnl-positive{color:#188367}.pnl-negative{color:#be5260}
+.pnl-item{border:1px solid #deecf6;border-radius:13px;padding:12px;background:#f9fcff}
+.pnl-item span{display:block;color:var(--muted);font-size:12px}
+.pnl-item b{display:block;font-size:18px;margin-top:4px;font-variant-numeric:tabular-nums}
+.pnl-footnote{font-size:12px;color:var(--muted);margin:12px 0 0}
+
+@media(max-width:380px){.price{font-size:27px}.brand b{font-size:18px}.field label{font-size:12px}}
+</style></head><body><main class="shell">
+<header class="header"><div class="brand"><img src="/app/icon-192.png" alt="海派合约天才图标"><div><b>海派合约天才</b><span>DeepSeek · 全自动行情分析</span></div></div><span class="tag">自主研究版</span></header>
+<section class="card position-card" id="positionCard">
+ <div class="row"><h2 style="margin:0">当前 AI 模拟持仓</h2><span class="pill" id="positionState">正在检查</span></div>
+ <p class="mini" style="margin-top:9px">最多3笔，不同币种同时持有。左右滑动查看每笔模拟持仓；不代表真实币安仓位。</p>
+ <div class="position-summary">
+  <div><small>当前模拟持仓</small><strong id="positionCount">— / 3</strong></div>
+  <div><small>总浮动盈亏（未扣平仓费）</small><strong id="positionTotalPnl">—</strong></div>
+ </div>
+ <div id="positionEmpty" class="mini">正在加载后台持仓…</div>
+ <div id="positionTrack" class="position-scroll" aria-label="模拟持仓卡片，左右滑动查看" tabindex="0"></div>
+ <div id="positionDots" class="position-pagination" aria-label="选择持仓"></div>
+ <div id="positionPage" class="position-counter" aria-live="polite"></div>
+</section>
+<section class="card" id="cumulativePnlCard">
+ <div class="pnl-head"><h2 style="margin:0">模拟交易累计盈亏</h2><span class="pill">累计统计</span></div>
+ <p class="mini">累计总盈亏（含当前持仓，按最新标记价格估算）</p>
+ <div class="pnl-main" id="cumulativePnl">正在读取…</div>
+ <div class="grid">
+  <div class="pnl-item"><span>累计已实现净盈亏</span><b id="realizedPnl">—</b></div>
+  <div class="pnl-item"><span>当前持仓浮盈亏（未扣费用）</span><b id="unrealizedPnl">—</b></div>
+ </div>
+ <p class="pnl-footnote" id="cumulativePnlNote">已实现盈亏计入模拟开平仓手续费；累计总盈亏估算还计入未平仓模拟手续费及滑点，不含资金费、强平和真实交易结果。</p>
+</section>
+<section class="card hero">
+ <div class="row"><strong>BTC / ETH / SOL · AI 自选机会</strong><span class="pill" id="connection">正在连接</span></div>
+ <h1>AI 自主分析</h1>
+ <p class="mini">实时采集 BTC、ETH、SOL 行情，结合秒级成交、分钟线、小时线、日线和周线，让 AI 自主选择短线、中线或长线模拟持仓。平仓由 AI 决定，无固定止盈止损。</p>
+ <div class="price" id="markPrice">行情待更新</div>
+ <div class="row"><span>行情接收</span><strong id="marketStream">正在检查</strong></div>
+ <div class="row"><span>AI 最新决策</span><strong id="aiDecision">尚无分析</strong></div>
+ <div class="row"><span>AI 分析状态</span><strong id="engineState">尚未启动</strong></div>
+ <div class="row"><span>最近分析时间</span><strong id="lastAnalysis">—</strong></div>
+ <div class="row"><span>行情网络延迟</span><strong id="marketLag">—</strong></div>
+ <div class="row"><span>最近 AI 分析耗时</span><strong id="aiLatency">—</strong></div>
+ <div class="row"><span>AI 分析触发</span><strong id="aiTrigger">—</strong></div>
+ <div class="row"><span>中长线趋势（15m / 1h / 4h / 日 / 周）</span><strong id="multiTrend">正在加载…</strong></div>
+ <div class="row"><span>成交数据窗口</span><strong id="microWindow">—</strong></div>
+ <div class="row"><span>最近异常记录</span><strong id="recentError">无记录</strong></div>
+ <div class="note warn">这是模拟交易版本，不会向币安发出真实订单。AI 分析可能超时、报错或失联；没有价格保护止损，失联时模拟仓位可能一直持有。</div>
+</section>
+<section class="card">
+ <h2>AI 自动分析</h2>
+ <p class="mini">开启后由后台持续获取行情，AI 自主选择 BTC、ETH 或 SOL 的模拟机会，并决定什么时候平仓。行情触及任何价格都不会自动止盈或止损；保留你手动操作的紧急停止功能。</p>
+ <div class="buttons"><button id="toggle" class="btn main">开启 AI 自动分析</button></div>
+ <h2 style="margin-top:24px">只需设置两项</h2>
+ <div class="fields">
+  <div class="field"><label for="leverage">杠杆倍数（1—100 倍）</label><input id="leverage" type="number" min="1" max="100" step="1" inputmode="numeric"></div>
+  <div class="field"><label for="marginUsdt">每笔开仓金额（USDT）</label><input id="marginUsdt" type="number" min="1" max="100" step="0.5" inputmode="decimal"></div>
+ </div>
+ <p class="mini" style="margin:9px 0 0">仅模拟：100倍杠杆下，约1%的反向价格波动就可能耗尽保证金；当前模拟器未完整模拟真实强平及资金费。</p>
+ <div class="buttons"><button id="save" class="btn">保存这两项</button></div>
+ <div class="status" id="saveStatus" role="status" aria-live="polite">正在加载…</div>
+ <button id="stop" class="btn danger" style="width:100%;margin-top:13px">紧急停止 AI 模拟并请求平仓</button>
+</section>
+<section class="grid"><div class="stat"><span>模拟账户余额</span><b id="balance">—</b></div><div class="stat"><span>已结束模拟交易</span><b id="tradeCount">—</b></div></section>
+
+<section class="card" id="historyCard"><h2>最近模拟交易</h2><p class="history-hint">仅显示盈亏及开仓、平仓时间 · 在下方区域内上下滑动</p><div class="history" id="history" role="region" tabindex="0" aria-label="最近100笔模拟交易，内部上下滚动"><p class="mini">正在读取…</p></div></section>
+<section class="card"><h2>运行说明</h2><p class="mini">行情订阅采用 WebSocket，断线时尝试重连并使用公开 REST 行情补偿。AI 推理可能超时或返回 WAIT；无有效行情和有效决策时不会新开仓。本页面仅是模拟研究，不提供实盘自动下单。</p><p class="mini"><a href="/app/">旧版十分钟事件合约研究</a> · <a href="/genius/api/status" target="_blank" rel="noopener">查看引擎状态</a></p></section>
+</main><script src="/app/genius.js" defer></script></body></html>

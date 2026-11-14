@@ -1,0 +1,39 @@
+name: Alibaba retire all bots except 5m single
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-single-only-retirement.yml'
+      - 'prediction-bot-v1/aliyun_single_only_retire.py'
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zl-aliyun-single-only-retirement
+  cancel-in-progress: false
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate remote script syntax before touching production
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_single_only_retire.py
+          python - <<'PY'
+          import ast,subprocess
+          p='prediction-bot-v1/aliyun_single_only_retire.py'
+          t=ast.parse(open(p).read())
+          s=next(n.value.value for n in t.body if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='SCRIPT' for x in n.targets))
+          r=subprocess.run(['bash','-n'],input=s,text=True,capture_output=True)
+          print(r.stderr)
+          assert r.returncode==0, 'SHELL_SYNTAX_INVALID'
+          print('SINGLE_ONLY_REMOTE_SHELL_SYNTAX_OK=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Safely retire only non-single cloud runtimes and routes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_single_only_retire.py

@@ -1,0 +1,28 @@
+name: Diagnose next 23-30s live V2 / Edge rejection evidence
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_selective30_live_window_probe.py'
+      - '.github/workflows/zl-aliyun-selective30-live-window-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-prediction-selective30-window-probe
+  cancel-in-progress: false
+jobs:
+  readonly-window-capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/aliyun_selective30_live_window_probe.py
+      - run: pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Capture real-market V2 filter evidence at T+22 through T+31
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_selective30_live_window_probe.py

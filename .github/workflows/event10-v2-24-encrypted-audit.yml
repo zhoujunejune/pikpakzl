@@ -1,0 +1,92 @@
+name: EVENT10 V2 exact 24 signal audit encrypted detail
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/event10-v2-24-encrypted-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: event10-v2-24-encrypted-readonly
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install tools
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0 cryptography
+      - name: Run read-only historical audit, encrypt details before emitting logs
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,re,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          from cryptography.hazmat.primitives import serialization,hashes
+          from cryptography.hazmat.primitives.asymmetric import padding
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feature/zl-futures-bot-v1' and re.fullmatch('[0-9a-f]{40}',sha)
+          ak=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'];sk=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET']
+          command=f"""#!/bin/bash
+          set -Eeuo pipefail
+          tmp=$(mktemp -d /tmp/event10-v2-detail.XXXXXXXX)
+          trap 'rm -rf "$tmp"' EXIT
+          for f in readonly_old_10min_recalc.py readonly_v2_24_detail.py; do
+            curl -fsSL --retry 2 --max-time 30 'https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/'"$f" -o "$tmp/$f"
+          done
+          python3 -m py_compile "$tmp/readonly_old_10min_recalc.py" "$tmp/readonly_v2_24_detail.py"
+          python3 "$tmp/readonly_v2_24_detail.py"
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+            region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          ins='b67374069bb3457ba6a3a2ede9305d3f'
+          invocation=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id=ins,name='event10-v2-24-encrypted-readonly',
+            type='RunShellScript',working_user='root',command_content=command,timeout=310)).body.invoke_id
+          if not invocation:raise RuntimeError('MISSING_INVOCATION')
+          detail=None
+          for _ in range(155):
+            time.sleep(2)
+            r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+              region_id='ap-southeast-1',instance_id=ins,invoke_id=invocation)).body.invocation_result
+            if not r or str(r.invocation_status) not in (
+              'Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):
+                continue
+            output=base64.b64decode(r.output or '').decode('utf8','replace')
+            if str(r.invocation_status)!='Success' or int(r.exit_code)!=0:
+                raise RuntimeError('READONLY_REMOTE_ERROR_'+str(r.invocation_status))
+            matches=[line.partition('V2_DETAIL_JSON=')[2] for line in output.splitlines()
+              if line.startswith('V2_DETAIL_JSON=')]
+            if len(matches)!=1:raise RuntimeError('DETAIL_JSON_MISSING')
+            detail=json.loads(matches[0])
+            break
+          if detail is None:raise RuntimeError('AUDIT_TIMEOUT')
+          # Only encrypted historical timestamps and prices go into public build logs.
+          pub=serialization.load_pem_public_key(base64.b64decode("LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFwcFY2VXlHUCs4U21BOU43dWVUcwpaNllSK3JaSGJJMXUrQmMyUThuWXRnWnB3VnVjZ25RNzhiZllLVGlKcnp3M0lWcGdwYUNWaE0vcmdidEkxUXhWCm5iWkJORXZVdE1HOGVCT09acDBjWGQ5UFhwQmtJRENVamZnbHJQanN1cjlwTTZrcmRvaUZTZHYzT2VjcE80U3UKS21IaHNWNHFyKzlQVGxNUWZ5NjlXb09pdVVzYnY4ak03eld2SlZVaytQVTBQZ3k5ait6a01qcS9ReE9uL1llYwplT3hSQXd1d0hXSFlIdC9OYS8rak1HcGJaOU1TMnlXNGJ1Vmlpdy9ISDUvRjhYcUhpallKZW9Xak5UQURpM2c5CktvbDhNcDUzYThwQ1dBL0xVTGRYVWZ3aUdGSk1CNGNMb2RmMGVFNEsweHN3TDFBcW45RU51Rzl6d0NwRlB2SWUKUHdJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t"))
+          key=AESGCM.generate_key(bit_length=256);nonce=os.urandom(12)
+          encrypted=AESGCM(key).encrypt(nonce,json.dumps(detail,ensure_ascii=False,separators=(',',':')).encode(),b'ZL-EVENT10-V2-24')
+          wrapped=pub.encrypt(key,padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),label=None))
+          envelope={'key':base64.b64encode(wrapped).decode(),
+            'nonce':base64.b64encode(nonce).decode(),'data':base64.b64encode(encrypted).decode()}
+          os.makedirs("dist",exist_ok=True)
+          with open("dist/v2-24-encrypted-envelope.json","w",encoding="utf-8") as output_file:
+            json.dump(envelope,output_file,separators=(",",":"))
+          print("V2_ENCRYPTED_ARTIFACT_READY=true")
+          print('V2_DETAIL_ROW_COUNT='+str(detail['total']))
+          print('V2_DETAIL_SUMMARY='+json.dumps(detail['summary'],ensure_ascii=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EVENT10-V2-24-ENCRYPTED-DETAIL
+          path: dist/v2-24-encrypted-envelope.json
+          retention-days: 1
+          if-no-files-found: error

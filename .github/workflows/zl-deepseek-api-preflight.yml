@@ -1,0 +1,54 @@
+name: Check DeepSeek API secret and live model (no orders)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/zl-deepseek-api-preflight.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: One minimal paid test request, never print secret or response text
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json,os,sys,urllib.request,urllib.error
+          key=os.getenv('DEEPSEEK_API_KEY','')
+          if not key:
+              print('DEEPSEEK_SECRET_PRESENT=false')
+              sys.exit(2)
+          print('DEEPSEEK_SECRET_PRESENT=true')
+          data=json.dumps({
+              'model':'deepseek-flash',
+              'messages':[{'role':'system','content':'Return only the token UP.'},
+                          {'role':'user','content':'UP'}],
+              'temperature':0,
+              'max_tokens':64,
+              'thinking':{'type':'disabled'}
+          }).encode()
+          req=urllib.request.Request('https://api.deepseek.com/chat/completions',method='POST',data=data,
+              headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+          try:
+              with urllib.request.urlopen(req,timeout=40) as resp:
+                  body=json.load(resp)
+                  msg=body.get('choices',[{}])[0].get('message',{}).get('content','')
+                  print('DEEPSEEK_HTTP_STATUS',resp.status)
+                  print('DEEPSEEK_OUTPUT_VALID',isinstance(msg,str) and 'UP' in msg)
+                  print('DEEPSEEK_MODEL',body.get('model','UNSPECIFIED'))
+                  print('DEEPSEEK_USAGE_TOKENS',body.get('usage',{}).get('total_tokens','UNSPECIFIED'))
+                  assert isinstance(msg,str) and 'UP' in msg
+          except urllib.error.HTTPError as err:
+              try:
+                  body=json.loads(err.read(3000))
+                  error=body.get('error',{})
+                  code=str(error.get('type') or error.get('code') or 'UNKNOWN')
+              except Exception:
+                  code='UNKNOWN'
+              print('DEEPSEEK_HTTP_STATUS',err.code)
+              print('DEEPSEEK_ERROR_TYPE',code[:80])
+              sys.exit(3)
+          PY

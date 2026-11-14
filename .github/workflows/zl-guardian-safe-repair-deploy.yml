@@ -1,0 +1,58 @@
+name: GUARDIAN 5M selective repair and production verification
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_repair_deploy.py
+      - railway-diagnostic/guardian-prepost-retry.test.mjs
+      - .github/workflows/zl-guardian-safe-repair-deploy.yml
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: guardian5-safe-repair-deploy
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Compile deploy script and embedded remote shell
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_repair_deploy.py
+          python - <<'PY'
+          import ast,subprocess
+          t=ast.parse(open('prediction-bot-v1/aliyun_guardian_repair_deploy.py').read())
+          script=next(n.value.value for n in t.body if isinstance(n,ast.Assign) and any(getattr(v,'id',None)=='REMOTE' for v in n.targets))
+          p=subprocess.run(['bash','-n'],input=script,text=True,capture_output=True)
+          print(p.stderr)
+          assert p.returncode==0,'GUARDIAN_REMOTE_SHELL_SYNTAX_INVALID'
+          PY
+      - name: Check trade / registry modules and isolated tests
+        run: |
+          node --check railway-diagnostic/wrapper.mjs
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --check railway-diagnostic/guardian-risk-integration.mjs
+          node --test railway-diagnostic/guardian-live-bridge.test.mjs railway-diagnostic/guardian-submit-recheck.test.mjs railway-diagnostic/guardian-risk-integration.test.mjs
+  deploy:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/zl-futures-bot-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Apply narrow patch only if live following is OFF and risk positions empty
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID" && test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_repair_deploy.py

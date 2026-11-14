@@ -1,0 +1,44 @@
+name: Verify Alibaba DeepSeek frontend (read-only)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/zl-deepseek-frontend-verify.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check actual authenticated frontend and model routing
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,base64,json,os,time,re
+          root='https://prediction.47-237-188-69.sslip.io'
+          key='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           request=urllib.request.Request(root+path,headers={'Authorization':key,'Cache-Control':'no-store'})
+           for i in range(9):
+            try:
+             with urllib.request.urlopen(request,timeout=12) as r:return r.status,r.read(350000).decode('utf-8','replace')
+            except Exception as e:
+             if i==8:raise
+             time.sleep(5)
+          for p in ('/','/api/order-signal-model','/deepseek/api/history?limit=5','/deepseek/api/status'):
+           try:
+            status,s=get(p)
+            print('FRONTEND_PAGE_PROBE',p,'HTTP',status)
+            if p=='/':
+             print('FRONTEND_DEEPSEEK_STATS_HEADING', 'DeepSeek 每轮预测与官方结算 · 独立统计' in s)
+             print('FRONTEND_DEEPSEEK_RENDERER', 'async function renderDeepSeekRoundStats()' in s)
+             print('FRONTEND_DEEPSEEK_HISTORY_FETCH', '/deepseek/api/history' in s)
+             print('FRONTEND_LEGACY_STATS_HEADER', '仅统计新版RSI' in s)
+            else:
+             v=json.loads(s)
+             print('FRONTEND_API_MODEL',p,v.get('model'))
+             if p.startswith('/deepseek/api/history'):print('FRONTEND_DEEPSEEK_RECORDS',len(v.get('records',[])))
+           except Exception as e:print('FRONTEND_PAGE_PROBE_FAILED',p,type(e).__name__,str(e)[:90])
+          PY

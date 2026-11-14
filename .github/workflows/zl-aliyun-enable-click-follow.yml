@@ -1,0 +1,70 @@
+name: Enable owner-click automatic following on Alibaba Prediction
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_owner_start_following.sh'
+      - 'prediction-bot-v1/aliyun_owner_start_following.py'
+      - '.github/workflows/zl-aliyun-enable-click-follow.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check deploy syntax
+        run: |
+          bash -n prediction-bot-v1/aliyun_owner_start_following.sh
+          python -m py_compile prediction-bot-v1/aliyun_owner_start_following.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Install owner gated auto-follow without enabling the follow switch
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_owner_start_following.py
+      - name: Authenticated HTTPS safe end-to-end readiness and minimum check
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,json,base64,os
+          base='https://prediction.47-237-188-69.sslip.io'
+          token='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(base+path,headers={'Authorization':token,'Cache-Control':'no-cache'})
+           with urllib.request.urlopen(req,timeout=18) as r:return json.load(r)
+          status=get('/api/status')
+          assert status.get('ok') is True
+          assert status.get('enabled') is False
+          assert status.get('autoConfirmEnabled') is True
+          assert status.get('autoConfirmHalted') is False
+          print('FOLLOW_PUBLIC_AUTO_MODE_ARMABLE=true')
+          print('FOLLOW_PUBLIC_SWITCH_STAYS_OFF_UNTIL_OWNER_CLICKS=true')
+          req=urllib.request.Request(base+'/api/control',
+            method='POST',data=b'{"enabled":true,"amount":"0"}',
+            headers={'Authorization':token,'Origin':base,'Sec-Fetch-Site':'same-origin',
+             'Content-Type':'application/json'})
+          try:
+           urllib.request.urlopen(req,timeout=18)
+           raise AssertionError('Invalid amount unexpectedly authorized')
+          except urllib.error.HTTPError as error:
+           response=json.loads(error.read().decode())
+           assert error.code==400,(error.code,response)
+           assert '1 USDT' in response.get('error','')
+           print('FOLLOW_PUBLIC_LEGACY_RENDER_GATE_REMOVED_INVALID_AMOUNT_REJECTED=true')
+          after=get('/api/status')
+          assert after.get('enabled') is False
+          assert after.get('autoConfirmEnabled') is True
+          print('FOLLOW_PUBLIC_NO_ORDERS_SUBMITTED_BY_TEST=true')
+          model=get('/api/order-signal-model')
+          assert model.get('model')=='SELECTIVE_V2_FAST8_PREWARM_V1'
+          print('FOLLOW_PUBLIC_SINGLE_SELECTIVE8_MODEL_UNCHANGED=true')
+          PY

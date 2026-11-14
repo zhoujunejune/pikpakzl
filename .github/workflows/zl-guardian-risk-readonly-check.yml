@@ -1,0 +1,26 @@
+name: GUARDIAN5 Alibaba risk read-only diagnosis
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_risk_readonly_check.py
+      - .github/workflows/zl-guardian-risk-readonly-check.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m py_compile prediction-bot-v1/aliyun_guardian_risk_readonly_check.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read current position monitor timestamps and flags; no trade mutations
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_risk_readonly_check.py

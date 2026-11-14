@@ -1,0 +1,66 @@
+name: Deploy exact Selective V2 8-second production signal only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_selective8_install.sh'
+      - 'prediction-bot-v1/aliyun_selective8_deploy.py'
+      - '.github/workflows/zl-aliyun-selective8-only.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify deployment syntax
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_selective8_deploy.py
+          bash -n prediction-bot-v1/aliyun_selective8_install.sh
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Pin screenshot V2 8s route as only order signal on Alibaba
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_selective8_deploy.py
+      - name: Verify public authenticated original V2 stats and selected trade source
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,time,urllib.request
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+            req=urllib.request.Request(base+path,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+            with urllib.request.urlopen(req,timeout=16) as resp:return resp.read()
+          chosen=json.loads(get('/api/order-signal-model'))
+          assert chosen['model']=='SELECTIVE_V2_FAST8_PREWARM_V1'
+          assert [m['id'] for m in chosen['models']]==['SELECTIVE_V2_FAST8_PREWARM_V1']
+          j=json.loads(get('/api/round-stats'))
+          assert j['productionSignalSourceMode']=='SELECTIVE_V2_FAST8'
+          summary=j.get('productionSummary') or {}
+          print('PUBLIC_8SEC_MODEL_FIXED',chosen['model'])
+          print('PUBLIC_8SEC_HISTORIC_WINS',summary.get('correct'))
+          print('PUBLIC_8SEC_HISTORIC_LOSSES',summary.get('wrong'))
+          print('PUBLIC_8SEC_BASIS',summary.get('decidedRounds'))
+          # /api/production-signal is intentionally localhost-only (V2:13002)
+          # and is verified by the Alibaba deployment step. Do not expose
+          # this internal signal endpoint just to make a public smoke test pass.
+          assert [x['source'] for x in j.get('activeSignalModels',[])]==[
+            'SELECTIVE_V2_FAST8_PRIMARY','EDGE_RESCUE_FAST8_PRIMARY',
+            'SELECTIVE_V2_FAST8_UNVERIFIED_DIRECTION']
+          print('PUBLIC_8SEC_REAL_MODEL_SOURCES_VERIFIED=true')
+          html=get('/').decode('utf8','replace')
+          assert '<option value="SELECTIVE_V2_FAST8_PREWARM_V1">' in html
+          assert '<option value="EDGE_5M_V1">' not in html
+          print('PUBLIC_8SEC_ONLY_SELECTIVE=true')
+          PY

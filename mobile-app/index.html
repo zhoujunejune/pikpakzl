@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#dff2ff">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<title>海派事件合约</title>
+<style>
+:root{color-scheme:light;--bg:#e9f5ff;--card:#fff;--card2:#f7fbff;--line:#e2edf6;--text:#143555;--sub:#617d97;--accent:#218bdc;--green:#168f67;--red:#da5e67;--amber:#ae791d}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:linear-gradient(180deg,#dcefff 0%,#e9f5ff 28%,#eff7ff 100%) fixed;color:var(--text);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.52}
+button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:pointer}a{color:var(--accent);text-decoration:none}
+.shell{max-width:760px;margin:0 auto;padding:calc(16px + env(safe-area-inset-top)) 17px calc(104px + env(safe-area-inset-bottom))}
+.top{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:17px}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}.logo{width:58px;height:58px;display:block;object-fit:cover;border-radius:16px;flex-shrink:0;border:2px solid #fff;box-shadow:0 5px 16px #75a8d125}
+.brand b{display:block;font-size:20px;letter-spacing:.015em;font-weight:800;white-space:nowrap}
+.brand small,.muted,.k{color:var(--sub)}.brand small{display:block;font-size:12px;margin-top:1px}
+.light{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--sub);background:#ffffffb8;border:1px solid #d7e9f8;padding:7px 8px;border-radius:22px;white-space:nowrap}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#9db0c4}
+.dot.up{background:var(--green)}.dot.down{background:var(--red)}
+.hi{margin:0 0 4px;font-size:24px;letter-spacing:-.04em;line-height:1.28}.desc{font-size:12px;color:var(--sub);margin:0 0 13px}
+.section{margin-top:18px}.sect-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 11px}.sect-head h2{font-size:16px;margin:0;font-weight:760}.sect-head small{font-size:11px;color:var(--sub)}
+.card{background:#ffffffed;border:1px solid #ffffff;border-radius:22px;padding:17px;margin:11px 0;box-shadow:0 7px 22px #6e9bbc13}
+.card-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.card-title{font-size:16px;font-weight:750}.card-sub{font-size:12px;color:var(--sub);margin-top:3px}
+.pill{font-size:11px;padding:5px 10px;border-radius:20px;background:#eaf3fb;color:var(--sub);white-space:nowrap}
+.pill.good{background:#e4f6ec;color:#087d58}.pill.bad{background:#fff0f1;color:#b44451}
+.stat-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:13px}
+.stat{padding:12px 9px;border-radius:17px;background:#fff;min-width:0;text-align:center;border:1px solid #e8f0f7;box-shadow:0 5px 15px #87b3d415}
+.k{display:block;font-size:11px;white-space:normal}.v{display:block;font-size:21px;font-weight:800;margin-top:3px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.v.small{font-size:14px}
+.uptext{color:var(--green)}.downtext{color:var(--red)}.warning{color:var(--amber)}.mini{color:var(--sub);font-size:12px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:9px}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 13px;border-radius:13px;border:1px solid #d5e9f9;background:#eff8ff;color:#246ba2;font-size:13px;font-weight:700;text-align:center}
+.btn.primary{border-color:#218bdc;background:#218bdc;color:white;box-shadow:0 5px 13px #218bdc22}.btn:disabled{opacity:.48;cursor:not-allowed}.btn.full{width:100%}
+.switch-setting{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:13px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.switch-setting strong{display:block;font-size:14px}.switch-setting small{display:block;color:var(--sub);font-size:12px;margin-top:5px;line-height:1.5}
+.switch-setting input[type="checkbox"]{appearance:none;-webkit-appearance:none;flex-shrink:0;width:51px;height:30px;border-radius:18px;background:#cedce8;border:1px solid #b9cada;position:relative;margin:0;cursor:pointer;transition:background .18s}
+.switch-setting input[type="checkbox"]:before{content:"";position:absolute;left:3px;top:3px;width:22px;height:22px;border-radius:50%;background:white;box-shadow:0 2px 5px #758da438;transition:transform .18s}
+.switch-setting input[type="checkbox"]:checked{background:#218bdc;border-color:#218bdc}.switch-setting input[type="checkbox"]:checked:before{transform:translateX(21px)}
+.switch-setting input[type="checkbox"]:disabled{opacity:.45;cursor:not-allowed}.switch-setting input[type="checkbox"]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}.actions>*{flex:1}.line{height:1px;background:var(--line);margin:15px 0}
+.kvline{display:flex;justify-content:space-between;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--line);gap:10px;font-size:13px}
+.kvline:last-child{border-bottom:0}.kvline .label{color:var(--sub)}.kvline .value{text-align:right;max-width:66%;overflow-wrap:anywhere}
+.records{display:flex;flex-direction:column;gap:9px}.record{padding:12px;background:#f7fbff;border:1px solid #e7eff7;border-radius:14px}.record-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.record-title{font-size:14px;font-weight:770}.record-note{font-size:11px;color:var(--sub);margin-top:7px;overflow-wrap:anywhere}
+.record-signal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:11px}
+.record-price-block{min-width:0;background:white;border:1px solid #e9f0f8;border-radius:10px;padding:10px}.record-price-label{font-size:11px;color:var(--sub);margin-bottom:3px}
+.record-price-value{font-size:14px;font-weight:720;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.record-comparison{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-top:9px;font-size:13px}.record-change{font-weight:750;font-variant-numeric:tabular-nums}.record-outcome{font-weight:720}
+.event-record-viewport{position:relative;height:clamp(320px,52dvh,570px);overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;touch-action:pan-y;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:#b9d7e8 transparent;padding:2px 3px 7px 0}
+.event-record-viewport:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.event-record-footer{text-align:center;padding:11px 0 4px;min-height:37px}
+.message{padding:12px;border:1px solid #dcecf8;border-radius:13px;background:#f1f8ff;font-size:12px;color:#52748e;margin-top:10px;line-height:1.65}
+.section-panel{display:none}.section-panel.active{display:block}
+.tabs{position:fixed;bottom:0;left:0;right:0;background:#ffffffed;backdrop-filter:blur(15px);border-top:1px solid #dbeaf4;padding:8px 11px calc(9px + env(safe-area-inset-bottom));z-index:10}
+.tabs-inner{max-width:760px;margin:auto;display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.tab{border:0;border-radius:14px;background:transparent;color:#7089a4;padding:8px 2px;display:flex;flex-direction:column;gap:3px;align-items:center;font-size:11px;font-weight:680}
+.tab svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.tab.selected{background:#d8edff;color:#147ecb}
+.hero{position:relative;text-align:center;min-height:250px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:26px 12px 20px;overflow:hidden}
+.hero-mascot{position:absolute;width:66px;height:66px;border-radius:20px;object-fit:cover;opacity:.93;bottom:11px;left:4px;border:2px solid #fff}
+.hero-radar{width:66px;height:66px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-bottom:4px;background:#e4f3ff;border:2px solid #bddffa;color:#279be4}
+.hero-radar svg{width:41px;height:41px;fill:none;stroke:currentColor;stroke-width:1.6}.hero-title{font-size:28px;line-height:1.25;font-weight:830;letter-spacing:-.03em}
+.hero-note{font-size:12px;color:var(--sub);padding:0 18px}.hero-sublabel{color:#6b8ca7;font-size:11px}
+.hero[data-direction="UP"] .hero-title{color:var(--green)}.hero[data-direction="DOWN"] .hero-title{color:var(--red)}
+.hero[data-direction="UP"] .hero-radar{color:var(--green);background:#e8f8f0}.hero[data-direction="DOWN"] .hero-radar{color:var(--red);background:#ffedf0}
+.price-strip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#fff;border:1px solid #fff;border-radius:18px;padding:12px 14px;margin-bottom:15px;box-shadow:0 4px 15px #81b4da12}
+.price-strip b{font-size:13px}.price-strip small{color:var(--sub);font-size:11px}.price-strip .status-text{font-size:12px;color:var(--green);font-weight:700}
+.details{margin-top:13px;border-top:1px solid var(--line);padding-top:11px}.details summary{cursor:pointer;color:#407cac;font-size:12px;font-weight:680;list-style:none}
+.details summary:after{content:"  ﹀"}.details[open] summary:after{content:"  ﹀"}
+.quick-link{color:var(--accent);font-size:12px;font-weight:700}.home-records .record:nth-child(n+3){display:none}
+.trade-card{border:1px solid #dcecf8}
+.trade-main{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:13px}
+.trade-counter{display:flex;align-items:baseline;gap:4px;white-space:nowrap;color:#143555}
+.trade-counter strong{font-size:34px;font-weight:820;line-height:1.1;font-variant-numeric:tabular-nums}
+.trade-counter span{font-size:12px;color:var(--sub)}
+.trade-add{flex:1;max-width:245px;min-width:0}
+.trade-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px}
+.trade-undo{border:0;background:transparent;color:#337eb7;font-size:12px;padding:8px 1px;white-space:nowrap}
+.trade-undo:disabled{color:#a4b6c5}
+.trade-history-row{display:flex;align-items:center;justify-content:space-between;padding:10px 2px;border-bottom:1px solid #e7eff7;font-size:13px}
+.trade-history-row:last-child{border-bottom:0}
+@media(max-width:355px){.trade-main{flex-wrap:wrap}.trade-add{max-width:none;width:100%}}
+.site-footnote{font-size:11px;color:#7891a6;line-height:1.65;margin-top:12px}
+[hidden]{display:none!important}
+@media(min-width:600px){.hi{font-size:28px}.shell{padding-left:29px;padding-right:29px}.stat-row{gap:13px}.hero{min-height:275px}}
+@media(max-width:355px){.brand b{font-size:17px}.logo{width:50px;height:50px}.v{font-size:18px}.light{font-size:10px;padding:6px}}
+</style>
+</head>
+<body>
+<div class="shell">
+<header class="top">
+ <div class="brand"><img class="logo" src="/app/icon-192.png" width="58" height="58" alt="海绵宝宝和派大星"><div><b>海派事件合约</b><small>BTC 10分钟信号站</small></div></div>
+ <div class="light" aria-live="polite"><span class="dot" id="healthDot"></span><span id="healthText">连接中</span></div>
+</header>
+<div id="hotUpdateBanner" class="message" hidden role="status" aria-live="polite">
+ <div id="hotUpdateText">发现新的网页版本</div>
+ <button class="btn primary full" type="button" id="hotUpdateButton" style="margin-top:10px">刷新应用最新版（不需要重新安装）</button>
+</div>
+<section id="panel-event10" class="section-panel active" aria-label="十分钟信号">
+ <div class="price-strip">
+  <div><b>₿ BTC / USDT</b><small style="display:block">公开指数参考 · 不自动下单</small></div>
+  <div class="status-text" id="eMiniConnection">● 正在连接</div>
+ </div>
+ <div class="card" style="padding:15px">
+  <div class="card-top"><div class="card-title">10分钟事件合约</div><span class="pill" id="eStatus">读取中</span></div>
+  <div class="hero" id="eHero" data-direction="WAIT">
+   <div class="hero-radar"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="19"/><circle cx="24" cy="24" r="12"/><circle cx="24" cy="24" r="5"/><path d="M24 24L36 11"/><circle cx="24" cy="24" r="2" fill="currentColor"/></svg></div>
+   <div class="hero-title" id="eSignal">等待新信号</div>
+   <div class="hero-note" id="eReason">正在同步最近一次规则检查结果…</div>
+   <div class="hero-sublabel" id="ePhase">当前策略 · 等待实时版本</div>
+   <img class="hero-mascot" src="/app/icon-192.png" alt="" aria-hidden="true">
+  </div>
+  <div class="mini" id="eFreshness">正在核实最近一次行情扫描时间…</div>
+  <button class="btn primary full" style="margin-top:13px" type="button" id="manualCheck">立即手动检测信号</button>
+  <div class="message" id="manualResult" hidden aria-live="polite"></div>
+  <p class="site-footnote">仅提供方向研究，不代替币安事件合约开仓价格或官方结算。闹铃开关与权限请在 App 顶部的提醒管理中设置。</p>
+ </div>
+ <div class="card section trade-card" id="tradeJournalCard" aria-label="真实交易手动登记">
+  <div class="card-top">
+   <div><div class="card-title">今日真实交易</div><div class="card-sub" id="tradeTodayDate">北京时间 · 正在读取</div></div>
+   <span class="pill" id="tradeLimitState">目标≤10单/天</span>
+  </div>
+  <div class="trade-main">
+   <div class="trade-counter"><strong id="tradeTodayCount">—</strong><span>/ 10 单</span></div>
+   <button class="btn primary trade-add" id="tradeRecordButton" type="button" disabled>＋ 我已完成一笔交易</button>
+  </div>
+  <div class="trade-footer">
+   <span class="mini" id="tradeJournalNotice" role="status" aria-live="polite">正在检查本机交易记录…</span>
+   <button class="trade-undo" id="tradeUndoButton" type="button" disabled>撤销最后一笔</button>
+  </div>
+  <p class="site-footnote">手动登记：每完成一笔真实交易后点一次。仅保存到此手机，不自动读取币安成交；每日北京时间00:00自动开始新一天。</p>
+ </div>
+ <div class="stat-row" aria-label="当前策略统计">
+  <div class="stat"><span class="k">信号总数</span><span class="v" id="eHomeTotal">—</span></div>
+  <div class="stat"><span class="k">代理胜率</span><span class="v uptext" id="eProxyAccuracy">—</span></div>
+  <div class="stat"><span class="k">最近10轮</span><span class="v" id="eLastTen">—</span></div>
+ </div>
+ <div class="card section">
+  <div class="sect-head"><h2>近期信号记录</h2><button class="btn" type="button" data-go="records" style="min-height:35px;padding:6px 11px">查看全部 ›</button></div>
+  <div id="eHomeRecords" class="records home-records"><div class="mini">正在同步…</div></div>
+ </div>
+ <div class="mini" id="eConnectionDetail" role="status" aria-live="polite">正在核验信号接口…</div>
+</section>
+<section id="panel-stats" class="section-panel" aria-label="信号统计">
+ <h1 class="hi">数据统计</h1><p class="desc" id="eStatsStrategy">正在核实当前策略版本 · 非真实交易收益</p>
+ <div class="card">
+  <div class="card-title" id="eStrategyTitle">当前策略表现 · 版本核实中</div>
+  <div class="kvline"><span class="label">有效方向 / 已核对</span><span class="value" id="eCounts">—</span></div>
+  <div class="kvline"><span class="label">代理胜率</span><span class="value" id="eProxyAccuracyDetail">—</span></div>
+  <div class="kvline"><span class="label">最近10轮命中</span><span class="value" id="eLastTenDetail">—</span></div>
+  <div class="message" id="eScanAudit" aria-live="polite">正在读取最近一小时信号筛选情况…</div>
+  <div class="mini" id="eAiReview" aria-live="polite">当前为纯规则信号，不调用 AI。</div>
+  <details class="details"><summary>统计说明</summary><p class="mini">代理命中以公开币安指数信号锁定价与600秒后指数价比较，不是币安官方事件合约交易结果，也不是收益率。</p></details>
+ </div>
+ <div class="card" id="tradeHistoryCard">
+  <div class="card-title">每天真实交易次数（手动登记）</div>
+  <p class="mini" id="tradeJournalStrategyNote">按北京时间统计最近30个有记录的日期；本机手动交易统计与当前策略信号胜率独立。</p>
+  <div id="tradeHistoryList" role="region" aria-label="已登记真实交易的每日次数"><div class="mini">正在读取本机记录…</div></div>
+ </div>
+</section>
+<section id="panel-records" class="section-panel" aria-label="历史信号记录">
+ <h1 class="hi">历史记录</h1><p class="desc">保留每轮锁定价、10分钟后指数价及方向结果</p>
+ <div class="card">
+  <div class="sect-head"><h2>当前策略信号记录</h2><small id="eTotal">读取中</small></div>
+  <p class="mini">在记录框内向下滑动加载更多。指数代理核验不代表事件合约官方结算。</p>
+  <div id="eRecordScroll" class="event-record-viewport" role="region" aria-label="十分钟信号记录，滑动加载更多" tabindex="0">
+   <div class="records" id="eRecords"><div class="mini">读取中…</div></div>
+  </div>
+  <div id="eRecordStatus" class="mini event-record-footer" role="status" aria-live="polite">同步记录中…</div>
+ </div>
+</section>
+<section id="panel-more" class="section-panel" aria-label="应用设置">
+ <h1 class="hi">应用设置</h1><p class="desc">海派 · 简约海洋风 · 安全提醒</p>
+ <div class="card">
+  <div class="card-title">信号提醒</div>
+  <label class="switch-setting" for="reverseAlertToggle">
+   <span><strong>反向信号提醒</strong><small>开启后手机显示相反方向；原始规则信号、核验与统计不变。</small></span>
+   <input id="reverseAlertToggle" type="checkbox" role="switch" aria-label="反向信号提醒" aria-describedby="reverseAlertHelp" disabled>
+  </label>
+  <p class="mini" id="reverseAlertHelp" style="margin:10px 0 2px">仅改变本机通知和弹窗内容，不改变顶部的闹铃总开关。需要安装正式安卓 App。</p>
+  <div class="mini" id="reverseAlertState" role="status" aria-live="polite" style="margin-top:9px">正在检查本机提醒支持…</div>
+  <div class="actions"><a class="btn" href="/event10/" rel="noopener">打开完整控制页面</a></div>
+ </div>
+ <div class="card">
+  <div class="card-title">连接和版本</div>
+  <div class="kvline"><span class="label">数据服务</span><span class="value">阿里云 HTTPS</span></div>
+  <div class="kvline"><span class="label">网页热更新</span><span class="value" id="appUpdateState">检查中</span></div>
+  <div class="kvline"><span class="label">网页版本</span><span class="value" id="appBuildVersion">—</span></div>
+  <div class="kvline"><span class="label">登录保护</span><span class="value">沿用 Caddy Basic Auth</span></div>
+  <div class="kvline"><span class="label">刷新</span><span class="value">前台实时读取 · 安卓原生后台独立监听</span></div>
+  <div class="kvline"><span class="label">交易执行</span><span class="value">仅观察方向，不自动下单</span></div>
+  <div class="actions"><button class="btn primary full" type="button" id="refresh">立即刷新数据</button></div>
+ </div>
+ <div class="card"><div class="card-title">安装到安卓桌面</div><p class="mini">Chrome 打开本页面 → 右上角菜单「安装应用」或「添加到主屏幕」。原生闹铃、锁屏监听和反向开关仅在正式安卓安装版提供。</p></div>
+</section>
+</div>
+<nav class="tabs" aria-label="底部导航"><div class="tabs-inner">
+ <button class="tab selected" data-go="event10" type="button" aria-label="十分钟信号"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 12l5-5m-5 0v5h5"/></svg>信号</button>
+ <button class="tab" data-go="stats" type="button" aria-label="统计"><svg viewBox="0 0 24 24"><path d="M4 20V11m5 9V5m5 15v-8m5 8V8"/><path d="M2 21h20"/></svg>统计</button>
+ <button class="tab" data-go="records" type="button" aria-label="记录"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/></svg>记录</button>
+ <button class="tab" data-go="more" type="button" aria-label="设置"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/></svg>设置</button>
+</div></nav>
+<script src="/app/app.js" defer></script>
+</body></html>

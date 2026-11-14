@@ -1,0 +1,41 @@
+name: EVENT10 V23 reversal-aware quality isolated preproduction (never deploy)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/event10-v23-preproduction-quality.yml'
+      - 'event10-bot/multi-timeframe-trend.mjs'
+      - 'event10-bot/pure-signal.mjs'
+      - 'event10-bot/manual-engine.mjs'
+      - 'event10-bot/v23-reversal-quality.test.mjs'
+      - 'event10-bot/panel.html'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Syntax check
+        run: |
+          node --check event10-bot/pure-signal.mjs
+          node --check event10-bot/manual-engine.mjs
+          node --check event10-bot/multi-timeframe-trend.mjs
+          node --check event10-bot/readonly-candles.mjs
+          python3 - <<'PY'
+          import pathlib,re,tempfile,subprocess
+          page=pathlib.Path('event10-bot/panel.html').read_text()
+          scripts=re.findall(r'<script[^>]*>(.*?)</script>',page,re.S|re.I)
+          if not scripts:raise RuntimeError('PANEL_INLINE_SCRIPT_MISSING')
+          with tempfile.TemporaryDirectory() as d:
+              for i,body in enumerate(scripts):
+                  path=pathlib.Path(d)/f'panel{i}.js'
+                  path.write_text(body)
+                  subprocess.run(['node','--check',str(path)],check=True)
+          PY
+      - name: V23 regression + alert-only checks
+        run: node --test event10-bot/v23-reversal-quality.test.mjs event10-bot/alert-watch.test.mjs

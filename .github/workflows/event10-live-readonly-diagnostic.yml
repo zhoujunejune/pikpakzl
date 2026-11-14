@@ -1,0 +1,221 @@
+# 2026-11-13: post-release V23 no-order live-health verification; read-only, no changes on host.
+# 2026-11-13: audit user-observed V22 low hit-rate with per-signal trend vs live-price contradictions.
+# 2026-11-12: user reports sparse EVENT10 V20 signals after EVENT10-only restore; inspect last hour/24h rejects, preserve live state.
+# V18 AI-completion-required read-only production audit; no trades, never expose API keys.
+# Post V17 deployment: verify retired Guardian units remain stopped.
+# Live V17 independent candle source and AI review production confirmation.
+# AI/Feed preflight after Guardian5 retirement (no secrets disclosed); repeat.
+# V16 postdeploy production readonly version+frequency+direction ledger audit
+# V15 latest production read-only diagnostics 2026-11-06, no strategy changes.
+# Verify V15 10-minute pacing and loss-streak pause on read-only live status/ledger
+# V14 followup production read-only sustained signal frequency check
+# 2026-11-05 V14 post-deploy signal frequency + separated ledger verification, read only
+# Current V13 post-release read-only production signal audit
+# Recheck V12 warmup and 1m feed volume after reset
+# Confirm V12 ledger reset and version-only app API after deploy 2026-11-05
+# 2026-11-05 verify post dual EMA deployment, read only
+# Signal frequency audit request 2026-11-05. Read only: no orders, no strategy modifications.
+name: EVENT10 live read-only signal diagnosis
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-live-readonly-diagnostic.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect only local EVENT10 status, ledger and upstream feed; never mutate
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
+          sk=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk,'READ_ONLY_CREDENTIALS_UNAVAILABLE'
+          script='''#!/bin/bash
+          set -eu
+          python3 - <<'REMOTE'
+          import json, urllib.request, time
+          def read(endpoint):
+              try:
+                  with urllib.request.urlopen(endpoint,timeout=6) as r:
+                      return json.loads(r.read(800000))
+              except Exception as e:
+                  return {'ok':False,'diagnosticError':type(e).__name__+':'+str(e)[:100]}
+          s=read('http://127.0.0.1:13020/api/status')
+          l=read('http://127.0.0.1:13020/api/signals?limit=100&offset=0')
+          h=read('http://127.0.0.1:13020/api/history')
+          f=read('http://127.0.0.1:13003/api/shadow-market-data')
+          import os,subprocess,pathlib,re
+          try:
+              unit=subprocess.run(['systemctl','show','-p','MainPID','--value','zl-event10-deepseek'],capture_output=True,text=True,timeout=3).stdout.strip()
+              keys=[]
+              if unit.isdigit() and int(unit)>0:
+                  env_raw=pathlib.Path('/proc/'+unit+'/environ').read_bytes()
+                  keys=[x.split(b'=',1)[0].decode('ascii','ignore') for x in env_raw.split(b'\\0') if b'=' in x]
+              print('DIAG_AI_KEY_PRESENT',any(k in keys for k in ('DEEPSEEK_API_KEY','EVENT10_AI_API_KEY')),flush=True)
+              print('DIAG_AI_ENDPOINT_CONFIGURED',any(k in keys for k in ('DEEPSEEK_BASE_URL','EVENT10_AI_BASE_URL')),flush=True)
+              print('DIAG_AI_MODEL_CONFIGURED',any(k in keys for k in ('DEEPSEEK_MODEL','EVENT10_AI_MODEL')),flush=True)
+              for cfg in ('/etc/systemd/system/zl-event10-deepseek.service','/opt/zl-event10/.env'):
+                  p=pathlib.Path(cfg)
+                  if p.exists():
+                      content=p.read_text(errors='replace')
+                      print('DIAG_AI_CONFIG_SOURCE',cfg,'has_key_name',bool(re.search(r'(DEEPSEEK_API_KEY|EVENT10_AI_API_KEY)',content)),'has_envfile',bool(re.search(r'^EnvironmentFile=',content,re.M)),flush=True)
+          except Exception as ex:print('DIAG_AI_PREFLIGHT_ERROR',type(ex).__name__,flush=True)
+          for svc in ('zl-prediction-trade','zl-prediction-v2','zl-prediction-v3',
+              'zl-prediction-guardian-analysis','zl-prediction-fast5','zl-prediction-fast5-stats',
+              'zl-prediction-ui-visibility','zl-prediction-risk-exits','zl-prediction-redis',
+              'zl-prediction-official-reference','zl-event10-deepseek','zl-event10-trade-stream'):
+              run=subprocess.run(['systemctl','is-active',svc],capture_output=True,text=True,timeout=4)
+              print('DIAG_UNIT',svc,run.stdout.strip(),flush=True)
+          print('DIAG_STATUS_OK',s.get('ok'),flush=True)
+          print('DIAG_STRATEGY',s.get('decisionReviewVersion'),flush=True)
+          print('DIAG_AI_CONFIGURED',s.get('aiReviewConfigured'),flush=True)
+          print('DIAG_AI_MANDATORY',s.get('aiMandatory'),flush=True)
+          learning=s.get('aiLearningProfile') or {}
+          print('DIAG_LEARNING_PROFILE',json.dumps({k:learning.get(k) for k in ('settledSamples','winCount','lossCount','observedProxyAccuracyPct')},ensure_ascii=False),flush=True)
+          rows=(l.get('records') or [])
+          print('DIAG_UNREVIEWED_PUBLISHED',sum(1 for x in rows if x.get('aiAnalysisCompleted') is not True),flush=True)
+          print('DIAG_V18_VALID_SIGNALS',len(rows),flush=True)
+          print('DIAG_AI_MODEL',s.get('aiReviewModel'),flush=True)
+          print('DIAG_AI_ACTUAL_STATS',json.dumps(s.get('aiReviewStats') or {},ensure_ascii=False),flush=True)
+          print('DIAG_LAST_VALID_SCAN',s.get('lastSuccessfulScanAt'),flush=True)
+          print('DIAG_LAST_SCAN_SOURCE',((s.get('lastCheck') or {}).get('evidence') or {}).get('candleSource'),flush=True)
+          print('DIAG_LAST_AI_REVIEW',json.dumps(((s.get('lastCheck') or {}).get('aiReview') or {}),ensure_ascii=False)[:450],flush=True)
+          print('DIAG_MODE',s.get('mode'),flush=True)
+          print('DIAG_LAST_ERROR',str(s.get('lastError') or '')[:160],flush=True)
+          c=s.get('lastCheck') or {}
+          print('DIAG_LAST_CHECK',c.get('status'),c.get('checkedAt'),flush=True)
+          print('DIAG_LAST_CHECK_ERROR',str(c.get('error') or '')[:180],flush=True)
+          print('DIAG_LAST_CHECK_REASON',str(c.get('reason') or '')[:220],flush=True)
+          print('DIAG_LAST_CHECK_GATES',json.dumps({
+              'up':c.get('upChecks'), 'down':c.get('downChecks'),
+              'change3mPct':c.get('change3mPct')
+          },ensure_ascii=False),flush=True)
+          print('DIAG_V22_TIMEFRAMES',json.dumps({
+            'version':s.get('decisionReviewVersion'),
+            'latestStatus':(s.get('lastCheck') or {}).get('status'),
+            'coverage':((s.get('lastCheck') or {}).get('evidence') or {}).get('timeframeCoverage'),
+            'trendScore':((s.get('lastCheck') or {}).get('evidence') or {}).get('trendScore'),
+            'timeframes':{k:{'available':v.get('available'),'trend':v.get('trend'),'reason':v.get('reason')}
+              for k,v in ((((s.get('lastCheck') or {}).get('evidence') or {}).get('timeframes')) or {}).items()}
+          },ensure_ascii=False),flush=True)
+          print('DIAG_MIN_SIGNAL_GAP_MS',s.get('minSignalGapMs'),flush=True)
+          print('DIAG_SCAN_SUMMARY',json.dumps((s.get('scanDiagnostics') or {}).get('lastHour') or {},ensure_ascii=False),flush=True)
+          print('DIAG_SCAN_24H',json.dumps((s.get('scanDiagnostics') or {}).get('last24Hours') or {},ensure_ascii=False),flush=True)
+          print('DIAG_NOW_MS',int(time.time()*1000),flush=True)
+          print('DIAG_AUTO_INTERVAL_MS',s.get('autoIntervalMs'),flush=True)
+          print('DIAG_AUTO_LAST_CHECK',s.get('lastAutoCheckAt'),flush=True)
+          rows=l.get('records',[])
+          settled=[x for x in rows if isinstance(x.get('proxyHit'),bool)]
+          print('DIAG_READONLY_SAMPLE',json.dumps({
+            'firstRecordOpenedAt':min((x.get('openedAt') for x in rows if isinstance(x.get('openedAt'),(int,float))),default=None),
+            'lastRecordOpenedAt':max((x.get('openedAt') for x in rows if isinstance(x.get('openedAt'),(int,float))),default=None),
+            'recent25':{'total':len(rows[:25]),'settled':sum(isinstance(x.get('proxyHit'),bool) for x in rows[:25]),
+                        'hits':sum(x.get('proxyHit') is True for x in rows[:25])},
+            'directionHits':{d:{'settled':sum(x.get('direction')==d for x in settled),
+                                 'hits':sum(x.get('direction')==d and x.get('proxyHit') is True for x in settled)}
+                                for d in ('UP','DOWN')},
+            'consecutiveMissesNewest':next((i for i,x in enumerate(settled) if x.get('proxyHit') is True),len(settled)),
+            'last8': [{'t':x.get('openedAt'),'d':x.get('direction'),'hit':x.get('proxyHit')} for x in rows[:8]]
+          },ensure_ascii=False),flush=True)
+          print('DIAG_LEDGER',json.dumps({'ok':l.get('ok'),'version':l.get('version'),
+              'total':l.get('total'),'stats':l.get('stats')},ensure_ascii=False),flush=True)
+          print('DIAG_RECENT_SIGNAL_ROWS',json.dumps([
+              {k:item.get(k) for k in ('id','strategyVersion','direction','signalQuality','openedAt','expiresAt','openPrice','closePrice','proxyHit','proxyOutcome','change3mPct','volumeRatio','rsi14','eventTag','checks','settlementStatus')}
+              for item in l.get('records',[])[:25]],ensure_ascii=False),flush=True)
+          # V22 direction error attribution: collect only compact, read-only
+          # current-version observations, never secrets or order data.
+          hr=[x for x in (h.get('records') or []) if x.get('decisionReviewVersion')==s.get('decisionReviewVersion')]
+          hr.sort(key=lambda x:x.get('openedAt') or 0)
+          brief=[]
+          for x in hr[-40:]:
+              e=((x.get('ruleChecks') or {}).get('evidence') or {})
+              tf=e.get('timeframes') or {}
+              brief.append({
+                't':x.get('openedAt'),'dir':x.get('direction'),
+                'hit':x.get('proxyHit'),'status':x.get('settlementStatus'),
+                'p0':x.get('openPrice'),'p1':x.get('closePrice'),
+                'changePct':x.get('returnPct'),
+                'score':e.get('trendScore'),'liveDir':e.get('currentPriceDirection'),
+                'liveDelta':e.get('liveIndexDelta'),
+                'votes':{name:(v or {}).get('trend') for name,v in tf.items()},
+                'supertrend':{name:((v or {}).get('supertrend') or {}).get('direction') for name,v in tf.items()}})
+          settledBrief=[x for x in brief if isinstance(x.get('hit'),bool)]
+          conflicts=[x for x in settledBrief if x.get('liveDir') and x['liveDir']!=x.get('dir')]
+          def metric(a):
+              return {'n':len(a),'hits':sum(x['hit'] is True for x in a),
+                'ratePct':round(100*sum(x['hit'] is True for x in a)/len(a),2) if a else None}
+          print('DIAG_V22_ATTRIBUTION',json.dumps({
+            'historyCount':len(hr),'last40Settled':metric(settledBrief),
+            'longVsLiveConflict':metric(conflicts),
+            'alignedLive':metric([x for x in settledBrief if x.get('liveDir')==x.get('dir')]),
+            'first3MinutesCluster':sum(
+              x['t']-brief[i-1]['t']<180000
+              for i,x in enumerate(brief) if i and isinstance(x.get('t'),(int,float)) and
+                isinstance(brief[i-1].get('t'),(int,float))),
+            'last20':brief[-20:]
+          },ensure_ascii=False),flush=True)
+          print('DIAG_FEED_OK',f.get('ok'),flush=True)
+          print('DIAG_FEED_CONNECTED',(f.get('latest') or {}).get('marketFeedConnected'),flush=True)
+          print('DIAG_FEED_ERROR',str(f.get('errors') or f.get('diagnosticError') or '')[:220],flush=True)
+          for interval in ('1m','5m'):
+              block=(f.get('candles') or {}).get(interval)
+              rows=block if isinstance(block,list) else (block or {}).get('rows',[])
+              valid=[x for x in rows if isinstance(x,dict) and x.get('closed') is True]
+              print('DIAG_FEED_'+interval+'_CLOSED',len(valid),flush=True)
+          REMOTE
+          '''
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',
+              endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          instance='b67374069bb3457ba6a3a2ede9305d3f'
+          rsp=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=instance,
+              name='event10-readonly-signal-health',type='RunShellScript',
+              working_user='root',command_content=script,timeout=55))
+          invoke=rsp.body.invoke_id
+          assert invoke,'READONLY_NO_INVOKE_ID'
+          for _ in range(40):
+              time.sleep(2)
+              r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',
+                  instance_id=instance,invoke_id=invoke)).body.invocation_result
+              if not r or str(r.invocation_status) not in ('Success','Failed','Aborted',
+                  'ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+              output=base64.b64decode(r.output or '').decode('utf-8','replace')
+              for line in output.splitlines():
+                  if line.startswith('DIAG_'): print(line,flush=True)
+              assert str(r.invocation_status)=='Success' and int(r.exit_code)==0,'READONLY_REMOTE_DIAG_FAILED'
+              break
+          else: raise RuntimeError('READONLY_REMOTE_DIAG_TIMED_OUT')
+          PY
+
+  report:
+    if: always()
+    needs: [diagnose]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Report readonly diagnostic completion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_RESULT: ${{ needs.diagnose.result }}
+        run: |
+          state=failure
+          if [ "$AUDIT_RESULT" = success ]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context="event10-readonly-live-diagnostic" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="EVENT10 readonly live diagnostic result: $AUDIT_RESULT" >/dev/null
+          echo "EVENT10_READONLY_CI=$state"

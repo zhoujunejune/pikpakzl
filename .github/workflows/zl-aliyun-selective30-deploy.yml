@@ -1,0 +1,63 @@
+name: Deploy Alibaba prediction qualified 30-second dual-source policy
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-selective30-deploy.yml'
+      - 'prediction-bot-v1/aliyun_selective30_patch.py'
+      - 'prediction-bot-v1/aliyun_selective30_deploy.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate Aliyun deployment launcher and server patch
+        run: python -m py_compile prediction-bot-v1/aliyun_selective30_patch.py prediction-bot-v1/aliyun_selective30_deploy.py
+      - name: Install Alibaba Cloud SWAS SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Apply V2 + Edge only with rollback, preserve trades and histories
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_selective30_deploy.py
+      - name: Public HTTPS verify 30s model and only 2 active sources
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,json,os,urllib.request
+          host='https://prediction.47-237-188-69.sslip.io'
+          password=os.environ['ZL_PANEL_PASSWORD']
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          def get(route):
+            req=urllib.request.Request(host+route,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+            with urllib.request.urlopen(req,timeout=25) as r:
+              assert r.status==200
+              return r.read()
+          model=json.loads(get('/api/order-signal-model'))
+          assert model.get('ready') is True
+          assert model.get('model')=='SELECTIVE_V2_30S_QUALIFIED_V1'
+          assert [m['id'] for m in model.get('models',[])]==['SELECTIVE_V2_30S_QUALIFIED_V1']
+          stats=json.loads(get('/api/round-stats'))
+          assert stats.get('productionSignalSourceMode')=='SELECTIVE_V2_FAST8'
+          assert [r['source'] for r in stats.get('activeSignalModels',[])]==[
+            'SELECTIVE_V2_FAST8_PRIMARY','EDGE_RESCUE_FAST8_PRIMARY']
+          assert all(r['version']=='SELECTIVE_V2_30S_QUALIFIED_V1' for r in stats['activeSignalModels'])
+          html=get('/').decode('utf-8','replace')
+          assert '30秒' in html
+          assert 'SELECTIVE_V2_30S_QUALIFIED_V1' in html
+          print('PREDICTION_PUBLIC_30S_VERSION_VERIFIED=true')
+          print('PREDICTION_PUBLIC_TWO_ACTIVE_SOURCES=true')
+          print('PREDICTION_PUBLIC_OLD_FALLBACK_NO_LONGER_ACTIVE=true')
+          print('PREDICTION_PUBLIC_HISTORIC_ROWS',len(stats.get('records',[])))
+          PY

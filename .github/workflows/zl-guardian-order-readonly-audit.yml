@@ -1,0 +1,25 @@
+name: Read-only GUARDIAN order-chain readiness audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_order_audit.py
+      - .github/workflows/zl-guardian-order-readonly-audit.yml
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate read-only audit script
+        run: python -m py_compile prediction-bot-v1/aliyun_guardian_order_audit.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read guarded live order-chain flags, no orders
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian_order_audit.py

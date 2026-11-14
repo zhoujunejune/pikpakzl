@@ -1,0 +1,44 @@
+name: GUARDIAN5 guarded Alibaba production execution cutover
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_execution_cutover.py
+      - .github/workflows/zl-guardian5-execution-cutover.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: guardian5-selective-production-cutover
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate read-only preflight and guarded remote script syntax
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_execution_cutover.py
+          python - <<'PY'
+          import ast,subprocess
+          tree=ast.parse(open('prediction-bot-v1/aliyun_guardian_execution_cutover.py').read())
+          src=next(v.value.value for v in tree.body if isinstance(v,ast.Assign) and any(getattr(t,'id',None)=='REMOTE' for t in v.targets))
+          result=subprocess.run(['bash','-n'],input=src,text=True,capture_output=True)
+          print(result.stderr)
+          assert result.returncode==0,'GUARDIAN_CUTOVER_REMOTE_SYNTAX_INVALID'
+          print('GUARDIAN_CUTOVER_REMOTE_SYNTAX_OK=true')
+          PY
+      - name: Install Alibaba lightweight server SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Selectively update Guardian entry gates, only if production is idle and SELL monitoring healthy
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_execution_cutover.py

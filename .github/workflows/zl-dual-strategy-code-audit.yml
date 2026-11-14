@@ -1,0 +1,50 @@
+name: Dual bot code and runtime read-only inspection
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-dual-strategy-code-audit.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect dual files and safe code context only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
+          for start,end in [(174,235),(355,416),(417,479),(480,543),(544,637)]:
+              script=("#!/bin/bash\nset -Eeuo pipefail\npython3 - <<'SCAN'\n"
+              +"from pathlib import Path\nimport re\np=Path('/opt/zl-prediction-dual5/binance_dual5_pairs.mjs')\n"
+              +"ls=p.read_text().splitlines()\n"
+              +f"print('SECTION',{start},{end})\n"
+              +f"for i in range({start},{end}+1):\n"
+              +" if i>len(ls):continue\n s=ls[i-1]\n"
+              +" if re.search(r'api.?key|secret|password|private.?key|Authorization|Bearer|signature|process\\.env|walletAddress|walletId',s,re.I):s='[REDACTED]'\n"
+              +" print('LINE',i,s[:190])\nSCAN\n")
+              r=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-dual-source-readonly',type='RunShellScript',command_content=script,working_user='root',timeout=90))
+              complete=False
+              for _ in range(30):
+                  time.sleep(2)
+                  x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=r.body.invoke_id)).body.invocation_result
+                  if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ClientNotRunning'):
+                      try:out=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
+                      except:out='NO_OUTPUT'
+                      print('REMOTE_SECTION',start,end,x.invocation_status,x.exit_code)
+                      print(out[-14000:])
+                      if str(x.invocation_status)!='Success' or int(x.exit_code)!=0:raise SystemExit(3)
+                      complete=True
+                      break
+              if not complete:raise SystemExit('REMOTE_PENDING')
+          PY

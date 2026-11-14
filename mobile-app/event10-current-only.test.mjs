@@ -1,0 +1,232 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+
+const src=fs.readFileSync(new URL("./app.js",import.meta.url),"utf8");
+const version="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101";
+const from=src.indexOf("function eventVersion(r){");
+const to=src.indexOf("function event(e,ledger){",from);
+assert.ok(from>0&&to>from,"current strategy filtering helpers must exist");
+const api=vm.runInNewContext(
+  "const EVENT10_FREQ_OPTIMIZED_VERSION="+JSON.stringify(version)+";\n"+
+  src.slice(from,to)+"\n({eventVersion,eventStrategyLabel,currentEventRecord,mergeEventRecords})"
+);
+
+const mk=(id,ver,at)=>({id,openedAt:at,direction:"UP",strategyVersion:ver,status:"PREDICTED"});
+const old="EVENT10_HIGH_SELECTIVITY_6GATES_V1_20261031";
+test("only current strategy signals are displayed, never historical or mismatched records",()=>{
+ const records=api.mergeEventRecords({version,records:[
+   mk("legacy",old,100),mk("fresh",version,110),mk("fresh",version,110),
+   mk("unknown",null,111),{...mk("bad",version,112),direction:"WAIT"}
+ ]});
+ assert.equal(records.length,1);
+ assert.equal(records[0].id,"fresh");
+});
+test("old or wrong-version signal history is not used as current signal history",()=>{
+ assert.equal(api.mergeEventRecords({version:old,records:[mk("fresh",version,110)]}).length,0);
+ assert.equal(api.mergeEventRecords(null).length,0);
+ assert.equal(api.currentEventRecord({active:mk("old",old,300),lastSession:mk("old2",old,200)}),null);
+ const latest=api.currentEventRecord({
+   active:mk("old",old,300),
+   lastCheck:{...mk("current",version,250),checkedAt:260},
+   lastSession:mk("old2",old,240)
+ });
+ assert.equal(latest.id,"current");
+});
+test("the app never requests legacy event history or mixes old stats",()=>{
+ assert.ok(!src.includes('api("/event10/api/history"'));
+ assert.ok(!src.includes("legacyHistory"));
+ assert.ok(src.includes("if(e?.decisionReviewVersion!==EVENT10_FREQ_OPTIMIZED_VERSION)"));
+ assert.ok(src.includes("const currentLedger=ledger?.version===EVENT10_FREQ_OPTIMIZED_VERSION"));
+ assert.ok(src.includes('put("eTotal","新策略 "'));
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ assert.ok(html.includes("当前策略信号记录"));
+ assert.ok(!html.includes("历史信号（新旧策略）"));
+});
+
+test("price comparison uses frozen index reference and exact settlement values",()=>{
+ const first=src.indexOf("function eventIndexPrice(v){");
+ const last=src.indexOf("function renderRecords(id,items){",first);
+ assert.ok(first>=0&&last>first);
+ const c=vm.runInNewContext(src.slice(first,last)+"\n({eventIndexPrice,eventPriceComparison})",{Date});
+ assert.equal(c.eventIndexPrice(77579.24043478),"77,579.24043478");
+ assert.equal(c.eventIndexPrice(null),"—");
+ const base={openPrice:77500,expiresAt:Date.now()+600000,direction:"UP"};
+ const pending=c.eventPriceComparison({...base,closePrice:null,proxyHit:null});
+ assert.equal(pending.outcome,"等待10分钟到期核验");
+ assert.equal(pending.change,"—");
+ const win=c.eventPriceComparison({...base,closePrice:77550,proxyHit:true,proxyOutcome:"UP",
+   settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
+ assert.equal(win.outcome,"指数代理命中");assert.match(win.change,/^\+0\.06452%$/);
+ const lose=c.eventPriceComparison({...base,closePrice:77450,proxyHit:false,proxyOutcome:"DOWN",
+   settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
+ assert.equal(lose.outcome,"指数代理未命中");assert.match(lose.change,/^-0\.06452%$/);
+ const missing=c.eventPriceComparison({...base,settlementStatus:"UNVERIFIABLE_PRICE_NEAR_EXPIRY"});
+ assert.equal(missing.outcome,"到期数据不足，无法核验");
+ const flat=c.eventPriceComparison({...base,closePrice:77500,proxyHit:null,proxyOutcome:"FLAT",
+   settlementStatus:"INDEX_SIGNAL_TPLUS10_PROXY_ONLY"});
+ assert.match(flat.outcome,/持平/);
+});
+test("record cards show locked index, expiry index, net change, result and both timestamps",()=>{
+ assert.ok(src.includes('"信号锁定指数价"'));
+ assert.ok(src.includes('"10分钟后指数价"'));
+ assert.ok(src.includes('"record-comparison"'));
+ assert.ok(src.includes("r.closeObservedAt"));
+ assert.ok(src.includes("state.eventRecords"));
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ for(const part of ["record-signal-grid","eRecordScroll","eRecordStatus","event-record-viewport"])
+  assert.ok(html.includes(part),part);
+});
+
+test("scrolling merges 125 signal rounds, deduplicates and updates settlement",()=>{
+ const from=src.indexOf("function eventVersion(r){"),to=src.indexOf("function event(e,ledger){",from);
+ const api=vm.runInNewContext(
+  "const EVENT10_FREQ_OPTIMIZED_VERSION="+JSON.stringify(version)+";\n"+
+  src.slice(from,to)+"\n({mergeEventRecordPages,eventHistoryFingerprint})");
+ const rounds=Array.from({length:125},(_,i)=>({
+  ...mk("sig-"+i,version,1000000-i*60000),openPrice:77500+i,closePrice:null,proxyHit:null
+ }));
+ let loaded=[];
+ for(let i=0;i<125;i+=25)
+  loaded=api.mergeEventRecordPages(loaded,rounds.slice(i,i+25));
+ assert.equal(loaded.length,125);
+ assert.equal(loaded[0].id,"sig-0");
+ assert.equal(loaded.at(-1).id,"sig-124");
+ const settled={...rounds[0],closePrice:77650.12345,proxyHit:true};
+ loaded=api.mergeEventRecordPages(loaded,[mk("newest",version,2000000),settled,rounds[1]]);
+ assert.equal(loaded.length,126);
+ assert.equal(loaded[0].id,"newest");
+ assert.equal(loaded.find(x=>x.id==="sig-0").closePrice,77650.12345);
+ assert.equal(loaded.at(-1).id,"sig-124");
+ assert.ok(api.eventHistoryFingerprint(loaded).includes("77650.12345"));
+});
+test("finger scrolling replaces static next-page buttons and keeps newest signals up top",()=>{
+ assert.ok(src.includes('addEventListener("scroll",onEventHistoryScroll'));
+ assert.ok(src.includes("async function loadMoreEventSignals(){"));
+ assert.ok(src.includes("state.eventRecords.length-3"));
+ assert.ok(src.includes("eventHistorySignature"));
+ assert.ok(src.includes("const id=first?.dataset?.eventId"));
+ assert.ok(!src.includes("eRecordNext"));
+ assert.ok(!src.includes("eRecordPrev"));
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ for(const piece of ["overflow-y:auto","touch-action:pan-y","eRecordScroll","eRecordStatus"])
+  assert.ok(html.includes(piece),piece);
+ assert.ok(!html.includes("下一页</button>"));
+});
+
+test("V16 shows unified accuracy and rejection audit without confusing signal tiers",()=>{
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ for(const id of ["eProxyAccuracy","eScanAudit","eFreshness"])assert.ok(html.includes('id="'+id+'"'),id);
+ assert.ok(!html.includes('id="eScanGates"'));
+ assert.ok(!src.includes('put("eScanGates"'));
+ assert.ok(!src.includes("未通过的主要条件"));
+ for(const key of ["scanDiagnostics","lastSuccessfulScanAt","eScanAudit"])assert.ok(src.includes(key),key);
+ assert.ok(src.includes("指数代理"),"official event contract settlement must never be claimed");
+});
+test("海派事件合约 v1.3.8 retains only EVENT10 with no Guardian API or navigation",()=>{
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ const manifest=JSON.parse(fs.readFileSync(new URL("./manifest.webmanifest",import.meta.url),"utf8"));
+ assert.ok(html.includes('id="panel-event10"')&&html.includes('id="panel-more"'));
+ assert.ok(html.includes('id="panel-stats"')&&html.includes('id="panel-records"'));
+ assert.ok(html.includes('data-go="event10"')&&html.includes('data-go="more"'));
+ assert.ok(html.includes('data-go="stats"')&&html.includes('data-go="records"'));
+ assert.ok(!html.includes('panel-guardian')&&!html.includes('data-go="guardian"'));
+ assert.ok(!html.includes('panel-overview')&&!html.includes('data-go="overview"'));
+ assert.ok(!html.includes('gRecords')&&!html.includes('GUARDIAN'));
+ assert.ok(!src.includes('/guardian/api/status')&&!src.includes('api("/api/status",7500)'));
+ assert.ok(!src.includes('function guardian(')&&!src.includes('guardianError('));
+ assert.ok(src.includes('async function refreshEvent10Only(){'));
+ assert.ok(src.includes('api("/event10/api/status",9000,controller.signal)'));
+ assert.ok(src.includes('if(location.hash==="#event10")void refreshEvent10Only();'));
+ assert.ok(src.includes('navigate(["event10","stats","records","more"].includes(initial)?initial:"event10")'));
+ assert.ok(src.includes('APP_VERSION="1.4.0"'));
+ assert.equal(manifest.name,"海派事件合约");
+  assert.equal(manifest.start_url,"/app/#event10");
+  assert.ok(!html.includes('href="/app/genius.html"'));
+});
+test("app independently discovers current strategy from live status, verifies ledger only when available",()=>{
+ assert.ok(src.includes("let EVENT10_FREQ_OPTIMIZED_VERSION=null;"));
+ assert.ok(src.includes("ledger?.version!==EVENT10_FREQ_OPTIMIZED_VERSION"));
+ assert.ok(src.includes("event(service,null)"));
+ assert.ok(src.includes("state.eventOnline=true"));
+ assert.ok(src.includes("state.eventLedgerOnline=false"));
+ assert.ok(src.includes("Live rule direction must NEVER be blocked"));
+ assert.ok(src.includes('api("/event10/api/signals?limit="+state.eventPageSize+"&offset=0",11000,controller.signal)'));
+ assert.ok(src.includes("version!==EVENT10_FREQ_OPTIMIZED_VERSION"));
+ assert.ok(src.includes("EVENT10_FREQ_OPTIMIZED_VERSION=version"));
+ assert.ok(src.includes("state.eventRecords=[]"));
+ assert.ok(!src.includes('const EVENT10_FREQ_OPTIMIZED_VERSION="EVENT10_FORCED_CONTRARIAN_12M_V1_20261101"'));
+});
+
+test("a slow signal-history endpoint must not hide currently available pure-rule signal",()=>{
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ assert.ok(html.includes('id="eConnectionDetail"'));
+ assert.ok(src.includes('const stats=(currentLedger?ledger?.stats:e?.stats)||{};'));
+ assert.ok(src.includes('state.eventOnline=true;state.eventLastError=null;'));
+ assert.ok(src.includes('state.eventLastStatus=service'));
+ assert.ok(src.includes('event(state.eventLastStatus,null)'));
+ assert.ok(src.includes('state.eventOnline?"● 已连接":partial?"● 记录可用·实时重连":"● 连接异常"'));
+ assert.ok(!src.includes('if(!currentLedger)throw Error("新策略历史接口未就绪'));
+});
+
+test("current strategy label comes from actual EVENT10 backend version, not stale V20 text",()=>{
+ const v27="EVENT10_EMA_DECAY_REENTRY_V27_20261113";
+ const v28="EVENT10_EMA_DECAY_REENTRY_V28_20261114";
+ assert.equal(api.eventStrategyLabel(v27),"V27");
+ assert.equal(api.eventStrategyLabel(v28),"V28");
+ assert.equal(api.eventStrategyLabel(version),"V1");
+ assert.equal(api.eventStrategyLabel(null),"当前策略");
+ assert.equal(api.eventStrategyLabel("garbage V40"),"当前策略");
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ assert.ok(html.includes('id="eStatsStrategy"'));
+ assert.ok(html.includes('id="eStrategyTitle"'));
+ assert.ok(html.includes('id="tradeJournalStrategyNote"'));
+ assert.ok(src.includes('put("eStatsStrategy","只统计"+strategyLabel'));
+ assert.ok(src.includes('put("eAiReview","信号来源：纯规则 "+strategyLabel'));
+ assert.ok(src.includes('put("ePhase",direction?strategyLabel'));
+ assert.ok(!html.includes("V20"),"html must not mention stale strategy");
+ assert.ok(!src.includes("V20"),"javascript must not mention stale strategy");
+});
+
+test("slow connection: current history stays visible and stale history is requested at most every 15s",()=>{
+ assert.ok(src.includes("function needsEventLedgerFetch(service,now=Date.now()){"));
+ assert.ok(src.includes("now-state.eventLedgerLastSyncAt>=15000"));
+ assert.ok(src.includes("settled!==state.eventLedgerSettledCount"));
+ assert.ok(src.includes('if(!needsEventLedgerFetch(service)){'));
+ assert.ok(src.includes('if(state.eventHistoryError)drawEventHistory();'));
+ assert.ok(!src.includes('state.eventHistoryError="无法刷新，已加载记录仍然可看"'));
+});
+test("slow first launch: verified current ledger is visible if live status times out, never presented as live signal",()=>{
+ assert.ok(src.includes("function renderVerifiedLedgerFallback(ledger){"));
+ assert.ok(src.includes("const earlyLedger=!state.eventLastStatus?"));
+ assert.ok(src.includes("if(!outdated()&&ledger)renderVerifiedLedgerFallback(ledger);"));
+ const start=src.indexOf("function renderVerifiedLedgerFallback(ledger){");
+ const end=src.indexOf("// Cancel stale requests",start);
+ assert.ok(start>=0&&end>start);
+ const fragment=src.slice(start,end);
+ const ui={};
+ const sandbox={
+   state:{eventRecords:[],eventTotal:0,eventLedgerOnline:false,eventOnline:false,
+     eventHistorySignature:"",homeHistorySignature:"",eventHistoryError:null},
+   put:(id,value)=>{ui[id]=value;},
+   pct:(n,d)=>d?((n/d)*100).toFixed(1)+"%":"—",
+   eventStrategyLabel:v=>{const m=v.match(/_V(\d+)_\d{8}$/);return m?"V"+m[1]:"当前策略";},
+   updateEventHistory:(ledger)=>{sandbox.state.eventRecords=ledger.records;sandbox.state.eventTotal=ledger.total;},
+   pill:(id,tone,value)=>{ui[id]=value;},refreshConnectionBadge:()=>{}
+ };
+ const ctx=vm.createContext(sandbox);
+ const runner=vm.runInContext(
+  'let EVENT10_FREQ_OPTIMIZED_VERSION=null;'+fragment+
+  '\n({fallback:renderVerifiedLedgerFallback,current:()=>EVENT10_FREQ_OPTIMIZED_VERSION})',ctx);
+ const valid={ok:true,version:"EVENT10_EMA_DECAY_REENTRY_V27_20261113",total:6,
+   records:[],stats:{validDirections:6,proxySettled:4,proxyHits:2,proxyAccuracyPct:50}};
+ assert.equal(runner.fallback(valid),true);
+ assert.equal(runner.current(),valid.version);
+ assert.equal(ui.eCounts,"6 / 4");
+ assert.equal(ui.eProxyAccuracy,"50.0%");
+ assert.equal(ui.eSignal,"实时方向暂不可用");
+ assert.equal(sandbox.state.eventOnline,false);
+ assert.equal(runner.fallback({...valid,version:"OLD_VERSION"}),false);
+ assert.equal(runner.current(),valid.version);
+});

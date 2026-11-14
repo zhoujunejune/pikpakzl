@@ -1,0 +1,73 @@
+name: EVENT10 V4 startup failure forensic read-only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-v4-startup-forensic.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud-swas-open20200601==4.0.0
+      - name: Inspect current EVENT10 version and recent systemd startup errors without changes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,time,base64
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak,sk=os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID'),os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk
+          shell=r"""#!/bin/bash
+          set -eu
+          python3 - <<'REMOTE'
+          import json,urllib.request,subprocess
+          try:
+            with urllib.request.urlopen('http://127.0.0.1:13020/api/status',timeout=5) as r:
+              d=json.loads(r.read())
+            print('FORENSIC_VERSION',d.get('decisionReviewVersion'),flush=True)
+            print('FORENSIC_SERVICE_OK',d.get('ok'),flush=True)
+            print('FORENSIC_LAST_ERROR',str(d.get('lastError'))[:140],flush=True)
+            print('FORENSIC_LAST_CHECK',str((d.get('lastCheck') or {}).get('status')),flush=True)
+            l=urllib.request.urlopen('http://127.0.0.1:13020/api/signals?limit=1',timeout=5)
+            x=json.loads(l.read())
+            print('FORENSIC_SIGNALS',json.dumps({'version':x.get('version'),'total':x.get('total')},ensure_ascii=False),flush=True)
+          except Exception as e:print('FORENSIC_STATUS_ERROR',str(e)[:170],flush=True)
+          cmd=['journalctl','-u','zl-event10-deepseek','--since','2026-11-02 03:10:00 UTC',
+            '--until','2026-11-02 03:20:00 UTC','--no-pager','-o','cat']
+          p=subprocess.run(cmd,capture_output=True,text=True,timeout=8)
+          rows=p.stdout.splitlines()
+          keys=('Error','error','Exception','FAILED','failed','ReferenceError','SyntaxError','TypeError','Cannot','ENOENT','permission','node:')
+          found=[x for x in rows if any(k in x for k in keys)]
+          print('FORENSIC_JOURNAL_ROWS',len(rows),flush=True)
+          for line in found[-16:]:
+            if len(line)>270:line=line[:270]
+            print('FORENSIC_JOURNAL_ERROR',line,flush=True)
+          print('FORENSIC_SYSTEMD_ACTIVE',subprocess.run(['systemctl','is-active','zl-event10-deepseek'],capture_output=True,text=True).stdout.strip(),flush=True)
+          REMOTE
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          inst='b67374069bb3457ba6a3a2ede9305d3f'
+          rsp=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id=inst,
+            name='event10-read-only-v4-startup-forensic',type='RunShellScript',working_user='root',
+            command_content=shell,timeout=60))
+          invoke=rsp.body.invoke_id
+          assert invoke
+          for _ in range(45):
+            time.sleep(2)
+            r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id=inst,invoke_id=invoke)).body.invocation_result
+            if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning'):continue
+            out=base64.b64decode(r.output or '').decode('utf8','replace')
+            for line in out.splitlines():
+              if line.startswith('FORENSIC_'):print(line,flush=True)
+            assert str(r.invocation_status)=='Success' and int(r.exit_code)==0,'FORENSIC_REMOTE_FAILED '+out[-200:]
+            break
+          else:raise RuntimeError('FORENSIC_TIMEOUT')
+          PY

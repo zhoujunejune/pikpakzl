@@ -1,0 +1,113 @@
+name: EVENT10 live DeepSeek V4-Pro high-thinking read-only API smoke
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-ai-completion-smoke.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Check real DeepSeek high-thinking completion without placing any signal or order
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          remote=r'''#!/bin/bash
+          set -Eeuo pipefail
+          python3 - <<'REMOTE'
+          import json,subprocess,pathlib,urllib.request,time
+          pid=subprocess.run(['systemctl','show','-p','MainPID','--value','zl-event10-deepseek'],
+            check=True,capture_output=True,text=True).stdout.strip()
+          assert pid.isdecimal() and int(pid)>0
+          raw=pathlib.Path('/proc/'+pid+'/environ').read_bytes()
+          keys=dict(x.split(b'=',1) for x in raw.split(b'\0') if b'=' in x)
+          key=keys.get(b'EVENT10_AI_API_KEY') or keys.get(b'DEEPSEEK_API_KEY')
+          assert key,'EVENT10_AI_SMOKE_KEY_MISSING'
+          model=(keys.get(b'EVENT10_AI_MODEL') or b'deepseek-v4-pro').decode('ascii')
+          assert model=='deepseek-v4-pro','EVENT10_AI_SMOKE_MODEL_UNEXPECTED'
+          prompt=[
+           {'role':'system','content':'仅用于验证API思考模式是否工作；这是虚构指标，不涉及真实交易。必须给出符合JSON对象的完整结论：direction为UP或DOWN、confidence为0到1浮点数、reason、upCase、downCase、decisiveEvidence、risk均为至少8个汉字的完整句子。先分别比较上涨与下跌依据再输出。'},
+           {'role':'user','content':'虚构示例：一分EMA9=101、EMA21=100；五分EMA9=103、EMA21=102；3分钟涨幅=0.1%，RSI=61；旧失败案例曾发生冲高回落。请对UP与DOWN分别给出具体解释、反证和风险，输出合法JSON。'}]
+          req=urllib.request.Request('https://api.deepseek.com/chat/completions',
+            data=json.dumps({'model':model,'messages':prompt,
+              'reasoning_effort':'high','thinking':{'type':'enabled'},
+              'response_format':{'type':'json_object'},'max_tokens':8192}).encode(),
+            headers={'Content-Type':'application/json','Authorization':'Bearer '+key.decode()},
+            method='POST')
+          start=time.monotonic()
+          try:
+           with urllib.request.urlopen(req,timeout=75) as r:
+            data=json.load(r)
+          except Exception as e:
+           print('EVENT10_AI_SMOKE_CONNECTION_ERROR',type(e).__name__,flush=True)
+           raise SystemExit(4)
+          c=(data.get('choices') or [{}])[0]
+          m=c.get('message') or {}
+          try:answer=json.loads(m.get('content') or '')
+          except Exception:answer={}
+          fields=['reason','upCase','downCase','decisiveEvidence','risk']
+          reasons_ok=all(isinstance(answer.get(x),str) and len(answer[x].strip())>=8 for x in fields)
+          reasoning_tokens=((data.get('usage') or {}).get('completion_tokens_details') or {}).get('reasoning_tokens')
+          observed=(isinstance(reasoning_tokens,int) and reasoning_tokens>0) or bool(m.get('reasoning_content'))
+          valid=(c.get('finish_reason')=='stop' and answer.get('direction') in ('UP','DOWN')
+           and isinstance(answer.get('confidence'),(int,float)) and 0<=answer['confidence']<=1
+           and reasons_ok and observed)
+          print('EVENT10_AI_SMOKE_FINISH_REASON',str(c.get('finish_reason'))[:24],flush=True)
+          print('EVENT10_AI_SMOKE_COMPLETE',valid,flush=True)
+          print('EVENT10_AI_SMOKE_REASONING_OBSERVED',observed,flush=True)
+          print('EVENT10_AI_SMOKE_TOKENS',reasoning_tokens if isinstance(reasoning_tokens,int) else 'not_reported',flush=True)
+          print('EVENT10_AI_SMOKE_LATENCY_SECONDS',round(time.monotonic()-start,2),flush=True)
+          print('EVENT10_AI_SMOKE_NO_SIGNALS_OR_ORDERS=true',flush=True)
+          if not valid:raise SystemExit(5)
+          REMOTE
+          '''
+          ak=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
+          sk=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk
+          client=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+            region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          run=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='event10-ai-completion-smoke-only',
+            type='RunShellScript',working_user='root',command_content=remote,timeout=135))
+          assert run.body.invoke_id
+          for i in range(80):
+            time.sleep(2)
+            result=client.describe_invocation_result(sw.DescribeInvocationResultRequest(
+               region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+               invoke_id=run.body.invoke_id)).body.invocation_result
+            if not result or str(result.invocation_status) not in ('Success','Failed','Aborted',
+              'ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+            output=base64.b64decode(result.output or '').decode('utf8','replace')
+            for line in output.splitlines():
+              if line.startswith('EVENT10_AI_SMOKE_'):print(line,flush=True)
+            assert str(result.invocation_status)=='Success' and int(result.exit_code)==0 and 'EVENT10_AI_SMOKE_COMPLETE True' in output
+            break
+          else:raise RuntimeError('EVENT10_AI_SMOKE_UNCONFIRMED')
+          PY
+  report:
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.check.result }}
+        run: |
+          if [ "$RESULT" = success ];then state=success;else state=failure;fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context="event10-deepseek-thinking-smoke" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="True DeepSeek high-thinking JSON completion test: $RESULT" >/dev/null

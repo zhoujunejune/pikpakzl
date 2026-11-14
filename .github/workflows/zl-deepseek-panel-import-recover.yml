@@ -1,0 +1,28 @@
+name: Recover Alibaba production panel static imports for DeepSeek-only UI
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_deepseek_import_recover.py
+      - .github/workflows/zl-deepseek-panel-import-recover.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/aliyun_deepseek_import_recover.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Restore missing JS imports and verify DeepSeek-only production panel
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_import_recover.py

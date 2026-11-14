@@ -1,0 +1,107 @@
+name: Inspect Alibaba prediction runtime health
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-prediction-health.yml'
+      - 'prediction-bot-v1/aliyun_live_health.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Read-only service health and sanitized error types
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_live_health.py
+
+      - name: Verify authenticated prediction page without old PIN
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,time,urllib.request,urllib.error
+          host="https://prediction.47-237-188-69.sslip.io"
+          pw=os.environ["ZL_PANEL_PASSWORD"]
+          header="Basic "+base64.b64encode(("zl:"+pw).encode()).decode()
+          def get(path,auth):
+            req=urllib.request.Request(host+path,headers={"Authorization":header} if auth else {})
+            try:
+              with urllib.request.urlopen(req,timeout=12) as r:
+                return r.status,r.read(300000)
+            except urllib.error.HTTPError as err:return err.code,b""
+          for n in range(6):
+            try:
+              anon,_=get("/",False)
+              status,html=get("/",True)
+              if anon==401 and status==200:break
+            except Exception:pass
+            time.sleep(5)
+          print("PREDICTION_PUBLIC_UNAUTH_STATUS",anon)
+          print("PREDICTION_PUBLIC_AUTH_STATUS",status)
+          print("PREDICTION_HAS_LEGACY_PIN_INPUT",b'id="pin" type="password"' in html)
+          print("PREDICTION_UI_AUTH_PASS",anon==401 and status==200 and b'id="pin" type="hidden"' in html)
+          assert anon==401 and status==200 and b'id="pin" type="hidden"' in html
+          PY
+
+      - name: Verify obsolete Binance API editor is removed from frontend and server
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,urllib.request,urllib.error
+          base="https://prediction.47-237-188-69.sslip.io"
+          auth="Basic "+base64.b64encode(("zl:"+os.environ["ZL_PANEL_PASSWORD"]).encode()).decode()
+          def fetch(path,login=True,method="GET"):
+            headers={"Authorization":auth} if login else {}
+            if method=="POST":
+              headers.update({"Origin":base,"Sec-Fetch-Site":"same-origin","Content-Type":"application/json"})
+            req=urllib.request.Request(base+path,headers=headers,method=method,
+                data=b'{"apiKey":"deleted"}' if method=="POST" else None)
+            try:
+              with urllib.request.urlopen(req,timeout=15) as r:return r.status,r.read(80000)
+            except urllib.error.HTTPError as e:return e.code,e.read(80000)
+          anon,_=fetch("/settings/",False)
+          auth_page,_=fetch("/settings/")
+          auth_status,_=fetch("/settings/status")
+          auth_post,_=fetch("/settings/credentials",method="POST")
+          main_code,main=fetch("/")
+          print("OLD_SETTINGS_UNAUTH",anon)
+          print("OLD_SETTINGS_AUTH",auth_page)
+          print("OLD_SETTINGS_STATUS",auth_status)
+          print("OLD_SETTINGS_POST",auth_post)
+          print("FRONTEND_LINK_REMOVED",b'href="/settings/"' not in main)
+          assert (anon,auth_page,auth_status,auth_post)==(401,404,404,404)
+          assert main_code==200 and b'href="/settings/"' not in main
+          PY
+
+      - name: Verify read-only POST works with gateway login and no former PIN
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request,urllib.error
+          base="https://prediction.47-237-188-69.sslip.io"
+          auth="Basic "+base64.b64encode(("zl:"+os.environ["ZL_PANEL_PASSWORD"]).encode()).decode()
+          headers={"Authorization":auth,"Origin":base,"Sec-Fetch-Site":"same-origin","Content-Type":"application/json"}
+          req=urllib.request.Request(base+"/api/egress-ip",headers=headers,method="POST",data=b'{"pin":""}')
+          try:
+            with urllib.request.urlopen(req,timeout=16) as r:
+              code=r.status
+              obj=json.loads(r.read(6000))
+          except urllib.error.HTTPError as e:
+            code=e.code
+            try:obj=json.loads(e.read(6000))
+            except:obj={}
+          print("SECOND_PIN_DISABLED_PROXY_POST_STATUS",code)
+          print("SECOND_PIN_DISABLED_REJECTED_AS_PIN",code==401 and "PIN" in str(obj.get("error","")).upper())
+          assert not(code==401 and "PIN" in str(obj.get("error","")).upper())
+          PY

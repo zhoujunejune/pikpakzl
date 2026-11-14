@@ -312,6 +312,22 @@ jobs:
                   d['v28DecisionReason']=e.get('trendDecisionReason')
                   d['longContextCaution']=(e.get('entryTiming') or {}).get('longContextCaution')
                   detailed.append(d)
+              # V29 conservative replay of CURRENT-V28 accepted signals only.
+              # Never infer success of suppressed signals or use later candles.
+              for y in detailed:
+                  if y['trendScore'] is None:continue
+                  print('V29_CANDIDATE_EVIDENCE',json.dumps({
+                    'at':y['at'],'side':y['side'],'hit':y['hit'],
+                    'p3':y['p3Bps'],'p5':y['p5Bps'],
+                    'score':y['trendScore'],'ema1':y['ema1mDirection'],
+                    'ema2':y['ema2mDirection'],
+                    'acc1':y['ema1mAccel'],'sc1':y['ema1mSpreadChange'],
+                    'slope2':y['ema2mSlope'],
+                    'pos60':y['pricePos60m'],'pos2h':y['pricePos2h'],
+                    'pos24h':y['pricePos24h'],'farAgainst':y['farAgainst'],
+                    'confirmedTurn':y.get('v28ConfirmedTurn'),
+                    'timeframes':[y.get('tf'+n) for n in ('1m','2m','5m','10m','15m','30m')]
+                  },ensure_ascii=False),flush=True)
               print('V27_FEATURE_META',json.dumps({'totalSettled':len(settled),
                   'joinedOriginalEvidence':sum(x.get('trendScore') is not None for x in detailed),
                   'savedSessions':len(original)},ensure_ascii=False),flush=True)

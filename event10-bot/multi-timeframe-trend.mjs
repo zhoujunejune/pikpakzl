@@ -175,7 +175,26 @@ export function assessEmaEntry(side,snapshots,ctx,priceAction){
  const reboundVsTrend=nearTermAdverse&&
    (d*a.ema9SlopeBps<=-0.35||d*a.spreadChangeBps<=-0.55)&&
    (d*b.ema9SlopeBps<=0||d*b.spreadChangeBps<=0);
- const ready=!adverse&&!extended&&!earlyWeakening&&!reboundVsTrend;
+ // V29: an adverse CLOSED 3m swing plus shrinking 1m EMA9/21 spread
+ // and decelerating EMA9 is a countertrend warning even if 5m closes lag.
+ const fastCountermove=finite(p3)&&d*p3<=-8&&
+   d*a.spreadChangeBps<=-0.25&&d*a.ema9AccelerationBps<=-0.7;
+ const day=ctx?.ranges?.["24h"],hour=ctx?.ranges?.["60m"];
+ const two=ctx?.ranges?.["2h"],p5=priceAction?.fiveMinuteBps;
+ const dayAtEdge=day?.available===true&&
+   (side==="UP"?day.position>=0.88:day.position<=0.12);
+ const hPos=hour?.available?(side==="UP"?1-hour.position:hour.position):null;
+ const twoPos=two?.available?(side==="UP"?1-two.position:two.position):null;
+ const crowded=(finite(hPos)&&hPos<=0.20)||(finite(twoPos)&&twoPos<=0.12);
+ const stretched3=finite(p3)&&d*p3>=50;
+ const stretched5=finite(p5)&&d*p5>=70;
+ const accelAgainst=d*a.ema9AccelerationBps<=-2;
+ const dailyEdgeExhaustion=dayAtEdge&&(
+   stretched3||
+   (crowded&&accelAgainst&&finite(p3)&&d*p3>=10)||
+   (finite(hPos)&&hPos<=0.20&&stretched5));
+ const ready=!adverse&&!extended&&!earlyWeakening&&!reboundVsTrend&&
+   !fastCountermove&&!dailyEdgeExhaustion;
  const crossAligned=a.crossover===(d===1?"GOLDEN":"DEATH") &&
     b.direction===side&&d*b.ema9SlopeBps>0;
  const pullback=d*a.closeDistanceEma9Bps>=-Math.max(2,0.5*atr)&&
@@ -187,10 +206,13 @@ export function assessEmaEntry(side,snapshots,ctx,priceAction){
  return {ready,reason:adverse?"V26_EMA_AGAINST_ENTRY":
    extended?"V26_EMA_OVEREXTENDED_ENTRY":
    earlyWeakening?"V27_EMA_MOMENTUM_DECAY":
-   reboundVsTrend?"V27_EMA_EARLY_COUNTERMOVE":"V27_EMA_ENTRY_OK",
+   reboundVsTrend?"V27_EMA_EARLY_COUNTERMOVE":
+   fastCountermove?"V29_FAST_COUNTERMOVE_EMA_DECAY":
+   dailyEdgeExhaustion?"V29_24H_EXTREME_CHASE":"V29_EMA_ENTRY_OK",
    entryType,opposingShortEmas:oppose,recentOpposingCross:!!freshOppositeCross,
    overextended:!!extended,momentumDecaying:!!earlyWeakening,
-   confirmedCountermove:!!reboundVsTrend,
+   confirmedCountermove:!!(reboundVsTrend||fastCountermove),
+   dailyEdgeExhaustion,fastCountermove,
    shortEmaAligned:a.direction===side&&b.direction===side,
    atr1mBps:round(atr,4)};
 }
@@ -342,7 +364,7 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
 // V28: veto weak, internally conflicting continuation signals while keeping
 // a clearly confirmed emerging 1m/2m reversal path available in BOTH directions.
 // The 30m/5m conflicts only act as vetoes when at least another indicator warns.
-export function assessTrendConflict(side,selected,timeframes,emaEntry,priceAction){
+export function assessTrendConflict(side,selected,timeframes,emaEntry,priceAction,entryTiming,ctx){
  if(side!=="UP"&&side!=="DOWN")return {ready:false,reason:"NO_DIRECTION"};
  const d=side==="UP"?1:-1;
  const trend=name=>timeframes?.[name]?.available?timeframes[name].trend:null;
@@ -363,10 +385,30 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
    (longAgainst&&(shortAgainst||emaOpposed||oppositeSpot))||
    (longAgainst&&against("15m")&&finite(spot3)&&d*spot3<6)||
    (emaOpposed&&(shortAgainst||oppositeSpot||weak));
- const ready=confirmedTurn||!repeatedDisagreement;
- return {ready,reason:ready?"V28_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
+ // V29: V28's confirmedTurn shortcut wrongly bypassed a VERIFIED adverse
+ // 4h/24h trend and 5/10/15/30m disagreement.
+ const farAgainst=entryTiming?.farTrendAgainst===true;
+ const severeLongConflict=farAgainst&&against("15m")&&against("30m");
+ const e1=emaEntry?.["1m"],e2=emaEntry?.["2m"];
+ const hour=ctx?.ranges?.["60m"];
+ const hPos=hour?.available?(side==="UP"?hour.position:1-hour.position):null;
+ const inSafeHour=finite(hPos)&&hPos<=0.85;
+ const signedScore=d*(selected?.trendScore??0);
+ const requalified=severeLongConflict&&inSafeHour&&
+   e1?.available===true&&e2?.available===true&&
+   e1.direction===side&&e2.direction===side&&
+   finite(spot3)&&d*spot3>=6&&signedScore>=0.15&&
+   d*e2.ema9SlopeBps>0&&(
+     (confirmedTurn&&d*e1.ema9AccelerationBps>=-1)||
+     (!earlyTurn&&trend("5m")===side&&trend("10m")===side&&
+       d*e1.ema9AccelerationBps>=0));
+ const severeLongUnconfirmed=severeLongConflict&&!requalified;
+ const ready=!severeLongUnconfirmed&&(confirmedTurn||!repeatedDisagreement);
+ return {ready,reason:severeLongUnconfirmed?"V29_UNCONFIRMED_4H_24H_COUNTERTREND":
+   ready?"V29_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
    conflicts,confirmedTurn,fiveAgainst,longAgainst,shortAgainst,
-   emaOpposed,oppositeSpot,weak};
+   emaOpposed,oppositeSpot,weak,farAgainst,severeLongConflict,
+   requalified,severeLongUnconfirmed};
 }
 export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot,indexAt}){
  if(feed?.ok!==true||feed?.readOnly!==true||feed?.symbol!=="BTCUSDT"||
@@ -397,7 +439,7 @@ export function analyzeMultiTimeframes({feed,at,indexPrice,previousIndexSnapshot
    "2m":ema921EntrySnapshot(mapping["2m"],"2m"),
    "5m":ema921EntrySnapshot(five.bars,"5m")};
  const emaTiming=assessEmaEntry(result.direction,emaEntry,entryHorizons,spotPriceAction);
- const trendConflict=assessTrendConflict(result.direction,result,timeframes,emaEntry,spotPriceAction);
+ const trendConflict=assessTrendConflict(result.direction,result,timeframes,emaEntry,spotPriceAction,entryTiming,entryHorizons);
  const holdForHorizon=!!result.direction&&!entryTiming.ready;
  const holdForEma=!!result.direction&&!emaTiming.ready;
  const holdForConflict=!!result.direction&&!trendConflict.ready;

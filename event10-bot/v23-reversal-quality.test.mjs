@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,assessTrendConflict,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
-import {createEngine,renewedAfterSettledMiss,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
+import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
 const json=x=>({ok:true,json:async()=>x});
 const temp=()=>path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-v23-")),"sessions.json");
@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_FREQUENCY_FIRST_V32_20261114");
+ assert.equal(RULE_VERSION,"EVENT10_HIGH_FREQUENCY_DIRECTION_V33_20261114");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -643,5 +643,27 @@ test("V32: confirmed 3m+5m price, short vote and independent long vote allow bot
    const farRisk=assessTrendConflict(side,r,bothLongAgainst,ema,p,
       {farTrendAgainst:true},{ranges:{"60m":{available:true,position:.5}}});
    assert.equal(farRisk.ready,false);
+ }
+});
+
+test("V33: only verified short spot or scored timeframes yield a fallback direction; both sides",()=>{
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1;
+   const evidence={spotPriceAction:{threeMinuteBps:d*3,oneMinuteBps:d*.5},
+     timeframes:{"1m":{available:true,trend:side},"2m":{available:true,trend:side},
+       "5m":{available:true,trend:side==="UP"?"DOWN":"UP"}},
+     trendScore:-d*.25,liveIndexChangeBps:0};
+   const r=chooseFrequencyPriorityDirection({direction:null,evidence});
+   assert.equal(r.side,side);
+   assert.equal(r.basis,"CLOSED_SPOT_3M");
+   assert.equal(r.agreeingTimeframes,2);
+   assert.equal(chooseFrequencyPriorityDirection({direction:side,evidence}),null);
+   assert.equal(chooseFrequencyPriorityDirection({direction:null,
+      evidence:{...evidence,liveIndexChangeBps:-d*5}}),null);
+   assert.equal(chooseFrequencyPriorityDirection({direction:null,
+      evidence:{...evidence,spotPriceAction:{threeMinuteBps:0,oneMinuteBps:0},
+        trendScore:0}}),null);
+   assert.equal(chooseFrequencyPriorityDirection({direction:null,
+      evidence:{...evidence,timeframes:{}}}),null);
  }
 });

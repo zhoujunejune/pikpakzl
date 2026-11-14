@@ -89,6 +89,23 @@ jobs:
               'signalDefinition':'BINANCE_INDEX_TPLUS600_PROXY_ONLY_NOT_OFFICIAL_EVENT_SETTLEMENT'},ensure_ascii=False),flush=True)
           for x in batches:
               print('TEN_ROUND_BATCH',json.dumps(x,ensure_ascii=False),flush=True)
+          # Full V33 ledger stores the original trend score even when detailed
+          # session evidence is trimmed. Evaluate same 88 settled signals, same
+          # signal timestamps and exactly the same frequency. No future inputs.
+          all_rows=sorted(settled,key=lambda x:x['openedAt'])
+          for x in all_rows:
+              print('V33_SCORE_OUTCOME',json.dumps({
+                'at':clock(x['openedAt']),'id':x.get('id'),
+                'side':x.get('direction'),'hit':x.get('proxyHit'),
+                'score':x.get('trendScore'),'reason':x.get('trendDecisionReason'),
+                'p3Pct':x.get('change3mPct'),'open':x.get('openPrice'),
+                'close':x.get('closePrice'),
+                'expirySampleLagMs':x.get('expirySampleLagMs')
+              },ensure_ascii=False),flush=True)
+          print('V33_SCORE_META',json.dumps({
+             'n':len(all_rows),'hasScore':sum(type(x.get('trendScore')) in (float,int) for x in all_rows)
+          },ensure_ascii=False),flush=True)
+
           # Read-only chronological hourly audit in Asia/Shanghai (UTC+8).
           # This is IN-SAMPLE proxy validation, not executable trading advice.
           from collections import defaultdict

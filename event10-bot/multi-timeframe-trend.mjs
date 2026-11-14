@@ -342,6 +342,17 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    sides["15m"]===five&&sides["30m"]===five&&
    liveDirection!==-candidate&&finite(p3)&&finite(p5)&&
    candidate*p3>=6&&candidate*p5>=8&&Math.abs(combined)>=0.15;
+ // V31: 10m vote can lag a fresh completed swing while 5/15/30m
+ // trends agree. This is the repeated V30 EARLY_REVERSAL_UNCONFIRMED
+ // case, where BOTH 1/2m indicators disagree with the primary trend.
+ // Require independent 3m AND 5m closed spot evidence; veto strong
+ // contrary index ticks and all one-sided (unconfirmed) swings.
+ const dominantSide=(five!==0&&five===sides["15m"]&&five===sides["30m"])?five:0;
+ const dominantRecovery=dominantSide!==0&&one===two&&one===-dominantSide&&
+   sides["10m"]!==dominantSide&&finite(p3)&&finite(p5)&&
+   dominantSide*p3>=9&&dominantSide*p5>=12&&
+   !(finite(liveBps)&&dominantSide*liveBps<=-3)&&
+   (dominantSide>0?downCloses<=1:upCloses<=1);
  // Avoid blindly chasing a six-timeframe trend against a clear 3m+5m reversal.
  const adverseAction=finite(p3)&&finite(p5)&&(
    (candidate<0&&p3>=6&&p5>=10&&upCloses>=2)||
@@ -353,6 +364,8 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    reason="V24_CONFIRMED_EARLY_REVERSAL";selected=one;
  }else if(trendResumption){
    reason="V30_TREND_RESUMPTION_SPOT_CONFIRMED";selected=candidate;
+ }else if(dominantRecovery){
+   reason="V31_DOMINANT_TREND_SPOT_RECOVERY";selected=dominantSide;
  }else if(one!==0&&one===two&&one!==five&&liveDirection!==-one)
    reason="V23_EARLY_REVERSAL_UNCONFIRMED";
  else if(candidate!==0&&one!==0&&two===one&&candidate!==one&&
@@ -367,7 +380,8 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    reason="V23_SCORE_TOO_WEAK";
  const accepted=reason==="V23_NORMALIZED_TREND"||
    reason==="V24_CONFIRMED_EARLY_REVERSAL"||
-   reason==="V30_TREND_RESUMPTION_SPOT_CONFIRMED";
+   reason==="V30_TREND_RESUMPTION_SPOT_CONFIRMED"||
+   reason==="V31_DOMINANT_TREND_SPOT_RECOVERY";
  return {direction:accepted?direction(selected):null,decisionReason:reason,
    trendScore:round(combined,4),weightedTimeframeScore:round(baseline,4),
    currentPriceDirection:direction(liveDirection),
@@ -375,7 +389,7 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    normalizedVotes:norm,shortTermDirection:direction(sign((norm["1m"]||0)+(norm["2m"]||0))),
    longContextDirection:direction(sign((norm["15m"]||0)+(norm["30m"]||0))),
    timeframeWeightCoverage:round(observedWeight,4),
-   trendResumption,closedReversal,noCalibratedConfidence:true};
+   trendResumption,dominantRecovery,closedReversal,noCalibratedConfidence:true};
 }
 // V28: veto weak, internally conflicting continuation signals while keeping
 // a clearly confirmed emerging 1m/2m reversal path available in BOTH directions.
@@ -429,10 +443,21 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
    finite(priceAction?.fiveMinuteBps)&&d*priceAction.fiveMinuteBps>=8&&
    d*e1.spreadChangeBps>=0.25&&d*e1.ema9AccelerationBps>=0&&
    d*e2.ema9SlopeBps>=-1;
- const ready=!severeLongUnconfirmed&&(confirmedTurn||resumption||!repeatedDisagreement);
+ // V31: require 5/15/30m independent votes plus actual spot momentum
+ // and a returning short EMA. Never override an adverse 4h/24h direction,
+ // hard entry-timing filters, or duplicate/rolling quotas.
+ const dominant=selected?.decisionReason==="V31_DOMINANT_TREND_SPOT_RECOVERY"&&
+   farAgainst!==true&&
+   ["5m","15m","30m"].every(name=>trend(name)===side)&&
+   e1?.available===true&&e2?.available===true&&
+   finite(priceAction?.threeMinuteBps)&&d*priceAction.threeMinuteBps>=9&&
+   finite(priceAction?.fiveMinuteBps)&&d*priceAction.fiveMinuteBps>=12&&
+   d*e1.spreadChangeBps>=0.20&&d*e1.ema9AccelerationBps>=0&&
+   d*e2.ema9SlopeBps>=-1;
+ const ready=!severeLongUnconfirmed&&(confirmedTurn||resumption||dominant||!repeatedDisagreement);
  return {ready,reason:severeLongUnconfirmed?"V29_UNCONFIRMED_4H_24H_COUNTERTREND":
-   ready?"V30_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
-   conflicts,confirmedTurn,resumption,fiveAgainst,longAgainst,shortAgainst,
+   ready?"V31_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
+   conflicts,confirmedTurn,resumption,dominant,fiveAgainst,longAgainst,shortAgainst,
    emaOpposed,oppositeSpot,weak,farAgainst,severeLongConflict,
    requalified,severeLongUnconfirmed};
 }

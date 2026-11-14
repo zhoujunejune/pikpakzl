@@ -109,8 +109,22 @@ def main():
             cmd(NODE,"--check",str(folder/name))
         cmd(NODE,"--test",str(folder/"v23-reversal-quality.test.mjs"),str(folder/"alert-watch.test.mjs"),timeout=110)
         print("EVENT10_HS_TESTS_PASSED=true",flush=True)
-        if not validate_state(status(),before.get("decisionReviewVersion")):
-            raise RuntimeError("EVENT10_PREDEPLOY_STATE_CHANGED")
+        # The live service scans every 12 seconds. busyStart/busySettle
+        # can legitimately change while staged regression tests are running.
+        # Retry for an idle publication-safe moment; NEVER ignore changes to
+        # production version, no-order configuration, or active expiry.
+        for _ in range(50):
+            fresh=status()
+            if (fresh.get("decisionReviewVersion")!=before.get("decisionReviewVersion") or
+                fresh.get("autoTradingEnabled") is not False or
+                fresh.get("executionAvailable") is not False or
+                fresh.get("configured") is not True):
+                raise RuntimeError("EVENT10_PREDEPLOY_SAFETY_STATE_CHANGED")
+            if validate_state(fresh,before.get("decisionReviewVersion")):
+                break
+            time.sleep(0.4)
+        else:
+            raise RuntimeError("EVENT10_PREDEPLOY_IDLE_WINDOW_TIMEOUT")
         backup=pathlib.Path("/var/lib/zl-event10")/(
             "late-index-backup-"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
         backup.mkdir(parents=True,exist_ok=False)

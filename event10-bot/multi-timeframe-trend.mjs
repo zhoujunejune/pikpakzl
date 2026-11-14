@@ -387,12 +387,12 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
  // Require meaningful CLOSED spot movement, not a 2bp 3-minute wiggle.
  // Short 1m+2m votes are correlated; one long vote alone must also have a
  // confirming 5m close. Two independent higher-period votes can substitute.
- const spotSide=finite(p3)&&Math.abs(p3)>=4?sign(p3):0;
+ const spotSide=finite(p3)&&Math.abs(p3)>=3?sign(p3):0;
  const shortSupport=[one,two,five].filter(x=>x===spotSide).length;
  const longSupport=["10m","15m","30m"].filter(tf=>sides[tf]===spotSide).length;
  const spot5Supports=finite(p5)&&spotSide*p5>=3;
  const liveReject=finite(liveBps)&&spotSide*liveBps<=-3;
- const confirmedVotes=longSupport>=2||(longSupport>=1&&spot5Supports);
+ const confirmedVotes=shortSupport>=2||(shortSupport>=1&&(longSupport>=1||spot5Supports));
  const highFrequency=!wasAccepted&&spotSide!==0&&!liveReject&&
    shortSupport>=1&&confirmedVotes;
  if(highFrequency){reason="V32_FREQUENCY_CLOSED_SPOT";selected=spotSide;}
@@ -476,16 +476,23 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
  const alignedShort=trend("1m")===side||trend("2m")===side||trend("5m")===side;
  const emaSupports=e1?.available&&e2?.available&&
    (e1.direction===side||e2.direction===side);
- // Never let high-frequency acceptance bypass V29's stronger 4h/24h
- // requalification: earlier loose alternative recreated failed countertrend UP.
- const farRequalified=!severeLongConflict||requalified;
- // Do not revive the V28 high-loss countertrend UP pattern when both 15m
- // and 30m disagree. A fully-confirmed V24 reversal takes its own path.
+ // V32 frequency-first: allow a confirmed short-lived countertrend direction
+ // only with two aligned EMA directions, non-extreme hourly position and
+ // 5m spot support. This prioritizes opportunities; it does NOT calibrate hit rate.
  const againstBothLong=against("15m")&&against("30m");
+ const hourly=ctx?.ranges?.["60m"];
+ const nearEdge=hourly?.available&&
+   (side==="UP"?hourly.position>=0.94:hourly.position<=0.06);
+ const counterConfirmed=!againstBothLong||(
+   e1?.available&&e2?.available&&e1.direction===side&&e2.direction===side&&
+   finite(priceAction?.fiveMinuteBps)&&d*priceAction.fiveMinuteBps>=4&&
+   !nearEdge);
+ const farRequalified=!severeLongConflict||requalified||(
+   counterConfirmed&&finite(spot3)&&d*spot3>=4&&!nearEdge);
  const frequencyReady=frequencyRequested&&alignedShort&&emaSupports&&
-   !againstBothLong&&finite(spot3)&&d*spot3>=4&&farRequalified;
- const ready=!severeLongUnconfirmed&&
-   (frequencyReady||confirmedTurn||resumption||dominant||!repeatedDisagreement);
+   counterConfirmed&&finite(spot3)&&d*spot3>=3&&farRequalified;
+ const ready=frequencyReady||(!severeLongUnconfirmed&&
+   (confirmedTurn||resumption||dominant||!repeatedDisagreement));
  return {ready,reason:ready?"V32_TREND_CONTEXT_OK":
    severeLongUnconfirmed?"V29_UNCONFIRMED_4H_24H_COUNTERTREND":
    "V28_CONFLICTED_MULTITIMEFRAME_ENTRY",

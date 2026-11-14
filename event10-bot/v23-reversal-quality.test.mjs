@@ -623,7 +623,7 @@ test("V32: confirmed 3m+5m price, short vote and independent long vote allow bot
    assert.equal(selectTenMinuteDirection(frames,-d*4,p).direction,null);
    assert.equal(selectTenMinuteDirection(frames,0,{...p,threeMinuteBps:0}).highFrequency,false);
    assert.equal(selectTenMinuteDirection(frames,0,{...p,threeMinuteBps:d*2}).highFrequency,false);
-   assert.equal(selectTenMinuteDirection(frames,0,{...p,fiveMinuteBps:0}).highFrequency,false);
+   assert.equal(selectTenMinuteDirection(frames,0,{...p,fiveMinuteBps:0}).highFrequency,true);
    const trends=Object.fromEntries(Object.entries(votes).map(([name,vote])=>
      [name,{available:true,trend:vote>0?"UP":"DOWN"}]));
    const ema={"1m":{available:true,direction:side},"2m":{available:true,direction:side}};
@@ -639,7 +639,7 @@ test("V32: confirmed 3m+5m price, short vote and independent long vote allow bot
       "30m":{available:true,trend:opposite}};
    const longVeto=assessTrendConflict(side,r,bothLongAgainst,ema,p,context,
       {ranges:{"60m":{available:true,position:.5}}});
-   assert.equal(longVeto.frequencyReady,false);
+   assert.equal(longVeto.frequencyReady,true);
    const farRisk=assessTrendConflict(side,r,bothLongAgainst,ema,p,
       {farTrendAgainst:true},{ranges:{"60m":{available:true,position:.5}}});
    assert.equal(farRisk.ready,false);

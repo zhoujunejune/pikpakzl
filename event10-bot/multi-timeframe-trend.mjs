@@ -479,8 +479,11 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
  // Never let high-frequency acceptance bypass V29's stronger 4h/24h
  // requalification: earlier loose alternative recreated failed countertrend UP.
  const farRequalified=!severeLongConflict||requalified;
+ // Do not revive the V28 high-loss countertrend UP pattern when both 15m
+ // and 30m disagree. A fully-confirmed V24 reversal takes its own path.
+ const againstBothLong=against("15m")&&against("30m");
  const frequencyReady=frequencyRequested&&alignedShort&&emaSupports&&
-   finite(spot3)&&d*spot3>=4&&farRequalified;
+   !againstBothLong&&finite(spot3)&&d*spot3>=4&&farRequalified;
  const ready=!severeLongUnconfirmed&&
    (frequencyReady||confirmedTurn||resumption||dominant||!repeatedDisagreement);
  return {ready,reason:ready?"V32_TREND_CONTEXT_OK":

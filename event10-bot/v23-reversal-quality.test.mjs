@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_VERIFIED_RESUMPTION_V30_20261114");
+ assert.equal(RULE_VERSION,"EVENT10_BALANCED_RECOVERY_V31_20261114");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -564,5 +564,48 @@ test("V30: 5/10/15/30m trend can resume only with fresh 3m+5m and recovering EMA
      {farTrendAgainst:true},{}).ready,false,side);
    const bad3=selectTenMinuteDirection(votes,0,{...pa,threeMinuteBps:d*2});
    assert.notEqual(bad3.decisionReason,"V30_TREND_RESUMPTION_SPOT_CONFIRMED");
+ }
+});
+
+test("V31: 5/15/30m dominant recovery produces UP/DOWN when 10m and 1/2m lag, with two independent closed spot moves",()=>{
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1,other=side==="UP"?"DOWN":"UP";
+   const votes={},tf={};
+   for(const name of ["1m","2m","5m","10m","15m","30m"]){
+     const lag=["1m","2m","10m"].includes(name);
+     votes[name]={available:true,vote:d*(lag?-5.2:5.2)};
+     tf[name]={available:true,trend:lag?other:side};
+   }
+   const price={threeMinuteBps:d*14,fiveMinuteBps:d*21,
+     upCloses:side==="UP"?2:0,downCloses:side==="DOWN"?2:0};
+   const result=selectTenMinuteDirection(votes,0,price);
+   assert.equal(result.direction,side,side);
+   assert.equal(result.decisionReason,"V31_DOMINANT_TREND_SPOT_RECOVERY");
+   assert.equal(result.dominantRecovery,true);
+   const ema={"1m":{available:true,direction:other,
+       spreadChangeBps:d*.55,ema9AccelerationBps:d*.8},
+     "2m":{available:true,direction:other,ema9SlopeBps:d*.1}};
+   const noConflict={farTrendAgainst:false};
+   const allowed=assessTrendConflict(side,result,tf,ema,price,noConflict,{ranges:{}});
+   assert.equal(allowed.ready,true,side);
+   assert.equal(allowed.dominant,true,side);
+   assert.equal(assessTrendConflict(side,result,tf,ema,price,
+     {farTrendAgainst:true},{ranges:{}}).ready,false,side);
+   assert.equal(assessTrendConflict(side,result,tf,
+     {...ema,"1m":{...ema["1m"],ema9AccelerationBps:-d*2}},
+     price,noConflict,{}).ready,false,side);
+   assert.equal(assessTrendConflict(side,result,tf,
+     {...ema,"1m":{...ema["1m"],spreadChangeBps:d*.1}},
+     price,noConflict,{}).ready,false,side);
+   const noFive=selectTenMinuteDirection(votes,0,{...price,fiveMinuteBps:d*4});
+   assert.notEqual(noFive.decisionReason,"V31_DOMINANT_TREND_SPOT_RECOVERY");
+   const indexOpposed=selectTenMinuteDirection(votes,-d*5,price);
+   assert.notEqual(indexOpposed.decisionReason,"V31_DOMINANT_TREND_SPOT_RECOVERY");
+   tf["15m"]={available:true,trend:other};
+   assert.equal(assessTrendConflict(side,result,tf,ema,price,noConflict,{}).ready,false);
+   const changed=Object.fromEntries(Object.entries(votes).map(([k,v])=>[k,{...v}]));
+   changed["30m"].vote=-d*5.2;
+   assert.notEqual(selectTenMinuteDirection(changed,0,price).decisionReason,
+     "V31_DOMINANT_TREND_SPOT_RECOVERY");
  }
 });

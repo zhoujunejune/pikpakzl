@@ -378,10 +378,21 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    reason="V24_SPOT_REVERSAL_CONFLICT";
  else if(Math.abs(combined)<0.20)
    reason="V23_SCORE_TOO_WEAK";
- const accepted=reason==="V23_NORMALIZED_TREND"||
-   reason==="V24_CONFIRMED_EARLY_REVERSAL"||
-   reason==="V30_TREND_RESUMPTION_SPOT_CONFIRMED"||
-   reason==="V31_DOMINANT_TREND_SPOT_RECOVERY";
+ // V32 frequency-first: on a mixed market, use actual CLOSED 3m spot
+ // direction if at least two independent short/long trend votes support it.
+ // No signal on stale data, flat 3m price or a strong opposing live tick.
+ // This raises opportunity count, not predicted hit probability.
+ const wasAccepted=["V23_NORMALIZED_TREND","V24_CONFIRMED_EARLY_REVERSAL",
+   "V30_TREND_RESUMPTION_SPOT_CONFIRMED","V31_DOMINANT_TREND_SPOT_RECOVERY"].includes(reason);
+ const spotSide=finite(p3)&&Math.abs(p3)>=2?sign(p3):0;
+ const shortSupport=[one,two,five].filter(x=>x===spotSide).length;
+ const longSupport=["10m","15m","30m"].filter(tf=>sides[tf]===spotSide).length;
+ const spot5Supports=finite(p5)&&spotSide*p5>=2;
+ const liveReject=finite(liveBps)&&spotSide*liveBps<=-3;
+ const highFrequency=!wasAccepted&&spotSide!==0&&!liveReject&&
+   shortSupport>=1&&(shortSupport+longSupport>=2||spot5Supports);
+ if(highFrequency){reason="V32_FREQUENCY_CLOSED_SPOT";selected=spotSide;}
+ const accepted=wasAccepted||highFrequency;
  return {direction:accepted?direction(selected):null,decisionReason:reason,
    trendScore:round(combined,4),weightedTimeframeScore:round(baseline,4),
    currentPriceDirection:direction(liveDirection),
@@ -389,7 +400,7 @@ export function selectTenMinuteDirection(timeframes,liveBps=null,priceAction=nul
    normalizedVotes:norm,shortTermDirection:direction(sign((norm["1m"]||0)+(norm["2m"]||0))),
    longContextDirection:direction(sign((norm["15m"]||0)+(norm["30m"]||0))),
    timeframeWeightCoverage:round(observedWeight,4),
-   trendResumption,dominantRecovery,closedReversal,noCalibratedConfidence:true};
+   trendResumption,dominantRecovery,closedReversal,highFrequency,noCalibratedConfidence:true};
 }
 // V28: veto weak, internally conflicting continuation signals while keeping
 // a clearly confirmed emerging 1m/2m reversal path available in BOTH directions.
@@ -454,10 +465,24 @@ export function assessTrendConflict(side,selected,timeframes,emaEntry,priceActio
    finite(priceAction?.fiveMinuteBps)&&d*priceAction.fiveMinuteBps>=12&&
    d*e1.spreadChangeBps>=0.20&&d*e1.ema9AccelerationBps>=0&&
    d*e2.ema9SlopeBps>=-1;
- const ready=!severeLongUnconfirmed&&(confirmedTurn||resumption||dominant||!repeatedDisagreement);
- return {ready,reason:severeLongUnconfirmed?"V29_UNCONFIRMED_4H_24H_COUNTERTREND":
-   ready?"V31_TREND_CONTEXT_OK":"V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
-   conflicts,confirmedTurn,resumption,dominant,fiveAgainst,longAgainst,shortAgainst,
+ // V32 frequency path does not demand full six-period agreement. Allow
+ // confirmed 3m spot + an aligned 1/2m or 5m vote and EMA. A 4h/24h
+ // countertrend requires BOTH EMA confirmations and avoids hourly extremes.
+ const frequencyRequested=selected?.decisionReason==="V32_FREQUENCY_CLOSED_SPOT";
+ const alignedShort=trend("1m")===side||trend("2m")===side||trend("5m")===side;
+ const emaSupports=e1?.available&&e2?.available&&
+   (e1.direction===side||e2.direction===side);
+ const farRequalified=!severeLongConflict||(
+   e1?.available&&e2?.available&&e1.direction===side&&e2.direction===side&&
+   inSafeHour&&finite(spot3)&&d*spot3>=4);
+ const frequencyReady=frequencyRequested&&alignedShort&&emaSupports&&
+   finite(spot3)&&d*spot3>=2&&farRequalified;
+ const ready=frequencyReady||(!severeLongUnconfirmed&&
+   (confirmedTurn||resumption||dominant||!repeatedDisagreement));
+ return {ready,reason:ready?"V32_TREND_CONTEXT_OK":
+   severeLongUnconfirmed?"V29_UNCONFIRMED_4H_24H_COUNTERTREND":
+   "V28_CONFLICTED_MULTITIMEFRAME_ENTRY",
+   conflicts,confirmedTurn,resumption,dominant,frequencyReady,fiveAgainst,longAgainst,shortAgainst,
    emaOpposed,oppositeSpot,weak,farAgainst,severeLongConflict,
    requalified,severeLongUnconfirmed};
 }

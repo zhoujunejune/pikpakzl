@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_LONG_REGIME_REQUALIFY_V29_20261114");
+ assert.equal(RULE_VERSION,"EVENT10_VERIFIED_RESUMPTION_V30_20261114");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -515,4 +515,54 @@ test("V29: no historical or unconfirmed 4h/24h context may fabricate an entry ve
  assert.equal(out.direction,"UP");
  assert.equal(out.evidence.trendConflict.severeLongConflict,false);
  assert.equal(out.evidence.entryReady,true);
+});
+
+test("V30: closed-spot 3m/5m and all 10/15/30m allow confirmed 1/2m reversal with quiet live tick",()=>{
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1;
+   const t={};
+   for(const name of ["1m","2m","5m","10m","15m","30m"]){
+     t[name]={available:true,vote:d*(name==="5m"?-5.2:5.2)};
+   }
+   const pa={threeMinuteBps:d*12,fiveMinuteBps:d*11,
+     upCloses:side==="UP"?2:1,downCloses:side==="DOWN"?2:1};
+   const r=selectTenMinuteDirection(t,0,pa);
+   assert.equal(r.direction,side);
+   assert.equal(r.decisionReason,"V24_CONFIRMED_EARLY_REVERSAL");
+   assert.equal(r.closedReversal,true);
+   t["30m"].vote=-d*5.2;
+   const unconfirmed=selectTenMinuteDirection(t,0,pa);
+   assert.notEqual(unconfirmed.decisionReason,"V24_CONFIRMED_EARLY_REVERSAL");
+ }
+});
+test("V30: 5/10/15/30m trend can resume only with fresh 3m+5m and recovering EMA; symmetric",()=>{
+ for(const side of ["UP","DOWN"]){
+   const d=side==="UP"?1:-1,opposite=side==="UP"?"DOWN":"UP";
+   const votes={};const tf={};
+   for(const name of ["1m","2m","5m","10m","15m","30m"]){
+     const shorter=name==="1m"||name==="2m";
+     votes[name]={available:true,vote:d*(shorter?-1.8:5.2)};
+     tf[name]={available:true,trend:shorter?opposite:side};
+   }
+   const pa={threeMinuteBps:d*12,fiveMinuteBps:d*16,
+     upCloses:side==="UP"?2:1,downCloses:side==="DOWN"?2:1};
+   const selection=selectTenMinuteDirection(votes,0,pa);
+   assert.equal(selection.direction,side);
+   assert.equal(selection.decisionReason,"V30_TREND_RESUMPTION_SPOT_CONFIRMED");
+   const ema={"1m":{available:true,direction:opposite,
+       spreadChangeBps:d*.5,ema9AccelerationBps:d*.8},
+     "2m":{available:true,direction:opposite,ema9SlopeBps:d*.1}};
+   const valid=assessTrendConflict(side,selection,tf,ema,pa,
+     {farTrendAgainst:false},{ranges:{"60m":{available:true,position:.5}}});
+   assert.equal(valid.ready,true,side);
+   assert.equal(valid.resumption,true,side);
+   assert.equal(assessTrendConflict(side,selection,tf,
+     {...ema,"1m":{...ema["1m"],ema9AccelerationBps:-d*1}},
+     pa,{farTrendAgainst:false},{}).ready,false,side);
+   const adverse={...tf,"30m":{available:true,trend:opposite}};
+   assert.equal(assessTrendConflict(side,selection,adverse,ema,pa,
+     {farTrendAgainst:true},{}).ready,false,side);
+   const bad3=selectTenMinuteDirection(votes,0,{...pa,threeMinuteBps:d*2});
+   assert.notEqual(bad3.decisionReason,"V30_TREND_RESUMPTION_SPOT_CONFIRMED");
+ }
 });

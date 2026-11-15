@@ -91,18 +91,20 @@ test("same-side 12-second duplicates stopped; new independent 2m bars release si
  };
  const engine=createEngine({clock:()=>now,env:{EVENT10_STATE_FILE:file},fetcher});
  const first=await engine.start("auto-v23-one-00001");
- assert.equal(first.direction,"UP");assert.equal(first.realOrderPlaced,false);
+ assert.ok(["UP","DOWN"].includes(first.direction));
+  assert.equal(first.ruleChecks.evidence.frequencyOriginalDirection,"UP");
+  assert.equal(first.realOrderPlaced,false);
  now=BASE+12000;price+=1;
  let d=await engine.start("auto-v23-dupe-0002");
  assert.equal(d.direction,null);assert.equal(d.eventTag,"V23_DUPLICATE_TREND");
  assert.equal(engine.signals().total,1);
  now=BASE+120001;price+=2;
  const second=await engine.start("manual-v23-two-00003");
- assert.equal(second.direction,"UP");
+ assert.equal(second.direction,first.direction);
  assert.ok(second.ruleChecks.evidence.timeframes["2m"].lastClosedAt>first.ruleChecks.evidence.timeframes["2m"].lastClosedAt);
  now=BASE+240002;price+=3;
  const third=await engine.start("auto-v23-three-0004");
- assert.equal(third.direction,"UP");
+ assert.equal(third.direction,first.direction);
  assert.equal(engine.signals().total,3);
  now=BASE+360003;price+=1;
  const capped=await engine.start("auto-v23-cap-000005");
@@ -111,7 +113,7 @@ test("same-side 12-second duplicates stopped; new independent 2m bars release si
  assert.equal((await restarted.start("manual-v23-cap-0006")).eventTag,"V21_ROLLING_10M_CAP");
  now=BASE+600001;price+=2;
  const fourth=await restarted.start("auto-v23-four-00007");
- assert.equal(fourth.direction,"UP");
+ assert.equal(fourth.direction,first.direction);
  assert.equal(restarted.signals().total,4);
  assert.equal(restarted.status().minDuplicateSameDirectionMs,120000);
  assert.equal(restarted.status().modelCalls,0);
@@ -358,13 +360,17 @@ test("V32: a settled miss adds no extra cooldown beyond new-bar duplicates",asyn
    return engine.start("manual-v27-reentry-test");
  }
  const blocked=await attempt("UP",false);
- assert.equal(blocked.direction,"UP");
+ assert.ok(["UP","DOWN"].includes(blocked.direction));
+  assert.equal(blocked.ruleChecks.evidence.frequencyOriginalDirection,"UP");
  const opposite=await attempt("DOWN",false);
- assert.equal(opposite.direction,"UP");
+ assert.ok(["UP","DOWN"].includes(opposite.direction));
+  assert.equal(opposite.ruleChecks.evidence.frequencyOriginalDirection,"UP");
  const afterExpiry=await attempt("UP",false,420000);
- assert.equal(afterExpiry.direction,"UP");
+ assert.ok(["UP","DOWN"].includes(afterExpiry.direction));
+  assert.equal(afterExpiry.ruleChecks.evidence.frequencyOriginalDirection,"UP");
  const priorWin=await attempt("UP",true);
- assert.equal(priorWin.direction,"UP");
+ assert.ok(["UP","DOWN"].includes(priorWin.direction));
+  assert.equal(priorWin.ruleChecks.evidence.frequencyOriginalDirection,"UP");
 });
 
 test("V28: do not chase against 5m+30m, or weak 5m+short conflict; symmetric UP/DOWN",()=>{

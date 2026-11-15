@@ -763,3 +763,54 @@ test("V38 strong positive-score UP calibrates direction only after admission, ne
  assert.equal(SIGNAL_WINDOW_MS,600000);
  assert.equal(AUTO_SLOT_MS,12000);
 });
+
+test("V39 fresh buy flow plus depth/index overrides only the published direction; same 12s slot and quota",async()=>{
+ let now=BASE;
+ const jsonValue=value=>({ok:true,json:async()=>value});
+ const indexBars=()=>Array.from({length:6},(_,i)=>{
+  const t=Math.floor(now/60000)*60000-(6-i)*60000,c=70000+i*13;
+  return [t,String(c-2),String(c+3),String(c-3),String(c),"0",t+59999];
+ });
+ const fetcher=async url=>{
+  if(url.includes("shadow-market-data"))return jsonValue(fixture(now));
+  if(url.includes("/premiumIndex"))return jsonValue({symbol:"BTCUSDT",indexPrice:"70006",time:now-100});
+  if(url.includes("/depth"))return jsonValue({T:now-100,
+   bids:Array.from({length:20},(_,i)=>[String(70000-i*0.1),"5"]),
+   asks:Array.from({length:20},(_,i)=>[String(70000.1+i*0.1),"1"])});
+  if(url.includes("/aggTrades"))return jsonValue(Array.from({length:60},(_,i)=>({
+   T:now-6200+i*100,p:"70001",q:"0.1",m:i>=48})));
+  if(url.includes("/indexPriceKlines"))return jsonValue(indexBars());
+  throw Error("UNEXPECTED_ROUTE");
+ };
+ const file=temp(),engine=createEngine({clock:()=>now,fetcher,env:{EVENT10_STATE_FILE:file}});
+ const first=await engine.start("auto-v39-micro-one");
+ assert.equal(first.direction,"UP");
+ assert.equal(first.ruleChecks.evidence.microstructure.availableSources,3);
+ assert.equal(first.ruleChecks.evidence.microstructure.reason,"MICRO_CORRECTS_DIRECTION");
+ assert.equal(first.ruleChecks.evidence.frequencyOriginalDirection,"UP");
+ assert.equal(engine.signals().total,1);
+ now=BASE+12000;
+ const duplicate=await engine.start("auto-v39-micro-duplicate");
+ assert.equal(duplicate.direction,null);
+ assert.equal(duplicate.eventTag,"V23_DUPLICATE_TREND");
+ assert.equal(engine.signals().total,1);
+ assert.equal(engine.status().maxSignalsPerTenMinutes,3);
+ assert.equal(engine.status().autoIntervalMs,12000);
+});
+test("V39 unavailable optional feeds preserve base signal and expose actual errors",async()=>{
+ const now=BASE,file=temp();
+ const fetcher=async url=>{
+  if(url.includes("shadow-market-data"))return json(fixture(now));
+  if(url.includes("/premiumIndex"))return json({symbol:"BTCUSDT",indexPrice:"70006",time:now-100});
+  throw Error("TEST_OPTIONAL_SOURCE_OFFLINE");
+ };
+ const engine=createEngine({clock:()=>now,fetcher,env:{EVENT10_STATE_FILE:file}});
+ const first=await engine.start("manual-v39-source-fallback");
+ assert.ok(["UP","DOWN"].includes(first.direction));
+ assert.equal(first.ruleChecks.evidence.microstructure.availableSources,0);
+ assert.equal(first.ruleChecks.evidence.microstructure.changed,false);
+ const health=await engine.probe();
+ assert.equal(health.availability.orderBook.available,false);
+ assert.equal(health.availability.aggressiveFlow.available,false);
+ assert.equal(health.availability.indexKlines.available,false);
+});

@@ -70,3 +70,25 @@ test("optional source errors cannot block a signal; return accurate per-source a
  assert.equal(none.availability.orderBook.available,false);
  assert.equal(chooseMicrostructureDirection("UP",none.features,AT).side,"UP");
 });
+
+test("V40 protected rebound resists two stale-noisy bearish votes, but unanimous fresh bearish sources may correct it",()=>{
+ const at=AT;
+ const buyFlow={...parseMicroAggTrades(trades(10,50),at),receivedAt:at};
+ const shortDown={...parseMicroIndexKlines(indexBars(false),at),receivedAt:at};
+ const upDepth={...parseMicroOrderBook(book(5,1),at),receivedAt:at};
+ const mixed={aggressiveFlow:buyFlow,indexKlines:shortDown,orderBook:upDepth};
+ assert.equal(buyFlow.vote,"DOWN");
+ assert.equal(shortDown.vote,"DOWN");
+ assert.equal(upDepth.vote,"UP");
+ assert.equal(chooseMicrostructureDirection("UP",mixed,at).side,"DOWN");
+ const guard=chooseMicrostructureDirection("UP",mixed,at,{requireUnanimousDown:true});
+ assert.equal(guard.side,"UP");
+ assert.equal(guard.changed,false);
+ assert.equal(guard.reason,"MICRO_PROTECTED_BOUNCE_REQUIRES_THREE_BEARISH_SOURCES");
+ const downDepth={...parseMicroOrderBook(book(1,5),at),receivedAt:at};
+ const unanimous=chooseMicrostructureDirection("UP",{...mixed,orderBook:downDepth},at,
+   {requireUnanimousDown:true});
+ assert.equal(unanimous.side,"DOWN");
+ assert.equal(unanimous.changed,true);
+ assert.equal(chooseMicrostructureDirection("DOWN",mixed,at,{requireUnanimousDown:true}).side,"DOWN");
+});

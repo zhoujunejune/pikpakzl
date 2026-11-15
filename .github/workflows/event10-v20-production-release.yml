@@ -1,8 +1,8 @@
-# V38: same-frequency directional-only strong-score UP calibration; 12s scan, 3-per-10m and 2m duplicate policy unchanged.
-# Deploy V38 on existing Aliyun EVENT10 server, no AI/no orders and no unrelated service modifications.
-# V38: after successful V33 admission only, adjust high-score UP signals using pre-entry trendScore>=0.30.
+# V39: optional fresh USD-M depth + aggTrades + indexPriceKlines consensus, after original V38 admission.
+# Deploy V39 only in EVENT10; no API orders/AI, optional feed failures never block publication.
+# V39 retains 12s scan, 3/10m rolling cap and original-side >=120s/closed-2m de-duplication.
 # Release verification includes the tested updated signal-selection and countertrend checks; old builds cannot reach production.
-name: EVENT10 V38 strong-score UP calibrated same-frequency production release
+name: EVENT10 V39 optional microstructure fusion guarded same-frequency production release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -21,9 +21,10 @@ jobs:
       - run: |
           node --check event10-bot/multi-timeframe-trend.mjs
           node --check event10-bot/readonly-candles.mjs
+          node --check event10-bot/microstructure-signals.mjs
           node --check event10-bot/pure-signal.mjs
           node --check event10-bot/manual-engine.mjs
-          node --test event10-bot/v23-reversal-quality.test.mjs event10-bot/alert-watch.test.mjs
+          node --test event10-bot/v23-reversal-quality.test.mjs event10-bot/alert-watch.test.mjs event10-bot/microstructure-signals.test.mjs
           python3 -m py_compile event10-bot/aliyun_high_selectivity_only.py
           node --input-type=module - <<'JS'
           import fs from 'node:fs';
@@ -58,7 +59,7 @@ jobs:
               region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
           remote=f"""#!/bin/bash
           set -Eeuo pipefail
-          stage=$(mktemp -d /tmp/event10-v38-XXXXXXXX)
+          stage=$(mktemp -d /tmp/event10-v39-XXXXXXXX)
           trap 'rm -rf "$stage"' EXIT
           curl -fsSL --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/aliyun_high_selectivity_only.py" -o "$stage/deploy.py"
           python3 -m py_compile "$stage/deploy.py"
@@ -66,7 +67,7 @@ jobs:
           """
           res=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
               instance_id='b67374069bb3457ba6a3a2ede9305d3f',
-              name='event10-v38-strong-up-calibration-10m',
+              name='event10-v39-optional-microstructure-10m',
               type='RunShellScript',working_user='root',command_content=remote,timeout=370))
           for _ in range(160):
               time.sleep(2)
@@ -96,12 +97,12 @@ jobs:
               with urllib.request.urlopen(req,timeout=20) as r:return json.load(r)
           s=get('/event10/api/status')
           l=get('/event10/api/signals?limit=1&offset=0')
-          assert s['decisionReviewVersion']=='EVENT10_STRONG_UP_MEAN_REVERSION_V38_20261115'
+          assert s['decisionReviewVersion']=='EVENT10_MICROSTRUCTURE_FUSION_V39_20261115'
           assert l['version']==s['decisionReviewVersion']
-          assert s['providerModel']=='PURE_SIGNAL_V38_STRONG_UP_CALIBRATION'
+          assert s['providerModel']=='PURE_SIGNAL_V39_MICROSTRUCTURE_FUSION'
           assert s['autoTradingEnabled'] is False and s['modelCalls']==0
           assert s['minSignalGapMs']==0 and s['maxSignalsPerTenMinutes']==3 and s['autoIntervalMs']==12000 and s['livePriceUsedForDirection'] is True
           assert s['multiTimeframeIntervals']==['1m','2m','5m','10m','15m','30m']
           assert s['minDuplicateSameDirectionMs']==120000 and s['requiresNewCompleted2mBarForRepeat'] is True
-          print('V38_SAME_FREQUENCY_PRODUCTION_VERIFIED=true',flush=True)
+          print('V39_SAME_FREQUENCY_PRODUCTION_VERIFIED=true',flush=True)
           PY

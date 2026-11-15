@@ -343,6 +343,27 @@ jobs:
                   d['v28Conflicts']=conflict.get('conflicts')
                   d['v28DecisionReason']=e.get('trendDecisionReason')
                   d['longContextCaution']=(e.get('entryTiming') or {}).get('longContextCaution')
+                  # V39: original publication-time micro evidence, strictly read-only.
+                  # Pre-micro final side is stored before optional consensus; no future inputs.
+                  m=e.get('microstructure') or {}
+                  before_micro=x.get('v35EquivalentDirection')
+                  if before_micro not in ('UP','DOWN'):before_micro=None
+                  baseline_hit=(x.get('closePrice')>x.get('openPrice') if before_micro=='UP' else
+                      x.get('closePrice')<x.get('openPrice') if before_micro=='DOWN' else None)
+                  if version.endswith('V39_20261115'):
+                      print('V39_MICRO_OUTCOME',json.dumps({
+                         'id':x.get('id'),'at':d['at'],'side':d['side'],
+                         'preMicroSide':before_micro,'hit':d['hit'],'preMicroHit':baseline_hit,
+                         'microChanged':m.get('changed'),'microReason':m.get('reason'),
+                         'votes':m.get('votes'),'sources':m.get('availableSources'),
+                         'depthImbalance':m.get('depthImbalance'),
+                         'buyFraction':m.get('tradeBuyFraction'),
+                         'index3mBps':m.get('index3mBps'),
+                         'p3Bps':d.get('p3Bps'),'p5Bps':d.get('p5Bps'),
+                         'trendScore':d.get('trendScore'),
+                         'farAgainst':d.get('farAgainst'),
+                         'tfs':[d.get('tf'+n) for n in ('1m','2m','5m','10m','15m','30m')]
+                      },ensure_ascii=False),flush=True)
                   detailed.append(d)
               # V29 conservative replay of CURRENT-V28 accepted signals only.
               # Never infer success of suppressed signals or use later candles.

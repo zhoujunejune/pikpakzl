@@ -1,8 +1,8 @@
-# V36: keep verified 12s scan idle-window safety, no-order and 3-per-10m invariants.
-# Deploy V36 settled-only strong DOWN direction correction after authenticated source validation, same frequency and no orders.
-# V36: prior settled directional failure evidence changes final side only, not original eligible slot timing.
+# V37: keep verified 12s scan, zero trading, original 3-per-10m and dedup policy. Only disable harmful DOWN-to-UP loss-streak inversion.
+# Deploy V37 UP-only settled-context correction; preserve V35 UP logic and original V33 admission/cadence.
+# V37: no consecutive-loss DOWN inversion. Any existing V35 UP-only correction occurs after eligibility checks.
 # Release verification includes the tested updated signal-selection and countertrend checks; old builds cannot reach production.
-name: EVENT10 V36 settled-only failed DOWN correction guarded production release
+name: EVENT10 V37 remove harmful DOWN flip guarded same-frequency production release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -58,7 +58,7 @@ jobs:
               region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
           remote=f"""#!/bin/bash
           set -Eeuo pipefail
-          stage=$(mktemp -d /tmp/event10-v35-XXXXXXXX)
+          stage=$(mktemp -d /tmp/event10-v37-XXXXXXXX)
           trap 'rm -rf "$stage"' EXIT
           curl -fsSL --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/aliyun_high_selectivity_only.py" -o "$stage/deploy.py"
           python3 -m py_compile "$stage/deploy.py"
@@ -66,7 +66,7 @@ jobs:
           """
           res=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
               instance_id='b67374069bb3457ba6a3a2ede9305d3f',
-              name='event10-v35-countertrend-calibration-10m',
+              name='event10-v37-down-flip-rollback-10m',
               type='RunShellScript',working_user='root',command_content=remote,timeout=370))
           for _ in range(160):
               time.sleep(2)
@@ -96,12 +96,12 @@ jobs:
               with urllib.request.urlopen(req,timeout=20) as r:return json.load(r)
           s=get('/event10/api/status')
           l=get('/event10/api/signals?limit=1&offset=0')
-          assert s['decisionReviewVersion']=='EVENT10_FAILED_DOWNTREND_ADAPTIVE_V36_20261115'
+          assert s['decisionReviewVersion']=='EVENT10_DOWN_FLIP_ROLLBACK_V37_20261115'
           assert l['version']==s['decisionReviewVersion']
-          assert s['providerModel']=='PURE_SIGNAL_V36_SETTLED_DIRECTION_ADAPTIVE'
+          assert s['providerModel']=='PURE_SIGNAL_V37_UP_ONLY_ADAPTIVE'
           assert s['autoTradingEnabled'] is False and s['modelCalls']==0
           assert s['minSignalGapMs']==0 and s['maxSignalsPerTenMinutes']==3 and s['autoIntervalMs']==12000 and s['livePriceUsedForDirection'] is True
           assert s['multiTimeframeIntervals']==['1m','2m','5m','10m','15m','30m']
           assert s['minDuplicateSameDirectionMs']==120000 and s['requiresNewCompleted2mBarForRepeat'] is True
-          print('V36_SAME_FREQUENCY_PRODUCTION_VERIFIED=true',flush=True)
+          print('V37_SAME_FREQUENCY_PRODUCTION_VERIFIED=true',flush=True)
           PY

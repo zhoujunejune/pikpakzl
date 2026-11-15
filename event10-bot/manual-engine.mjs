@@ -440,7 +440,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     };
     return {lastHour:aggregate(scanAudit.filter(x=>x.at>=clock()-3600000&&x.at<=clock()+1000)),
       last24Hours:aggregate(scanAudit),lastScanAt:scanAudit.at(-1)?.at??null,
-      note:"V40保持V39全部信号入围和发出名额：4小时/24小时偏弱且24小时处于中位、1/2分钟EMA看涨时不机械将强评分UP反向；盘口共识仍参与最终方向判断。"};
+      note:"V40R1仅调整已入围方向；V40保持V39全部信号入围和发出名额：4小时/24小时偏弱且24小时处于中位、1/2分钟EMA看涨时不机械将强评分UP反向；盘口共识仍参与最终方向判断。"};
   }
 
   // Only pending/last 500 full sessions remain hot; the signal ledger retains all.
@@ -471,7 +471,8 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     const h=latest();
     const ledgerStats=signalLedger.list(1,0).stats;
     return {ok:true,bot:"EVENT10", mode:"MIDRANGE_REBOUND_V40_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
-      providerModel:"PURE_SIGNAL_V40_MIDRANGE_REBOUND",aiMandatory:false,
+      providerModel:"PURE_SIGNAL_V40_MIDRANGE_REBOUND",
+      directionCalibrationPatch:"V40R1_LOWER_HOUR_REBOUND_20261116",aiMandatory:false,
       aiReviewConfigured:false,aiReviewModel:null,aiLearningMode:"DISABLED",
       aiReviewStats:{...aiStats},aiInProgress:null,
       aiLearningProfile:null,

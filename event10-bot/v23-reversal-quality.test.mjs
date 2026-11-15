@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_STRONG_UP_MEAN_REVERSION_V38_20261115");
+ assert.equal(RULE_VERSION,"EVENT10_MICROSTRUCTURE_FUSION_V39_20261115");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},

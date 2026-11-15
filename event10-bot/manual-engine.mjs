@@ -87,7 +87,13 @@ export function chooseSettledOnlyAdaptiveDirection({baseSide,trendScore,at,signa
  // A four-sample DOWN loss streak does not prove a new UP regime.
  // V36's 14 DOWN->UP flips on a 65-signal cohort hit only three times.
  // Leave the admitted DOWN side intact; no changes to quotas or cadence.
- return {...fallback,reason:"V37_DOWN_STREAK_FLIP_DISABLED"};
+ // Preserve loss-streak counts for diagnostics, but never turn DOWN into UP.
+ // Only already-settled, earlier signals contribute to these read-only metrics.
+ const prior=known.filter(x=>x.trendScore< -0.30&&
+   (x.baseDirection??x.direction)==="DOWN").slice(0,4);
+ const hits=prior.filter(x=>x.closePrice<x.openPrice).length;
+ return {...fallback,reason:"V37_DOWN_STREAK_FLIP_DISABLED",
+   pastSamples:prior.length,matchingSamples:prior.length,matchingHits:hits};
 }
 
 export function checkedTick(data, now, maxAgeMs=6000) {

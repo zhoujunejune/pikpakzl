@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_DOWN_FLIP_ROLLBACK_V37_20261115");
+ assert.equal(RULE_VERSION,"EVENT10_STRONG_UP_MEAN_REVERSION_V38_20261115");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -737,4 +737,23 @@ test("V37: DOWN retains direction despite a short historical losing streak; freq
  assert.equal(choose({signalHistory:prior.map(x=>({...x,strategyVersion:"UNKNOWN"})).values()}).flip,false);
  assert.equal(choose({signalHistory:prior.map(x=>({...x,closePrice:69980,proxyHit:true})).values()}).flip,false);
  assert.equal(MAX_SIGNALS_PER_10M,3);assert.equal(SIGNAL_WINDOW_MS,600000);
+});
+
+test("V38 strong positive-score UP calibrates direction only after admission, never alters quota",()=>{
+ const at=Date.parse("2026-11-15T15:00:00Z");
+ const t={"15m":{available:true,trend:"UP"},"30m":{available:true,trend:"UP"}};
+ const choose=(p={})=>chooseSettledOnlyAdaptiveDirection({
+   baseSide:"UP",trendScore:.30,at,signalHistory:[].values(),timeframes:t,...p
+ });
+ const calibrated=choose();
+ assert.equal(calibrated.side,"DOWN");
+ assert.equal(calibrated.flip,true);
+ assert.equal(calibrated.reason,"STRONG_UP_SCORE_CALIBRATED_DIRECTION");
+ assert.equal(calibrated.matchingSamples,0);
+ assert.equal(choose({trendScore:.299999}).flip,false);
+ assert.equal(choose({baseSide:"DOWN",trendScore:.89}).flip,false);
+ assert.equal(choose({baseSide:null}).flip,false);
+ assert.equal(MAX_SIGNALS_PER_10M,3);
+ assert.equal(SIGNAL_WINDOW_MS,600000);
+ assert.equal(AUTO_SLOT_MS,12000);
 });

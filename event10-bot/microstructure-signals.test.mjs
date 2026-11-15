@@ -49,7 +49,7 @@ test("reject future, stale, malformed depth, aggregate trade and index candle da
  assert.throws(()=>parseMicroAggTrades(trades(0,0),AT),/TOO_FEW/);
  assert.throws(()=>parseMicroAggTrades(trades(48,12,AT-50000),AT),/TOO_FEW/);
  assert.throws(()=>parseMicroIndexKlines(indexBars().slice(0,2),AT),/TOO_FEW/);
- const corrupted=indexBars();corrupted[5][0]+=60000;corrupted[5][6]+=60000;
+ const corrupted=indexBars();corrupted[3][0]+=60000;corrupted[3][6]+=60000;
  assert.throws(()=>parseMicroIndexKlines(corrupted,AT),/GAP|TOO_FEW/);
 });
 test("optional source errors cannot block a signal; return accurate per-source availability",async()=>{

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,assessTrendConflict,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
-import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,chooseSettledOnlyAdaptiveDirection,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
+import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,chooseSettledOnlyAdaptiveDirection,calibrateLowerHourRebound,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
 const json=x=>({ok:true,json:async()=>x});
 const temp=()=>path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-v23-")),"sessions.json");
@@ -837,6 +837,30 @@ test("V40 strong-score UP is protected ONLY for verified 4h/24h bearish midrange
  assert.equal(decide({entryTiming:{farTrendAgainst:false}}).side,"DOWN");
  assert.equal(decide({trendScore:.29}).side,"UP");
  assert.equal(decide({baseSide:"DOWN"}).side,"DOWN");
+ assert.equal(MAX_SIGNALS_PER_10M,3);
+ assert.equal(SIGNAL_WINDOW_MS,600000);
+ assert.equal(AUTO_SLOT_MS,12000);
+});
+
+test("V40R1: direction-only lower-hour rebound, micro veto, and no admission change",()=>{
+ const frames=Object.fromEntries(["1m","2m","5m","10m","15m","30m"].map(k=>[k,{available:true,trend:"DOWN"}]));
+ const e={entryHorizons:{ranges:{"60m":{available:true,position:.17},
+   "24h":{available:true,position:.62}}},timeframes:frames};
+ const result=calibrateLowerHourRebound("DOWN",e);
+ assert.equal(result.side,"UP");assert.equal(result.changed,true);
+ assert.equal(result.reason,"V40R1_VERIFIED_LOWER_HOUR_REBOUND");
+ assert.equal(calibrateLowerHourRebound("UP",e).side,"UP");
+ assert.equal(calibrateLowerHourRebound("DOWN",{}).side,"DOWN");
+ assert.equal(calibrateLowerHourRebound("DOWN",{...e,entryHorizons:{
+   ranges:{"60m":{available:true,position:.31},"24h":{available:true,position:.62}}}}).side,"DOWN");
+ assert.equal(calibrateLowerHourRebound("DOWN",{...e,entryHorizons:{
+   ranges:{"60m":{available:true,position:.17},"24h":{available:true,position:.54}}}}).side,"DOWN");
+ assert.equal(calibrateLowerHourRebound("DOWN",{...e,timeframes:{
+   ...frames,"5m":{available:true,trend:"UP"},"15m":{available:true,trend:"UP"}}}).side,"DOWN");
+ assert.equal(calibrateLowerHourRebound("DOWN",{...e,microstructure:{
+   votes:{aggressiveFlow:"DOWN",orderBook:"DOWN",indexKlines:"UP"}}}).side,"DOWN");
+ assert.equal(calibrateLowerHourRebound("DOWN",{...e,microstructure:{
+   votes:{aggressiveFlow:"DOWN",orderBook:"UP",indexKlines:"UP"}}}).side,"UP");
  assert.equal(MAX_SIGNALS_PER_10M,3);
  assert.equal(SIGNAL_WINDOW_MS,600000);
  assert.equal(AUTO_SLOT_MS,12000);

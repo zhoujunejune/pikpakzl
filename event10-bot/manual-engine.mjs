@@ -119,6 +119,27 @@ export function chooseSettledOnlyAdaptiveDirection({baseSide,trendScore,at,signa
    pastSamples:prior.length,matchingSamples:prior.length,matchingHits:hits};
 }
 
+// V40R1 post-admission calibration; closed spot horizons only, never future results.
+// Signal acceptance, 12s scans, rolling quota and de-dup remain untouched.
+export function calibrateLowerHourRebound(side,evidence){
+ const unchanged={side,changed:false,reason:"V40R1_KEEP"};
+ if(side!=="DOWN")return unchanged;
+ const hour=evidence?.entryHorizons?.ranges?.["60m"];
+ const day=evidence?.entryHorizons?.ranges?.["24h"];
+ const frame=evidence?.timeframes||{};
+ const valid=["1m","2m","5m","10m","15m","30m"].filter(k=>frame[k]?.available===true);
+ const priorBear=valid.filter(k=>frame[k]?.trend==="DOWN").length;
+ if(!(hour?.available===true&&day?.available===true&&
+   Number.isFinite(hour.position)&&hour.position>=0&&hour.position<=0.30&&
+   Number.isFinite(day.position)&&day.position>=0.55&&day.position<=0.75&&
+   valid.length>=5&&priorBear>=5))return unchanged;
+ const votes=evidence?.microstructure?.votes||{};
+ if(votes.aggressiveFlow==="DOWN"&&(votes.orderBook==="DOWN"||votes.indexKlines==="DOWN"))
+   return {...unchanged,reason:"V40R1_BEARISH_MICRO_VETO"};
+ return {side:"UP",changed:true,reason:"V40R1_VERIFIED_LOWER_HOUR_REBOUND",
+   hourlyPosition:hour.position,dailyPosition:day.position,priorBearishFrames:priorBear};
+}
+
 export function checkedTick(data, now, maxAgeMs=6000) {
   if (data?.ok!==true || data?.readOnly!==true || data?.symbol!=="BTCUSDT" ||
       data?.latest?.marketFeedConnected===false) throw Error("UNVERIFIED_BTC_FEED");
@@ -239,6 +260,8 @@ function slimSignal(h) {
     aiDirection:h.aiReview?.status==="AI_REVIEWED"?h.aiReview.direction:null,
     baseDirection:evidence.frequencyOriginalDirection??h.aiReview?.baseDirection??h.direction,
     adaptiveFlipApplied:evidence.adaptiveDirection?.flip===true,
+    v40R1FlipApplied:evidence.v40R1Direction?.changed===true,
+    v40R1OriginalDirection:evidence.v40R1OriginalDirection??null,
     v35EquivalentDirection:evidence.v35EquivalentDirection??null,
     adaptivePriorAlignedSamples:evidence.adaptiveDirection?.alignedSamples??null,
     aiStatus:h.aiReview?.status??"NOT_REQUESTED",
@@ -668,7 +691,19 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
             (m.side==="UP"?"看涨":"看跌")+"；仅修正已入围方向，名额、锁价时间和去重不变，命中不保证。";
         }
       }
-      // V23 validated multi-timeframe direction plus fresh index; no AI or orders.
+      // Direction-only V40R1 correction, after unchanged original-side slot gates.
+       if(rule.direction){
+         const original=rule.direction;
+         const calibration=calibrateLowerHourRebound(original,rule.evidence);
+         rule.evidence.v40R1OriginalDirection=original;
+         rule.evidence.v40R1Direction=calibration;
+         if(calibration.changed){
+           rule.direction=calibration.side;rule.signal=calibration.side;
+           rule.reason="V40R1低位反弹方向校准：1小时位置低、24小时中高位、旧周期偏空；" +
+             "只改变已入围方向，信号数量不变，命中不保证。";
+         }
+       }
+       // V23 validated multi-timeframe direction plus fresh index; no AI or orders.
       // Use the same fresh index quote at rule evaluation time; the full
       // 600-second proxy verification window begins when the signal is recorded.
       const aiReview=null;

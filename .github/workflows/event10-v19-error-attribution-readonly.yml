@@ -362,6 +362,11 @@ jobs:
                          'p3Bps':d.get('p3Bps'),'p5Bps':d.get('p5Bps'),
                          'trendScore':d.get('trendScore'),
                          'farAgainst':d.get('farAgainst'),
+                         'fourHourBps':num((h.get('4h') or {}).get('changeBps')),
+                         'dayBps':num((h.get('24h') or {}).get('changeBps')),
+                         'pos24h':d.get('pricePos24h'),
+                         'analysisReason':e.get('trendDecisionReason'),
+                         'originalVeto':e.get('originalVetoReason'),
                          'tfs':[d.get('tf'+n) for n in ('1m','2m','5m','10m','15m','30m')]
                       },ensure_ascii=False),flush=True)
                   detailed.append(d)

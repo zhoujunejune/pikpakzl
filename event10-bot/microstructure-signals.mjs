@@ -1,4 +1,4 @@
-// EVENT10 V39: OPTIONAL public USD-M market microstructure evidence.
+// EVENT10 V40: OPTIONAL public USD-M market microstructure evidence, with stricter countertrend-bounce validation.
 // All calls are read-only. No orders, no keys, no impact on signal eligibility.
 // Values are sampled at or before the candidate's publication timestamp.
 const BASE="https://fapi.binance.com";
@@ -98,7 +98,7 @@ export async function collectOptionalMicrostructure({fetcher=fetch,now=Date.now,
    availability:Object.fromEntries(rows.map(x=>[x.name,x.availability])),
    available:rows.filter(x=>x.feature).length,total:MICRO_FEATURE_NAMES.length};
 }
-export function chooseMicrostructureDirection(baseSide,features,decisionAt){
+export function chooseMicrostructureDirection(baseSide,features,decisionAt,{requireUnanimousDown=false}={}){
  const initial={side:baseSide,changed:false,reason:"MICROSTRUCTURE_NO_OVERRIDE",
   votes:{},availableSources:0};
  if(!["UP","DOWN"].includes(baseSide)||!Number.isSafeInteger(decisionAt))
@@ -117,10 +117,13 @@ export function chooseMicrostructureDirection(baseSide,features,decisionAt){
  const supporters=Object.keys(votes).filter(k=>votes[k]===flow);
  // Require fresh trade aggression and at least one corroborating INDEPENDENT source.
  // Neutral, sparse, stale or unavailable data MUST preserve the original direction.
- const confirmed=flow&&supporters.length>=2;
+ const protectedReboundBlocked=requireUnanimousDown&&baseSide==="UP"&&
+   flow==="DOWN"&&supporters.length>=2&&supporters.length<3;
+ const confirmed=!!flow&&supporters.length>=2&&!protectedReboundBlocked;
  const side=confirmed?flow:baseSide;
  return {side,changed:side!==baseSide,
-  reason:confirmed?(side===baseSide?"MICRO_CONFIRMS_BASE":"MICRO_CORRECTS_DIRECTION"):"MICRO_INSUFFICIENT_CONSENSUS",
+  reason:protectedReboundBlocked?"MICRO_PROTECTED_BOUNCE_REQUIRES_THREE_BEARISH_SOURCES":
+   confirmed?(side===baseSide?"MICRO_CONFIRMS_BASE":"MICRO_CORRECTS_DIRECTION"):"MICRO_INSUFFICIENT_CONSENSUS",
   votes,availableSources,corroboratingSources:confirmed?supporters:[],
   tradeBuyFraction:fresh.aggressiveFlow?.takerBuyFraction??null,
   depthImbalance:fresh.orderBook?.imbalanceTop20??null,

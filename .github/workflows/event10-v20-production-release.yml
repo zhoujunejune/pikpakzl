@@ -1,4 +1,4 @@
-# V37: keep verified 12s scan, zero trading, original 3-per-10m and dedup policy. Only disable harmful DOWN-to-UP loss-streak inversion.
+# V37 panel version aligned after guarded preflight rejection; keep verified 12s scan, zero trading, original 3-per-10m and dedup policy. Only disable harmful DOWN-to-UP loss-streak inversion.
 # Deploy V37 UP-only settled-context correction; preserve V35 UP logic and original V33 admission/cadence.
 # V37: no consecutive-loss DOWN inversion. Any existing V35 UP-only correction occurs after eligibility checks.
 # Release verification includes the tested updated signal-selection and countertrend checks; old builds cannot reach production.

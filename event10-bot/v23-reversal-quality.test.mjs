@@ -66,7 +66,7 @@ test("future/incomplete data is excluded and actual Supertrend still computes",(
  assert.equal(supertrend(bars)?.direction,"UP");
 });
 test("full evaluation includes all six timeframes and fresh price, no real order",()=>{
- assert.equal(RULE_VERSION,"EVENT10_MICROSTRUCTURE_FUSION_V39_20261115");
+ assert.equal(RULE_VERSION,"EVENT10_MIDRANGE_REBOUND_CALIBRATION_V40_20261115");
  assert.equal(AUTO_SLOT_MS,12000);
  let f=fixture(BASE);
  const a=evaluatePureSignal({feed:f,reference:{observedAt:BASE},
@@ -813,4 +813,31 @@ test("V39 unavailable optional feeds preserve base signal and expose actual erro
  assert.equal(health.availability.orderBook.available,false);
  assert.equal(health.availability.aggressiveFlow.available,false);
  assert.equal(health.availability.indexKlines.available,false);
+});
+
+test("V40 strong-score UP is protected ONLY for verified 4h/24h bearish midrange rebound with 1m/2m bullish EMA",()=>{
+ const at=Date.parse("2026-11-15T17:00:00Z");
+ const horizons={ranges:{
+   "4h":{available:true,changeBps:-66.712},
+   "24h":{available:true,changeBps:-407.478,position:.48}
+ }};
+ const emas={"1m":{direction:"UP"},"2m":{direction:"UP"}};
+ const decide=(o={})=>chooseSettledOnlyAdaptiveDirection({
+   baseSide:"UP",trendScore:.52,at,signalHistory:[].values(),
+   entryHorizons:horizons,emaEntry:emas,entryTiming:{farTrendAgainst:true},...o
+ });
+ assert.equal(decide().side,"UP");
+ assert.equal(decide().flip,false);
+ assert.equal(decide().reason,"V40_VERIFIED_MIDRANGE_REBOUND_UP");
+ assert.equal(decide({entryHorizons:{ranges:{...horizons.ranges,"24h":{...horizons.ranges["24h"],position:.39}}}}).side,"DOWN");
+ assert.equal(decide({entryHorizons:{ranges:{...horizons.ranges,"24h":{...horizons.ranges["24h"],position:.61}}}}).side,"DOWN");
+ assert.equal(decide({entryHorizons:{ranges:{...horizons.ranges,"4h":{...horizons.ranges["4h"],changeBps:43.398}}}}).side,"DOWN");
+ assert.equal(decide({entryHorizons:{ranges:{...horizons.ranges,"24h":{...horizons.ranges["24h"],available:false}}}}).side,"DOWN");
+ assert.equal(decide({emaEntry:{"1m":{direction:"UP"},"2m":{direction:"DOWN"}}}).side,"DOWN");
+ assert.equal(decide({entryTiming:{farTrendAgainst:false}}).side,"DOWN");
+ assert.equal(decide({trendScore:.29}).side,"UP");
+ assert.equal(decide({baseSide:"DOWN"}).side,"DOWN");
+ assert.equal(MAX_SIGNALS_PER_10M,3);
+ assert.equal(SIGNAL_WINDOW_MS,600000);
+ assert.equal(AUTO_SLOT_MS,12000);
 });

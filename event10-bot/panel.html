@@ -35,7 +35,7 @@ th{color:#a9c6e7}
 </style></head><body><main>
 <nav aria-label="应用导航"><a href="/app/">海派事件合约 App</a><a href="/event10/" class="active" aria-current="page">十分钟信号详情</a></nav>
 <h1>海派事件合约 · BTC 十分钟纯规则信号</h1>
-<p class="sub">BTCUSDT · V39 行情数据融合 · 12秒扫描 · 最多3条/10分钟</p>
+<p class="sub">BTCUSDT · V40 反弹识别优化 · 12秒扫描 · 最多3条/10分钟</p>
 <div class="notice">
 <strong>仅做信号，不会执行交易。</strong>
 V32频率优先：利用已收盘3分钟、5分钟价格变化与短中长周期的独立趋势判断，减少弱信号状态下过度等待；仍排除很小的3分钟波动、强逆向趋势、超涨超跌以及不可靠数据。同向至少2分钟和新2分钟K线；滚动10分钟最多3条。增加信号不代表提高胜率。</div>
@@ -123,7 +123,7 @@ V32频率优先：利用已收盘3分钟、5分钟价格变化与短中长周期
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const SIGNAL_VERSION="EVENT10_MICROSTRUCTURE_FUSION_V39_20261115";
+const SIGNAL_VERSION="EVENT10_MIDRANGE_REBOUND_CALIBRATION_V40_20261115";
 const PAGE_SIZE=25;
 let signalPageOffset=0,signalTotal=0;
 const pct=value=>typeof value==="number"&&Number.isFinite(value)?value.toFixed(2)+"%":"—";
@@ -273,7 +273,7 @@ function display(d){
  $("engine").textContent=d.configured?"方向分析已启用":"行情服务暂不可用";
  $("engine").className="status "+(d.configured?"good":"bad");
  $("start").disabled=inflight||!d.configured; // Manual joins background scan
- $("aiStatus").textContent="信号来源：V39 沿用V38策略，额外使用指数K线、盘口与主动成交数据，对已入围的多空方向做新鲜共识校准。数据不可用时自动回退V38，不改变发信号数量与去重条件，不调用AI。"
+ $("aiStatus").textContent="信号来源：V40 保留V39多周期K线、盘口和主动成交数据，修正中位反弹时机械反向追空的误判。数据不齐仍按现有规则，不改变发信号数量和去重条件，不调用AI。"
 
  if(s){
   const noSignal=s.status==="NO_SIGNAL"||s.status==="DATA_ERROR";

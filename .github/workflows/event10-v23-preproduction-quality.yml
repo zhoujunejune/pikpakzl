@@ -7,6 +7,8 @@ on:
       - 'event10-bot/multi-timeframe-trend.mjs'
       - 'event10-bot/pure-signal.mjs'
       - 'event10-bot/manual-engine.mjs'
+      - 'event10-bot/microstructure-signals.mjs'
+      - 'event10-bot/microstructure-signals.test.mjs'
       - 'event10-bot/v23-reversal-quality.test.mjs'
       - 'event10-bot/panel.html'
   workflow_dispatch:
@@ -26,6 +28,7 @@ jobs:
           node --check event10-bot/manual-engine.mjs
           node --check event10-bot/multi-timeframe-trend.mjs
           node --check event10-bot/readonly-candles.mjs
+          node --check event10-bot/microstructure-signals.mjs
           python3 - <<'PY'
           import pathlib,re,tempfile,subprocess
           page=pathlib.Path('event10-bot/panel.html').read_text()
@@ -38,4 +41,4 @@ jobs:
                   subprocess.run(['node','--check',str(path)],check=True)
           PY
       - name: V23 regression + alert-only checks
-        run: node --test event10-bot/v23-reversal-quality.test.mjs event10-bot/alert-watch.test.mjs
+        run: node --test event10-bot/v23-reversal-quality.test.mjs event10-bot/alert-watch.test.mjs event10-bot/microstructure-signals.test.mjs

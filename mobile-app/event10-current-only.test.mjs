@@ -213,7 +213,7 @@ test("slow first launch: verified current ledger is visible if live status times
    pct:(n,d)=>d?((n/d)*100).toFixed(1)+"%":"—",
    eventStrategyLabel:v=>{const m=v.match(/_V(\d+)_\d{8}$/);return m?"V"+m[1]:"当前策略";},
    updateEventHistory:(ledger)=>{sandbox.state.eventRecords=ledger.records;sandbox.state.eventTotal=ledger.total;},
-   pill:(id,tone,value)=>{ui[id]=value;},refreshConnectionBadge:()=>{}
+   pill:(id,tone,value)=>{ui[id]=value;},refreshConnectionBadge:()=>{},displayEventLiveQuote:()=>{},displayEventModelIdentity:()=>{}
  };
  const ctx=vm.createContext(sandbox);
  const runner=vm.runInContext(
@@ -229,4 +229,29 @@ test("slow first launch: verified current ledger is visible if live status times
  assert.equal(sandbox.state.eventOnline,false);
  assert.equal(runner.fallback({...valid,version:"OLD_VERSION"}),false);
  assert.equal(runner.current(),valid.version);
+});
+
+test("index quote rejects stale samples and strategy patch reflects server",()=>{
+ const html=fs.readFileSync(new URL("./index.html",import.meta.url),"utf8");
+ for(const id of ["eLiveIndexPrice","eQuoteFreshness","eLiveModelName","eLiveModelPatch"])
+  assert.ok(html.includes('id="'+id+'"'),id);
+ const begin=src.indexOf("function verifiedEventLiveQuote(");
+ const end=src.indexOf("function currentEventRecord(e){",begin);
+ assert.ok(begin>0&&end>begin);
+ const api=vm.runInNewContext(src.slice(begin,end)+"\n({verifiedEventLiveQuote,serverEventModelIdentity})",
+  {Date,Math,Number,eventStrategyLabel:()=>"V40"});
+ const now=1794791000000;
+ const good={lastSuccessfulScanAt:now-2000,lastCheck:{
+  liveIndexPrice:68234.23,referencePriceObservedAt:now-4200,
+  checkedAt:now-3500,status:"NO_SIGNAL"}};
+ assert.equal(api.verifiedEventLiveQuote(good,now).price,68234.23);
+ assert.equal(api.verifiedEventLiveQuote(good,now+44000).ready,false);
+ assert.equal(api.verifiedEventLiveQuote({...good,lastCheck:{...good.lastCheck,status:"DATA_ERROR"}},now).ready,false);
+ assert.equal(api.verifiedEventLiveQuote({...good,lastSuccessfulScanAt:now-98000},now).ready,false);
+ const version="EVENT10_MIDRANGE_REBOUND_CALIBRATION_V40_20261115";
+ assert.ok(api.serverEventModelIdentity({decisionReviewVersion:version,
+  directionCalibrationPatch:"V40R1_LOWER_HOUR_REBOUND_20261116"}).name.includes("V40R1"));
+ assert.ok(api.serverEventModelIdentity({decisionReviewVersion:version,
+  directionCalibrationPatch:"V40R2_DUAL_CLOSED_MOMENTUM_20261116"}).name.includes("V40R2"));
+ assert.ok(api.serverEventModelIdentity({decisionReviewVersion:version}).name.includes("未报告补丁"));
 });

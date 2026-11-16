@@ -141,6 +141,50 @@ function eventStrategyLabel(version){
  const match=typeof version==="string"?version.match(/^EVENT10_[A-Z0-9_]+_V([0-9]+)_[0-9]{8}$/):null;
  return match?"V"+match[1]:"当前策略";
 }
+
+// Index quote originates in the live EVENT10 scan, not a historical signal lock/close.
+function verifiedEventLiveQuote(status,now=Date.now()){
+ const c=status?.lastCheck,v=Number(c?.liveIndexPrice);
+ const t=Number(c?.referencePriceObservedAt),scan=Number(c?.checkedAt);
+ const success=Number(status?.lastSuccessfulScanAt);
+ if(!Number.isFinite(v)||v<=0||!Number.isFinite(t)||t<=0||
+  !Number.isFinite(scan)||!Number.isFinite(success)||
+  c?.status==="DATA_ERROR"||t>now+2000||scan>now+2000||
+  now-t<0||now-t>40000||now-scan<0||now-scan>40000||
+  now-success<0||now-success>40000)return {ready:false};
+ return {ready:true,price:v,observedAt:t,ageSeconds:Math.round((now-t)/1000)};
+}
+function displayEventLiveQuote(status,connected){
+ const q=connected?verifiedEventLiveQuote(status):{ready:false};
+ const el=$("eQuoteState");
+ if(el){el.className="quote-status"+(q.ready?"":" stale");el.textContent=q.ready?"● 报价有效":"● 报价未确认";}
+ put("eLiveIndexPrice",q.ready?eventIndexPrice(q.price):"—");
+ put("eQuoteFreshness",q.ready?"报价 "+q.ageSeconds+" 秒前 · 后台每12秒采样":
+  connected?"价格过期或采样缺失 · 不展示旧价格":"实时连接中断 · 不展示旧价格");
+ put("eQuoteTime",q.ready?"采集 "+stamp(q.observedAt):"—");
+}
+function serverEventModelIdentity(status){
+ if(!status||typeof status.decisionReviewVersion!=="string")
+  return {name:"实时模型待核验",patch:"服务器状态不可用，不显示猜测版本",correction:"等待服务端确认",raw:"—"};
+ const version=status.decisionReviewVersion,base=eventStrategyLabel(version);
+ const patch=typeof status.directionCalibrationPatch==="string"?status.directionCalibrationPatch:"";
+ const id=/^(V[0-9]+R[0-9]+)_/.exec(patch)?.[1]||"";
+ let correction="服务器未报告已核验的补丁说明，当前仅确认基础规则。";
+ if(id==="V40R1")correction="V40R1：识别1小时低位及24小时区间位置，校准旧跌势中的反弹；若新鲜主动卖盘与盘口或指数K线一致看跌，则不反向。";
+ if(id==="V40R2")correction="V40R2：保留V40R1；当已收盘3/5分钟同步走弱且EMA减速时校准已入围看涨方向；新鲜看涨盘口和主动成交共识可以否决。";
+ return {name:base+(id?" + "+id:"（未报告补丁）"),
+  patch:id?"补丁 "+id+" · 服务端确认 · 纯规则无AI":"基础策略已确认，补丁号未返回",
+  correction,raw:"基础版本："+version+" · 补丁："+(patch||"未报告")+
+   " · 模型："+(status.providerModel||"未报告")};
+}
+function displayEventModelIdentity(status,connected){
+ const d=serverEventModelIdentity(connected?status:null);
+ put("eLiveModelName",d.name);
+ put("eLiveModelPatch",d.patch);
+ put("eModelCorrection",d.correction);
+ put("eModelRawVersion",d.raw);
+ put("eModelRunStatus",connected&&status?.configured===true?"运行中":"待核验");
+}
 function currentEventRecord(e){
  if(e?.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION)return e.active;
  return [e?.lastCheck,e?.lastSession]
@@ -253,6 +297,8 @@ function event(e,ledger){
  const records=currentLedger?mergeEventRecords(ledger):[];
  const active=!!e.active&&eventVersion(e.active)===EVENT10_FREQ_OPTIMIZED_VERSION;
  const strategyLabel=eventStrategyLabel(e.decisionReviewVersion);
+ displayEventLiveQuote(e,state.eventOnline);
+ displayEventModelIdentity(e,state.eventOnline);
  put("eStrategyTitle","当前策略表现 · "+strategyLabel);
  put("eStatsStrategy","只统计"+strategyLabel+"已发布的方向信号 · 非真实交易收益");
  put("tradeJournalStrategyNote","按北京时间统计最近30个有记录的日期；本机交易次数与"+strategyLabel+"信号胜率独立。");
@@ -294,6 +340,8 @@ function event(e,ledger){
  $("manualCheck").disabled=e.configured!==true||state.manualBusy;
 }
 function eventError(error){
+ displayEventLiveQuote(null,false);
+ displayEventModelIdentity(null,false);
  state.eventHistoryError="状态读取失败，已加载记录仍然保留";
  drawEventHistory();
  pill("eStatus","bad","暂不可用");
@@ -333,6 +381,8 @@ function renderVerifiedLedgerFallback(ledger){
   state.eventHistorySignature="";state.homeHistorySignature="";state.eventHistoryError=null;
  }
  const label=eventStrategyLabel(version),stats=ledger.stats||{};
+ displayEventLiveQuote(null,false);
+ displayEventModelIdentity(null,false);
  state.eventLedgerOnline=true;state.eventOnline=false;
  updateEventHistory(ledger);
  put("eStrategyTitle","当前策略表现 · "+label);

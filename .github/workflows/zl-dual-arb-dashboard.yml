@@ -1,0 +1,75 @@
+name: Dual5 arbitrage dashboard copy only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-dual-arb-dashboard.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  update-dual-ui-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Update only standalone dual5 HTML copy
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -Eeuo pipefail
+          python3 - <<'CHANGE'
+          from pathlib import Path
+          import os,datetime,shutil
+          p=Path('/opt/zl-prediction-dual5/binance_dual5_dashboard.html')
+          s=p.read_text(encoding='utf-8')
+          changes=[
+           ('预估利润不再是阻止买单的条件。','预估净收益未达到套利门槛时不下单，属于正常过滤。'),
+           ('独立实盘已开启；每轮尽快尝试买入 UP 和 DOWN，不过滤预估收益','双边套利已开启；仅当净收益达到门槛时才尝试买入 UP 和 DOWN'),
+           ('   \' · 报价状态：\'+(q?label(q.status):\'等待有效市场\')+',
+            '   \' · 报价状态：\'+(q?label(q.status):\'等待有效市场\')+\n   \' · 套利门槛：\'+(q&&q.requiredNetEdgeUSDT!=null?fmt(q.requiredNetEdgeUSDT):\'--\')+\' USDT\'+'),
+           ('<article><h2>最近一次执行记录</h2>',
+            '<article><h2>Maker挂单策略</h2><p class="sub">Maker限价挂单和撤单链路尚未完成独立验证，当前不会提交Maker委托；双边套利按净收益门槛独立运行。</p></article><article><h2>最近一次执行记录</h2>'),
+          ]
+          already='Maker限价挂单和撤单链路尚未完成独立验证' in s
+          if not already:
+           for old,new in changes:
+            n=s.count(old)
+            if n!=1:raise SystemExit('DUAL_UI_ANCHOR_MISMATCH '+str(n)+' '+old[:22])
+            s=s.replace(old,new,1)
+           bk=p.parent/'backups'
+           bk.mkdir(mode=0o700,exist_ok=True)
+           path=bk/('dual5-dashboard.before-arb-ui.'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'.html')
+           shutil.copy2(p,path)
+           tmp=p.with_suffix('.html.stage')
+           tmp.write_text(s,encoding='utf-8')
+           os.chmod(tmp,p.stat().st_mode & 0o777)
+           os.chown(tmp,p.stat().st_uid,p.stat().st_gid)
+           os.replace(tmp,p)
+           print('DUAL_UI_PATCH_APPLIED')
+          else:print('DUAL_UI_ALREADY_UP_TO_DATE')
+          assert 'Maker限价挂单和撤单链路尚未完成独立验证' in p.read_text()
+          assert '预估净收益未达到套利门槛时不下单' in p.read_text()
+          print('DUAL_UI_CHANGED_ONLY_SINGLE_UNTOUCHED_NO_TRADE')
+          CHANGE
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
+          inv=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='dual5-arb-ui-copy',type='RunShellScript',command_content=script,working_user='root',timeout=90)).body.invoke_id
+          for _ in range(40):
+           time.sleep(2)
+           x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=inv)).body.invocation_result
+           if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ClientNotRunning'):
+            try:out=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
+            except:out='NO_OUTPUT'
+            print('REMOTE_STATUS',x.invocation_status,'EXIT',x.exit_code)
+            print(out[-3500:])
+            raise SystemExit(0 if str(x.invocation_status)=='Success' and int(x.exit_code)==0 and 'DUAL_UI_CHANGED_ONLY_SINGLE_UNTOUCHED_NO_TRADE' in out else 3)
+          raise SystemExit('REMOTE_PENDING')
+          PY

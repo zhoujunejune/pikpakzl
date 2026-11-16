@@ -1,0 +1,32 @@
+name: ZL Futures V1 Unit Tests
+on:
+  push:
+    branches:
+      - feature/zl-futures-bot-v1
+    paths:
+      - "futures-bot-v1/**"
+      - ".github/workflows/zl-futures-bot-v1-test.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r futures-bot-v1/requirements.txt
+      - name: Compile all dashboard and trading modules
+        run: python -m compileall -q futures-bot-v1
+      - name: Run unit tests without network or trading keys
+        working-directory: futures-bot-v1
+        run: python -m unittest discover -v -p 'test_*.py'
+      - name: Check inline browser JavaScript syntax
+        working-directory: futures-bot-v1
+        run: |
+          python -c "from dashboard import PAGE; open('/tmp/zl-futures-dashboard.js','w').write(PAGE.split('<script>',1)[1].split('</script>',1)[0])"
+          node --check /tmp/zl-futures-dashboard.js

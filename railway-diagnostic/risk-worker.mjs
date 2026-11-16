@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import {GUARDIAN_RISK_ENABLED,guardianRiskQuote,guardianRiskHeartbeat} from './guardian-risk-integration.mjs';
 
 const API = 'https://api.binance.com';
 const API_KEY = process.env.BINANCE_PREDICTION_API_KEY || '';
@@ -229,6 +230,13 @@ function evaluateRisk(targets, quote) {
   return { ok: true, currentSellAmount, tpTriggered, slTriggered, triggered: Boolean(reason), reason };
 }
 
+// Existing positions preserve their legacy policy. Only registered Guardian
+// BUY orders use the real-SELL-quote dynamic risk policy.
+function evaluatePositionRisk(position,targets,quote){
+  const guardian=guardianRiskQuote({tokenId:targets.tokenId,
+    cost:targets.totalCost,current:weiToDecimal(quote?.amountOut)});
+  return guardian??evaluateRisk(targets,quote);
+}
 function quoteTooCloseToExpiry(quote) {
   const expireAt = Number(quote?.expireAt || 0);
   return expireAt > 0 && expireAt - Date.now() < QUOTE_MIN_REMAINING_MS;
@@ -378,7 +386,7 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
         log('risk_sell_quote_failed', { tokenId, error: quoteResult.error, code: quoteResult.code ?? null, httpStatus: quoteResult.httpStatus ?? null, network: Boolean(quoteResult.network) });
         return;
       }
-      evaluation = evaluateRisk(targets, quoteResult.quote);
+      evaluation = evaluatePositionRisk(position,targets,quoteResult.quote);
       if (!evaluation.ok) {
         sellState.set(tokenId, { inFlight: false, lastAttemptAt: Date.now(), error: evaluation.error });
         log('risk_sell_quote_failed', { tokenId, error: evaluation.error });
@@ -443,7 +451,8 @@ async function sellPosition(wallet, payment, position, topic, targets, initialQu
       orderId: placed.orderId,
       error: null,
     });
-    const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;
+    const targetAmount = evaluation.dynamic ? evaluation.targetAmount :
+      (evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget);
     log('risk_sell_submitted', {
       tokenId,
       orderId: placed.orderId,
@@ -471,7 +480,7 @@ function cleanupSellState(activeTokenIds) {
 }
 
 async function tick() {
-  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED) || workerBusy) return;
+  if ((!TAKE_PROFIT_ENABLED && !STOP_LOSS_ENABLED && !GUARDIAN_RISK_ENABLED) || workerBusy) return;
   if (!API_KEY || !API_SECRET) return;
   workerBusy = true;
   health.lastTickStartedAt = new Date().toISOString();
@@ -488,6 +497,8 @@ async function tick() {
     }
     health.lastSuccessfulPositionsAt = new Date().toISOString();
     health.positionsSeen = Array.isArray(positionsResult.positions) ? positionsResult.positions.length : null;
+    // Heartbeat is process liveness, not a guarantee Binance will fill a SELL.
+    guardianRiskHeartbeat(true);
     // Warm the existing payment lookup while unchanged position/quote checks run.
     // No extra API request, cached route and SELL parameters remain identical.
     const paymentReady = getPaymentRoute();
@@ -538,7 +549,7 @@ async function tick() {
         continue;
       }
 
-      const evaluation = evaluateRisk(targets, quoteResult.quote);
+      const evaluation = evaluatePositionRisk(position,targets,quoteResult.quote);
       if (!evaluation.ok) {
         sellState.set(tokenId, { ...(state || {}), lastAttemptAt: Date.now(), error: evaluation.error });
         log('risk_sell_quote_failed', { tokenId, marketTopicId: position.marketTopicId, error: evaluation.error });
@@ -558,7 +569,8 @@ async function tick() {
       });
 
       if (!evaluation.triggered) continue;
-      const targetAmount = evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget;
+      const targetAmount = evaluation.dynamic ? evaluation.targetAmount :
+      (evaluation.reason === 'STOP_LOSS' ? targets.slTarget : targets.tpTarget);
       log('risk_triggered', { tokenId, reason: evaluation.reason, currentSellAmount: evaluation.currentSellAmount, targetAmount });
       // Payment routing is needed only at the original SELL submission point.
       const payment = await paymentReady;
@@ -569,6 +581,7 @@ async function tick() {
     await paymentReady;
     cleanupSellState(activeTokens);
   } catch (e) {
+    guardianRiskHeartbeat(false);
     log('risk_tick_exception', { error: e?.message || String(e) });
   } finally {
     health.lastTickFinishedAt = new Date().toISOString();
@@ -584,6 +597,7 @@ log('risk_worker_started', {
   pollMs: POLL_MS,
   retryMs: RETRY_MS,
   scope: SCOPE,
+  guardianDynamicExitEnabled: GUARDIAN_RISK_ENABLED,
   hasCredentials: Boolean(API_KEY && API_SECRET),
   hasWalletAddress: Boolean(ENV_WALLET_ADDRESS),
   hasWalletId: Boolean(ENV_WALLET_ID),

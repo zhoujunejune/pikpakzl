@@ -1,0 +1,63 @@
+name: Remove prediction trade progress display only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_remove_trade_progress.sh'
+      - 'prediction-bot-v1/aliyun_remove_trade_progress.py'
+      - '.github/workflows/zl-aliyun-remove-trade-progress.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate deployment script
+        run: |
+          bash -n prediction-bot-v1/aliyun_remove_trade_progress.sh
+          python -m py_compile prediction-bot-v1/aliyun_remove_trade_progress.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Retire current-round card without touching orders or API keys
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_remove_trade_progress.py
+      - name: Verify authenticated public page and shared APIs
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,base64,os,json
+          base='https://prediction.47-237-188-69.sslip.io'
+          token='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           req=urllib.request.Request(base+path,headers={'Authorization':token,'Cache-Control':'no-cache'})
+           with urllib.request.urlopen(req,timeout=20) as response:
+            return response.status,response.read(450000)
+          code,page=get('/')
+          assert code==200
+          for pattern in (b'liveOrderFlowCard',b'flowOverall',b'flowSubmitted',
+           b'flowLastOrder', '本轮交易进度'.encode()):
+           assert pattern not in page,pattern
+          for pattern in (b'orderSignalModelSelect',b'directionModeChoices',
+           b'activeFast8EmittedDirection',b'activeFast8OrderDirection'):
+           assert pattern in page
+          print('FLOW_REMOVAL_HTTPS_FRONTEND_ABSENT=true')
+          code,body=get('/api/status')
+          assert code==200 and json.loads(body).get('ok') is True
+          print('FLOW_REMOVAL_HTTPS_SHARED_ORDER_STATE_OK=true')
+          code,body=get('/api/direction-mode')
+          assert code==200 and json.loads(body).get('ready') is True
+          print('FLOW_REMOVAL_HTTPS_DIRECTION_MODE_OK=true')
+          code,body=get('/api/order-signal-model')
+          assert code==200 and json.loads(body).get('model')=='SELECTIVE_V2_FAST8_PREWARM_V1'
+          print('FLOW_REMOVAL_HTTPS_MODEL_UNCHANGED=true')
+          PY

@@ -1,0 +1,26 @@
+name: Alibaba HTTPS paper control integration check
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-control-smoke.yml'
+      - 'futures-bot-v1/smoke_controls.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-control-integration-check
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check authenticated and unauthorized dashboard control calls
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python futures-bot-v1/smoke_controls.py

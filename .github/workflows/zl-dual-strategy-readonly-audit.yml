@@ -1,0 +1,69 @@
+name: Dual bot isolated read-only inventory
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-dual-strategy-readonly-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect dual bot only - no mutation, no trading
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -u
+          echo DUAL_AUDIT_START
+          echo SCAN_UTC:$(date -u +%FT%TZ)
+          echo SERVICE_MATCHES_BEGIN
+          systemctl list-units --all --no-pager --plain --no-legend | awk 'BEGIN{IGNORECASE=1} /dual|maker|paired|arbitra|hedge|both|prediction/{print $1,$3,$4}' | head -65
+          echo SERVICE_MATCHES_END
+          echo DIR_MATCHES_BEGIN
+          find /opt -maxdepth 6 -type d \( -iname '*dual*' -o -iname '*arbitra*' -o -iname '*maker*' -o -iname '*hedge*' -o -iname '*prediction*' \) 2>/dev/null | head -85
+          echo DIR_MATCHES_END
+          echo SOURCE_FILE_MATCHES_BEGIN
+          find /opt -maxdepth 7 -type f \( -iname '*dual*' -o -iname '*maker*' -o -iname '*arbitra*' -o -iname '*hedge*' -o -iname '*bothside*' \) 2>/dev/null | head -100
+          echo SOURCE_FILE_MATCHES_END
+          echo CODE_REFERENCES_BEGIN
+          if command -v rg >/dev/null 2>&1;then
+            rg -l --glob '*.{mjs,js,py}' --glob '!*.test.*' --max-filesize 300K -i 'dual.?side|both.?side|two.?sided|paired.?order|maker.?quote|arbitrage|双边|双向' /opt/zl-prediction-live/src /opt/zl-futures* 2>/dev/null | head -80
+          else
+            grep -RilE --include='*.mjs' --include='*.js' --include='*.py' 'dual.?side|both.?side|paired.?order|arbitrage|双边' /opt/zl-prediction-live/src 2>/dev/null | head -80
+          fi
+          echo CODE_REFERENCES_END
+          echo LIVE_PORTS_BEGIN
+          ss -ltn | awk '$4 ~ /127.0.0.1:(130[0-9][0-9]|11[0-9][0-9][0-9])$/ {print $4}' | sort
+          echo LIVE_PORTS_END
+          echo DUAL_AUDIT_END
+          """
+          if not os.getenv('ALIBABA_CLOUD_ACCESS_KEY_ID') or not os.getenv('ALIBABA_CLOUD_ACCESS_KEY_SECRET'):
+              raise SystemExit('ALI_CREDENTIALS_MISSING')
+          client=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
+          result=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='zl-dual-readonly-inventory',type='RunShellScript',command_content=script,working_user='root',timeout=90))
+          invoke=result.body.invoke_id
+          assert invoke
+          for _ in range(40):
+              time.sleep(2)
+              got=client.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+              if got and str(got.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ClientNotRunning'):
+                  try: out=base64.b64decode(got.output or '',validate=True).decode('utf8','replace')
+                  except Exception:out='OUTPUT_UNAVAILABLE'
+                  print('REMOTE_STATUS',got.invocation_status,'EXIT',got.exit_code)
+                  print(out[-15500:])
+                  raise SystemExit(0 if str(got.invocation_status)=='Success' and int(got.exit_code)==0 else 3)
+          raise SystemExit('REMOTE_PENDING')
+          PY

@@ -1,0 +1,27 @@
+name: Retire obsolete LLM5 service while keeping DeepSeek production
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - .github/workflows/zl-deepseek-retire-llm5.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/aliyun_deepseek_retire_llm5.py
+      - run: pip -q install alibabacloud_swas_open20200601==4.0.0
+      - name: Stop only obsolete legacy LLM5 process and verify DeepSeek remains healthy
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_retire_llm5.py

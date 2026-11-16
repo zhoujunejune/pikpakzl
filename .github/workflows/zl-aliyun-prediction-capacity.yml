@@ -1,0 +1,37 @@
+name: Alibaba prediction live migration prerequisites (readonly)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-prediction-capacity.yml'
+      - 'prediction-bot-v1/aliyun_audit.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check GitHub secret identifiers (never values)
+        env:
+          BINANCE_PREDICTION_API_KEY: ${{ secrets.BINANCE_PREDICTION_API_KEY }}
+          BINANCE_PREDICTION_API_SECRET: ${{ secrets.BINANCE_PREDICTION_API_SECRET }}
+          CONTROL${{ secrets.CONTROL_PIN_SHA256 }}SHA256: _PIN_
+        run: |
+          python - <<'PY'
+          import os
+          for key in ('BINANCE_PREDICTION_API_KEY','BINANCE_PREDICTION_API_SECRET','CONTROL_PIN_SHA256'):
+              print("GITHUB_SECRET_NAME",key,"configured="+str(bool(os.getenv(key))))
+          PY
+      - name: Install Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect SWAS without reading secrets
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_audit.py

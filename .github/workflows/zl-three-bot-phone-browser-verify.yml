@@ -1,0 +1,25 @@
+name: Verify three authenticated robot dashboards in phone browser
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-three-bot-phone-browser-verify.yml'
+      - 'ui-theme/browser_visual_verify_v2.py'
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  browser-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install headless browser
+        run: |
+          python -m pip install -q playwright
+          python -m playwright install chromium
+      - name: Open real public URLs in phone-width browser; never click trading controls
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python ui-theme/browser_visual_verify_v2.py

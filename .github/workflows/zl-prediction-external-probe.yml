@@ -1,0 +1,22 @@
+name: Test prediction HTTPS from outside Alibaba
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/external_https_probe.py'
+      - '.github/workflows/zl-prediction-external-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  external-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Public DNS TLS login and model page checks from GitHub runner
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python prediction-bot-v1/external_https_probe.py

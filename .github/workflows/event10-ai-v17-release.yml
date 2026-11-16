@@ -1,0 +1,155 @@
+name: EVENT10 V18 strict AI completed signals and settled-loss feedback Alibaba deployment
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-ai-v17-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+concurrency:
+  group: event10-v17-ai-isolated-production-release
+  cancel-in-progress: false
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate read-only rule gating, index and AI feedback
+        run: |
+          node --check event10-bot/server.mjs
+          node --check event10-bot/manual-engine.mjs
+          node --check event10-bot/ai-direction-review.mjs
+          node --check event10-bot/readonly-candles.mjs
+          node --test event10-bot/selective-trend.test.mjs event10-bot/ai-direction-review.test.mjs
+          python3 -m py_compile event10-bot/aliyun_high_selectivity_only.py
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('event10-bot/pure-signal.mjs').read_text()
+          assert 'EVENT10_AI_REQUIRED_LEARNING_V18_20261106' in s
+          assert 'EVENT10_AI_REQUIRED_LEARNING_V18_20261106' in Path('event10-bot/panel.html').read_text()
+          assert 'MIN_SIGNAL_GAP_MS = 600_000' in Path('event10-bot/manual-engine.mjs').read_text()
+          ai=Path('event10-bot/ai-direction-review.mjs').read_text()
+          engine=Path('event10-bot/manual-engine.mjs').read_text()
+          assert 'AI_REVIEW_EFFORT="high"' in ai
+          assert 'env.EVENT10_AI_MODEL||"deepseek-flash"' in ai
+          assert 'env.EVENT10_AI_MODEL||"deepseek-flash"' in engine
+          assert 'thinkingMode:aiConfigured?"enabled"' in engine
+          assert 'V18_AI_REQUIRED_INCOMPLETE' in engine
+          assert 'aiMandatory:true' in engine
+          assert 'buildLearningProfile' in engine
+          assert 'publishAt=clock()' in engine
+          assert 'AI_REVIEW_MAX_TOKENS=8192' in ai
+          assert 'thinking:{type:"enabled"}' in ai
+          assert 'AI_THINKING_NOT_VERIFIED' in ai
+          assert 'AI_INCOMPLETE_FALLBACK' in ai
+          assert 'aiInProgress' in engine
+          assert 'timeoutMs:40000' in engine
+          assert 'attempt===1?' in ai and 'Math.min(20000,timeoutMs)' in ai
+          assert 'NO_EVENT_CONTRACT_ORDER_API' in Path('event10-bot/server.mjs').read_text()
+          assert 'EVENT10_AI_REQUIRED_LEARNING_V18_20261106' in Path('event10-bot/aliyun_high_selectivity_only.py').read_text()
+          print('V17_AI_FREQ_AND_NO_ORDER_CHECK_PASS=true')
+          PY
+  deploy:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy isolated EVENT10 AI model from pinned commit
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,re,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          sha=os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REF_NAME']=='feature/zl-futures-bot-v1'
+          assert re.fullmatch(r'[a-f0-9]{40}',sha)
+          ak=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_ID')
+          sk=os.environ.get('ALIBABA_CLOUD_ACCESS_KEY_SECRET')
+          assert ak and sk,'EVENT10_AI_CLOUD_CREDS_MISSING'
+          remote=f'''#!/bin/bash
+          set -Eeuo pipefail
+          stage=$(mktemp -d /tmp/event10-ai-v17.XXXXXXXX)
+          trap 'rm -rf "$stage"' EXIT
+          curl -fsSL --retry 3 --max-time 35 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/{sha}/event10-bot/aliyun_high_selectivity_only.py" -o "$stage/release.py"
+          python3 -m py_compile "$stage/release.py"
+          python3 "$stage/release.py" {sha}
+          '''
+          client=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+              region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          response=client.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+              instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+              name='event10-v17-deepseek-direction-only',
+              type='RunShellScript',working_user='root',command_content=remote,timeout=370))
+          invoke=response.body.invoke_id
+          assert invoke,'EVENT10_AI_INVOKE_MISSING'
+          for _ in range(170):
+              time.sleep(2)
+              result=client.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                  region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=invoke)).body.invocation_result
+              if not result or str(result.invocation_status) not in ('Success','Failed','Aborted',
+                  'ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+              output=base64.b64decode(result.output or '').decode('utf8','replace')
+              for line in output.splitlines():
+                  if line.startswith('EVENT10_HS_'):print(line,flush=True)
+              assert str(result.invocation_status)=='Success' and int(result.exit_code)==0 and 'EVENT10_HS_DEPLOY_SUCCEEDED=true' in output,('REMOTE_FAILED_'+str(result.invocation_status)+'_'+output[-450:])
+              break
+          else:raise RuntimeError('EVENT10_AI_DEPLOY_UNCONFIRMED')
+          PY
+      - name: Verify public authenticated v17 signal endpoints and AI configuration
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,base64,json,os,time
+          base='https://prediction.47-237-188-69.sslip.io'
+          pw=os.environ.get('ZL_PANEL_PASSWORD','')
+          assert pw,'PANEL_AUTH_MISSING'
+          basic=base64.b64encode(('zl:'+pw).encode()).decode()
+          def get(path):
+              req=urllib.request.Request(base+path,headers={'Authorization':'Basic '+basic,'Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=15) as r:return json.loads(r.read(750000))
+          status=get('/event10/api/status')
+          history=get('/event10/api/signals?limit=5&offset=0')
+          assert status.get('decisionReviewVersion')=='EVENT10_AI_REQUIRED_LEARNING_V18_20261106'
+          assert status.get('aiReviewConfigured') is True
+          assert status.get('aiMandatory') is True
+          assert status.get('aiReviewModel')=='deepseek-flash'
+          assert status.get('thinkingMode')=='enabled'
+          assert status.get('reasoningEffort')=='high'
+          assert status.get('autoTradingEnabled') is False
+          assert status.get('minSignalGapMs')==600000
+          assert history.get('version')==status.get('decisionReviewVersion')
+          print('EVENT10_AI_PUBLIC_CONFIGURED=true')
+          print('EVENT10_AI_MODEL',status.get('aiReviewModel'))
+          print('EVENT10_AI_CALLS',status.get('modelCalls'))
+          print('EVENT10_V17_PUBLIC_ENDPOINTS_OK=true')
+          PY
+  report:
+    if: always()
+    needs: [tests, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish immutable V17 deployment check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST: ${{ needs.tests.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          if [ "$TEST" = success ] && [ "$DEPLOY" = success ];then result=success;else result=failure;fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$result" -f context="event10-v17-ai-production-deploy" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="V17 independent BTC feed and DeepSeek review: tests=$TEST deploy=$DEPLOY" >/dev/null
+          echo EVENT10_V17_RELEASE_RESULT="$result"

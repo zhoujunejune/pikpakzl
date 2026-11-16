@@ -1,0 +1,94 @@
+name: Deploy unified exchange API manager for both robots
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'exchange-api-manager/**'
+      - '.github/workflows/zl-aliyun-exchange-apis.yml'
+      - 'futures-bot-v1/dashboard.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-unified-exchange-manager
+  cancel-in-progress: false
+jobs:
+  build-test-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate syntax and isolated credential tests
+        run: |
+          python -m py_compile exchange-api-manager/server.py
+          python -m unittest discover -s exchange-api-manager -p 'test_server.py' -v
+          bash -n exchange-api-manager/install_aliyun.sh
+      - name: Install Alibaba SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy authenticated shared API manager on Alibaba
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python exchange-api-manager/aliyun_deploy.py
+      - name: Verify both sites protected with login and page contains selector
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,urllib.request,urllib.error,base64,json,time
+          pw=os.environ['ZL_PANEL_PASSWORD']
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          for host in ('47-237-188-69.sslip.io','prediction.47-237-188-69.sslip.io'):
+            base='https://'+host
+            def get(path,yes):
+              req=urllib.request.Request(base+path,headers={'Authorization':auth} if yes else {})
+              try:
+                with urllib.request.urlopen(req,timeout=15) as r:return r.status,r.read(130000)
+              except urllib.error.HTTPError as e:return e.code,b''
+            for i in range(6):
+              anon,_=get('/api-keys/',False)
+              status,data=get('/api-keys/',True)
+              if anon==401 and status==200:break
+              time.sleep(3)
+            print('API_MANAGER_SITE',host,'anon',anon,'loggedIn',status)
+            assert anon==401 and status==200
+            assert b'id="bot"' in data and b'id="exchange"' in data
+            a,body=get('/api-keys/api/status?bot=futures&exchange=binance',True)
+            assert a==200 and 'configured' in json.loads(body)
+            a,_=get('/healthz',True) if host.startswith('47-') else get('/api/status',True)
+            print('API_MANAGER_MAIN_SITE_HEALTH',host,a)
+            assert a==200
+          print('API_MANAGER_SMOKE_BOTH_ROBOTS_OK')
+          PY
+
+      - name: Probe prediction homepage repeatedly to catch intermittent HTTP 502
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import base64,os,time,urllib.request,urllib.error
+          base='https://prediction.47-237-188-69.sslip.io/'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          failures=[]
+          for index in range(6):
+              req=urllib.request.Request(base,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+              try:
+                  with urllib.request.urlopen(req,timeout=20) as r:
+                      code=r.status
+                      data=r.read(300000)
+              except urllib.error.HTTPError as e:
+                  code=e.code
+                  data=b''
+              except Exception:
+                  code=0
+                  data=b''
+              valid=code==200 and b'<html' in data.lower()
+              print('PREDICTION_HOME_PROBE',index+1,'HTTP',code,'HTML',valid)
+              if not valid:failures.append((index+1,code))
+              if index<5:time.sleep(2)
+          assert not failures, 'PREDICTION_HOME_UNSTABLE '+str(failures)
+          print('PREDICTION_HOME_6_REQUESTS_OK')
+          PY

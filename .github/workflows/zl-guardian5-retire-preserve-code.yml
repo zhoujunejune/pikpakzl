@@ -1,0 +1,60 @@
+name: Guardian5 safe retirement - preserve code and event10
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_guardian5_retirement.py'
+      - '.github/workflows/zl-guardian5-retire-preserve-code.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+concurrency:
+  group: zl-alibaba-guardian5-retirement
+  cancel-in-progress: false
+jobs:
+  inspect-or-retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate stop script syntax without cloud commands
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian5_retirement.py
+          python - <<'PY'
+          from pathlib import Path
+          import ast,subprocess
+          p=Path('prediction-bot-v1/aliyun_guardian5_retirement.py')
+          t=ast.parse(p.read_text())
+          s=next(n.value.value for n in t.body if isinstance(n,ast.Assign) and any(getattr(x,'id',None)=='SCRIPT' for x in n.targets))
+          r=subprocess.run(['bash','-n'],input=s,text=True,capture_output=True)
+          assert r.returncode==0,r.stderr
+          assert 'zl-event10-deepseek' in s and 'caddy' in s
+          assert 'systemctl disable --now' in s
+          print('GUARDIAN_RETIRE_LOCAL_STATIC_OK=true')
+          PY
+      - name: Install Alibaba SWAS client
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Stop and disable only five-minute Guardian services; preserve code and ten-minute services
+        env:
+          GUARDIAN_RETIRE_MODE: stop
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_guardian5_retirement.py
+  report:
+    if: always()
+    needs: [inspect-or-retire]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.inspect-or-retire.result }}
+        run: |
+          if [ "$RESULT" = success ]; then state=success; else state=failure; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context="guardian5-retirement-stop" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="Guardian5 systemd retirement STOP/DISABLE: $RESULT" >/dev/null

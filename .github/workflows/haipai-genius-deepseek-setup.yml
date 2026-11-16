@@ -1,0 +1,88 @@
+name: Haipai Genius DeepSeek key setup - paper only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/haipai-genius-deepseek-setup.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Securely configure DeepSeek only in isolated simulator
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import os,base64,time,textwrap
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          key=os.environ.get('DEEPSEEK_API_KEY','').strip()
+          assert key and len(key)>12 and '\n' not in key and '\r' not in key,'DEEPSEEK_KEY_MISSING_OR_INVALID'
+          token=base64.b64encode(key.encode()).decode()
+          remote="""#!/bin/bash
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p /etc/systemd/system/haipai-genius-paper.service.d
+          python3 - <<'SETKEY'
+          import base64,pathlib,os
+          key=base64.b64decode('TOKEN_HERE').decode('utf-8')
+          assert '\\n' not in key and '\\r' not in key
+          p=pathlib.Path('/etc/haipai-genius-paper.env')
+          p.write_text('DEEPSEEK_API_KEY='+key+'\\n')
+          os.chmod(p,0o600)
+          SETKEY
+          cat >/etc/systemd/system/haipai-genius-paper.service.d/90-api-key.conf <<'UNIT'
+          [Service]
+          EnvironmentFile=-/etc/haipai-genius-paper.env
+          UNIT
+          systemctl daemon-reload
+          systemctl restart haipai-genius-paper
+          python3 - <<'VERIFY'
+          import json,urllib.request
+          x=json.load(urllib.request.urlopen('http://127.0.0.1:13023/api/status',timeout=7))
+          assert x['aiConfigured'] is True
+          assert x['realTradingEnabled'] is False
+          assert x['settings']['enabled'] is False
+          assert x['aiModel']=='deepseek-flash'
+          print('HAIPAI_GENIUS_DEEPSEEK_CONFIGURED=true')
+          print('HAIPAI_GENIUS_REAL_TRADES_DISABLED=true')
+          VERIFY
+          """.replace('TOKEN_HERE',token)
+          lines=remote.splitlines()
+          remote=lines[0]+'\n'+textwrap.dedent('\n'.join(lines[1:]))+'\n'
+          cli=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],
+            access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],
+            region_id='ap-southeast-1',endpoint='swas.ap-southeast-1.aliyuncs.com'))
+          job=cli.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',
+            instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+            name='haipai-genius-deepseek-key-no-live-orders',
+            type='RunShellScript',working_user='root',command_content=remote,timeout=85))
+          assert job.body.invoke_id
+          for _ in range(40):
+            time.sleep(2)
+            r=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+              region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',
+              invoke_id=job.body.invoke_id)).body.invocation_result
+            if not r or str(r.invocation_status) not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero'):continue
+            msg=base64.b64decode(r.output or '').decode('utf8','replace')
+            print('HAIPAI_GENIUS_REMOTE_STATUS='+str(r.invocation_status),flush=True)
+            print('HAIPAI_GENIUS_REMOTE_EXIT='+str(r.exit_code),flush=True)
+            for line in msg.splitlines():
+              if line.startswith('HAIPAI_GENIUS_'):print(line,flush=True)
+              if any(word in line for word in ('SyntaxError','IndentationError','AssertionError','No such file','Failed to','File "<stdin>"','bash: line','systemctl:')):
+                if not any(word in line for word in ('base64.b64decode','DEEPSEEK_API_KEY=','TOKEN_HERE')):
+                  print('HAIPAI_GENIUS_REMOTE_DIAGNOSTIC='+line[-180:],flush=True)
+            assert str(r.invocation_status)=='Success' and int(r.exit_code)==0,'CONFIGURATION_FAILED'
+            assert 'HAIPAI_GENIUS_DEEPSEEK_CONFIGURED=true' in msg
+            break
+          else:raise RuntimeError('NO_REMOTE_RESULT')
+          PY

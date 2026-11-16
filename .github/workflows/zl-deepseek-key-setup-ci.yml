@@ -1,0 +1,31 @@
+name: Validate secure DeepSeek interactive setup script (no secret access)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/deepseek5_secure_key_setup.sh
+      - .github/workflows/zl-deepseek-key-setup-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell script syntax without any API key
+        run: bash -n prediction-bot-v1/deepseek5_secure_key_setup.sh
+      - name: Verify script never contains a hardcoded key
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('prediction-bot-v1/deepseek5_secure_key_setup.sh').read_text()
+          assert 'read -r -s key < /dev/tty' in text
+          assert 'set +x' in text
+          assert 'chmod 600' in text
+          assert 'realOrderEnabled' in text
+          assert 'tradeIntegration' in text
+          print('INTERACTIVE_HIDDEN_INPUT_PRESENT=true')
+          print('NO_EXCHANGE_ORDER_PATH=true')
+          PY

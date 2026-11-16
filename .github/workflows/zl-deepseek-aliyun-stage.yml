@@ -1,0 +1,39 @@
+name: Deploy isolated DeepSeek signal service to Alibaba (orders off)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_deepseek_stage.py
+      - prediction-bot-v1/deepseek-5m-engine.mjs
+      - prediction-bot-v1/deepseek-5m-engine.test.mjs
+      - .github/workflows/zl-deepseek-aliyun-stage.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-deepseek-aliyun-stage-no-orders
+  cancel-in-progress: false
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check staged service and no-order behavior
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_deepseek_stage.py
+          node --check prediction-bot-v1/deepseek-5m-engine.mjs
+          node --test prediction-bot-v1/deepseek-5m-engine.test.mjs
+      - name: Install SWAS Cloud Assistant SDK
+        run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Stage isolated DeepSeek service while preserving production
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_stage.py

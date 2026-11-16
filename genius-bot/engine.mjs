@@ -1,0 +1,210 @@
+// 海派合约天才 · independent PAPER-ONLY perpetual futures engine.
+// Financial research software, not a real-money order executor.
+export const ENGINE_VERSION = 'HAIPAI_GENIUS_PAPER_V154_BILLING_BACKOFF';
+export const PAPER_FEE_RATE = 0.0005;
+export const PAPER_SLIPPAGE_RATE = 0.0003;
+export const DEFAULT_SETTINGS = Object.freeze({enabled:false,emergencyStop:false,
+  symbol:'BTCUSDT',paperBalance:200,leverage:2,marginUsdt:5});
+const finite = Number.isFinite;
+const round=(n,p=6)=>Number(n.toFixed(p));
+export function validateSettings(value){
+  if(!value||typeof value!=='object'||Array.isArray(value)||
+      Object.keys(value).sort().join('|')!==Object.keys(DEFAULT_SETTINGS).sort().join('|'))
+    throw Error('INVALID_SETTINGS_FIELDS');
+  const s={...value};
+  for(const name of ['enabled','emergencyStop'])if(typeof s[name]!=='boolean')throw Error('INVALID_'+name);
+  if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(s.symbol))throw Error('UNSUPPORTED_SYMBOL');
+  const ranges={paperBalance:[10,10000],leverage:[1,100],marginUsdt:[1,100],
+    };
+  for(const [name,[min,max]] of Object.entries(ranges)){
+    if(typeof s[name]!=='number'||!finite(s[name])||s[name]<min||s[name]>max)
+      throw Error('INVALID_'+name);
+  }
+  if(!Number.isInteger(s.leverage))throw Error('INVALID_INTEGER_SETTING');
+  // Simulated margin size may exceed 10% of initial paper capital. Opening is
+  // separately blocked when there are insufficient *available* paper funds.
+  if(s.marginUsdt>s.paperBalance)throw Error('MARGIN_EXCEEDS_PAPER_START_BALANCE');
+  return s;
+}
+export function parseDecision(payload){
+  const d=typeof payload==='string'?JSON.parse(payload):payload;
+  if(!d||typeof d!=='object'||Array.isArray(d)||!['LONG','SHORT','WAIT','HOLD','CLOSE'].includes(d.action))
+    throw Error('INVALID_AI_DIRECTION');
+  if(typeof d.reason!=='string'||d.reason.length<6||d.reason.length>300)
+    throw Error('INVALID_AI_REASON');
+  if(typeof d.confidence!=='number'||!finite(d.confidence)||d.confidence<0||d.confidence>1)
+    throw Error('INVALID_AI_SCORE');
+  if(d.symbol!=null&&!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(d.symbol))throw Error('INVALID_AI_SYMBOL');
+  const out={action:d.action,reason:d.reason,confidence:round(d.confidence,3)};
+  if(d.symbol)out.symbol=d.symbol;
+  if(d.horizon!==undefined){
+    if(!['SHORT','MEDIUM','LONG'].includes(d.horizon))throw Error('INVALID_AI_HORIZON');
+    out.horizon=d.horizon;
+  }
+  return out;
+}
+export const MAX_PAPER_POSITIONS=3;
+export function normalizePaperPositions(state){
+  if(!state||typeof state!=='object'||!Array.isArray(state.positions))throw Error('INVALID_PAPER_POSITIONS');
+  if(state.positions.length>MAX_PAPER_POSITIONS)throw Error('TOO_MANY_PAPER_POSITIONS');
+  const seen=new Set();
+  for(const p of state.positions){
+    if(!p||p.source!=='DEEPSEEK_PAPER_ONLY'||!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(p.symbol)||
+      seen.has(p.symbol)||!['LONG','SHORT'].includes(p.side)||
+      !Number.isFinite(p.entry)||p.entry<=0||!Number.isFinite(p.qty)||p.qty<=0||
+      !Number.isFinite(p.marginUsdt)||p.marginUsdt<=0||!Number.isFinite(p.leverage)||p.leverage<=0)
+      throw Error('INVALID_PAPER_POSITION');
+    seen.add(p.symbol);
+    delete p.stop;
+    delete p.takeProfit;
+  }
+  return state.positions;
+}
+export function parsePortfolioPlan(payload){
+  const obj=typeof payload==='string'?JSON.parse(payload):payload;
+  if(!obj||typeof obj!=='object'||Array.isArray(obj))throw Error('INVALID_AI_PORTFOLIO');
+  // Older JSON response formats are permitted only as a single explicit decision.
+  const raw=Array.isArray(obj.decisions)?obj.decisions:obj.action?[obj]:null;
+  if(!raw||raw.length<1||raw.length>6)throw Error('INVALID_AI_PORTFOLIO_DECISIONS');
+  const out=raw.map(parseDecision);
+  const unique=new Set();
+  for(const d of out){
+    if(!d.symbol||unique.has(d.symbol))throw Error('AI_DUPLICATE_OR_MISSING_SYMBOL');
+    unique.add(d.symbol);
+  }
+  return out;
+}
+export function ema(values,period){
+  if(!Array.isArray(values)||values.length<period||!values.every(v=>finite(v)&&v>0))throw Error('INVALID_CANDLES_FOR_EMA');
+  let avg=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(const value of values.slice(period))avg+=(value-avg)*2/(period+1);
+  return avg;
+}
+export function makeMarket({symbol,markPrice,markTime,oneMin,fiveMin,now=Date.now()}){
+  if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(symbol)||!finite(markPrice)||markPrice<=0||
+      !Number.isSafeInteger(markTime)||markTime>now+1000||now-markTime>5000)
+    throw Error('STALE_MARK_PRICE');
+  const parse=(candles,step,min)=>{
+    if(!Array.isArray(candles)||candles.length<min)throw Error('NOT_ENOUGH_CANDLES');
+    const arr=candles.map(x=>({startMs:Number(x.startMs),close:Number(x.close),
+      high:Number(x.high),low:Number(x.low),volume:Number(x.volume)}));
+    if(arr.some(x=>!Number.isSafeInteger(x.startMs)||x.startMs<=0||!finite(x.close)||x.close<=0||
+        !finite(x.high)||!finite(x.low)||x.high<x.low||x.high<x.close||x.low>x.close||
+        !finite(x.volume)||x.volume<0||x.startMs+step>now))throw Error('INVALID_CLOSED_CANDLES');
+    for(let i=1;i<arr.length;i++)if(arr[i].startMs-arr[i-1].startMs!==step)throw Error('GAPPED_CANDLES');
+    if(now-(arr.at(-1).startMs+step)>step+5000)throw Error('STALE_CANDLES');
+    return arr;
+  };
+  const one=parse(oneMin,60000,30),five=parse(fiveMin,300000,30);
+  const prices=one.map(x=>x.close),fivePrices=five.map(x=>x.close);
+  const last=one.at(-1),previous=one.at(-4),volumeBase=one.slice(-21,-1).reduce((a,b)=>a+b.volume,0)/20;
+  const trend1m=ema(prices,9)>ema(prices,21)?'UP':'DOWN';
+  const trend5m=ema(fivePrices,9)>ema(fivePrices,21)?'UP':'DOWN';
+  const high20=Math.max(...one.slice(-20).map(x=>x.high));
+  const low20=Math.min(...one.slice(-20).map(x=>x.low));
+  return {symbol,markPrice,markTime,checkedAt:now,
+    trend1m,trend5m,momentum3mPct:round(100*(last.close/previous.close-1),5),
+    volumeRatio:round(volumeBase>0?last.volume/volumeBase:0,3),
+    pricePosition20mPct:round(high20>low20?100*(markPrice-low20)/(high20-low20):50,2),
+    high20m:high20,low20m:low20,
+    dataType:'BINANCE_USDM_MARK_PRICE_AND_CLOSED_FUTURES_KLINES'};
+}
+export function newState(settings=DEFAULT_SETTINGS){return {settings:validateSettings({...settings}),balance:settings.paperBalance,
+  day:null,dayStart:settings.paperBalance,positions:[],closed:[],realizedNetPnl:0,lastDecision:null,lastError:null,lastActionAt:0,
+  lastMarket:null,aiStatus:'NOT_REQUESTED',cycleCount:0};}
+const dayOf=(t)=>new Date(t).toISOString().slice(0,10);
+export function rollDay(state,now){
+  const day=dayOf(now);
+  if(state.day!==day){state.day=day;state.dayStart=state.balance;}
+}
+export function paperOpen(state,market,decision,now=Date.now()){
+  const s=state.settings;
+  const positions=normalizePaperPositions(state);
+  if(!s.enabled||s.emergencyStop)return {ok:false,reason:'NOT_ARMED'};
+  if(positions.length>=MAX_PAPER_POSITIONS)return {ok:false,reason:'MAX_THREE_PAPER_POSITIONS'};
+  if(!['LONG','SHORT'].includes(decision.action))return {ok:false,reason:'AI_DID_NOT_REQUEST_ENTRY'};
+  if(positions.some(p=>p.symbol===market.symbol))return {ok:false,reason:'SYMBOL_ALREADY_HELD'};
+  if(!['BTCUSDT','ETHUSDT','SOLUSDT'].includes(market.symbol)||
+      decision.symbol!==market.symbol||now-market.checkedAt>5000)throw Error('STALE_OR_MISMATCHED_MARKET');
+  const locked=positions.reduce((v,p)=>v+p.marginUsdt,0);
+  if(locked+s.marginUsdt>state.balance)return {ok:false,reason:'INSUFFICIENT_FREE_PAPER_MARGIN'};
+  const side=decision.action,sign=side==='LONG'?1:-1;
+  const entry=round(market.markPrice*(1+sign*PAPER_SLIPPAGE_RATE),6);
+  const qty=round(s.marginUsdt*s.leverage/entry,8),openFee=round(qty*entry*PAPER_FEE_RATE,6);
+  if(qty<=0||s.marginUsdt+openFee>state.balance-locked)return {ok:false,reason:'INSUFFICIENT_PAPER_FUNDS'};
+  state.balance=round(state.balance-openFee,6);
+  const position={id:'paper-'+now+'-'+market.symbol,symbol:market.symbol,side,qty,
+    marginUsdt:s.marginUsdt,leverage:s.leverage,entry,openedAt:now,openFee,
+    horizon:decision.horizon||'UNSPECIFIED',
+    entryHorizon:decision.horizon||'UNSPECIFIED',
+    entrySignals:{trend1m:market.trend1m||null,trend5m:market.trend5m||null,
+      momentum3mPct:Number.isFinite(market.momentum3mPct)?market.momentum3mPct:null,
+      at:now},
+    source:'DEEPSEEK_PAPER_ONLY',strategyVersion:ENGINE_VERSION,reason:decision.reason};
+  positions.push(position);
+  state.lastActionAt=now;
+  return {ok:true,position};
+}
+/** Simulated position is closed only by an AI CLOSE decision or manual emergency stop.
+ * A price tick alone cannot create a closing instruction.
+ */
+export function paperMark(state,market,now=Date.now(),closeReason=null,aiReason=null){
+  const positions=normalizePaperPositions(state);
+  const p=positions.find(x=>x.symbol===market.symbol);
+  if(!p)return {ok:false,reason:'NO_MATCHING_POSITION'};
+  if(now-market.checkedAt>10000)throw Error('MARKET_NOT_FRESH');
+  if(closeReason!=='AI_CLOSE'&&closeReason!=='EMERGENCY_STOP')return {ok:false,reason:'AI_HOLD'};
+  const sign=p.side==='LONG'?1:-1;
+  const close=round(market.markPrice*(1-sign*PAPER_SLIPPAGE_RATE),6);
+  const gross=round(sign*(close-p.entry)*p.qty,6),fee=round(close*p.qty*PAPER_FEE_RATE,6);
+  const net=round(gross-p.openFee-fee,6);
+  state.balance=round(state.balance+gross-fee,6);
+  const {stop,takeProfit,...cleanPosition}=p;
+  const trade={...cleanPosition,close,closedAt:now,exitReason:closeReason,
+    aiExitReason:closeReason==='AI_CLOSE'?String(aiReason||'AI requested close').slice(0,300):null,
+    grossPnl:gross,netPnl:net,closeFee:fee,paper:true};
+  // Lifetime realized PnL must not reset when the visible 500-record ledger rolls over.
+  if(!Number.isFinite(state.realizedNetPnl))throw Error('MISSING_REALIZED_PNL_LEDGER');
+  state.realizedNetPnl=round(state.realizedNetPnl+net);
+  state.closed.unshift(trade);
+  state.closed=state.closed.slice(0,500);
+  state.positions=positions.filter(x=>x.id!==p.id);
+  state.lastActionAt=now;
+  return {ok:true,trade};
+}
+export function paperFloatingPnL(positions,snapshots,now=Date.now()){
+  return positions.reduce((out,p)=>{
+    const quote=snapshots.find(x=>x.symbol===p.symbol&&Number.isFinite(x.markPrice)&&
+      Number.isFinite(x.checkedAt)&&now-x.checkedAt<10000);
+    if(!quote){out.complete=false;return out;}
+    const sign=p.side==='LONG'?1:-1;
+    out.total=round(out.total+sign*(quote.markPrice-p.entry)*p.qty);
+    return out;
+  },{total:0,complete:true});
+}
+
+/** Separate lifetime closed-trade net PnL from active gross PnL and a fee/slippage
+ * adjusted mark-to-market estimate. Never equate open positions with realized profit.
+ */
+export function paperPnlSummary(state,snapshots=[],now=Date.now()){
+  if(!Number.isFinite(state.realizedNetPnl))throw Error('INVALID_REALIZED_PNL_LEDGER');
+  const positions=normalizePaperPositions(state);
+  const floating=paperFloatingPnL(positions,snapshots,now);
+  let estimatedOpenNet=0,complete=floating.complete;
+  for(const p of positions){
+    const quote=snapshots.find(x=>x.symbol===p.symbol&&Number.isFinite(x.markPrice)&&
+      x.markPrice>0&&Number.isFinite(x.checkedAt)&&now-x.checkedAt<10000);
+    if(!quote){complete=false;continue;}
+    const sign=p.side==='LONG'?1:-1;
+    const simulatedClose=round(quote.markPrice*(1-sign*PAPER_SLIPPAGE_RATE),6);
+    const gross=sign*(simulatedClose-p.entry)*p.qty;
+    const closeFee=simulatedClose*p.qty*PAPER_FEE_RATE;
+    estimatedOpenNet+=gross-p.openFee-closeFee;
+  }
+  return {realizedNetPnl:round(state.realizedNetPnl),
+    openGrossPnl:complete?floating.total:null,
+    estimatedOpenNetPnl:complete?round(estimatedOpenNet):null,
+    estimatedCumulativePnl:complete?round(state.realizedNetPnl+estimatedOpenNet):null,
+    complete,closedRecordsAvailable:state.closed.length,openPositions:positions.length,
+    accounting:'SIMULATION_INCLUDES_OPEN_AND_CLOSE_FEES_AND_SLIPPAGE_NO_FUNDING'};
+}

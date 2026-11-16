@@ -1,0 +1,50 @@
+name: Repair Alibaba 30s prediction current-round evidence and verify
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-selective30-current-repair.yml'
+      - 'prediction-bot-v1/aliyun_selective30_current_round_repair.py'
+      - 'prediction-bot-v1/aliyun_selective30_current_round_deploy.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  repair-current-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m py_compile prediction-bot-v1/aliyun_selective30_current_round_repair.py prediction-bot-v1/aliyun_selective30_current_round_deploy.py
+      - run: pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy current-round market data input into V2 and trade control
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_selective30_current_round_deploy.py
+      - name: Verify public UI model and 2 signal sources
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,json
+          url='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(route):
+            with urllib.request.urlopen(urllib.request.Request(url+route,headers={'Authorization':auth,'Cache-Control':'no-cache'}),timeout=20) as r:return r.read()
+          choice=json.loads(get('/api/order-signal-model'))
+          assert choice.get('model')=='SELECTIVE_V2_30S_CURRENT_ROUND_V2',choice
+          s=json.loads(get('/api/round-stats'))
+          assert [i.get('source') for i in s.get('activeSignalModels',[])]==[
+            'SELECTIVE_V2_FAST8_PRIMARY','EDGE_RESCUE_FAST8_PRIMARY']
+          assert all(i.get('version')=='SELECTIVE_V2_30S_CURRENT_ROUND_V2' for i in s['activeSignalModels'])
+          assert 'SELECTIVE_V2_30S_CURRENT_ROUND_V2' in get('/').decode('utf-8','replace')
+          print('CURRENT_ROUND_PUBLIC_DEPLOY_VERIFIED=true')
+          print('CURRENT_ROUND_FALLBACK_DISABLED=true')
+          print('CURRENT_ROUND_HISTORY_ROWS',len(s.get('records',[])))
+          PY

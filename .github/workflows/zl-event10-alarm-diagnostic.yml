@@ -1,0 +1,70 @@
+# 2026-11-05 user-requested fresh read-only notification timeliness audit.
+# 2026-11-05: audit last V11 signals for Android notification timeliness and network reachability (server read-only).
+# 2026-11-03 07:55+08 read-only connectivity root-cause audit.
+# Read-only external signal API audit requested 2026-10-31 18:25 Asia/Shanghai.
+name: Diagnose live Event10 latest signals for app alarm
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-event10-alarm-diagnostic.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read real Event10 signals and status without exposing authorization
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import base64,os,json,urllib.request,datetime,zoneinfo
+          pwd=os.getenv('ZL_PANEL_PASSWORD','')
+          assert len(pwd)>10,'MISSING_AUTH'
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+pwd).encode()).decode()
+          def get(endpoint):
+            req=urllib.request.Request(base+endpoint,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+            with urllib.request.urlopen(req,timeout=15) as f:return json.load(f)
+          sh=zoneinfo.ZoneInfo('Asia/Shanghai')
+          now=datetime.datetime.now(sh)
+          print('SERVER_CHECK_LOCAL_SHANGHAI',now.isoformat())
+          # Check the actual app HTML and static files over public TLS, using the same Basic Auth as native Android.
+          import urllib.error,hashlib,socket,ssl,collections
+          for endpoint in ['/app/','/app/app.js','/app/sw.js','/app/manifest.webmanifest','/app/version.json','/event10/']:
+            req=urllib.request.Request(base+endpoint,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+            try:
+              with urllib.request.urlopen(req,timeout=12) as f:
+                data=f.read(350000)
+                body=data.decode('utf-8','replace')
+                expected=endpoint=='/app/' and ('ZL CONTROL' in body and '/app/app.js' in body) or endpoint=='/app/app.js' and '/event10/api/status' in body
+                print('PUBLIC_ASSET',endpoint,'http',f.status,'bytes',len(data),'type',f.headers.get('Content-Type'),'sha12',hashlib.sha256(data).hexdigest()[:12],'expected',expected if endpoint in ['/app/','/app/app.js'] else 'na','htmlTitle',body.split('<title>')[1].split('</title>')[0][:55] if '<title>' in body else 'na')
+            except urllib.error.HTTPError as e:print('PUBLIC_ASSET_HTTP_ERROR',endpoint,e.code)
+            except Exception as e:print('PUBLIC_ASSET_ERROR',endpoint,type(e).__name__,str(e)[:130])
+          # Unauthenticated request should be HTTP 401; distinguish auth rejection from blank response.
+          try:
+            with urllib.request.urlopen(urllib.request.Request(base+'/app/',headers={'Cache-Control':'no-cache'}),timeout=10) as res:
+              print('PUBLIC_NOAUTH',res.status,res.headers.get('Content-Type'),len(res.read(20000)))
+          except urllib.error.HTTPError as e: print('PUBLIC_NOAUTH_HTTP',e.code,'www_authenticate_present',bool(e.headers.get('WWW-Authenticate')))
+          except Exception as e: print('PUBLIC_NOAUTH_ERROR',type(e).__name__,str(e)[:130])
+          status=get('/event10/api/status')
+          print('EVENT10_STATUS',json.dumps({
+            k:status.get(k) for k in ('ok','model','lastError') 
+          },ensure_ascii=False,default=str)[:2000])
+          last=status.get('lastSession') or {}
+          print('EVENT10_LAST_SESSION',json.dumps({k:last.get(k) for k in ('id','openedAt','direction','status','reason','model')},ensure_ascii=False)[:2000])
+          signals=get('/event10/api/signals?limit=12&offset=0')
+          print('SIGNALS_API_OK',signals.get('ok'),'RECORDS',len(signals.get('records') or []))
+          for x in (signals.get('records') or []):
+            ts=x.get('openedAt')
+            dt=datetime.datetime.fromtimestamp(ts/1000,sh).isoformat() if isinstance(ts,(int,float)) and ts>0 else 'MISSING'
+            age=round((now.timestamp()*1000-ts)/1000) if isinstance(ts,(int,float)) and ts>0 else None
+            print('EVENT10_SIGNAL',json.dumps({
+              'id':x.get('id'),'time_shanghai':dt,'age_seconds':age,
+              'direction':x.get('direction'),'status':x.get('status'),
+              'expiresAt':x.get('expiresAt'),
+              'expires_shanghai':(datetime.datetime.fromtimestamp(x.get('expiresAt')/1000,sh).isoformat() if isinstance(x.get('expiresAt'),(int,float)) and x.get('expiresAt')>0 else 'MISSING'),
+              'trigger':x.get('trigger'),'strategyVersion':x.get('strategyVersion')
+            },ensure_ascii=False,default=str))
+          PY

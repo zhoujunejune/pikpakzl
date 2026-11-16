@@ -1,0 +1,21 @@
+name: Alibaba single-only public UI and route verification
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/single_only_live_smoke.py'
+      - '.github/workflows/zl-single-only-live-smoke.yml'
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify protected public single panel and absence of retired bot routes
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python prediction-bot-v1/single_only_live_smoke.py

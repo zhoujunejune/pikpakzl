@@ -1,0 +1,44 @@
+name: GUARDIAN dashboard remove retired dynamic-risk controls (UI only)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_guardian_frontend_remove_dynamic.py
+      - .github/workflows/zl-guardian-frontend-dynamic-cleanup.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: guardian5-homepage-ui-only
+  cancel-in-progress: false
+jobs:
+  frontend-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate remote UI-only change and shell syntax
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_guardian_frontend_remove_dynamic.py
+          python - <<'PY'
+          import ast,subprocess
+          t=ast.parse(open('prediction-bot-v1/aliyun_guardian_frontend_remove_dynamic.py').read())
+          script=next(n.value.value for n in t.body if isinstance(n,ast.Assign)
+            and any(isinstance(z,ast.Name) and z.id=='SCRIPT' for z in n.targets))
+          proc=subprocess.run(['bash','-n'],input=script,text=True,capture_output=True)
+          print(proc.stderr)
+          assert proc.returncode==0,'UI_ONLY_SCRIPT_SYNTAX_FAILED'
+          print('GUARDIAN_UI_ONLY_SCRIPT_SYNTAX_OK=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Remove obsolete Guardian dynamic-risk cards with backup and rollback
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_ID"
+          test -n "$ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+          python prediction-bot-v1/aliyun_guardian_frontend_remove_dynamic.py

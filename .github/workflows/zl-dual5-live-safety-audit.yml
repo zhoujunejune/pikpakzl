@@ -1,0 +1,94 @@
+name: Dual5 immediate live trade safety inspection
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-dual5-live-safety-audit.yml']
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Inspect live dual5 safety without writing to server
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          script=r"""#!/bin/bash
+          set -u
+          echo DUAL_LIVE_SAFETY_AUDIT_BEGIN
+          date -u '+CURRENT_UTC %Y-%m-%dT%H:%M:%SZ'
+          echo DUAL_SERVICE:$(systemctl is-active zl-prediction-dual5)
+          echo SINGLE_SERVICE:$(systemctl is-active zl-prediction-fast5)
+          python3 - <<'SCAN'
+          from pathlib import Path
+          import urllib.request,json,re
+          for port in [13048,13046,13045,13044,13042,13020]:
+           try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/status',timeout=2) as r:d=json.load(r)
+            if d.get('model')!='BINANCE_DUAL5_PAIR_V1':continue
+            print('DUAL_STATUS_PORT',port)
+            print('DUAL_STATUS_SAFE',json.dumps({
+             k:d.get(k) for k in ['model','mode','active','armed','blocked','health','round','at','checked','quoteChecks','attempts','lastError','lastOrderRound','minNetEdgeUSDT','firstScanLagMs','marketTopicId','configUpdatedAt','amounts','fundingSource','lastScanAt'] if k in d},ensure_ascii=False))
+            for k in ['lastOpportunity','lastOrder']:
+             raw=d.get(k)
+             if isinstance(raw,dict):
+              safe={a:raw.get(a) for a in ['round','phase','status','strategyMode','at','askSum','rawSpread','quoteNetUSDT','requiredNetEdgeUSDT','amountUp','amountDown','pairedShares','conservativeNet','actualPairWorstCaseUSDT','estimatedNetUSDT','error','warning','firstOrderSubmitAt','upConfirmedAt','downOrderSubmitAt','bothConfirmedAt','pairExecutionMs','fundingSource','first','second'] if a in raw}
+              print('DUAL_'+k.upper(),json.dumps(safe,ensure_ascii=False)[:2500])
+            legs=d.get('legs') or {}
+            print('DUAL_LEG_STATES',json.dumps({k:{a:v.get(a) for a in ['status','round','costUSDT','shares','updatedAt']} for k,v in legs.items() if isinstance(v,dict)},ensure_ascii=False)[:1800])
+            break
+           except Exception as e:
+            print('DUAL_PORT_ERROR',port,type(e).__name__)
+          p=Path('/opt/zl-prediction-dual5/binance_dual5_pairs.mjs')
+          if p.exists():
+           s=p.read_text()
+           for i,line in enumerate(s.splitlines()[:14],1):
+            if 'FILE=' in line or 'PORT=' in line:
+             import re
+             cleaned=re.sub(r'process\.env\.[A-Za-z0-9_]+','[ENV_NAME]',line)
+             print('DUAL_CONFIG_PATH_SOURCE',i,cleaned[:240])
+           print('CONFIG_FILES',[(str(q),q.exists()) for q in [Path('/var/lib/zl-prediction-dual5/state.json'),Path('/opt/zl-prediction-dual5/state.json')]])
+           print('DUAL_STRATEGY_MARKER_INSTALLED','DUAL5_ARB_EDGE_GATE_V2_20261028' in s)
+           print('DUAL_MARKER_COUNT',s.count('DUAL5_ARB_EDGE_GATE_V2_20261028'))
+           assert s.count('DUAL5_ARB_EDGE_GATE_V3_20261028')==1,'V3_MARKER_MISSING'
+           assert not any(r'\n' in line for line in s.splitlines() if 'DUAL5_ARB_EDGE_GATE_V2_20261028' in line or 'DUAL5_ARB_EDGE_GATE_V3_20261028' in line),'COMMENTED_GUARD'
+           assert len([l for l in s.splitlines() if l.lstrip().startswith('const requiredEdge=Math.max(')])==1,'REQUIRED_EDGE_NOT_EXECUTABLE'
+           assert len([l for l in s.splitlines() if l.lstrip().startswith('const minimumEdgeAtSubmit=Math.max(')])==1,'SUBMIT_GATE_NOT_EXECUTABLE'
+           print('DUAL_V3_BOTH_EXECUTABLE_ENTRY_GATES_CONFIRMED')
+           for ix,line in enumerate(s.splitlines(),1):
+            if any(x in line for x in ['requiredEdge=','ARBITRAGE_EDGE_TOO_LOW','attemptPair(round','if(!config.armed)','estimate.feasible','MIN_EDGE=','ENTRY_WINDOW_MS=','conservativeNet=','const conservativeNet','const feeReserve','quoteNetUSDT:','calcPair(q1,q2']):
+             print('DUAL_CODE_CHECK',ix,line[:185])
+          SCAN
+          echo DUAL_JOURNAL_RECENT_BEGIN
+          journalctl -u zl-prediction-dual5 --since '45 minutes ago' --no-pager -o cat 2>/dev/null | python3 -c 'import sys,re
+          lines=sys.stdin.read().splitlines()
+          p=r"SUBMITTING|FILLED|ORDER_PENDING|UNHEDGED|ARB|EDGE|attempt|order|trading|lock|error|fail"
+          for line in [x for x in lines if re.search(p,x,re.I)][-25:]:
+           s=re.sub(r"(?i)(password|secret|api[_-]?key|authorization|token)[=:]\\s*[^, }]+",r"\\1=[MASKED]",line)
+           print(s[:270])'
+          echo DUAL_JOURNAL_RECENT_END
+          echo DUAL_LIVE_SAFETY_AUDIT_END
+          """
+          c=Client(api.Config(access_key_id=os.environ['ALIBABA_CLOUD_ACCESS_KEY_ID'],access_key_secret=os.environ['ALIBABA_CLOUD_ACCESS_KEY_SECRET'],endpoint='swas.ap-southeast-1.aliyuncs.com',region_id='ap-southeast-1'))
+          r=c.run_command(sw.RunCommandRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',name='dual5-live-safety-readonly',type='RunShellScript',command_content=script,working_user='root',timeout=90))
+          for _ in range(45):
+           time.sleep(2)
+           x=c.describe_invocation_result(sw.DescribeInvocationResultRequest(region_id='ap-southeast-1',instance_id='b67374069bb3457ba6a3a2ede9305d3f',invoke_id=r.body.invoke_id)).body.invocation_result
+           if x and str(x.invocation_status) in ('Success','Failed','Aborted','ExecutionTimeout','ClientNotRunning'):
+            try:o=base64.b64decode(x.output or '',validate=True).decode('utf8','replace')
+            except:o='NO_OUTPUT'
+            print('REMOTE_STATUS',x.invocation_status,'EXIT',x.exit_code)
+            print(o[-18500:])
+            raise SystemExit(0 if str(x.invocation_status)=='Success' and int(x.exit_code)==0 else 3)
+          raise SystemExit('REMOTE_PENDING')
+          PY

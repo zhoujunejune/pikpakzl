@@ -1,0 +1,96 @@
+name: Android signing backup readonly audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/zl-android-signing-backup-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  locate-signing-backups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Readonly Alibaba signing backup file discovery
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID")
+          sk=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET")
+          if not ak or not sk: raise RuntimeError("ALIYUN_CREDENTIALS_UNAVAILABLE")
+          script=r"""#!/bin/bash
+          set -eu
+          python3 - <<'REMOTE_PY'
+          import os,time,collections
+          roots=['/root','/home','/opt','/srv','/var/lib','/etc','/mnt','/tmp']
+          suffix=('.jks','.keystore','.p12','.pfx')
+          found=[];archives=[];denied=0;seen=0;start=time.monotonic()
+          def onerr(e):
+              global denied
+              denied+=1
+          for root in roots:
+              if not os.path.isdir(root):continue
+              for d,dirs,files in os.walk(root,onerror=onerr):
+                  dirs[:]=[x for x in dirs if x not in ('node_modules','.git','proc','sys','run','cache','site-packages','venv','.venv')]
+                  if d.count('/')-root.count('/')>10:
+                      dirs[:]=[]
+                  for f in files:
+                      seen+=1
+                      low=f.lower()
+                      p=os.path.join(d,f)
+                      if low.endswith(suffix):
+                          try:
+                              st=os.stat(p)
+                              kind='DEBUG' if 'debug' in low else 'POTENTIAL_RELEASE'
+                              found.append((kind,st.st_size,p))
+                          except OSError: pass
+                      elif ('android' in low or 'signing' in low or 'keystore' in low or 'zl-control' in low) and low.endswith(('.zip','.tgz','.tar','.gz','.bak')):
+                          archives.append(p)
+                  if time.monotonic()-start>40:
+                      print('AUDIT_SCAN_TIME_LIMIT_REACHED=true',flush=True)
+                      break
+              if time.monotonic()-start>40: break
+          print('AUDIT_SCANNED_FILE_COUNT='+str(seen))
+          print('AUDIT_FILESYSTEM_READ_ERRORS='+str(denied))
+          print('AUDIT_SIGNING_CANDIDATES='+str(len(found)))
+          print('AUDIT_RELEASE_CANDIDATES='+str(sum(1 for x in found if x[0]=='POTENTIAL_RELEASE')))
+          for kind,size,path in found[:30]:
+              print('AUDIT_KEYFILE='+kind+'|'+str(size)+'|'+path)
+          print('AUDIT_BACKUP_ARCHIVES='+str(len(archives)))
+          for path in archives[:15]:print('AUDIT_ARCHIVE_PATH='+path)
+          print('AUDIT_END=true')
+          REMOTE_PY
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,region_id="ap-southeast-1",
+              endpoint="swas.ap-southeast-1.aliyuncs.com"))
+          inst="b67374069bb3457ba6a3a2ede9305d3f"
+          r=cli.run_command(sw.RunCommandRequest(region_id="ap-southeast-1",instance_id=inst,
+              name="android-signing-file-readonly-audit",type="RunShellScript",
+              working_user="root",command_content=script,timeout=90))
+          invocation=r.body.invoke_id
+          if not invocation:raise RuntimeError('NO_INVOKE_ID')
+          for _ in range(45):
+              time.sleep(2)
+              z=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                  region_id="ap-southeast-1",instance_id=inst,invoke_id=invocation)).body.invocation_result
+              if not z:continue
+              status=str(z.invocation_status)
+              if status not in ('Success','Failed','Aborted','ExecutionTimeout','ExitCodeNonzero','ClientNotRunning','InstanceNotRunning'):continue
+              out=base64.b64decode(z.output or '').decode('utf-8','replace')
+              for line in out.splitlines():
+                  if line.startswith('AUDIT_'):print(line)
+              print('AUDIT_REMOTE_STATUS='+status)
+              if status!='Success' or int(z.exit_code)!=0 or 'AUDIT_END=true' not in out:
+                  raise RuntimeError('REMOTE_AUDIT_NOT_COMPLETE')
+              break
+          else:raise RuntimeError('REMOTE_AUDIT_TIMEOUT')
+          PY

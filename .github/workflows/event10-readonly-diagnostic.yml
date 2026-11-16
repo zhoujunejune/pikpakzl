@@ -1,0 +1,342 @@
+# 2026-11-05 read-only post-deployment V11 tier/scan-audit check. No trading changes.
+# 2026-11-05: read current V10 live signal count and no-signal last-check state before root-cause audit.
+# 2026-11-04: post-release verify UI freshness and recovered scan error on live V10.
+# 2026-11-04: verify independent Binance spot OHLC, futures index timestamps, live feed freshness, scan cadence (read only).
+# 2026-11-04 V10 post-deploy read-only check: 4m signal gap, independent T+600 and service status.
+# 2026-11-04 V10 post-deployment read-only verification: signal count, 4m gap, T+600 settlement.
+# 2026-11-04 V9 low signal-frequency audit before changing strategy; read-only.
+# 2026-11-04 15:52 Asia/Shanghai: verify V9 targeted guards and signal-only runtime after Aliyun deploy.
+# 2026-11-04 15:42 Asia/Shanghai: investigate current V8 settled accuracy and misses, read-only.
+# 2026-11-03 21:40 Asia/Shanghai: verify V8 live status after Aliyun signal-only release; read only.
+# 2026-11-03 16:15 Asia/Shanghai: check V7 no-signal production state and exact gating.
+# Verify EVENT10 V7 live after 2026-11-03 10:14 Asia/Shanghai guarded release; read only.
+# Live root-cause audit for 10-minute signal underperformance: RSI, EMA timing, direction bias and settlement; read-only.
+# 2026-11-03 live V6 event10 win-rate on-demand read-only audit; no strategy changes.
+# Verify V6 fresh-candle and nonoverlapping production status after isolated deployment (read only).
+# Diagnose V5 clustered false DOWN signals at 01:42/01:46/01:47 local; read-only per-entry details.
+# 2026-11-03 V5 latest signal win-rate read-only check; no strategy or order changes.
+# Post-deployment V5 EVENT10 live read-only verification; strategy and orders unchanged.
+# Run read-only EVENT10 live win-rate audit requested 2026-11-03. No strategy or trading changes.
+# Read-only connectivity check: EVENT10 and Android notification link, 2026-10-31 11:36 Asia/Shanghai.
+# Audit request after EVENT10 six-gate guard refused cutover on 2026-10-31
+name: EVENT10 live read-only diagnostic
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/event10-readonly-diagnostic.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Fetch live EVENT10 state without mutations
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          python - <<'PY'
+          import base64,os,time
+          from alibabacloud_swas_open20200601.client import Client
+          from alibabacloud_swas_open20200601 import models as sw
+          from alibabacloud_tea_openapi import models as api
+          ak=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID");sk=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET")
+          if not ak or not sk:raise RuntimeError("ALI_READONLY_CREDENTIALS_MISSING")
+          script="""#!/bin/bash
+          set -Eeuo pipefail
+          python3 - <<'REMOTE'
+          import json,urllib.request,datetime,subprocess,pathlib
+          def get(path):
+              with urllib.request.urlopen('http://127.0.0.1:13020'+path,timeout=7) as r:
+                  return json.load(r)
+          info={'timeUTC':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          p=subprocess.run(['systemctl','is-active','zl-event10-deepseek'],capture_output=True,text=True)
+          info['event10Service']=p.stdout.strip()
+          try:
+              st=get('/api/status')
+              info['status']={k:st.get(k) for k in ('ok','mode','decisionReviewVersion','providerModel','autoSignalEnabled','busyStart','busySettle','lastError','configured')}
+              for name in ('lastCheck','lastSession','active'):
+                  s=st.get(name)
+                  info[name]=None if not s else {k:s.get(k) for k in (
+                    'id','status','direction','reason','error','openedAt','checkedAt',
+                    'expiresAt','decisionReviewVersion','strategyVersion','model','signalCycleStartMs',
+                    'source','settlementStatus','openPrice','featureAvailability')}
+              info['lastDataProbe']=st.get('lastDataProbe')
+              info['strategyStats']=st.get('strategyStats')
+              info['scanDiagnostics']=st.get('scanDiagnostics')
+          except Exception as e:info['statusError']=str(type(e).__name__)+':'+str(e)[:160]
+          try:
+              log=get('/api/signals?limit=3')
+              info['ledger']={'version':log.get('version'),'total':log.get('total'),
+                'stats':log.get('stats'),'last3':[{
+                  k:s.get(k) for k in ('openedAt','strategyVersion','direction','settlementStatus')
+                } for s in log.get('records',[])[:3]]}
+          except Exception as e:info['ledgerError']=str(type(e).__name__)+':'+str(e)[:140]
+          try:
+              data=get('/api/data-health')
+              info['dataHealth']={'ok':data.get('ok'),'availability':data.get('availability')}
+          except Exception as e:info['dataHealthError']=str(type(e).__name__)+':'+str(e)[:140]
+          # Only emit short, whitelisted startup error signatures, never complete logs,
+          # requests, configuration or environment variables.
+          import re
+          journal=subprocess.run(['journalctl','-u','zl-event10-deepseek',
+            '--no-pager','-n','180','-o','cat'],capture_output=True,text=True,timeout=8)
+          safe=[]
+          for line in journal.stdout.splitlines():
+              if re.search(r'(SyntaxError|ReferenceError|TypeError|ERR_MODULE_NOT_FOUND|Cannot find module|Error:|EADDRINUSE|Failed to start|error code|exit-code)',line,re.I) and not re.search(r'(secret|token|password|authorization|bearer|api.?key|private)',line,re.I):
+                  safe.append(line[:180])
+          info['recentStartupErrors']=safe[-12:]
+          pid=subprocess.run(['systemctl','show','-p','MainPID','--value','zl-event10-deepseek'],
+            capture_output=True,text=True,timeout=5).stdout.strip()
+          info['runtime']={'mainPid':pid}
+          if pid.isdecimal() and int(pid)>0:
+              proc=pathlib.Path('/proc')/pid
+              try:info['runtime']['cwd']=str((proc/'cwd').resolve())
+              except Exception:pass
+              try:
+                  parts=(proc/'cmdline').read_bytes().split(b'\\x00')
+                  info['runtime']['nodeFilePaths']=[p.decode('utf8','replace')[:120] for p in parts
+                    if p.startswith(b'/opt/') and (p.endswith(b'.mjs') or p.endswith(b'node'))][:5]
+              except Exception:pass
+          target=pathlib.Path('/opt/zl-event10/pure-signal.mjs')
+          if target.exists():
+              match=re.search(r'RULE_VERSION="([A-Za-z0-9_]+)"',target.read_text(errors='replace'))
+              info['runtime']['diskRuleVersion']=match.group(1) if match else 'UNKNOWN'
+
+          # Follow-up V3 read-only scan after minute-boundary error;  # Post-release feed-shape audit. Metadata only, no market prices or credentials.
+          try:
+              with urllib.request.urlopen('http://127.0.0.1:13003/api/shadow-market-data',timeout=6) as resp:
+                  feed=json.load(resp)
+              raw=(feed.get('candles') or {}).get('1m') or []
+              candles=raw if isinstance(raw,list) else (raw.get('rows') or raw.get('items') or raw.get('candles') or [])
+              info['spot1mFeed']={'rows':len(candles),
+                  'closed':sum(1 for b in candles if isinstance(b,dict) and b.get('closed') is True),
+                  'forming':sum(1 for b in candles if isinstance(b,dict) and b.get('closed') is False),
+                  'last3Types':[(b.get('closed') if isinstance(b,dict) else None) for b in candles[-3:]]}
+          except Exception as e:info['spot1mFeedError']=str(type(e).__name__)+':'+str(e)[:100]
+          # Audited freshness and independent official Binance comparisons, read only.
+          try:
+              import time as _time
+              from urllib.parse import urlencode
+              def remote_json(url):
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'Accept':'application/json','User-Agent':'Event10-Freshness-Audit/1.0'}),timeout=6) as r:
+                      return json.load(r)
+              def feed_data():
+                  return remote_json('http://127.0.0.1:13003/api/shadow-market-data')
+              source=feed_data()
+              now_ms=int(_time.time()*1000)
+              mstate=get('/api/status')
+              def candle_details(interval,ms):
+                  raw=(source.get('candles') or {}).get(interval) or []
+                  seq=raw if isinstance(raw,list) else (raw.get('rows') or raw.get('items') or raw.get('candles') or [])
+                  eligible=[x for x in seq if isinstance(x,dict) and x.get('closed') is True and
+                      isinstance(x.get('startMs',x.get('openTime')),(float,int))]
+                  eligible.sort(key=lambda x:x.get('startMs',x.get('openTime')))
+                  if not eligible:return {'rows':len(seq),'closedRows':0}
+                  end=int(eligible[-1].get('startMs',eligible[-1].get('openTime')))+ms
+                  expected=(now_ms//ms)*ms
+                  return {'rows':len(seq),'closedRows':len(eligible),'lastClosedStartMs':end-ms,
+                      'lastClosedEndMs':end,'ageMs':now_ms-end,
+                      'expectedLastCloseMs':expected,'lagPeriods':max(0,(expected-end)//ms),
+                      'currentAtCheck':end==expected,
+                      'lastOHLC':[round(float(eligible[-1][k]),6) for k in ('open','high','low','close')],
+                      'latest5GapFree':len(eligible)>=5 and all(
+                        int(eligible[-j].get('startMs',eligible[-j].get('openTime')))-
+                        int(eligible[-j-1].get('startMs',eligible[-j-1].get('openTime')))==ms for j in range(1,5))}
+              report={'checkedAtUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                  'serverTimestampMs':now_ms,
+                  'serviceVersion':mstate.get('decisionReviewVersion'),
+                  'mode':mstate.get('mode'),'lastError':mstate.get('lastError'),
+                  'lastAutoCheckAt':mstate.get('lastAutoCheckAt'),
+                  'lastAutoCheckAgeMs':now_ms-mstate.get('lastAutoCheckAt') if isinstance(mstate.get('lastAutoCheckAt'),(float,int)) else None,
+                  'lastSuccessfulScanAt':mstate.get('lastSuccessfulScanAt'),
+                  'lastDataErrorAt':mstate.get('lastDataErrorAt'),
+                  'lastDataError':mstate.get('lastDataError'),
+                  'lastScanCheckLatencyMs':(mstate.get('lastCheck') or {}).get('checkLatencyMs'),
+                  'lastScanIndexAgeMs':(mstate.get('lastCheck') or {}).get('openAgeMs'),
+                  'sourceOk':source.get('ok'),'readOnly':source.get('readOnly'),
+                  'symbol':source.get('symbol'),
+                  'marketFeedConnected':(source.get('latest') or {}).get('marketFeedConnected'),
+                  'sourceLatestEventAgeMs':now_ms-(source.get('latest') or {}).get('eventMs') if isinstance((source.get('latest') or {}).get('eventMs'),(int,float)) else None,
+                  'candles':{'1m':candle_details('1m',60000),'5m':candle_details('5m',300000)}}
+              for interval in ('1m','5m'):
+                  try:
+                      official=remote_json('https://api.binance.com/api/v3/klines?'+urlencode(
+                         {'symbol':'BTCUSDT','interval':interval,'limit':6}))
+                      local=report['candles'][interval]
+                      expectedStart=local.get('lastClosedStartMs')
+                      match=next((x for x in official if x[0]==expectedStart),None)
+                      if match is None:
+                          report['candles'][interval]['officialCompare']={'matchingBarFound':False,
+                             'officialLastBarStartMs':official[-1][0] if official else None}
+                      else:
+                          pairs=zip(local['lastOHLC'],[float(match[k]) for k in range(1,5)])
+                          bps=[round((a-b)/b*10000,5) if b else None for a,b in pairs]
+                          report['candles'][interval]['officialCompare']={'matchingBarFound':True,
+                             'localVsBinanceSpotOHLCbps':bps,'allOhlcWithin0_01Bps':all(v is not None and abs(v)<=0.01 for v in bps)}
+                  except Exception as e:
+                      report['candles'][interval]['officialCompareError']=str(type(e).__name__)+':'+str(e)[:120]
+              try:
+                  quote=remote_json('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT')
+                  ms=now_ms-int(quote.get('time',0))
+                  report['binanceFuturesIndexQuote']={'symbol':quote.get('symbol'),
+                      'ageMs':ms,'validWithin5sec':-1000<=ms<=5000,
+                      'indexPrice':round(float(quote.get('indexPrice')),6)}
+                  _time.sleep(2)
+                  follow=remote_json('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT')
+                  report['binanceFuturesIndexQuote']['twoSecondFollowup']={
+                      'timestampAdvanced':int(follow.get('time',0))>int(quote.get('time',0)),
+                      'priceChanged':float(follow.get('indexPrice'))!=float(quote.get('indexPrice')),
+                      'ageMsAtFollowup':int(_time.time()*1000)-int(follow.get('time',0))}
+              except Exception as e:report['indexQuoteError']=str(type(e).__name__)+':'+str(e)[:120]
+              try:
+                  c=get('/api/stream-health')
+                  report['streamCollector']={k:c.get(k) for k in (
+                    'ok','connected','lastReceivedAt','lastEventAt','lagMs','receivedCount','totalGaps','status')}
+                  if isinstance(c.get('lastReceivedAt'),(int,float)):
+                      report['streamCollector']['receiveAgeMs']=int(_time.time()*1000)-c['lastReceivedAt']
+              except Exception as e:report['streamCollectorError']=str(type(e).__name__)+':'+str(e)[:120]
+              print('EVENT10_FRESHNESS_AUDIT='+json.dumps(report,ensure_ascii=False,separators=(',',':')),flush=True)
+          except Exception as e:
+              print('EVENT10_FRESHNESS_ERROR='+str(type(e).__name__)+':'+str(e)[:210],flush=True)
+          # Read-only signal miss attribution: latest strategy only, no file writes.
+          try:
+              import collections,statistics
+              ledger=get('/api/signals?limit=100&offset=0')
+              sessions=get('/api/history')
+              byid={h.get('id'):h for h in sessions.get('records',[]) if isinstance(h,dict)}
+              signal_version=ledger.get('version')
+              entries=[r for r in ledger.get('records',[]) if
+                  r.get('strategyVersion')==signal_version and isinstance(r.get('proxyHit'),bool)]
+              def group(rows):
+                  n=len(rows)
+                  w=sum(1 for r in rows if r.get('proxyHit') is True)
+                  m=n-w
+                  return {'n':n,'hits':w,'misses':m,'hitPct':round(100*w/n,2) if n else None}
+              def qual(r):
+                  return r.get('signalQuality') or ((byid.get(r.get('id')) or {}).get('signalQuality')) or 'UNKNOWN'
+              def feat(r):
+                  s=byid.get(r.get('id')) or {}
+                  f=s.get('features') or (s.get('ruleChecks') or {}).get('evidence') or {}
+                  return f if isinstance(f,dict) else {}
+              def rsi_zone(r):
+                  v=r.get('rsi14')
+                  if not isinstance(v,(float,int)):v=feat(r).get('rsi14')
+                  if not isinstance(v,(float,int)):return 'UNKNOWN'
+                  return 'RSI_ge_63' if v>=63 else 'RSI_le_37' if v<=37 else 'RSI_between_37_63'
+              def rsi_override(r):
+                  if qual(r)!='STANDARD_RESEARCH':return False
+                  return (rsi_zone(r)=='RSI_ge_63' and r.get('direction')=='DOWN') or (rsi_zone(r)=='RSI_le_37' and r.get('direction')=='UP')
+              def bias(r):
+                  f=feat(r)
+                  a,b,c,d=(f.get(x) for x in ['ema1Fast','ema1Slow','ema5Fast','ema5Slow'])
+                  if not all(isinstance(x,(int,float)) for x in (a,b,c,d)):return 'UNKNOWN'
+                  if a>b and c>d:return 'BOTH_UP'
+                  if a<b and c<d:return 'BOTH_DOWN'
+                  return 'CONFLICT'
+              def against_bias(r):
+                  b=bias(r);side=r.get('direction')
+                  return (b=='BOTH_UP' and side=='DOWN') or (b=='BOTH_DOWN' and side=='UP')
+              def price_move_bps(r):
+                  a,b=r.get('openPrice'),r.get('closePrice')
+                  return round((b/a-1)*10000,2) if isinstance(a,(int,float)) and a>0 and isinstance(b,(int,float)) else None
+              def groupby(fn):
+                  buckets=collections.defaultdict(list)
+                  for r in entries:buckets[str(fn(r))].append(r)
+                  return {k:group(v) for k,v in sorted(buckets.items())}
+              def timestamp(ms):
+                  if not isinstance(ms,(int,float)):return None
+                  tz=datetime.timezone(datetime.timedelta(hours=8))
+                  return datetime.datetime.fromtimestamp(ms/1000,tz).strftime('%m-%d %H:%M:%S')
+              miss=[r for r in entries if r.get('proxyHit') is False]
+              analysis={'version':signal_version,'totalSignals':ledger.get('total'),
+                  'allSettled':group(entries),'byQuality':groupby(qual),
+                  'byDirection':groupby(lambda r:r.get('direction')),
+                  'byRsiZone':groupby(rsi_zone),
+                  'byStandardRsiOverride':groupby(lambda r:'OVERRIDE' if rsi_override(r) else ('OTHER_STANDARD' if qual(r)=='STANDARD_RESEARCH' else 'FILTERED')),
+                  'byEmaBias':groupby(bias),
+                  'byAgainstEmaBias':groupby(lambda r:'AGAINST' if against_bias(r) else 'NOT_AGAINST'),
+                  'byMinute':groupby(lambda r:datetime.datetime.fromtimestamp(r['openedAt']/1000,datetime.timezone.utc).strftime('%M') if isinstance(r.get('openedAt'),(int,float)) else 'UNKNOWN'),
+                  'recent10':group(entries[:10]),
+                  'misses':[]}
+              for r in miss:
+                  f=feat(r);m=price_move_bps(r)
+                  s=byid.get(r.get('id')) or {}
+                  analysis['misses'].append({'time':timestamp(r.get('openedAt')),
+                    'direction':r.get('direction'),'quality':qual(r),'eventTag':r.get('eventTag'),
+                    'rsi':r.get('rsi14'),'rsiOverride':rsi_override(r),
+                    'change3mPct':r.get('change3mPct'),'volumeRatio':r.get('volumeRatio'),
+                    'emaBias':bias(r),'againstEmaBias':against_bias(r),
+                    'returnBps':m,'settlementLagMs':r.get('expirySampleLagMs'),
+                    'last1mBullish':f.get('bullishLast3'),'last1mBearish':f.get('bearishLast3'),
+                    'conditions':r.get('checks'),'settlementStatus':r.get('settlementStatus')})
+              moves=[abs(price_move_bps(r)) for r in miss if price_move_bps(r) is not None]
+              analysis['missMoveAbsBpsMedian']=round(statistics.median(moves),2) if moves else None
+              analysis['missWithin5Bps']=sum(1 for x in moves if x<=5)
+              analysis['missWithin10Bps']=sum(1 for x in moves if x<=10)
+              # Compact read-only summary of all new-version settled signals, ordered oldest first.
+              detail=[{'time':timestamp(r.get('openedAt')),'hit':r.get('proxyHit'),'side':r.get('direction'),
+                 'rsi':r.get('rsi14'),'momentum3mPct':r.get('change3mPct'),
+                 'volumeRatio':r.get('volumeRatio'),'returnBps':price_move_bps(r),
+                 'emaBias':bias(r),'quality':qual(r),
+                 'last1mClosedAt':feat(r).get('lastClosed1mAt'),
+                 'last5mClosedAt':feat(r).get('lastClosed5mAt'),
+                 'last1mBarAgeMs':r.get('openedAt')-feat(r).get('lastClosed1mAt')-60000
+                   if isinstance(feat(r).get('lastClosed1mAt'),(int,float)) else None,
+                 'last5mBarAgeMs':r.get('openedAt')-feat(r).get('lastClosed5mAt')-300000
+                   if isinstance(feat(r).get('lastClosed5mAt'),(int,float)) else None}
+                 for r in sorted(entries,key=lambda r:r.get('openedAt',0))]
+              print('EVENT10_ENTRY_AUDIT='+json.dumps({'version':signal_version,
+                'entries':detail,'total':ledger.get('total')},ensure_ascii=False,separators=(',',':')),flush=True)
+              print('EVENT10_MISS_ANALYSIS='+json.dumps(analysis,ensure_ascii=False,separators=(',',':')),flush=True)
+          except Exception as e:print('EVENT10_MISS_ANALYSIS_ERROR='+str(type(e).__name__)+':'+str(e)[:240],flush=True)
+          print('EVENT10_LIVE_READONLY='+json.dumps(info,ensure_ascii=False,separators=(',',':')))
+          REMOTE
+          """
+          cli=Client(api.Config(access_key_id=ak,access_key_secret=sk,
+              region_id="ap-southeast-1",endpoint="swas.ap-southeast-1.aliyuncs.com"))
+          instance="b67374069bb3457ba6a3a2ede9305d3f"
+          resp=cli.run_command(sw.RunCommandRequest(region_id="ap-southeast-1",instance_id=instance,
+              name="event10-readonly-inspect",type="RunShellScript",working_user="root",
+              command_content=script,timeout=100))
+          invoke=resp.body.invoke_id
+          if not invoke:raise RuntimeError("NO_READONLY_INVOKE_ID")
+          finished=False
+          for _ in range(55):
+              time.sleep(2)
+              result=cli.describe_invocation_result(sw.DescribeInvocationResultRequest(
+                region_id="ap-southeast-1",instance_id=instance,invoke_id=invoke)).body.invocation_result
+              if not result or str(result.invocation_status) not in ("Success","Failed","Aborted",
+                  "ExecutionTimeout","ExitCodeNonzero","ClientNotRunning","InstanceNotRunning"):continue
+              out=base64.b64decode(result.output or '').decode('utf8','replace')
+              for line in out.splitlines():
+                  if line.startswith(("EVENT10_LIVE_READONLY=","EVENT10_MISS_ANALYSIS=","EVENT10_MISS_ANALYSIS_ERROR=","EVENT10_ENTRY_AUDIT=","EVENT10_FRESHNESS_AUDIT=","EVENT10_FRESHNESS_ERROR=")):print(line,flush=True)
+              if str(result.invocation_status)!="Success" or int(result.exit_code)!=0:
+                  raise RuntimeError('EVENT10_READONLY_FAILED_'+str(result.invocation_status)+'_'+out[-550:])
+              finished=True
+              break
+          if not finished:raise RuntimeError("EVENT10_READONLY_NOT_COMPLETED")
+          PY
+
+  report:
+    if: always()
+    needs: inspect
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish diagnostic run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.inspect.result }}
+        run: |
+          if [ "$RESULT" = "success" ]; then status=success; else status=failure; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$status" \
+            -f context="event10-live-readonly-diagnostic" \
+            -f target_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description="EVENT10 live readonly probe: $RESULT" >/dev/null

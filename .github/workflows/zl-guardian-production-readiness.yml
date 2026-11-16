@@ -1,0 +1,41 @@
+name: GUARDIAN production execution readiness
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/zl-guardian-production-readiness.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Confirm bridge modules parse and isolated tests pass
+        run: |
+          node --check railway-diagnostic/guardian-live-bridge.mjs
+          node --check railway-diagnostic/guardian-dynamic-exit.mjs
+          node --test railway-diagnostic/guardian-live-bridge.test.mjs
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Audit current Alibaba production deployment without opening trades
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          set -o pipefail
+          python prediction-bot-v1/aliyun_guardian_preflight.py | tee /tmp/guardian-live-audit.log
+          grep -q 'GUARDIAN_AUDIT_STATUS Success 0' /tmp/guardian-live-audit.log
+      - name: Require production order integration, dedicated exits and calibrated trade gate
+        run: |
+          set -e
+          report=/tmp/guardian-live-audit.log
+          if grep -q 'legacyHardWait True' "$report"; then echo 'BLOCKED: GUARDIAN legacy hard-WAIT still on production'; exit 1; fi
+          if grep -q 'guardian-live-bridge.mjs MISSING' "$report"; then echo 'BLOCKED: production entry adapter missing'; exit 1; fi
+          if grep -q 'guardian-dynamic-exit.mjs MISSING' "$report"; then echo 'BLOCKED: dynamic exit module missing'; exit 1; fi
+          grep -q 'GUARDIAN_RISK_DYNAMIC_FLAG ENABLED_TRUE' "$report" || { echo 'BLOCKED: production dynamic exit worker not enabled'; exit 1; }
+          if grep -q 'guardTradeEligible False' "$report"; then echo 'BLOCKED: official-feed and forward calibration not validated'; exit 1; fi
+          echo 'GUARDIAN_PRODUCTION_LIVE_READY=true'

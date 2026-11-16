@@ -1,0 +1,39 @@
+name: Pause BTC 5m AI model calls without stopping execution or risk services
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/zl-five-minute-ai-pause.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-five-minute-ai-pause
+  cancel-in-progress: false
+jobs:
+  pause:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Verify isolated, non-trading pause script
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_pause_5m_ai_calls.py
+          python - <<'PY'
+          from pathlib import Path
+          code=Path('prediction-bot-v1/aliyun_pause_5m_ai_calls.py').read_text()
+          assert 'UnsetEnvironment=DEEPSEEK_API_KEY' in code
+          assert 'systemctl","restart",MAIN' in code
+          assert 'FIVE_M_MARKET_TRADE_RISK_EVENT10_PIDS_UNCHANGED=true' in code
+          assert 'FIVE_M_PRODUCTION_SOURCE_UNCHANGED=true' in code
+          for forbidden in ('fapi/v1/order','papi/v1/order','api/v3/order','/api/confirm'):
+              assert forbidden not in code
+          print('FIVE_M_AI_PAUSE_STATIC_SAFETY_CHECKS_PASSED=true')
+          PY
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Apply persistent 5m AI-call pause, preserve market/trade/exit and EVENT10
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_pause_5m_ai_calls.py

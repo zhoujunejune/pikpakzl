@@ -1,0 +1,46 @@
+name: Alibaba SWAS HTTPS Phone Panel
+# Re-run after user configured ZL_PANEL_PASSWORD in GitHub encrypted Secrets.
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-panel.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-https-phone-panel
+  cancel-in-progress: false
+jobs:
+  https-panel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 19
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify dedicated panel password exists
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,sys
+          p=os.environ.get("ZL_PANEL_PASSWORD","")
+          if len(p)<16 or len(p)>128:
+              print("PANEL_NOT_READY: add GitHub Actions secret ZL_PANEL_PASSWORD with 16-128 unique characters")
+              sys.exit(2)
+          print("PANEL_CREDENTIAL_PRESENT: password value hidden")
+          PY
+      - name: Install Alibaba Cloud SDK and bcrypt
+        run: python -m pip install --disable-pip-version-check alibabacloud_swas_open20200601==4.0.0 "bcrypt>=4,<6"
+      - name: Deploy password-protected HTTPS panel to verified server (paper only)
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python futures-bot-v1/aliyun_panel_deploy.py
+      - name: Confirm HTTPS certificate, anonymous 401 and authenticated paper dashboard
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: python futures-bot-v1/smoke_panel.py

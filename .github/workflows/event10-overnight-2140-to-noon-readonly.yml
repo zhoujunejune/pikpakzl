@@ -1,0 +1,197 @@
+name: EVENT10 21h40 to next-day-noon inverse read-only audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-overnight-2140-to-noon-readonly.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  statistics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Retrieve production EVENT10 current-version full ledger and summarize by ten
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,json,time,base64,urllib.request,datetime
+          base='https://prediction.47-237-188-69.sslip.io'
+          password=os.environ.get('ZL_PANEL_PASSWORD','')
+          if not password:
+              raise SystemExit('EVENT10_STATS_ERROR=AUTH_SECRET_MISSING')
+          authorization='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          def get(path):
+              req=urllib.request.Request(base+path,
+                headers={'Authorization':authorization,'Accept':'application/json','Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=24) as resp:
+                  if resp.status != 200:raise RuntimeError('HTTP_'+str(resp.status))
+                  return json.loads(resp.read(4000000))
+          status=get('/event10/api/status')
+          assert status.get('ok') is True,'EVENT10_STATS_STATUS_FAILED'
+          version=status.get('decisionReviewVersion')
+          assert isinstance(version,str) and version.startswith('EVENT10_'),'EVENT10_STATS_VERSION_FAILED'
+          items=[]
+          offset=0
+          reported_total=None
+          for page in range(100):
+              ledger=get('/event10/api/signals?limit=100&offset='+str(offset))
+              assert ledger.get('ok') is True and ledger.get('version')==version,'EVENT10_STATS_VERSION_MISMATCH'
+              rows=ledger.get('records')
+              assert isinstance(rows,list),'EVENT10_STATS_ROWS_INVALID'
+              if reported_total is None:reported_total=ledger.get('total')
+              items.extend(rows)
+              offset+=len(rows)
+              if len(rows)==0 or (isinstance(reported_total,int) and offset>=reported_total):break
+          else:raise RuntimeError('EVENT10_STATS_TRUNCATED')
+          if not isinstance(reported_total,int) or len(items)!=reported_total:
+              raise RuntimeError('EVENT10_STATS_PAGINATION_INCOMPLETE_'+str(len(items))+'_'+str(reported_total))
+          seen=set()
+          unique=[]
+          for item in items:
+              item_id=item.get('id')
+              if item_id in seen:raise RuntimeError('EVENT10_STATS_DUPLICATE_ID')
+              seen.add(item_id)
+              if item.get('strategyVersion')!=version:raise RuntimeError('EVENT10_STATS_MIXED_VERSION')
+              unique.append(item)
+          settled=sorted([x for x in unique if type(x.get('proxyHit')) is bool],
+             key=lambda x:(x.get('openedAt') or 0,x.get('id') or ''))
+          unsettled=[x for x in unique if type(x.get('proxyHit')) is not bool]
+          hits=sum(x['proxyHit'] for x in settled)
+          assert hits==sum(x.get('proxyHit') is True for x in settled)
+          batches=[]
+          def clock(ms):
+              if not isinstance(ms,(float,int)) or ms<=0:return None
+              return datetime.datetime.fromtimestamp(ms/1000,datetime.timezone(datetime.timedelta(hours=8))).strftime('%m-%d %H:%M')
+          for i in range(0,len(settled),10):
+              rows=settled[i:i+10]
+              wins=sum(x.get('proxyHit') is True for x in rows)
+              batch={'range':str(i+1)+'-'+str(i+len(rows)),
+                     'count':len(rows),'hits':wins,'misses':len(rows)-wins,
+                     'winRatePct':round(100*wins/len(rows),2),
+                     'firstLocal':clock(rows[0].get('openedAt')),
+                     'lastLocal':clock(rows[-1].get('openedAt')),
+                     'firstId':str(rows[0].get('id') or '')[:60],
+                     'lastId':str(rows[-1].get('id') or '')[:60]}
+              batches.append(batch)
+          print('TEN_ROUND_PRODUCTION_META',json.dumps({
+              'checkedAtLocal':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S %z'),
+              'model':status.get('aiReviewModel'),'version':version,'aiMandatory':status.get('aiMandatory'),
+              'totalSignals':len(unique),'settledSignals':len(settled),
+              'notSettledOrUnverifiable':len(unsettled),'hits':hits,'misses':len(settled)-hits,
+              'overallWinRatePct':round(100*hits/len(settled),2) if settled else None,
+              'firstLocal':clock(settled[0].get('openedAt')) if settled else None,
+              'lastLocal':clock(settled[-1].get('openedAt')) if settled else None,
+              'ledgerReported':ledger.get('stats'),
+              'signalDefinition':'BINANCE_INDEX_TPLUS600_PROXY_ONLY_NOT_OFFICIAL_EVENT_SETTLEMENT'},ensure_ascii=False),flush=True)
+          for x in batches:
+              print('TEN_ROUND_BATCH',json.dumps(x,ensure_ascii=False),flush=True)
+          # Read-only chronological hourly audit in Asia/Shanghai (UTC+8).
+          # This is IN-SAMPLE proxy validation, not executable trading advice.
+          from collections import defaultdict
+          localtz=datetime.timezone(datetime.timedelta(hours=8))
+          hourly=defaultdict(list)
+          four_hour=defaultdict(list)
+          daily=defaultdict(list)
+          for x in settled:
+              t=datetime.datetime.fromtimestamp(x['openedAt']/1000,localtz)
+              hourly[t.strftime('%H')].append(x)
+              four_hour[f'{(t.hour//4)*4:02d}:00-{((t.hour//4)+1)*4:02d}:00'].append(x)
+              daily[t.strftime('%Y-%m-%d')].append(x)
+          def emit(prefix,buckets):
+              for period in sorted(buckets):
+                  rows=buckets[period]
+                  original_hits=sum(x.get('proxyHit') is True for x in rows)
+                  reverse_hits=len(rows)-original_hits
+                  payload={'period':period,'count':len(rows),
+                      'originalHits':original_hits,'reverseHits':reverse_hits,
+                      'originalRate':round(original_hits*100/len(rows),2),
+                      'reverseRate':round(reverse_hits*100/len(rows),2),
+                      'firstLocal':clock(min(x.get('openedAt') for x in rows)),
+                      'lastLocal':clock(max(x.get('openedAt') for x in rows))}
+                  print(prefix,json.dumps(payload,ensure_ascii=False),flush=True)
+          emit('CONTRARIAN_HOURLY',hourly)
+          emit('CONTRARIAN_FOUR_HOURLY',four_hour)
+          emit('CONTRARIAN_DAILY',daily)
+          # Day-scoped 16:00-24:00 and first-ten-only results (counterfactual signal proxy).
+          day_window=defaultdict(list)
+          for x in settled:
+              dt=datetime.datetime.fromtimestamp(x['openedAt']/1000,localtz)
+              if dt.hour>=16:
+                  day_window[dt.strftime('%Y-%m-%d')].append(x)
+          for date in sorted(day_window):
+              ordered=sorted(day_window[date],key=lambda x:(x['openedAt'],x.get('id') or ''))
+              for label,subset in [('all',ordered),('first10',ordered[:10])]:
+                  reverse_hits=sum(x.get('proxyHit') is False for x in subset)
+                  print('CONTRARIAN_EVENING_CAP',json.dumps({'date':date,
+                      'selection':label,'signals':len(subset),'reverseHits':reverse_hits,
+                      'reverseLosses':len(subset)-reverse_hits,
+                      'reverseRate':round(reverse_hits*100/len(subset),2),
+                      'firstLocal':clock(subset[0]['openedAt']),
+                      'lastLocal':clock(subset[-1]['openedAt'])},ensure_ascii=False),flush=True)
+          # Night window: 21:40 Beijing time until next calendar day's 12:00,
+          # 21:40 inclusive, 12:00 exclusive. Sessions keyed by start date.
+          # Current day counts are provisional until the end timestamp passes.
+          allsessions=defaultdict(list)
+          for x in unique:
+              opened=x.get('openedAt')
+              if not isinstance(opened,(int,float)) or opened<=0:continue
+              dt=datetime.datetime.fromtimestamp(opened/1000,localtz)
+              minute=dt.hour*60+dt.minute
+              if minute>=21*60+40:
+                  anchor_date=dt.date()
+              elif minute<12*60:
+                  anchor_date=dt.date()-datetime.timedelta(days=1)
+              else:continue
+              allsessions[anchor_date.isoformat()].append(x)
+          now=datetime.datetime.now(localtz)
+          totals={'settled':0,'reverseWins':0,'reverseLosses':0,'unsettled':0,
+                  'tenFullSessions':0,'tenReverseWins':0,'tenReverseLosses':0}
+          for day,rows in sorted(allsessions.items()):
+              rows=sorted(rows,key=lambda x:(x['openedAt'],x.get('id') or ''))
+              start=datetime.datetime.fromisoformat(day).replace(tzinfo=localtz,hour=21,minute=40)
+              end=start+datetime.timedelta(days=1,hours=-9,minutes=-40)
+              # exact end = next date 12:00
+              end=start+datetime.timedelta(hours=14,minutes=20)
+              complete_window=now>=end
+              good=[x for x in rows if type(x.get('proxyHit')) is bool]
+              pending=[x for x in rows if type(x.get('proxyHit')) is not bool]
+              reverse_wins=sum(x.get('proxyHit') is False for x in good)
+              subset=rows[:10]
+              full_ten=len(subset)==10 and all(type(x.get('proxyHit')) is bool for x in subset)
+              ten_wins=sum(x.get('proxyHit') is False for x in subset) if full_ten else None
+              payload={'session':day,'timeRange':day+' 21:40 → next day 12:00',
+                       'isWindowComplete':complete_window,'signals':len(rows),
+                       'settled':len(good),'unsettled':len(pending),
+                       'reverseWins':reverse_wins,'reverseLosses':len(good)-reverse_wins,
+                       'reverseRate':round(100*reverse_wins/len(good),2) if good else None,
+                       'firstLocal':clock(rows[0]['openedAt']) if rows else None,
+                       'lastLocal':clock(rows[-1]['openedAt']) if rows else None,
+                       'firstTenCount':len(subset),'firstTenFullySettled':full_ten,
+                       'firstTenReverseWins':ten_wins,
+                       'firstTenReverseLosses':10-ten_wins if full_ten else None}
+              print('OVERNIGHT_REVERSE_SESSION',json.dumps(payload,ensure_ascii=False),flush=True)
+              # Complete windows only for summary: do not blend today's unfinished night.
+              if complete_window:
+                  totals['settled']+=len(good)
+                  totals['reverseWins']+=reverse_wins
+                  totals['reverseLosses']+=len(good)-reverse_wins
+                  totals['unsettled']+=len(pending)
+                  if full_ten:
+                      totals['tenFullSessions']+=1
+                      totals['tenReverseWins']+=ten_wins
+                      totals['tenReverseLosses']+=10-ten_wins
+          n=totals['settled']
+          m=totals['tenReverseWins']+totals['tenReverseLosses']
+          print('OVERNIGHT_REVERSE_SUMMARY',json.dumps({
+              **totals,'overallReverseRate':round(100*totals['reverseWins']/n,2) if n else None,
+              'firstTenReverseRate':round(100*totals['tenReverseWins']/m,2) if m else None,
+              'minSignalDate':clock(unique[0].get('openedAt')) if unique else None,
+              'timestamp':now.strftime('%Y-%m-%d %H:%M:%S %z'),
+              'definition':'BINANCE_INDEX_TPLUS600_PROXY_NOT_OFFICIAL_SETTLEMENT'
+          },ensure_ascii=False),flush=True)
+          print('OVERNIGHT_READONLY_COMPLETED=true',flush=True)
+          print('CONTRARIAN_READONLY_COMPLETED=true',flush=True)
+          print('TEN_ROUND_CHECK_COMPLETED=true',flush=True)
+          PY

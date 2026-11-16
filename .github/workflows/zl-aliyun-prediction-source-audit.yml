@@ -1,0 +1,38 @@
+name: Alibaba prediction isolated readonly source audit
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - '.github/workflows/zl-aliyun-prediction-source-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Probe authenticated independent prediction read-only API
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,urllib.request,base64,json
+          pwd=os.environ.get("ZL_PANEL_PASSWORD")
+          if not pwd: raise SystemExit("MISSING_PANEL_PASSWORD")
+          credentials=base64.b64encode(("zl:"+pwd).encode()).decode()
+          req=urllib.request.Request("https://47-237-188-69.sslip.io/prediction/api/overview",
+            headers={"Authorization":"Basic "+credentials, "Accept":"application/json"})
+          with urllib.request.urlopen(req,timeout=35) as r:
+            assert r.status==200
+            result=json.load(r)
+          assert result.get("mode")=="read_only_migration_monitor"
+          assert result.get("tradeExecutionEnabled") is False
+          for name in ("v2","v3","edge"):
+            data=result.get("sources",{}).get(name,{})
+            print("READONLY_SOURCE",name,"ok="+str(data.get("ok")),
+                  "error="+str(data.get("error","none"))[:70])
+          v2=result.get("sources",{}).get("v2",{})
+          print("V2_RECORDS",len(v2.get("records") or []))
+          print("MIGRATION_STAGE","READ_ONLY_MONITOR_NOT_LIVE_TRADING")
+          PY

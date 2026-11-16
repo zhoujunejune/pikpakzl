@@ -1,0 +1,55 @@
+name: Add password-protected DeepSeek 5m signal page to Alibaba (orders off)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - prediction-bot-v1/aliyun_deepseek_public_panel.py
+      - .github/workflows/zl-deepseek-public-panel.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m py_compile prediction-bot-v1/aliyun_deepseek_public_panel.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Create isolated authenticated UI route without touching trades
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_public_panel.py
+      - name: Verify password protection, visible DeepSeek UI and isolated signal
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,urllib.error,json
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def read(path,authenticate):
+              req=urllib.request.Request(base+path,headers={'Authorization':auth} if authenticate else {})
+              try:
+                  with urllib.request.urlopen(req,timeout=16) as r:
+                      return r.status,r.read(150000)
+              except urllib.error.HTTPError as e:
+                  return e.code,e.read(8000)
+          assert read('/deepseek/',False)[0]==401
+          code,html=read('/deepseek/',True)
+          assert code==200 and b'DEEPSEEK_5M_V1' in html
+          code,body=read('/deepseek/api/status',True)
+          assert code==200
+          data=json.loads(body)
+          assert data['model']=='DEEPSEEK_5M_V1' and data['configured'] is True
+          assert data['tradeIntegration'] is False and data['realOrderEnabled'] is False
+          print('DEEPSEEK_PUBLIC_PAGE_HTTP_200=true')
+          print('DEEPSEEK_PUBLIC_AUTH_REQUIRED=true')
+          print('DEEPSEEK_PUBLIC_MODEL',data['model'])
+          print('DEEPSEEK_PUBLIC_LATEST',data.get('lastSignal'))
+          print('DEEPSEEK_PUBLIC_NO_DIRECT_ORDERS=true')
+          PY

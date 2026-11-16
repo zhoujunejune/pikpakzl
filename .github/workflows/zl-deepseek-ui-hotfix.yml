@@ -1,0 +1,67 @@
+name: Repair live Alibaba front-end to show DeepSeek-only official statistics
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - .github/workflows/zl-deepseek-ui-hotfix.yml
+      - prediction-bot-v1/aliyun_deepseek_ui_hotfix.py
+      - prediction-bot-v1/aliyun_deepseek_ui_launch.py
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify no syntax errors in dashboard source and hotfix
+        run: |
+          python -m py_compile prediction-bot-v1/aliyun_deepseek_ui_hotfix.py prediction-bot-v1/aliyun_deepseek_ui_launch.py
+          node --check railway-diagnostic/panel-stats-shell.mjs
+      - run: pip -q install alibabacloud_swas_open20200601==4.0.0
+      - name: Preflight actual live panel code, no changes
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          DEEPSEEK_UI_DRY_RUN: '1'
+        run: python prediction-bot-v1/aliyun_deepseek_ui_launch.py
+      - name: Back up live panel and publish DeepSeek-only statistics
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+          DEEPSEEK_UI_DRY_RUN: '0'
+        run: python prediction-bot-v1/aliyun_deepseek_ui_launch.py
+      - name: Verify external password-protected panel shows DeepSeek statistics
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,base64,urllib.request,json
+          root='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(url):
+              req=urllib.request.Request(root+url,headers={'Authorization':auth,'Cache-Control':'no-store'})
+              with urllib.request.urlopen(req,timeout=25) as res:return res.status,res.read(200000)
+          code,html=get('/')
+          assert code==200
+          assert b'DeepSeek' in html and b'renderDeepSeekRoundStats' in html
+          assert b'/deepseek/api/history' in html
+          code,raw=get('/deepseek/api/history?limit=5')
+          history=json.loads(raw)
+          assert code==200 and history.get('model')=='DEEPSEEK_5M_V1'
+          code,raw=get('/api/order-signal-model')
+          selection=json.loads(raw)
+          assert selection.get('model')=='DEEPSEEK_5M_V1'
+          assert [x['id'] for x in selection.get('models',[])]==['DEEPSEEK_5M_V1']
+          print('UI_LIVE_PAGE_UPDATED=true')
+          print('UI_LIVE_DEEPSEEK_STAT_SOURCE=true')
+          print('UI_LIVE_HISTORY_COUNT',len(history['records']))
+          print('UI_PRODUCTION_MODEL_EXCLUSIVE=true')
+          print('UI_LEGACY_STATISTICS_EXCLUDED=true')
+          PY

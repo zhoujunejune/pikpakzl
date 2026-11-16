@@ -1,0 +1,76 @@
+name: Haipai Genius public authenticated DeepSeek status verify
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/haipai-genius-ai-status-verify.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read-only production paper status
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,urllib.request,base64,json
+          pw=os.environ['ZL_PANEL_PASSWORD']
+          auth='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          req=urllib.request.Request('https://prediction.47-237-188-69.sslip.io/genius/api/status',
+             headers={'Authorization':auth,'Cache-Control':'no-store'})
+          x=json.load(urllib.request.urlopen(req,timeout=15))
+          assert x['mode']=='PAPER_ONLY' and x['realTradingEnabled'] is False
+          print('HAIPAI_GENIUS_AI_CONFIGURED='+str(x['aiConfigured']))
+          print('HAIPAI_GENIUS_AI_MODEL='+str(x['aiModel']))
+          print('HAIPAI_GENIUS_AI_STATUS='+str(x['aiStatus']))
+          print('HAIPAI_GENIUS_MARKET_STREAM='+str(x.get('marketStream')))
+          print('HAIPAI_GENIUS_LAST_MARKET_SYMBOL='+str((x.get('lastMarket') or {}).get('symbol')))
+          print('HAIPAI_GENIUS_LAST_MARKET_TIME='+str((x.get('lastMarket') or {}).get('checkedAt')))
+          print('HAIPAI_GENIUS_MARKETS_SEEN='+','.join(m.get('symbol','') for m in x.get('marketSnapshots',[])))
+          print('HAIPAI_GENIUS_AI_LAST_DECISION='+str((x.get('lastDecision') or {}).get('action')))
+          print('HAIPAI_GENIUS_ENABLED='+str(x['settings']['enabled']))
+          print('HAIPAI_GENIUS_LAST_ERROR='+str(x.get('lastError'))[:110])
+          metrics=x.get('metrics') or {}
+          print('HAIPAI_GENIUS_VERSION='+str(x.get('version')))
+          print('HAIPAI_GENIUS_WEBSOCKET_STATE='+str(x.get('marketStream')))
+          print('HAIPAI_GENIUS_WS_MARK_EVENTS='+str(metrics.get('markEvents')))
+          print('HAIPAI_GENIUS_WS_TRADE_EVENTS='+str(metrics.get('aggTrades')))
+          print('HAIPAI_GENIUS_WS_BOOK_EVENTS='+str(metrics.get('bookEvents')))
+          print('HAIPAI_GENIUS_WS_MESSAGES='+str(metrics.get('wsMessages')))
+          print('HAIPAI_GENIUS_WS_LAG_MS='+str(metrics.get('wsLagMs')))
+          print('HAIPAI_GENIUS_WS_RECONNECTS='+str(metrics.get('wsReconnects')))
+          print('HAIPAI_GENIUS_WS_AGE_MS='+str(metrics.get('marketAgeMs')))
+          print('HAIPAI_GENIUS_AI_ATTEMPTS='+str(metrics.get('aiAttempts')))
+          print('HAIPAI_GENIUS_AI_SUCCESS='+str(metrics.get('aiSuccess')))
+          print('HAIPAI_GENIUS_AI_FAILURE='+str(metrics.get('aiFailure')))
+          print('HAIPAI_GENIUS_AI_DURATION_MS='+str(metrics.get('aiDurationMs')))
+          print('HAIPAI_GENIUS_AI_TRIGGER='+str(metrics.get('lastTrigger')))
+          print('HAIPAI_GENIUS_LAST_FIVE_ERRORS='+str([(v.get('kind'),v.get('detail')) for v in (metrics.get('errors') or [])[:5]])[:350])
+          per=metrics.get('perSymbol') or {}
+          for symbol in ('BTCUSDT','ETHUSDT','SOLUSDT'):
+              item=per.get(symbol,{})
+              print('HAIPAI_GENIUS_'+symbol+'_HIGHER_COMPLETE='+str(item.get('higherComplete')))
+              print('HAIPAI_GENIUS_'+symbol+'_HIGHER_BIAS='+str({key: value.get('bias') for key,value in (item.get('higher') or {}).items()}))
+          print('HAIPAI_GENIUS_LAST_HORIZON='+str((x.get('lastDecision') or {}).get('horizon')))
+          print('HAIPAI_GENIUS_CURRENT_PAPER_POSITION_PRESENT='+str(bool(x.get('position'))))
+          pos=x.get('positions')
+          assert isinstance(pos,list) and len(pos)<=3
+          assert len(set(p['symbol'] for p in pos))==len(pos), 'DUPLICATE_HELD_SYMBOL'
+          assert all(p['source']=='DEEPSEEK_PAPER_ONLY' and not ('stop' in p or 'takeProfit' in p) for p in pos)
+          assert x['positionCount']==len(pos)
+          print('HAIPAI_GENIUS_CURRENT_POSITIONS='+str(len(pos)))
+          print('HAIPAI_GENIUS_HELD_SYMBOLS='+','.join(p['symbol'] for p in pos))
+          print('HAIPAI_GENIUS_FLOATING_PNL_COMPLETE='+str((x.get('floatingPnl') or {}).get('complete')))
+          print('HAIPAI_GENIUS_LAST_PORTFOLIO_DECISIONS='+str([(d.get('symbol'),d.get('action')) for d in x.get('lastDecisions',[])]))
+          print('HAIPAI_GENIUS_CLOSED_PAPER_COUNT='+str(x.get('totalClosed')))
+          print('HAIPAI_GENIUS_HAS_PAPER_HISTORY='+str(x.get('totalClosed',0)>0))
+          print('HAIPAI_GENIUS_HIGHER_REQUESTS='+str(metrics.get('higherRequests')))
+          assert x['version']=='HAIPAI_GENIUS_PAPER_V144_MULTIPOSITION'
+          assert all(per.get(symbol,{}).get('higherComplete') is True for symbol in ('BTCUSDT','ETHUSDT','SOLUSDT')), 'MULTI_TIMEFRAME_DATA_INCOMPLETE'
+          print('HAIPAI_GENIUS_MULTI_HORIZON_VERIFIED=true')
+          print('HAIPAI_GENIUS_MULTIPOSITION_VERIFIED=true')
+          print('HAIPAI_GENIUS_PAPER_SERVICE_OK=true')
+          PY

@@ -1,0 +1,28 @@
+name: Validate Prediction MPC-first payment routing
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'railway-diagnostic/index.mjs'
+      - 'railway-diagnostic/wrapper.mjs'
+      - 'railway-diagnostic/payment-source-priority.mjs'
+      - 'railway-diagnostic/payment-source-priority.test.mjs'
+      - '.github/workflows/zl-prediction-payment-priority-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse affected production files
+        run: |
+          node --check railway-diagnostic/index.mjs
+          node --check railway-diagnostic/wrapper.mjs
+      - name: Test Prediction > Spot source selection and safe fallback
+        run: node --test railway-diagnostic/payment-source-priority.test.mjs

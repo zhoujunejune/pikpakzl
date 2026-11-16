@@ -1,0 +1,65 @@
+name: Fix prediction direction selection without extra PIN
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_direction_controls_install.sh'
+      - 'prediction-bot-v1/aliyun_direction_controls_deploy.py'
+      - '.github/workflows/zl-aliyun-direction-no-pin.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Validate deployment syntax
+        run: |
+          bash -n prediction-bot-v1/aliyun_direction_controls_install.sh
+          python -m py_compile prediction-bot-v1/aliyun_direction_controls_deploy.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Deploy and repair persisted direction controls
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_direction_controls_deploy.py
+      - name: Test authenticated HTTPS GET and benign OFF save without secondary PIN
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import json,base64,os,urllib.request,urllib.error
+          base='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+           q=urllib.request.Request(base+path,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+           with urllib.request.urlopen(q,timeout=18) as r:return json.load(r)
+          state=get('/api/direction-mode')
+          assert state['ready'] is True and state['ok'] is True
+          model=get('/api/order-signal-model')
+          assert model['model']=='SELECTIVE_V2_FAST8_PREWARM_V1'
+          print('DIRECTION_HTTPS_GET_READY=true')
+          # Do not switch anything ON or change the user's existing choices.
+          source=next((s for s,m in state['modes'].items() if m.get('UP')=='OFF'),None)
+          if source:
+           params={'source':source,'direction':'UP','mode':'OFF','expectedRevision':state['revision']}
+           headers={'Authorization':auth,'Origin':base,'Sec-Fetch-Site':'same-origin',
+                    'Content-Type':'application/json'}
+           req=urllib.request.Request(base+'/api/direction-mode',
+             data=json.dumps(params).encode(),method='POST',headers=headers)
+           with urllib.request.urlopen(req,timeout=20) as r:result=json.load(r)
+           assert result['ok'] is True and result['changed'] is False
+           print('DIRECTION_HTTPS_PIN_FREE_POST_OFF_IDEMPOTENT=true')
+          else:
+           print('DIRECTION_HTTPS_NO_OFF_SIDE_AVAILABLE_SKIP_WRITE_TEST=true')
+          reread=get('/api/direction-mode')
+          assert reread['ready'] is True and len(reread['modes'])==3
+          print('DIRECTION_HTTPS_SETTINGS_PERSISTED=true')
+          PY

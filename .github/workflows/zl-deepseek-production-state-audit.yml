@@ -1,0 +1,45 @@
+name: Inspect prediction production model selection (read-only)
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [.github/workflows/zl-deepseek-production-state-audit.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Read current production state with HTTP GET only, never submit orders
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os,json,base64,urllib.request,urllib.error
+          password=os.getenv('ZL_PANEL_PASSWORD')
+          if not password:raise SystemExit('PANEL_PASSWORD_MISSING')
+          auth='Basic '+base64.b64encode(('zl:'+password).encode()).decode()
+          base='https://prediction.47-237-188-69.sslip.io'
+          def fetch(route):
+              req=urllib.request.Request(base+route,headers={'Authorization':auth,'Cache-Control':'no-store'})
+              with urllib.request.urlopen(req,timeout=17) as response:
+                  return json.load(response)
+          for endpoint in ('/api/order-signal-model','/api/status'):
+              try:
+                  value=fetch(endpoint)
+                  if endpoint.endswith('order-signal-model'):
+                      print('PROD_SELECTOR_HTTP_200=true')
+                      print('PROD_SELECTED_MODEL',value.get('model','unknown'))
+                      print('PROD_SELECTOR_READY',value.get('ready'))
+                      print('PROD_AVAILABLE_MODEL_IDS',[x.get('id') for x in value.get('models',[]) if isinstance(x,dict)])
+                  else:
+                      print('PROD_STATUS_HTTP_200=true')
+                      print('PROD_FOLLOW_ENABLED',value.get('enabled'))
+                      print('PROD_AUTO_CONFIRM_ENABLED',value.get('autoConfirmEnabled'))
+                      print('PROD_STATUS_SELECTED_MODEL',value.get('orderSignalModel'))
+                      print('PROD_CURRENT_SIGNAL_SOURCE',(value.get('signal') or {}).get('source') if isinstance(value.get('signal'),dict) else 'none')
+              except urllib.error.HTTPError as e:
+                  print('PROD_ENDPOINT_ERROR',endpoint,e.code)
+                  raise
+          PY

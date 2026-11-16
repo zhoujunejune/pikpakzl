@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <style name="Theme.ZLControl" parent="android:style/Theme.Material.NoActionBar">
+    <item name="android:colorAccent">#5BAFFF</item>
+    <item name="android:statusBarColor">#0A1220</item>
+    <item name="android:navigationBarColor">#0B1625</item>
+    <item name="android:windowLightStatusBar">false</item>
+    <item name="android:windowActionModeOverlay">true</item>
+    <item name="android:windowBackground">#0A1220</item>
+  </style>
+</resources>

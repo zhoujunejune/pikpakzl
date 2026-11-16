@@ -1,0 +1,52 @@
+name: ZL Futures Lab - verified read-only training status
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: [".github/workflows/zl-futures-lab-training-audit.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verified-learning-status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Print simulation-only training audit with no key access
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,urllib.request,json,base64,collections,time
+          password=os.environ.get("ZL_PANEL_PASSWORD","")
+          assert password, "dashboard login secret absent"
+          url="https://47-237-188-69.sslip.io/futures-lab/live.json?t="+str(int(time.time()*1000))
+          auth="Basic "+base64.b64encode(("zl:"+password).encode()).decode()
+          req=urllib.request.Request(url,headers={"Authorization":auth,"Cache-Control":"no-store"})
+          with urllib.request.urlopen(req,timeout=18) as result:
+            data=json.load(result)
+          assert data.get("realOrders") is False
+          assert data.get("autoParameterTraining") is True
+          assert len(data.get("streams",[]))==9
+          print("AUDIT_MARKET_FRESH",data.get("fresh"))
+          print("AUDIT_TRAINING_COMPLETED_RUNS",data.get("learning",{}).get("completedRuns"))
+          print("AUDIT_TRAINING_LAST_RUN",data.get("learning",{}).get("lastRun"))
+          print("AUDIT_TRAINING_NEXT_RUN",data.get("learning",{}).get("nextRun"))
+          print("AUDIT_TRAINING_RUNNING",data.get("learning",{}).get("running"))
+          print("AUDIT_TRAINING_ERROR_CLASS",(data.get("learning",{}).get("error") or "none").split(":")[0][:60])
+          counts=collections.Counter()
+          for stream in data.get("streams",[]):
+            tr=stream.get("learning") or {}
+            status=tr.get("status","NOT_STARTED")
+            counts[status]+=1
+            print("TRAINED_STREAM",stream["symbol"],stream["strategy"],
+                  "STATUS",status,
+                  "VERSION",tr.get("version",0),
+                  "CANDLES",tr.get("candleCount",0),
+                  "TRAIN_TRADES",tr.get("trainTrades",0),
+                  "HOLDOUT_TRADES",tr.get("holdoutTrades",0),
+                  "HOLDOUT_RETURN",tr.get("holdoutNetPct"),
+                  "BASELINE_HOLDOUT_RETURN",tr.get("baselineHoldoutNetPct"),
+                  "FORWARD_CLOSED_TRADES",stream.get("closedTrades",0))
+          print("TRAINING_STATUS_COUNTS",json.dumps(counts,sort_keys=True))
+          print("SIMULATION_ONLY_NO_ORDERS_CONFIRMED=true")
+          PY

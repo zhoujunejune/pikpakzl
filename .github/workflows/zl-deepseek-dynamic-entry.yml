@@ -1,0 +1,63 @@
+name: Enable adaptive DeepSeek decisions until 270s, preserve no-order provider isolation
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - .github/workflows/zl-deepseek-dynamic-entry.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-alibaba-prediction-singlehost
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Check deployment source syntax
+        run: python -m py_compile prediction-bot-v1/aliyun_deepseek_dynamic_window.py prediction-bot-v1/aliyun_deepseek_dynamic_launch.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Verify live source patch against Alibaba without modifying production
+        env:
+          DEEPSEEK_DYNAMIC_DRY_RUN: '1'
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_dynamic_launch.py
+      - name: Back up and update production signal window with rollback
+        env:
+          DEEPSEEK_DYNAMIC_DRY_RUN: '0'
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_deepseek_dynamic_launch.py
+      - name: Public read-only verification of DeepSeek source, reasoning, feedback
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,base64,os,json
+          root='https://prediction.47-237-188-69.sslip.io'
+          cred='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          def get(path):
+              r=urllib.request.Request(root+path,headers={'Authorization':cred,'Cache-Control':'no-store'})
+              with urllib.request.urlopen(r,timeout=18) as res:return json.load(res)
+          prod=get('/api/order-signal-model')
+          ai=get('/deepseek/api/status')
+          assert prod.get('model')=='DEEPSEEK_5M_V1'
+          assert len(prod.get('models',[]))==1
+          assert ai.get('reasoning',{}).get('enabled') is True
+          assert ai.get('featuresVersion')=='BTC_OHLCV_RSI_MACD_ATR_V2'
+          assert ai.get('decisionWindowEndMs')==ai.get('round')+270000
+          assert ai.get('learning',{}).get('autoFeedback') is True
+          assert ai.get('realOrderEnabled') is False
+          print('DYNAMIC_DEEPSEEK_PUBLIC_MODEL_OK=true')
+          print('DYNAMIC_DEEPSEEK_THINKING_ENABLED=true')
+          print('DYNAMIC_DEEPSEEK_FEATURE_PIPELINE_ENABLED=true')
+          print('DYNAMIC_DEEPSEEK_OFFICIAL_LEARNING_ENABLED=true')
+          print('DYNAMIC_DEEPSEEK_WINDOW=270s')
+          print('DYNAMIC_DEEPSEEK_ERROR',str(ai.get('error'))[:120])
+          print('DYNAMIC_DEEPSEEK_LEARNING_STATS',json.dumps(ai.get('learning',{}),ensure_ascii=False)[:650])
+          PY

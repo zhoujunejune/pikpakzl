@@ -1,0 +1,81 @@
+name: Fix Alibaba prediction menu Bad Request redirect
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths:
+      - 'prediction-bot-v1/aliyun_fix_nav_redirect.py'
+      - '.github/workflows/zl-aliyun-fix-nav-redirect.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zl-aliyun-caddy-prediction-menu-fix
+  cancel-in-progress: false
+jobs:
+  repair-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m py_compile prediction-bot-v1/aliyun_fix_nav_redirect.py
+      - run: python -m pip install -q alibabacloud_swas_open20200601==4.0.0
+      - name: Correct production Caddy prediction redirect only
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: python prediction-bot-v1/aliyun_fix_nav_redirect.py
+      - name: Verify exact redirect clicked from futures navigation and both active frontends
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,os,base64,html.parser,time
+          origin='https://47-237-188-69.sslip.io'
+          pred='https://prediction.47-237-188-69.sslip.io'
+          auth='Basic '+base64.b64encode(('zl:'+os.environ['ZL_PANEL_PASSWORD']).encode()).decode()
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):return None
+          opener=urllib.request.build_opener(NoRedirect)
+          def visit(url,no_redirect=False):
+              req=urllib.request.Request(url,headers={'Authorization':auth,'Cache-Control':'no-cache'})
+              try:
+                  with (opener.open if no_redirect else urllib.request.urlopen)(req,timeout=13) as resp:
+                      return resp.status,resp.read(250000),resp.headers.get('Location',''),resp.url
+              except urllib.error.HTTPError as e:
+                  return e.code,e.read(25000),e.headers.get('Location',''),url
+          assert visit(origin+'/dashboard/')[0]==200
+          for path,dest in [('/prediction/',pred+'/'),('/prediction/api/status',pred+'/api/status')]:
+              status,_,loc,_=visit(origin+path,True)
+              print('NAV_REDIRECT',path,status,loc)
+              assert status in (301,302,307,308) and loc==dest,(status,loc,dest)
+              status,body,_,url=visit(dest)
+              print('NAV_TARGET',path,status,url,'bytes',len(body))
+              assert status==200 and b'Bad Request' not in body
+          class Links(html.parser.HTMLParser):
+              def __init__(self):super().__init__();self.links=[];self.last=''
+              def handle_starttag(self,tag,attrs):
+                  if tag=='a':self.last=dict(attrs).get('href','')
+              def handle_data(self,data):
+                  if self.last and data.strip():self.links.append((data.strip(),self.last))
+              def handle_endtag(self,tag):
+                  if tag=='a':self.last=''
+          for base in (origin,pred):
+              status,body,_,_=visit(base+'/')
+              assert status==200
+              parser=Links();parser.feed(body.decode('utf8','replace'))
+              nav=[(label,href) for label,href in parser.links if '机器人' in label or 'dashboard' in href or 'prediction' in href]
+              print('NAV_PAGE',base,'HTTP',status,'NAV_LINKS',nav[:16])
+          failures=[]
+          for i in range(10):
+              a=visit(origin+'/prediction/',True)
+              b=visit(pred+'/')
+              valid=a[0]==302 and a[2]==pred+'/' and b[0]==200 and b'Bad Request' not in b[1]
+              print('NAV_REPEAT',i+1,'redirect',a[0],'prediction',b[0],'pass',valid)
+              if not valid:failures.append(i+1)
+              if i<9:time.sleep(1)
+          assert not failures,'NAV_INTERMITTENT_FAILURES '+str(failures)
+          print('PREDICTION_MENU_CLICK_FLOW_10_OF_10_PASS=true')
+          PY

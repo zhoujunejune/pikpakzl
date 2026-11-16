@@ -1,0 +1,98 @@
+name: EVENT10 AI vs rules same-signal paired win rate read-only
+on:
+  push:
+    branches: [feature/zl-futures-bot-v1]
+    paths: ['.github/workflows/event10-ai-vs-rule-paired-readonly.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare AI and original rule directions on identical settled records
+        env:
+          ZL_PANEL_PASSWORD: ${{ secrets.ZL_PANEL_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os,urllib.request,base64,json,datetime,collections
+          pw=os.environ.get('ZL_PANEL_PASSWORD','')
+          assert pw, 'AUTH_SECRET_MISSING'
+          authorization='Basic '+base64.b64encode(('zl:'+pw).encode()).decode()
+          base='https://prediction.47-237-188-69.sslip.io'
+          def get(path):
+              request=urllib.request.Request(base+path,headers={
+                  'Authorization':authorization,'Accept':'application/json',
+                  'Cache-Control':'no-cache','Pragma':'no-cache'})
+              with urllib.request.urlopen(request,timeout=25) as response:
+                  assert response.status==200
+                  return json.loads(response.read(5000000))
+          status=get('/event10/api/status')
+          assert status.get('ok') is True
+          version=status.get('decisionReviewVersion')
+          assert version=='EVENT10_AI_REQUIRED_LEARNING_V18_20261106',('VERSION_CHANGED',version)
+          rows=[]
+          total=None
+          for offset in range(0,10000,100):
+              ledger=get('/event10/api/signals?limit=100&offset='+str(offset))
+              assert ledger.get('ok') and ledger.get('version')==version
+              if total is None:
+                  total=ledger.get('total')
+                  assert isinstance(total,int)
+              batch=ledger.get('records')
+              assert isinstance(batch,list)
+              rows.extend(batch)
+              if len(rows)>=total:break
+              assert batch,'EMPTY_PAGE'
+          assert len(rows)==total,('INCOMPLETE',len(rows),total)
+          assert len({x.get('id') for x in rows})==len(rows),'DUPLICATES'
+          assert all(x.get('strategyVersion')==version for x in rows),'MIXED_STRATEGIES'
+          settled=[x for x in rows if type(x.get('proxyHit')) is bool]
+          valid=[x for x in settled if
+              x.get('direction') in ('UP','DOWN') and
+              x.get('baseDirection') in ('UP','DOWN') and
+              x.get('proxyOutcome') in ('UP','DOWN') and
+              x.get('aiAnalysisCompleted') is True and
+              x.get('aiStatus')=='AI_REVIEWED']
+          unsettled=len(rows)-len(settled)
+          missing=len(settled)-len(valid)
+          valid.sort(key=lambda x:(x.get('openedAt') or 0,str(x.get('id') or '')))
+          if any((x.get('proxyOutcome')==x.get('direction')) != x.get('proxyHit') for x in valid):
+              raise RuntimeError('OUTCOME_MISMATCH')
+          def pct(x,n):return round(100*x/n,2) if n else None
+          def stats(items):
+              n=len(items)
+              ai=sum(x['direction']==x['proxyOutcome'] for x in items)
+              rule=sum(x['baseDirection']==x['proxyOutcome'] for x in items)
+              same=sum(x['direction']==x['baseDirection'] for x in items)
+              flipped=n-same
+              helps=sum(x['direction']!=x['baseDirection'] and x['direction']==x['proxyOutcome'] for x in items)
+              hurts=sum(x['direction']!=x['baseDirection'] and x['baseDirection']==x['proxyOutcome'] for x in items)
+              return {'count':n,'aiHits':ai,'ruleHits':rule,'aiWinRatePct':pct(ai,n),
+                'ruleWinRatePct':pct(rule,n),'aiMinusRulePp':round(100*(ai-rule)/n,2) if n else None,
+                'directionsAgreed':same,'directionsChanged':flipped,'aiHelped':helps,'aiHurt':hurts}
+          def date(t):
+              if not isinstance(t,(int,float)) or not t:return None
+              return datetime.datetime.fromtimestamp(t/1000,datetime.timezone(datetime.timedelta(hours=8))).strftime('%m-%d %H:%M')
+          print('AI_RULE_COMPARE_META',json.dumps({
+              'checkedAt':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(timespec='seconds'),
+              'version':version,'model':status.get('aiReviewModel'),'aiMandatory':status.get('aiMandatory'),
+              'total':total,'settled':len(settled),'unsettled':unsettled,'pairedValid':len(valid),
+              'pairedExcluded':missing,'ledgerStats':ledger.get('stats'),
+              'definition':'Same AI-published signals and same post-AI locked 10m index settlement; rule-only direction is stored pre-AI baseline, NOT an independently run no-AI bot.'},ensure_ascii=False),flush=True)
+          print('AI_RULE_COMPARE_ALL',json.dumps(stats(valid),ensure_ascii=False),flush=True)
+          for i in range(0,len(valid),10):
+              subset=valid[i:i+10]
+              print('AI_RULE_COMPARE_BATCH',json.dumps({'rounds':str(i+1)+'-'+str(i+len(subset)),
+                'firstAt':date(subset[0]['openedAt']),'lastAt':date(subset[-1]['openedAt']),
+                **stats(subset)},ensure_ascii=False),flush=True)
+          recent=valid[-10:]
+          print('AI_RULE_COMPARE_LAST10',json.dumps(stats(recent),ensure_ascii=False),flush=True)
+          for x in valid[-10:]:
+              print('AI_RULE_COMPARE_RECENT_ROW',json.dumps({'openedAt':date(x.get('openedAt')),
+               'ai':x.get('direction'),'baseline':x.get('baseDirection'),
+               'outcome':x.get('proxyOutcome'),'aiHit':x.get('proxyHit'),
+               'ruleHit':x.get('baseDirection')==x.get('proxyOutcome')},ensure_ascii=False),flush=True)
+          print('AI_RULE_COMPARE_DONE=true',flush=True)
+          PY

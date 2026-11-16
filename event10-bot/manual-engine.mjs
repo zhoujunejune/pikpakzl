@@ -164,6 +164,43 @@ export function calibrateUpMomentumConflict(side,evidence){
     threeMinuteBps:p.threeMinuteBps,fiveMinuteBps:p.fiveMinuteBps,trendScore:score};
 }
 
+// V40R3 conservative post-admission reversal calibration for verified
+// bearish price exhaustion. It never qualifies/vetoes/queues a signal and
+// reads only already-closed spot data and received public micro snapshots.
+// A falling market alone is not a signal to reverse; require BOTH extreme
+// spot range location and stalling short momentum plus EMA slowdown.
+export function calibrateExtremeBearExhaustion(side,evidence){
+ const keep={side,changed:false,reason:"V40R3_KEEP"};
+ if(side!=="DOWN")return keep;
+ if(evidence?.v40R2Direction?.changed===true)
+   return {...keep,reason:"V40R3_PRESERVE_V40R2"};
+ const r=evidence?.entryHorizons?.ranges||{},hour=r["60m"],day=r["24h"];
+ const p=evidence?.spotPriceAction||{},frame=evidence?.timeframes||{};
+ const frames=["1m","2m","5m","10m","15m","30m"];
+ const valid=frames.filter(k=>frame[k]?.available===true);
+ const bearish=valid.filter(k=>frame[k].trend==="DOWN").length;
+ const ema1=evidence?.emaEntry?.["1m"],ema2=evidence?.emaEntry?.["2m"];
+ const slowdown=(ema1?.available===true&&
+      Number.isFinite(ema1.ema9AccelerationBps)&&ema1.ema9AccelerationBps>=0.75)||
+      (ema2?.available===true&&Number.isFinite(ema2.ema9SlopeBps)&&
+       ema2.ema9SlopeBps>=-0.75);
+ if(!(hour?.available===true&&day?.available===true&&
+      Number.isFinite(hour.position)&&hour.position<=0.18&&hour.position>=0&&
+      Number.isFinite(day.position)&&day.position>=0.18&&day.position<=0.33&&
+      valid.length===6&&bearish>=5&&
+      Number.isFinite(p.threeMinuteBps)&&p.threeMinuteBps>=-3&&
+      p.threeMinuteBps<=-0.3&&
+      Number.isFinite(p.fiveMinuteBps)&&p.fiveMinuteBps>=-8&&
+      p.fiveMinuteBps<=0&&slowdown))return keep;
+ const votes=evidence?.microstructure?.votes||{};
+ if(votes.aggressiveFlow==="DOWN"&&
+    (votes.orderBook==="DOWN"||votes.indexKlines==="DOWN"))
+   return {...keep,reason:"V40R3_ACTIVE_BEARISH_FLOW_VETO"};
+ return {side:"UP",changed:true,reason:"V40R3_EXTREME_BEAR_EXHAUSTION",
+   hourPosition:hour.position,dayPosition:day.position,
+   threeMinuteBps:p.threeMinuteBps,fiveMinuteBps:p.fiveMinuteBps};
+}
+
 export function checkedTick(data, now, maxAgeMs=6000) {
   if (data?.ok!==true || data?.readOnly!==true || data?.symbol!=="BTCUSDT" ||
       data?.latest?.marketFeedConnected===false) throw Error("UNVERIFIED_BTC_FEED");
@@ -288,6 +325,12 @@ function slimSignal(h) {
     v40R1OriginalDirection:evidence.v40R1OriginalDirection??null,
     v40R2OriginalDirection:evidence.v40R2OriginalDirection??null,
     v40R2FlipApplied:evidence.v40R2Direction?.changed===true,
+    v40R3OriginalDirection:evidence.v40R3OriginalDirection??null,
+    v40R3FlipApplied:evidence.v40R3Direction?.changed===true,
+    v40R3Reason:evidence.v40R3Direction?.reason??null,
+    timeframeVotes:Object.fromEntries(["1m","2m","5m","10m","15m","30m"]
+      .map(k=>[k,evidence.timeframes?.[k]?.available===true?
+        evidence.timeframes[k].trend:null])),
     spot3mBps:Number.isFinite(evidence.spotPriceAction?.threeMinuteBps)?
        evidence.spotPriceAction.threeMinuteBps:null,
     spot5mBps:Number.isFinite(evidence.spotPriceAction?.fiveMinuteBps)?
@@ -421,6 +464,10 @@ function openSignalLedger(file,sessionHistory) {
     const v40R2BeforeHits=v40R2Comparable.filter(x=>scoreProxy(
       x.openPrice,x.closePrice,x.v40R2OriginalDirection).proxyHit===true).length;
     const v40R2AfterHits=v40R2Comparable.filter(x=>x.proxyHit===true).length;
+    const v40R3Comparable=comparable.filter(x=>["UP","DOWN"].includes(x.v40R3OriginalDirection));
+    const v40R3BeforeHits=v40R3Comparable.filter(x=>scoreProxy(
+      x.openPrice,x.closePrice,x.v40R3OriginalDirection).proxyHit===true).length;
+    const v40R3AfterHits=v40R3Comparable.filter(x=>x.proxyHit===true).length;
     const publishedHits=comparable.filter(x=>x.proxyHit===true).length;
      const v35Comparable=comparable.filter(x=>["UP","DOWN"].includes(x.v35EquivalentDirection));
      const v35Wins=v35Comparable.filter(x=>scoreProxy(x.openPrice,x.closePrice,x.v35EquivalentDirection).proxyHit===true).length;
@@ -434,6 +481,13 @@ function openSignalLedger(file,sessionHistory) {
         proxyAccuracyPct:settled.length?round(hits*100/settled.length,2):null,
         last5Pct:percentage(settled.slice(0,5)),
         last10Pct:percentage(settled.slice(0,10)),byTier,
+        v40R3PairedComparison:{settledComparable:v40R3Comparable.length,
+          directionCorrections:v40R3Comparable.filter(x=>x.v40R3FlipApplied===true).length,
+          beforeHits:v40R3BeforeHits,afterHits:v40R3AfterHits,
+          beforePct:v40R3Comparable.length?round(100*v40R3BeforeHits/v40R3Comparable.length,2):null,
+          afterPct:v40R3Comparable.length?round(100*v40R3AfterHits/v40R3Comparable.length,2):null,
+          gainPctPoints:v40R3Comparable.length?
+            round(100*(v40R3AfterHits-v40R3BeforeHits)/v40R3Comparable.length,2):null},
         v40R2PairedComparison:{settledComparable:v40R2Comparable.length,
           directionCorrections:v40R2Comparable.filter(x=>x.v40R2FlipApplied===true).length,
           beforeHits:v40R2BeforeHits,afterHits:v40R2AfterHits,
@@ -524,7 +578,7 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
     const ledgerStats=signalLedger.list(1,0).stats;
     return {ok:true,bot:"EVENT10", mode:"MIDRANGE_REBOUND_V40_12S_TRIPLE_SIGNAL_TPLUS600_PROXY_ONLY",
       providerModel:"PURE_SIGNAL_V40_MIDRANGE_REBOUND",
-      directionCalibrationPatch:"V40R2_DUAL_CLOSED_MOMENTUM_20261116",aiMandatory:false,
+      directionCalibrationPatch:"V40R3_EXTREME_BEAR_EXHAUSTION_20261116",aiMandatory:false,
       aiReviewConfigured:false,aiReviewModel:null,aiLearningMode:"DISABLED",
       aiReviewStats:{...aiStats},aiInProgress:null,
       aiLearningProfile:null,
@@ -766,6 +820,17 @@ export function createEngine({env=process.env,clock=Date.now,fetcher=fetch}={}) 
            rule.direction=correction.side;rule.signal=correction.side;
            rule.reason="V40R2已收盘3/5分钟价格持续转弱且EMA减速，" +
              "修正旧看涨趋势；发信号时间和数量保持不变，命中不保证。";
+         }
+       }
+       // V40R3 never modifies slot admission, scan schedule or duplicate gates.
+       if(rule.direction){
+         const before=rule.direction;
+         const correction=calibrateExtremeBearExhaustion(before,rule.evidence);
+         rule.evidence.v40R3OriginalDirection=before;
+         rule.evidence.v40R3Direction=correction;
+         if(correction.changed){
+           rule.direction=correction.side;rule.signal=correction.side;
+           rule.reason="V40R3区间极低位下跌动量减速校准：保持入围数量与锁价时间，命中不保证。";
          }
        }
        // V23 validated multi-timeframe direction plus fresh index; no AI or orders.

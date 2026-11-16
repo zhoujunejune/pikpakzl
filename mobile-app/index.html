@@ -86,6 +86,24 @@ button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:poin
 [hidden]{display:none!important}
 @media(min-width:600px){.hi{font-size:28px}.shell{padding-left:29px;padding-right:29px}.stat-row{gap:13px}.hero{min-height:275px}}
 @media(max-width:355px){.brand b{font-size:17px}.logo{width:50px;height:50px}.v{font-size:18px}.light{font-size:10px;padding:6px}}
+
+.live-market{margin:-4px 0 14px;background:linear-gradient(145deg,#fff,#f2f9ff);border:1px solid #d7eafa;border-radius:17px;padding:14px 15px;box-shadow:0 4px 15px #81b4da12}
+.live-market-head,.live-market-foot{display:flex;justify-content:space-between;align-items:center;gap:9px;flex-wrap:wrap}
+.live-market-head strong{font-size:13px;color:#315773}.quote-status{font-size:11px;font-weight:730;color:#478d67}.quote-status.stale{color:#bb7a38}
+.live-market-main{display:flex;align-items:baseline;gap:7px;margin:9px 0 6px;min-width:0}
+.live-market-main strong{font-size:clamp(27px,7.5vw,37px);letter-spacing:-.6px;font-weight:810;color:#10395d;font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere}
+.live-market-main span{font-size:12px;color:#708ca5;font-weight:700}
+.live-market-foot{font-size:11px;color:#7892a8;line-height:1.5}
+.strategy-identity{background:white;border:1px solid #dceaf5;border-radius:16px;padding:12px 14px;margin-bottom:14px}
+.strategy-identity-head{display:flex;justify-content:space-between;align-items:center;gap:9px}
+.strategy-identity-head span{font-size:11px;color:#7892a8}
+.strategy-identity-head b{font-size:11px;color:#287ab7;border-radius:20px;background:#e8f4fe;padding:4px 9px}
+.strategy-identity-name{font-size:17px;font-weight:790;color:#16486e;margin-top:5px;overflow-wrap:anywhere}
+.strategy-identity-sub{font-size:11px;color:#63839e;line-height:1.55;margin-top:5px}
+.strategy-identity .details{margin-top:9px;padding-top:9px}
+.strategy-info{font-size:12px;color:#3d617d;line-height:1.8;margin-top:9px}
+.strategy-info>div{padding:5px 0;border-bottom:1px solid #edf4f9}.strategy-info>div:last-child{border-bottom:0}
+.strategy-raw{font-size:10px;color:#7a94a8;overflow-wrap:anywhere;margin-top:8px}
 </style>
 </head>
 <body>
@@ -102,6 +120,29 @@ button,a{-webkit-tap-highlight-color:transparent}button{font:inherit;cursor:poin
  <div class="price-strip">
   <div><b>₿ BTC / USDT</b><small style="display:block">公开指数参考 · 不自动下单</small></div>
   <div class="status-text" id="eMiniConnection">● 正在连接</div>
+ </div>
+ <div class="live-market" aria-label="BTC指数近实时参考价格">
+  <div class="live-market-head"><strong>BTC / USDT · 指数参考价</strong><span id="eQuoteState" class="quote-status stale">正在核验行情</span></div>
+  <div class="live-market-main"><strong id="eLiveIndexPrice" aria-live="off">—</strong><span>USDT</span></div>
+  <div class="live-market-foot"><span id="eQuoteFreshness">后台每12秒读取一次 · 等待报价</span><span id="eQuoteTime">—</span></div>
+ </div>
+ <div class="strategy-identity" aria-label="当前信号模型">
+  <div class="strategy-identity-head"><span>当前实际信号模型 · 阿里云</span><b id="eModelRunStatus">核验中</b></div>
+  <div class="strategy-identity-name" id="eLiveModelName">正在读取模型…</div>
+  <div class="strategy-identity-sub" id="eLiveModelPatch">正在核对模型补丁与运行状态</div>
+  <details class="details" id="eStrategyDetails">
+   <summary>查看信号模型使用的指标与规则</summary>
+   <div class="strategy-info">
+    <div><b>多周期K线：</b>1/2/5/10/15/30分钟已收盘K线；权重22% / 27% / 28% / 13% / 7% / 3%。</div>
+    <div><b>技术指标：</b>Supertrend、EMA均线和斜率、MACD、RSI14、成交量与ATR波动。</div>
+    <div><b>价格结构：</b>1/3/5分钟价格变化，6分钟至24小时的价格区间、支撑阻力和反转位置。</div>
+    <div><b>行情辅助：</b>最新指数报价、盘口买卖挂单、主动成交、指数1分钟K线；失效数据不计入判断。</div>
+    <div><b>方向纠偏：</b><span id="eModelCorrection">等待服务器确认具体补丁</span></div>
+    <div><b>信号数量：</b>后台12秒扫描，滚动10分钟最多3条；同向间隔至少120秒且有新2分钟已收盘K线。</div>
+    <div><b>执行方式：</b>纯规则方向研究，不调用AI、不自动下单；10分钟后使用公开指数代理价核验。</div>
+   </div>
+   <div class="strategy-raw" id="eModelRawVersion">服务端版本尚未确认</div>
+  </details>
  </div>
  <div class="card" style="padding:15px">
   <div class="card-top"><div class="card-title">10分钟事件合约</div><span class="pill" id="eStatus">读取中</span></div>

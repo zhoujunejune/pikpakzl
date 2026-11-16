@@ -2,7 +2,7 @@
 # Deploy V40 only in EVENT10; no API orders/AI, maintain optional micro feed and V39 legacy settlement.
 # V40 retains original-side 120s/new-2m dedup, up to 3 per rolling 10m, and all safety checks.
 # Release verification includes the tested updated signal-selection and countertrend checks; old builds cannot reach production.
-name: EVENT10 V40R1 post-admission lower-hour rebound guarded same-frequency hotfix
+name: EVENT10 V40R2 guarded same-frequency production release
 on:
   push:
     branches: [feature/zl-futures-bot-v1]
@@ -100,10 +100,10 @@ jobs:
           assert s['decisionReviewVersion']=='EVENT10_MIDRANGE_REBOUND_CALIBRATION_V40_20261115'
           assert l['version']==s['decisionReviewVersion']
           assert s['providerModel']=='PURE_SIGNAL_V40_MIDRANGE_REBOUND'
-          assert s['directionCalibrationPatch']=='V40R1_LOWER_HOUR_REBOUND_20261116'
+          assert s['directionCalibrationPatch']=='V40R2_DUAL_CLOSED_MOMENTUM_20261116'
           assert s['autoTradingEnabled'] is False and s['modelCalls']==0
           assert s['minSignalGapMs']==0 and s['maxSignalsPerTenMinutes']==3 and s['autoIntervalMs']==12000 and s['livePriceUsedForDirection'] is True
           assert s['multiTimeframeIntervals']==['1m','2m','5m','10m','15m','30m']
           assert s['minDuplicateSameDirectionMs']==120000 and s['requiresNewCompleted2mBarForRepeat'] is True
-          print('V40R1_SAME_FREQUENCY_PRODUCTION_VERIFIED=true',flush=True)
+          print('V40R2_SAME_FREQUENCY_PRODUCTION_VERIFIED=true',flush=True)
           PY

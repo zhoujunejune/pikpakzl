@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,assessTrendConflict,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
-import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,chooseSettledOnlyAdaptiveDirection,calibrateLowerHourRebound,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
+import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,chooseSettledOnlyAdaptiveDirection,calibrateLowerHourRebound,calibrateUpMomentumConflict,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
 const json=x=>({ok:true,json:async()=>x});
 const temp=()=>path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-v23-")),"sessions.json");
@@ -861,6 +861,39 @@ test("V40R1: direction-only lower-hour rebound, micro veto, and no admission cha
    votes:{aggressiveFlow:"DOWN",orderBook:"DOWN",indexKlines:"UP"}}}).side,"DOWN");
  assert.equal(calibrateLowerHourRebound("DOWN",{...e,microstructure:{
    votes:{aggressiveFlow:"DOWN",orderBook:"UP",indexKlines:"UP"}}}).side,"UP");
+ assert.equal(MAX_SIGNALS_PER_10M,3);
+ assert.equal(SIGNAL_WINDOW_MS,600000);
+ assert.equal(AUTO_SLOT_MS,12000);
+});
+
+test("V40R2: only admitted UP with 3m+5m closed weakness AND EMA decay becomes DOWN",()=>{
+ const evidence={
+   trendScore:.67,
+   spotPriceAction:{threeMinuteBps:-8.26,fiveMinuteBps:-17.22},
+   emaEntry:{"1m":{available:true,ema9AccelerationBps:-5.16},
+             "2m":{available:true,ema9SlopeBps:1.29}},
+   microstructure:{votes:{aggressiveFlow:null,orderBook:null,indexKlines:null}},
+   v40R1Direction:{changed:false}
+ };
+ const d=calibrateUpMomentumConflict("UP",evidence);
+ assert.equal(d.side,"DOWN");
+ assert.equal(d.changed,true);
+ assert.equal(d.reason,"V40R2_DUAL_CLOSED_MOMENTUM_EMA_CONFLICT");
+ assert.equal(calibrateUpMomentumConflict("DOWN",evidence).side,"DOWN");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,trendScore:.25}).side,"UP");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,spotPriceAction:
+   {threeMinuteBps:-8.26,fiveMinuteBps:2}}).side,"UP");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,spotPriceAction:
+   {threeMinuteBps:-2,fiveMinuteBps:-17.22}}).side,"UP");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,emaEntry:{"1m":{
+   available:true,ema9AccelerationBps:-.1},"2m":{available:true,ema9SlopeBps:.8}}}).side,"UP");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,v40R1Direction:{changed:true}}).side,"UP");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,adaptiveDirection:{
+   reason:"V40_VERIFIED_MIDRANGE_REBOUND_UP"}}).side,"UP");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,microstructure:{
+   votes:{aggressiveFlow:"UP",orderBook:"UP",indexKlines:"DOWN"}}}).side,"UP");
+ assert.equal(calibrateUpMomentumConflict("UP",{...evidence,microstructure:{
+   votes:{aggressiveFlow:"DOWN",orderBook:"UP",indexKlines:"UP"}}}).side,"DOWN");
  assert.equal(MAX_SIGNALS_PER_10M,3);
  assert.equal(SIGNAL_WINDOW_MS,600000);
  assert.equal(AUTO_SLOT_MS,12000);

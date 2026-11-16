@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {selectTenMinuteDirection,aggregateBars,supertrend,closedSpotPriceAction,analyzeEntryHorizons,assessEntryTiming,ema921EntrySnapshot,assessEmaEntry,assessTrendConflict,TEN_MINUTE_WEIGHTS} from "./multi-timeframe-trend.mjs";
 import {evaluatePureSignal,RULE_VERSION,AUTO_SLOT_MS} from "./pure-signal.mjs";
-import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,chooseSettledOnlyAdaptiveDirection,calibrateLowerHourRebound,calibrateUpMomentumConflict,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
+import {createEngine,renewedAfterSettledMiss,chooseFrequencyPriorityDirection,chooseSettledOnlyAdaptiveDirection,calibrateLowerHourRebound,calibrateUpMomentumConflict,calibrateExtremeBearExhaustion,MAX_SIGNALS_PER_10M,SIGNAL_WINDOW_MS} from "./manual-engine.mjs";
 const BASE=Date.parse("2026-11-13T00:00:31Z");
 const json=x=>({ok:true,json:async()=>x});
 const temp=()=>path.join(fs.mkdtempSync(path.join(os.tmpdir(),"event10-v23-")),"sessions.json");
@@ -897,4 +897,46 @@ test("V40R2: only admitted UP with 3m+5m closed weakness AND EMA decay becomes D
  assert.equal(MAX_SIGNALS_PER_10M,3);
  assert.equal(SIGNAL_WINDOW_MS,600000);
  assert.equal(AUTO_SLOT_MS,12000);
+});
+
+test("V40R3: only bearish exhaustion after unchanged admission; protect trend and fresh sellers",()=>{
+ const frames=Object.fromEntries(["1m","2m","5m","10m","15m","30m"].map(k=>
+   [k,{available:true,trend:"DOWN"}]));
+ const e={
+   entryHorizons:{ranges:{"60m":{available:true,position:.052},
+     "24h":{available:true,position:.249}}},
+   timeframes:frames,
+   spotPriceAction:{threeMinuteBps:-2.437,fiveMinuteBps:-5.43},
+   emaEntry:{"1m":{available:true,ema9AccelerationBps:1.286},
+             "2m":{available:true,ema9SlopeBps:-3.909}},
+   microstructure:{votes:{aggressiveFlow:null,orderBook:null,indexKlines:null}},
+   v40R2Direction:{changed:false}
+ };
+ const changed=calibrateExtremeBearExhaustion("DOWN",e);
+ assert.equal(changed.side,"UP");
+ assert.equal(changed.changed,true);
+ assert.equal(changed.reason,"V40R3_EXTREME_BEAR_EXHAUSTION");
+ const keep=(changes)=>calibrateExtremeBearExhaustion("DOWN",{...e,...changes}).side;
+ assert.equal(calibrateExtremeBearExhaustion("UP",e).side,"UP");
+ assert.equal(keep({entryHorizons:{ranges:{"60m":{available:true,position:.19},
+   "24h":{available:true,position:.249}}}}),"DOWN");
+ assert.equal(keep({entryHorizons:{ranges:{"60m":{available:true,position:.052},
+   "24h":{available:true,position:.40}}}}),"DOWN");
+ assert.equal(keep({spotPriceAction:{threeMinuteBps:-17,fiveMinuteBps:-20}}),"DOWN");
+ assert.equal(keep({spotPriceAction:{threeMinuteBps:1.424,fiveMinuteBps:-6.935}}),"DOWN");
+ assert.equal(keep({spotPriceAction:{threeMinuteBps:-1.2,fiveMinuteBps:15.3}}),"DOWN");
+ assert.equal(keep({emaEntry:{"1m":{available:true,ema9AccelerationBps:-1.6},
+   "2m":{available:true,ema9SlopeBps:-2}}}),"DOWN");
+ assert.equal(keep({timeframes:{...frames,"5m":{available:false,trend:"DOWN"}}}),"DOWN");
+ assert.equal(keep({timeframes:{...frames,"1m":{available:true,trend:"UP"},
+   "2m":{available:true,trend:"UP"}}}),"DOWN");
+ assert.equal(keep({v40R2Direction:{changed:true}}),"DOWN");
+ assert.equal(keep({microstructure:{votes:{
+   aggressiveFlow:"DOWN",orderBook:"DOWN",indexKlines:"UP"}}}),"DOWN");
+ assert.equal(keep({microstructure:{votes:{
+   aggressiveFlow:"UP",orderBook:"DOWN",indexKlines:"DOWN"}}}),"UP");
+ assert.equal(MAX_SIGNALS_PER_10M,3);
+ assert.equal(SIGNAL_WINDOW_MS,600000);
+ assert.equal(AUTO_SLOT_MS,12000);
+ assert.equal(RULE_VERSION,"EVENT10_MIDRANGE_REBOUND_CALIBRATION_V40_20261115");
 });

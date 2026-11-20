@@ -45,16 +45,7 @@ for name in ['risk-runtime-status.json','risk-worker-health.json','risk-control.
 PY
 systemctl show zl-prediction-risk-exits -p MainPID -p ActiveState -p PrivateTmp
 systemctl show zl-prediction-trade -p MainPID -p ActiveState -p PrivateTmp
-BASE_SHA=16350d9faa9046224702f82a5c8f34f6cc1d9f68
-STAGE=$(mktemp -d /tmp/guardian-compare-XXXXXX)
-for name in wrapper.mjs guardian-live-bridge.mjs risk-runner.mjs risk-config-storage.mjs control-shell.mjs guardian-risk-integration.mjs guardian-main-dashboard.mjs;do
-  file="$BASE/$name"
-  if curl -fsSL --max-time 15 "https://raw.githubusercontent.com/zhoujunejune/pikpakzl/$BASE_SHA/railway-diagnostic/$name" -o "$STAGE/$name";then
-    if test -f "$file" && cmp -s "$STAGE/$name" "$file";then echo "GUARDIAN_DEPLOY_BASELINE $name MATCH"
-    else echo "GUARDIAN_DEPLOY_BASELINE $name LIVE_DRIFT";fi
-  else echo "GUARDIAN_DEPLOY_BASELINE $name REFERENCE_UNAVAILABLE";fi
-done
-rm -rf "$STAGE"
+echo GUARDIAN_DIAG_SKIP_BASELINE_DOWNLOADS=true
 python3 - <<'PY'
 from pathlib import Path
 b=Path('/opt/zl-prediction-live/src/railway-diagnostic')
@@ -70,6 +61,82 @@ for name,needles in patterns.items():
  try:s=(b/name).read_text()
  except Exception:continue
  print('GUARDIAN_RUNTIME_PATCH_ANCHORS',name,{n:s.count(n) for n in needles})
+PY
+python3 - <<'PY'
+from pathlib import Path
+p=Path('/opt/zl-prediction-live/src/railway-diagnostic')
+for name in ['guardian-live-bridge.mjs','order-direction-policy.mjs','index.mjs']:
+ try:s=(p/name).read_text()
+ except Exception as e:print('SOURCE_READ_FAILURE',name,type(e).__name__);continue
+ for i,line in enumerate(s.splitlines(),1):
+  if ('GUARDIAN_SOURCE=' in line or 'ORDER_SOURCES=' in line or
+      'function mappedOrderSignal(' in line or 'function orderDirectionForProduction(' in line or
+      "choice.model===GUARDIAN_ID" in line):
+   print('GUARDIAN_2125_SOURCE_ANCHOR',name,i,line.strip()[:210])
+PY
+echo GUARDIAN_2210_2215_INCIDENT_START=true
+python3 - <<'PY'
+import json,datetime,subprocess,urllib.request,collections,pathlib
+def get(port,path):
+ try:
+  with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}',timeout=5) as r:return json.load(r)
+ except Exception as e:return {'readError':type(e).__name__}
+def pick(o,ks):return {k:o.get(k) for k in ks if k in o} if isinstance(o,dict) else {}
+def ms(utc):return int(datetime.datetime.fromisoformat(utc.replace('Z','+00:00')).timestamp()*1000)
+target=[ms('2026-10-29T14:10:00Z'),ms('2026-10-29T14:15:00Z')]
+g=get(13049,'/api/status');s=get(13001,'/api/status')
+mode=get(13001,'/api/direction-mode');choice=get(13001,'/api/order-signal-model')
+print('G2210_GUARDIAN_CURRENT',json.dumps(pick(g,['ok','configured','model','observedAt','lastTickAt','lastAIAt','error']),ensure_ascii=False))
+print('G2210_GUARDIAN_LATEST',json.dumps(pick(g.get('latest'),['round','direction','status','reason']),ensure_ascii=False))
+recs=g.get('records') or []
+print('G2210_TOTAL_RECORDS',len(recs))
+for t in target:
+ a=[x for x in recs if isinstance(x,dict) and x.get('round')==t]
+ print('G2210_TARGET',t,'ROWS',len(a))
+ for x in a[-2:]:
+  print('G2210_SIGNAL',json.dumps(pick(x,['round','at','marketAt','status','predictedDirection','reason','subjectiveConfidence','tradeEligible','tradeGate']),ensure_ascii=False)[:950])
+print('G2210_TRADE_STATUS',json.dumps(pick(s,['ok','enabled','mode','amount','orderSignalModel','orderSignalModelReady','directionModeReady','guardianRiskReady','guardianExecutionReady','guardianRiskBlockReason','guardianExecutionBlockReason','orderMappingMode','orderSignal','productionSignal','orderProductionSource','startAfterRound']),ensure_ascii=False)[:1100])
+balance=get(13001,'/api/balance')
+print('G2210_LIVE_BALANCE',json.dumps({'ok':balance.get('ok'),'error':balance.get('error'),'accounts':[
+  {k:v.get(k) for k in ('accountType','availableBalanceDisplay','enabled')}
+  for v in (balance.get('items') or []) if isinstance(v,dict)]},ensure_ascii=False)[:1100])
+print('G2210_TRADE_PENDING',json.dumps(pick(s.get('pendingAction'),['round','state','status','error','code','blockReason','productionSignal','orderSignal','mappingMode']),ensure_ascii=False))
+print('G2210_LAST_ORDER',json.dumps(pick(s.get('lastOrder'),['round','state','status','error','code','submittedAt']),ensure_ascii=False))
+print('G2210_DIRECTION',json.dumps(pick(mode,['ok','ready','revision','modes','effectiveAfterRound']),ensure_ascii=False)[:1100])
+print('G2210_SOURCE_POLICY',json.dumps(pick(s,['directionModes','orderMappingMode','orderDirectionPolicy','signalTransport']),ensure_ascii=False)[:1200])
+print('G2210_CHOICE',json.dumps(pick(choice,['ok','ready','model','effectiveAfterRound']),ensure_ascii=False))
+for fn in ('guardian-live-bridge.mjs','order-direction-policy.mjs','index.mjs','wrapper.mjs'):
+ p=pathlib.Path('/opt/zl-prediction-live/src/railway-diagnostic')/fn
+ try:content=p.read_text().splitlines()
+ except Exception as e:print('G2210_SOURCE_ERR',fn,type(e).__name__);continue
+ for i,line in enumerate(content,1):
+  if any(z in line for z in ("GUARDIAN_SOURCE=","ORDER_SOURCES=","function guardianOrderSignal(","function mappedOrderSignal(","function guardianExitMonitorReady(","if(choice.model===GUARDIAN_ID)")):
+   print('G2210_SOURCE_ANCHOR',fn,i,line.strip()[:200])
+try:
+ pid=subprocess.check_output(['systemctl','show','--property=MainPID','--value','zl-prediction-trade'],text=True,timeout=5).strip()
+ raw=open('/proc/'+pid+'/environ','rb').read().split(bytes([0]))
+ for k in (b'AUTO_CONFIRM_ENABLED',b'AUTO_CONFIRM_STOP_ON_ERROR'):
+  v=next((x.split(b'=',1)[1].decode('utf8','replace') for x in raw if x.startswith(k+b'=')),'UNSET')
+  print('G2210_ENV',k.decode(),v)
+except Exception as e:print('G2210_ENV_ERROR',type(e).__name__)
+for unit in ('zl-prediction-trade','zl-prediction-guardian-analysis'):
+ try:
+  out=subprocess.run(['journalctl','--no-pager','-o','cat','-u',unit,
+   '--since','2026-10-29 14:09:30 UTC','--until','2026-10-29 14:21:00 UTC'],
+   capture_output=True,text=True,timeout=10).stdout
+ except Exception as e:print('G2210_JOURNAL_ERROR',unit,type(e).__name__);continue
+ cnt=collections.Counter();events=[]
+ for line in out.splitlines():
+  try:v=json.loads(line[line.index('{'):])
+  except Exception:continue
+  if not isinstance(v,dict):continue
+  event=str(v.get('event') or '')
+  cnt[event]+=1
+  if event and any(k in event.lower() for k in ('guardian','signal','intent','order','quote','submit','block','control','follow','confirm','ready','risk','fail')):
+   events.append(pick(v,['event','round','at','status','state','code','httpStatus','reason','blockReason','direction','productionSignal','orderSignal','source','error','enabled','fundingSource','paymentAccount']))
+ print('G2210_JOURNAL_SUMMARY',unit,'lines',len(out.splitlines()),'events',json.dumps(cnt.most_common(18),ensure_ascii=False))
+ for row in events[-45:]:print('G2210_JOURNAL_EVENT',unit,json.dumps(row,ensure_ascii=False)[:450])
+print('GUARDIAN_2210_2215_INCIDENT_DONE=true')
 PY
 echo GUARDIAN_RUNTIME_DIAG_COMPLETE=true
 """
